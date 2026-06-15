@@ -8858,7 +8858,7 @@
                 }
                 i.get(this, B, "f").push({
                     category: e,
-                    group: TrackEnvironment.Summer,
+                    group: t,
                     trackMetadata: n,
                     trackEnvironment: r,
                     trackData: a,
