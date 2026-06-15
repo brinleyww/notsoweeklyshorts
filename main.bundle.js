@@ -8901,7 +8901,7 @@
             }
             ,
             J = function() {
-                const e = i.get(this, G, "f").value.trim().toLowerCase();
+                const e = (i.get(this, G, "f")?.value ?? "").trim().toLowerCase();
                 for (const t of i.get(this, B, "f"))
                     t.trackMetadata.name.toLowerCase().includes(e) || t.trackMetadata.author?.toLowerCase().includes(e) ? t.buttonContainer.style.display = "" : t.buttonContainer.style.display = "none";
                 for (const e of ["official", "community", "custom"]) {
