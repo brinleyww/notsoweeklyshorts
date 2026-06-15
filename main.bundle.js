@@ -8771,7 +8771,19 @@
                             n.textContent = t,
                             e.appendChild(n)
                         } else {
-                            h.appendChild(e);
+                            switch (t) {
+                            case TrackEnvironment.Summer:
+                                h.prepend(e);
+                                break;
+                            case TrackEnvironment.Winter:
+                                {
+                                    const t = d.get(TrackEnvironment.Desert);
+                                    null != t ? h.insertBefore(e, t) : h.appendChild(e);
+                                    break
+                                }
+                            case TrackEnvironment.Desert:
+                                h.appendChild(e)
+                            }
                             let n, a, s;
                             n = "";
                             a = "Week 1";
