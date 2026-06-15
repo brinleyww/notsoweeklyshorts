@@ -8771,36 +8771,11 @@
                             n.textContent = t,
                             e.appendChild(n)
                         } else {
-                            switch (t) {
-                            case TrackEnvironment.Summer:
-                                h.prepend(e);
-                                break;
-                            case TrackEnvironment.Winter:
-                                {
-                                    const t = d.get(TrackEnvironment.Desert);
-                                    null != t ? h.insertBefore(e, t) : h.appendChild(e);
-                                    break
-                                }
-                            case TrackEnvironment.Desert:
-                                h.appendChild(e)
-                            }
+                            h.appendChild(e);
                             let n, a, s;
-                            switch (r) {
-                            case TrackEnvironment.Summer:
-                                n = "",
-                                a = "Week 1",
-                                s = "images/summer.svg";
-                                break;
-                            case TrackEnvironment.Winter:
-                                n = "winter",
-                                a = i.get(this, b, "f").get("Winter"),
-                                s = "images/winter_colored.svg";
-                                break;
-                            case TrackEnvironment.Desert:
-                                n = "desert",
-                                a = i.get(this, b, "f").get("Desert"),
-                                s = "images/desert_colored.svg"
-                            }
+                            n = "";
+                            a = "Week 1";
+                            s = "images/summer.svg";
                             const o = document.createElement("div");
                             o.className = "group-title " + n,
                             o.textContent = a,
@@ -8871,7 +8846,7 @@
                 }
                 i.get(this, B, "f").push({
                     category: e,
-                    group: t,
+                    group: TrackEnvironment.Summer,
                     trackMetadata: n,
                     trackEnvironment: r,
                     trackData: a,
