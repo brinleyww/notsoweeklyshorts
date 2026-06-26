@@ -51212,30 +51212,7 @@
             C.get(this, Gc, "f").push(R),
             _();
             const P = o.getCurrentUserProfile();
-            {
-                const nickContainer = document.createElement("div");
-                nickContainer.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 10px;";
-                const nickLabel = document.createElement("span");
-                nickLabel.textContent = "Name:";
-                nickLabel.style.cssText = "color:var(--text-color);font-size:18px;white-space:nowrap;";
-                const nickInput = document.createElement("input");
-                nickInput.type = "text";
-                nickInput.value = P.nickname ?? "";
-                nickInput.maxLength = 32;
-                nickInput.spellcheck = false;
-                nickInput.autocomplete = "off";
-                nickInput.style.cssText = "flex:1;background:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-size:18px;padding:4px 8px;font-family:inherit;clip-path:polygon(3px 0,100% 0,calc(100% - 3px) 100%,0 100%);";
-                const saveNick = () => {
-                    const v = nickInput.value.trim();
-                    if (v.length > 0) o.setNickname(v);
-                };
-                nickInput.addEventListener("blur", saveNick);
-                nickInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { saveNick(); nickInput.blur(); } });
-                nickContainer.appendChild(nickLabel);
-                nickContainer.appendChild(nickInput);
-                C.get(this, Bc, "f").appendChild(nickContainer);
-                C.get(this, Gc, "f").push(nickContainer);
-            }
+
             if (P.isVerifier) {
                 const e = document.createElement("button");
                 e.className = "button",
