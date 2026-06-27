@@ -51274,7 +51274,9 @@
                 e.classList.remove("button-spawn");
             C.get(this, Bc, "f").classList.add("hidden"),
             null != C.get(this, Tc, "f") && (C.get(this, Tc, "f").className = "hidden"),
-            C.get(this, Mc, "f").className = "hidden"
+            C.get(this, Mc, "f").className = "hidden";
+            const lbp = document.getElementById("nsws-lb-panel");
+            if (lbp) lbp.style.display = "none"
         }
         ,
         Qc = function() {
@@ -51282,7 +51284,12 @@
             C.get(this, Nc, "f").classList.remove("hidden"),
             C.get(this, Bc, "f").classList.remove("hidden"),
             null != C.get(this, Tc, "f") && (C.get(this, Tc, "f").className = "discord-link"),
-            C.get(this, Mc, "f").className = "info"
+            C.get(this, Mc, "f").className = "info";
+            const lbp = document.getElementById("nsws-lb-panel");
+            if (lbp) {
+                lbp.style.display = "block";
+                if (!lbp.dataset.loaded) { lbp.dataset.loaded = "1"; window.__nswsLbLoad && window.__nswsLbLoad(); }
+            }
         }
         ,
         Jc = function() {
@@ -51415,6 +51422,122 @@
                 C.set(this, Nc, document.createElement("div"), "f"),
                 C.get(this, Nc, "f").className = "main-buttons-container hidden",
                 C.get(this, kc, "f").appendChild(C.get(this, Nc, "f")),
+                (() => {
+                    const LB_TRACKS = [
+                        { id:"8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a", name:"1 - race" },
+                        { id:"2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c", name:"2 - trek" },
+                        { id:"84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b", name:"3 - maze" },
+                        { id:"0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f", name:"4 - speeeedddd" },
+                        { id:"05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e", name:"5 - nosebonkkk" },
+                    ];
+                    const LOG102 = Math.log10(2);
+                    const lbCalcPts = r => r ? Math.round(20000 / Math.pow(r, LOG102)) : 0;
+
+                    const panel = document.createElement("div");
+                    panel.id = "nsws-lb-panel";
+                    panel.style.cssText = [
+                        "position:absolute",
+                        "right:40px",
+                        "top:50%",
+                        "transform:translateY(-50%)",
+                        "width:320px",
+                        "background:rgba(10,15,35,0.88)",
+                        "border:1px solid rgba(80,130,220,0.3)",
+                        "border-radius:8px",
+                        "padding:18px 20px 14px",
+                        "font-family:inherit",
+                        "color:var(--text-color,#e8eaf6)",
+                        "display:none",
+                        "backdrop-filter:blur(8px)",
+                        "-webkit-backdrop-filter:blur(8px)",
+                    ].join(";");
+
+                    const hdr = document.createElement("div");
+                    hdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;";
+                    const title = document.createElement("span");
+                    title.textContent = "WEEK 1 STANDINGS";
+                    title.style.cssText = "font-size:11px;letter-spacing:3px;font-weight:700;color:rgba(150,180,255,0.7);";
+                    const refreshBtn = document.createElement("button");
+                    refreshBtn.id = "nsws-lb-refresh";
+                    refreshBtn.textContent = "↻";
+                    refreshBtn.style.cssText = "background:none;border:none;color:rgba(150,180,255,0.5);font-size:16px;cursor:pointer;padding:0 2px;line-height:1;";
+                    hdr.appendChild(title);
+                    hdr.appendChild(refreshBtn);
+                    panel.appendChild(hdr);
+
+                    const listEl = document.createElement("div");
+                    listEl.id = "nsws-lb-list";
+                    panel.appendChild(listEl);
+
+                    const footer = document.createElement("div");
+                    footer.id = "nsws-lb-footer";
+                    footer.style.cssText = "margin-top:10px;font-size:10px;color:rgba(100,130,180,0.5);text-align:right;letter-spacing:1px;";
+                    panel.appendChild(footer);
+
+                    C.get(this, kc, "f").appendChild(panel);
+
+                    const MEDAL = ["1st","2nd","3rd","4th","5th"];
+                    const MEDAL_COL = ["#FFD700","#C0C0C0","#cd7f32","#7090b0","#7090b0"];
+
+                    async function lbLoad() {
+                        listEl.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:12px;padding:6px 0;">Loading...</div>';
+                        footer.textContent = "";
+                        refreshBtn.style.opacity = "0.3";
+                        refreshBtn.disabled = true;
+                        try {
+                            const results = await Promise.all(LB_TRACKS.map(t =>
+                                fetch("https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
+                                    .then(r => r.json())
+                            ));
+                            const maps = results.map((data, i) => {
+                                const entries = Array.isArray(data) ? data : (data.entries || []);
+                                const m = {};
+                                entries.forEach((e, idx) => {
+                                    const n = (e.nickname || e.name || "").trim();
+                                    if (n && !(n in m)) m[n] = idx + 1;
+                                });
+                                return m;
+                            });
+                            const allNicks = new Set();
+                            maps.forEach(m => Object.keys(m).forEach(n => allNicks.add(n)));
+                            const pts = {};
+                            allNicks.forEach(nick => {
+                                let total = 0;
+                                maps.forEach(m => { if (m[nick]) total += lbCalcPts(m[nick]); });
+                                pts[nick] = total;
+                            });
+                            const sorted = Object.entries(pts).sort((a,b) => b[1]-a[1]).slice(0,5);
+                            listEl.innerHTML = "";
+                            sorted.forEach(([nick, p], i) => {
+                                const row = document.createElement("div");
+                                row.style.cssText = "display:flex;align-items:center;gap:10px;padding:7px 0;" + (i < sorted.length-1 ? "border-bottom:1px solid rgba(80,120,200,0.12);" : "");
+                                const rankEl = document.createElement("span");
+                                rankEl.textContent = MEDAL[i];
+                                rankEl.style.cssText = "min-width:34px;font-size:12px;font-weight:700;color:" + MEDAL_COL[i] + ";letter-spacing:0.5px;";
+                                const nameEl = document.createElement("span");
+                                nameEl.textContent = nick;
+                                nameEl.style.cssText = "flex:1;font-size:13px;font-weight:" + (i===0?"700":"500") + ";color:" + (i===0?"#ffe87a":"rgba(220,230,255,0.9)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+                                const ptsEl = document.createElement("span");
+                                ptsEl.textContent = p.toLocaleString();
+                                ptsEl.style.cssText = "font-size:13px;font-weight:600;color:" + MEDAL_COL[i] + ";font-variant-numeric:tabular-nums;min-width:48px;text-align:right;";
+                                row.appendChild(rankEl);
+                                row.appendChild(nameEl);
+                                row.appendChild(ptsEl);
+                                listEl.appendChild(row);
+                            });
+                            if (!sorted.length) listEl.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:12px;padding:6px 0;">No runs yet.</div>';
+                            footer.textContent = "Updated " + new Date().toLocaleTimeString();
+                        } catch(e) {
+                            listEl.innerHTML = '<div style="color:rgba(255,120,120,0.7);font-size:11px;">Failed to load</div>';
+                        } finally {
+                            refreshBtn.style.opacity = "1";
+                            refreshBtn.disabled = false;
+                        }
+                    }
+
+                    refreshBtn.addEventListener("click", lbLoad);
+                    window.__nswsLbLoad = lbLoad;
+                })(),
                 C.set(this, Bc, document.createElement("div"), "f"),
                 C.get(this, Bc, "f").className = "button-bar",
                 C.get(this, kc, "f").appendChild(C.get(this, Bc, "f")),
