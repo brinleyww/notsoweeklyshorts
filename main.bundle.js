@@ -49073,7 +49073,8 @@
             m.textContent = Qe(e),
             g.appendChild(m);
             const A = document.createElement("p");
-            A.textContent = "secret",
+            A.textContent = "SECRET",
+            A.style.cssText = "font-size:calc(1em + 2px);",
             f.appendChild(A);
             const v = document.createElement("div");
             v.className = "right",
@@ -51173,11 +51174,11 @@
                 // ── STANDINGS OVERLAY ──
                 if (!document.getElementById("nsws-standings-overlay")) {
                     const LB_TRACKS = [
-                        { id:"8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a", name:"1 - race" },
-                        { id:"2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c", name:"2 - trek" },
-                        { id:"84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b", name:"3 - maze" },
-                        { id:"0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f", name:"4 - speeeedddd" },
-                        { id:"05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e", name:"5 - nosebonkkk" },
+                        { id:"8a5c37b4840713ca9d8c71f7c8bde514f6f63e695914b4edcd70a3fdd7930ee0", name:"1 - Can't Crash Now!" },
+                        { id:"68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e", name:"2 - Twisty Twasty" },
+                        { id:"9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469", name:"3 - A Ternary Trio" },
+                        { id:"7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2", name:"4 - faht" },
+                        { id:"270e3c35316ca8fe28fbd87942f69889988179afbfb645206e2f4f49c437926b", name:"5 - antiAO8" },
                     ];
                     const LOG102 = Math.log10(2);
                     const stCalcPts = r => r ? Math.round(20000 / Math.pow(r, LOG102)) : 0;
@@ -51215,7 +51216,7 @@
                     const panelHdr = document.createElement("div");
                     panelHdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:22px 28px 16px;border-bottom:1px solid rgba(80,130,230,0.2);flex-shrink:0;";
                     const panelTitle = document.createElement("span");
-                    panelTitle.textContent = "Week 1 — Standings";
+                    panelTitle.textContent = "Week 2 — Standings";
                     panelTitle.style.cssText = "font-size:28px;font-weight:700;color:#e8eaf6;letter-spacing:1px;";
                     const hdrRight = document.createElement("div");
                     hdrRight.style.cssText = "display:flex;align-items:center;gap:14px;";
@@ -51235,7 +51236,7 @@
                     // Column headers
                     const colHdr = document.createElement("div");
                     colHdr.style.cssText = "display:grid;grid-template-columns:56px 1fr repeat(6,88px);gap:0;padding:10px 28px;border-bottom:1px solid rgba(80,130,230,0.15);flex-shrink:0;";
-                    const colLabels = ["#", "Player", "Total", "Race", "Trek", "Maze", "Speed", "Nose"];
+                    const colLabels = ["#", "Player", "Total", "CCN", "TT", "ATT", "faht", "AO8"];
                     colLabels.forEach((lbl, i) => {
                         const c = document.createElement("span");
                         c.textContent = lbl;
@@ -51264,10 +51265,15 @@
                         listWrap.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:20px;padding:30px 8px;">Loading standings...</div>';
                         updatedEl.textContent = "";
                         try {
-                            const results = await Promise.all(LB_TRACKS.map(t =>
-                                fetch("https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
-                                    .then(r => r.json())
-                            ));
+                            const [results, selfEntry] = await Promise.all([
+                                Promise.all(LB_TRACKS.map(t =>
+                                    fetch("https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
+                                        .then(r => r.json())
+                                )),
+                                fetch("https://ptproxy.cwcinc.dev/v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false")
+                                    .then(r => r.json()).catch(() => null)
+                            ]);
+                            const selfNick = selfEntry && selfEntry.entry ? (selfEntry.entry.nickname || "").trim() : (window.__nswsSelfNick || "");
                             const maps = results.map(data => {
                                 const entries = Array.isArray(data) ? data : (data.entries || []);
                                 const m = {};
@@ -51292,6 +51298,9 @@
                             sorted.forEach(([nick, p], i) => {
                                 const row = document.createElement("div");
                                 const isTop3 = i < 3;
+                                const isSelf = selfNick && nick.toLowerCase() === selfNick.toLowerCase();
+                                const baseBg = isTop3 ? "rgba(255,215,0,0.05)" : isSelf ? "rgba(80,180,255,0.08)" : "";
+                                const baseBorder = isTop3 ? "1px solid rgba(255,215,0,0.1)" : isSelf ? "1px solid rgba(80,180,255,0.35)" : "1px solid transparent";
                                 row.style.cssText = [
                                     "display:grid",
                                     "grid-template-columns:56px 1fr repeat(6,88px)",
@@ -51300,10 +51309,11 @@
                                     "border-radius:6px",
                                     "margin-bottom:3px",
                                     "align-items:center",
-                                    isTop3 ? "background:rgba(255,215,0,0.05);border:1px solid rgba(255,215,0,0.1);" : "border:1px solid transparent;",
+                                    "background:" + baseBg,
+                                    "border:" + baseBorder,
                                 ].join(";");
-                                row.addEventListener("mouseover", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.08)" : "rgba(80,130,230,0.07)"; });
-                                row.addEventListener("mouseout", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.05)" : ""; });
+                                row.addEventListener("mouseover", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.08)" : isSelf ? "rgba(80,180,255,0.13)" : "rgba(80,130,230,0.07)"; });
+                                row.addEventListener("mouseout", () => { row.style.background = baseBg; });
 
                                 const rankEl = document.createElement("span");
                                 rankEl.textContent = i + 1;
@@ -52179,58 +52189,58 @@
                 }
                 )),
                 C.set(this, Xh, [{
-                    id: "8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a",
-                    group: "Week 1",
+                    id: "8a5c37b4840713ca9d8c71f7c8bde514f6f63e695914b4edcd70a3fdd7930ee0",
+                    group: "Week 2",
                     trackMetadata: {
-                        name: "1 - race",
-                        author: "Cookedbyapringle",
-                        lastModified: null
-                    },
-                    environment: TrackEnvironment.Desert,
-                    trackUrl: "tracks/community/marvelous_marble.track",
-                    thumbnail: "tracks/community/thumbnails/marvelous_marble.png"
-                }, {
-                    id: "2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c",
-                    group: "Week 1",
-                    trackMetadata: {
-                        name: "2 - trek",
-                        author: "Cookedbyapringle",
-                        lastModified: null
-                    },
-                    environment: TrackEnvironment.Desert,
-                    trackUrl: "tracks/community/arx_lucida.track",
-                    thumbnail: "tracks/community/thumbnails/arx_lucida.png"
-                }, {
-                    id: "84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b",
-                    group: "Week 1",
-                    trackMetadata: {
-                        name: "3 - maze",
-                        author: "Cookedbyapringle",
-                        lastModified: null
-                    },
-                    environment: TrackEnvironment.Winter,
-                    trackUrl: "tracks/community/koselig.track",
-                    thumbnail: "tracks/community/thumbnails/koselig.png"
-                }, {
-                    id: "0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f",
-                    group: "Week 1",
-                    trackMetadata: {
-                        name: "4 - speeeedddd",
-                        author: "Cookedbyapringle",
+                        name: "1 - Can't Crash Now!",
+                        author: "Not So Weekly Shorts",
                         lastModified: null
                     },
                     environment: TrackEnvironment.Summer,
-                    trackUrl: "tracks/community/sky_bound.track",
-                    thumbnail: "tracks/community/thumbnails/sky_bound.png"
+                    trackUrl: "tracks/community/marvelous_marble.track",
+                    thumbnail: "tracks/community/thumbnails/marvelous_marble.png"
                 }, {
-                    id: "05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e",
-                    group: "Week 1",
+                    id: "68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e",
+                    group: "Week 2",
                     trackMetadata: {
-                        name: "5 - nosebonkkk",
-                        author: "Cookedbyapringle",
+                        name: "2 - Twisty Twasty",
+                        author: "Not So Weekly Shorts",
+                        lastModified: null
+                    },
+                    environment: TrackEnvironment.Winter,
+                    trackUrl: "tracks/community/arx_lucida.track",
+                    thumbnail: "tracks/community/thumbnails/arx_lucida.png"
+                }, {
+                    id: "9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469",
+                    group: "Week 2",
+                    trackMetadata: {
+                        name: "3 - A Ternary Trio",
+                        author: "Not So Weekly Shorts",
+                        lastModified: null
+                    },
+                    environment: TrackEnvironment.Summer,
+                    trackUrl: "tracks/community/koselig.track",
+                    thumbnail: "tracks/community/thumbnails/koselig.png"
+                }, {
+                    id: "7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2",
+                    group: "Week 2",
+                    trackMetadata: {
+                        name: "4 - faht",
+                        author: "Not So Weekly Shorts",
                         lastModified: null
                     },
                     environment: TrackEnvironment.Desert,
+                    trackUrl: "tracks/community/sky_bound.track",
+                    thumbnail: "tracks/community/thumbnails/sky_bound.png"
+                }, {
+                    id: "270e3c35316ca8fe28fbd87942f69889988179afbfb645206e2f4f49c437926b",
+                    group: "Week 2",
+                    trackMetadata: {
+                        name: "5 - antiAO8",
+                        author: "Not So Weekly Shorts",
+                        lastModified: null
+                    },
+                    environment: TrackEnvironment.Summer,
                     trackUrl: "tracks/community/shardmir.track",
                     thumbnail: "tracks/community/thumbnails/shardmir.png"
                 }].map((e => ({
@@ -54293,7 +54303,7 @@
                 ))
             }
             getLeaderboardUserEntry(e, t, n) {
-                const i = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=" + n.toString();
+                const i = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=" + n.toString(); window.__nswsUserToken = encodeURIComponent(e);
                 return new Promise(( (e, t) => {
                     const n = new XMLHttpRequest;
                     n.timeout = C.get(this, wu, "f"),
@@ -54312,6 +54322,7 @@
                                     if (!Number.isSafeInteger(i.position))
                                         return void t(new Error("Position is not a safe integer"));
                                     const r = i.position;
+                                    if (i.nickname) window.__nswsSelfNick = i.nickname;
                                     if (!("frames"in i) || "number" != typeof i.frames)
                                         return void t(new Error("Frames is not a number"));
                                     if (!Number.isSafeInteger(i.frames))
