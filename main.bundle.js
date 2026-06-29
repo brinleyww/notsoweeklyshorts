@@ -49083,7 +49083,7 @@
             g.appendChild(m);
             const A = document.createElement("p");
             A.textContent = "SECRET",
-            A.className = "nsws-secret",
+            A.style.cssText = "opacity:0.9;",
             f.appendChild(A);
             const v = document.createElement("div");
             v.className = "right",
@@ -51181,7 +51181,7 @@
                         { id:"68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e", name:"2 - Twisty Twasty" },
                         { id:"9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469", name:"3 - A Ternary Trio" },
                         { id:"7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2", name:"4 - faht" },
-                        { id:"83aca4294632060cb48dd912799fb5dbfc117d01cda572766c67482d49a5405a", name:"5 - antiAO8" },
+                        { id:"c9c0977d2d40c589420482020762af2a09cdf1aa372807377b6fcdeb48bc714d", name:"5 - antiAO8" },
                     ];
                     const LOG102 = Math.log10(2);
                     const stCalcPts = r => r ? Math.round(20000 / Math.pow(r, LOG102)) : 0;
@@ -51196,7 +51196,7 @@
                         "z-index:9999",
                         "align-items:center",
                         "justify-content:center",
-                        "background:rgba(5,10,25,0.92)",
+                        "background:rgba(0,0,0,0.75)",
                         "backdrop-filter:blur(6px)",
                         "-webkit-backdrop-filter:blur(6px)",
                     ].join(";");
@@ -51206,29 +51206,30 @@
                     panel.style.cssText = [
                         "width:min(820px,94vw)",
                         "height:min(780px,90vh)",
-                        "background:rgba(12,20,50,0.97)",
-                        "border:1px solid rgba(80,130,230,0.35)",
-                        "border-radius:12px",
+                        "background:var(--surface-color)",
+                        "border:none",
+                        "border-radius:0",
                         "display:flex",
                         "flex-direction:column",
                         "overflow:hidden",
                         "font-family:inherit",
+                        "clip-path:polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%)",
                     ].join(";");
 
                     // Header bar
                     const panelHdr = document.createElement("div");
-                    panelHdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:22px 28px 16px;border-bottom:1px solid rgba(80,130,230,0.2);flex-shrink:0;";
+                    panelHdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:16px 24px 14px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;background:var(--surface-secondary-color);";
                     const panelTitle = document.createElement("span");
                     panelTitle.textContent = "Week 2 — Standings";
-                    panelTitle.style.cssText = "font-size:28px;font-weight:700;color:#e8eaf6;letter-spacing:1px;";
+                    panelTitle.style.cssText = "font-size:32px;font-weight:400;color:var(--text-color);letter-spacing:0;";
                     const hdrRight = document.createElement("div");
                     hdrRight.style.cssText = "display:flex;align-items:center;gap:14px;";
                     const updatedEl = document.createElement("span");
                     updatedEl.id = "nsws-st-updated";
-                    updatedEl.style.cssText = "font-size:13px;color:rgba(120,160,220,0.6);letter-spacing:1px;";
+                    updatedEl.style.cssText = "font-size:13px;color:var(--text-color);opacity:0.4;letter-spacing:0;";
                     const closeBtn = document.createElement("button");
                     closeBtn.textContent = "✕";
-                    closeBtn.style.cssText = "background:none;border:1px solid rgba(80,130,230,0.3);color:rgba(180,200,255,0.7);font-size:18px;cursor:pointer;border-radius:6px;width:36px;height:36px;display:flex;align-items:center;justify-content:center;";
+                    closeBtn.style.cssText = "background:none;border:none;color:var(--text-color);opacity:0.6;font-size:20px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;";
                     closeBtn.addEventListener("click", () => { overlay.style.display = "none"; });
                     hdrRight.appendChild(updatedEl);
                     hdrRight.appendChild(closeBtn);
@@ -51238,12 +51239,12 @@
 
                     // Column headers
                     const colHdr = document.createElement("div");
-                    colHdr.style.cssText = "display:grid;grid-template-columns:56px 1fr repeat(6,88px);gap:0;padding:10px 28px;border-bottom:1px solid rgba(80,130,230,0.15);flex-shrink:0;";
+                    colHdr.style.cssText = "display:grid;grid-template-columns:56px 1fr repeat(6,88px);gap:0;padding:8px 24px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;background:var(--surface-secondary-color);";
                     const colLabels = ["#", "Player", "Total", "CCN", "TT", "ATT", "faht", "AO8"];
                     colLabels.forEach((lbl, i) => {
                         const c = document.createElement("span");
                         c.textContent = lbl;
-                        c.style.cssText = "font-size:13px;letter-spacing:2px;color:rgba(120,160,220,0.55);font-weight:700;text-align:" + (i <= 1 ? "left" : "right") + ";";
+                        c.style.cssText = "font-size:13px;letter-spacing:0;color:var(--text-color);opacity:0.4;font-weight:400;text-align:" + (i <= 1 ? "left" : "right") + ";";
                         colHdr.appendChild(c);
                     });
                     panel.appendChild(colHdr);
@@ -51251,10 +51252,10 @@
                     // Scrollable list
                     const listWrap = document.createElement("div");
                     listWrap.id = "nsws-st-list";
-                    listWrap.style.cssText = "overflow-y:auto;flex:1;padding:8px 20px 16px;";
+                    listWrap.style.cssText = "overflow-y:auto;flex:1;padding:4px 16px 16px;background:var(--surface-secondary-color);";
                     // Custom scrollbar styling via a style tag
                     const scrollStyle = document.createElement("style");
-                    scrollStyle.textContent = "#nsws-st-list::-webkit-scrollbar{width:6px}#nsws-st-list::-webkit-scrollbar-track{background:transparent}#nsws-st-list::-webkit-scrollbar-thumb{background:rgba(80,130,230,0.3);border-radius:3px}";
+                    scrollStyle.textContent = "#nsws-st-list::-webkit-scrollbar{width:6px}#nsws-st-list::-webkit-scrollbar-track{background:transparent}#nsws-st-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:0}";
                     document.head.appendChild(scrollStyle);
                     panel.appendChild(listWrap);
 
@@ -51265,7 +51266,7 @@
                     overlay.addEventListener("click", e => { if (e.target === overlay) overlay.style.display = "none"; });
 
                     async function stLoad() {
-                        listWrap.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:20px;padding:30px 8px;">Loading standings...</div>';
+                        listWrap.innerHTML = '<div style="color:var(--text-color);opacity:0.4;font-size:20px;padding:30px 8px;">Loading...</div>';
                         updatedEl.textContent = "";
                         try {
                             const [results, selfEntry] = await Promise.all([
@@ -51302,33 +51303,36 @@
                                 const row = document.createElement("div");
                                 const isTop3 = i < 3;
                                 const isSelf = selfNick && nick.toLowerCase() === selfNick.toLowerCase();
-                                const baseBg = isTop3 ? "rgba(255,215,0,0.05)" : isSelf ? "rgba(80,180,255,0.08)" : "";
+                                const baseBg = isTop3 ? "rgba(255,215,0,0.07)" : isSelf ? "rgba(80,180,255,0.1)" : "transparent";
                                 const baseBorder = isTop3 ? "1px solid rgba(255,215,0,0.1)" : isSelf ? "1px solid rgba(80,180,255,0.35)" : "1px solid transparent";
                                 row.style.cssText = [
                                     "display:grid",
                                     "grid-template-columns:56px 1fr repeat(6,88px)",
                                     "gap:0",
-                                    "padding:11px 8px",
-                                    "border-radius:6px",
-                                    "margin-bottom:3px",
+                                    "padding:10px 8px",
+                                    "border-radius:0",
+                                    "margin-bottom:0",
                                     "align-items:center",
                                     "background:" + baseBg,
-                                    "border:" + baseBorder,
+                                    "border-left:none",
+                                    "border-right:none",
+                                    "border-top:none",
+                                    "border-bottom:" + (isSelf ? "1px solid rgba(80,180,255,0.3)" : "1px solid rgba(255,255,255,0.05)"),
                                 ].join(";");
                                 row.addEventListener("mouseover", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.08)" : isSelf ? "rgba(80,180,255,0.13)" : "rgba(80,130,230,0.07)"; });
                                 row.addEventListener("mouseout", () => { row.style.background = baseBg; });
 
                                 const rankEl = document.createElement("span");
                                 rankEl.textContent = i + 1;
-                                rankEl.style.cssText = "font-size:20px;font-weight:700;color:" + (isTop3 ? MEDAL_COL[i] : "rgba(120,150,200,0.6)") + ";";
+                                rankEl.style.cssText = "font-size:24px;font-weight:400;color:var(--text-color);opacity:" + (isTop3 ? "1" : "0.5") + ";";
 
                                 const nameEl = document.createElement("span");
                                 nameEl.textContent = nick;
-                                nameEl.style.cssText = "font-size:20px;font-weight:" + (isTop3?"700":"500") + ";color:" + (i===0?"#ffe87a":i===1?"#e8e8e8":i===2?"#e8c090":"rgba(210,225,255,0.85)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
+                                nameEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
 
                                 const totalEl = document.createElement("span");
                                 totalEl.textContent = p.toLocaleString();
-                                totalEl.style.cssText = "font-size:20px;font-weight:700;color:" + (isTop3 ? MEDAL_COL[i] : "rgba(180,210,255,0.9)") + ";text-align:right;font-variant-numeric:tabular-nums;";
+                                totalEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";text-align:right;font-variant-numeric:tabular-nums;";
 
                                 row.appendChild(rankEl);
                                 row.appendChild(nameEl);
@@ -51338,7 +51342,7 @@
                                     const r = m[nick];
                                     const cell = document.createElement("span");
                                     cell.textContent = r ? "+" + stCalcPts(r).toLocaleString() : "—";
-                                    cell.style.cssText = "font-size:16px;color:" + (r ? "rgba(160,200,255,0.7)" : "rgba(80,100,140,0.4)") + ";text-align:right;font-variant-numeric:tabular-nums;";
+                                    cell.style.cssText = "font-size:16px;color:var(--text-color);opacity:" + (r ? "0.65" : "0.2") + ";text-align:right;font-variant-numeric:tabular-nums;";
                                     row.appendChild(cell);
                                 });
 
@@ -51493,7 +51497,7 @@
                 d.innerHTML = "Not the official version. &nbsp;<a href=\"https://www.crazygames.com/game/polytrack\" target=\"_blank\" style=\"color:rgba(120,170,255,0.7);text-decoration:underline;\">Play official here</a>";
                 document.body.appendChild(d);
                 const ds = document.createElement("style");
-                ds.textContent = "body:has(.track-info-ui) #nsws-disclaimer { display: none !important; } .leaderboard-ui .nsws-secret { font-size: 14px !important; padding: 2px 12px 10px !important; opacity: 0.45; letter-spacing: 1.5px; }";
+                ds.textContent = "body:has(.track-info-ui) #nsws-disclaimer { display: none !important; }";
                 document.head.appendChild(ds);
             }
         }
@@ -52246,7 +52250,7 @@
                     trackUrl: "tracks/community/sky_bound.track",
                     thumbnail: "tracks/community/thumbnails/sky_bound.png"
                 }, {
-                    id: "83aca4294632060cb48dd912799fb5dbfc117d01cda572766c67482d49a5405a",
+                    id: "c9c0977d2d40c589420482020762af2a09cdf1aa372807377b6fcdeb48bc714d",
                     group: "Week 2",
                     trackMetadata: {
                         name: "5 - antiAO8",
