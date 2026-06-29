@@ -52283,7 +52283,9 @@ window.__nswsDecrypt = async function(b64Data) {
                         const n = e.encryptedData
                             ? (async () => {
                                 const raw = await window.__nswsDecrypt(e.encryptedData);
-                                return { trackMetadata: e.trackMetadata, trackData: raw };
+                                const parsed = TrackDataModule.A.fromExportString(raw);
+                                if (null == parsed) throw new Error("Failed to decrypt track");
+                                return { trackMetadata: parsed.trackMetadata, trackData: parsed.trackData };
                               })()
                             : C.get(this, Qh, "m", id).call(this, e.trackUrl);
                         C.get(this, Zh, "f").set(e.id, n);
