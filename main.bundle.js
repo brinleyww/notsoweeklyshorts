@@ -1,16 +1,9 @@
-( () => {
-    var e, t = {
-        77: (module, exports, __webpack_require__) => {
-            "use strict";
-// ── NSWS Track Decryption ──
-// Reconstructs AES-256-GCM key from obfuscated chunks at runtime
 window.__nswsDecrypt = async function(b64Data) {
     const _x = (h1, h2) => {
         const a = h1.match(/../g).map(h => parseInt(h, 16));
         const b = h2.match(/../g).map(h => parseInt(h, 16));
         return a.map((v, i) => v ^ b[i]).map(b => b.toString(16).padStart(2, '0')).join('');
     };
-    // Obfuscated key chunks (XORed with masks)
     const _k0 = _x("54c2f2dbc1eb6f5e", "a7c3f1e2b4d890ab");
     const _k1 = _x("43b6c894671e008b", "5e2917f3c8a04b6d");
     const _k2 = _x("30542dcd251ce095", "d1e4729b3c50af87");
@@ -20,18 +13,20 @@ window.__nswsDecrypt = async function(b64Data) {
     const cryptoKey = await crypto.subtle.importKey(
         "raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]
     );
-    // Decode base64
     const raw = atob(b64Data);
     const buf = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
-    // First 12 bytes = nonce, rest = ciphertext+tag
     const nonce = buf.slice(0, 12);
     const ciphertext = buf.slice(12);
     const decrypted = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: nonce }, cryptoKey, ciphertext
     );
     return new TextDecoder().decode(decrypted);
-}
+};
+( () => {
+    var e, t = {
+        77: (module, exports, __webpack_require__) => {
+            "use strict";
             module.exports = __webpack_require__.p + "images/rotation_axis_x_positive.svg"
         }
         ,
