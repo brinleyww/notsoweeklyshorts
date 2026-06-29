@@ -4,7 +4,7 @@
             "use strict";
 // ── NSWS Track Decryption ──
 // Reconstructs AES-256-GCM key from obfuscated chunks at runtime
-async function __nswsDecrypt(b64Data) {
+window.__nswsDecrypt = async function(b64Data) {
     const _x = (h1, h2) => {
         const a = h1.match(/../g).map(h => parseInt(h, 16));
         const b = h2.match(/../g).map(h => parseInt(h, 16));
@@ -52287,7 +52287,7 @@ async function __nswsDecrypt(b64Data) {
                             return t.then(( ({trackData: e}) => e));
                         const n = e.encryptedData
                             ? (async () => {
-                                const raw = await __nswsDecrypt(e.encryptedData);
+                                const raw = await window.__nswsDecrypt(e.encryptedData);
                                 return { trackMetadata: e.trackMetadata, trackData: raw };
                               })()
                             : C.get(this, Qh, "m", id).call(this, e.trackUrl);
