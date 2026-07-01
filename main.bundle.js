@@ -51219,8 +51219,8 @@ window.__nswsDecrypt = async function(b64Data) {
                     // __nswsWeeks (e.g. week 3) is all that's needed for it to show up here
                     // automatically, become the new default, and push older weeks into the
                     // "past weeks" part of the dropdown.
-                    const stWeeksSorted = () => [...__nswsWeeks].sort((a, b) => b.week - a.week);
-                    const stTracksForWeek = week => (__nswsWeeks.find(w => w.week === week)?.tracks) ?? [];
+                    const stWeeksSorted = () => [...(window.__nswsWeeks || [])].sort((a, b) => b.week - a.week);
+                    const stTracksForWeek = week => ((window.__nswsWeeks || []).find(w => w.week === week)?.tracks) ?? [];
 
                     // Overlay backdrop
                     const overlay = document.createElement("div");
@@ -52341,6 +52341,7 @@ window.__nswsDecrypt = async function(b64Data) {
             tracks: [{ id: "8a5c37b4840713ca9d8c71f7c8bde514f6f63e695914b4edcd70a3fdd7930ee0", name: "1 - Can't Crash Now!", short: "CCN", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_1.png" }, { id: "68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e", name: "2 - Twisty Twasty", short: "TT", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week2_2.png" }, { id: "9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469", name: "3 - A Ternary Trio", short: "ATT", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_3.png" }, { id: "7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2", name: "4 - faht", short: "faht", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week2_4.png" }, { id: "c9c0977d2d40c589420482020762af2a09cdf1aa372807377b6fcdeb48bc714d", name: "5 - antiAO8", short: "AO8", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_5.png" }]
         }
         ];
+        window.__nswsWeeks = __nswsWeeks;
 
         const __nswsWeekKey = (chunks, masks) => {
             const _x = (h1, h2) => {
@@ -52380,10 +52381,11 @@ window.__nswsDecrypt = async function(b64Data) {
         const entries = [];
         const __nswsMaxWeek = Math.max(...__nswsWeeks.map(w => w.week));
         window.__nswsTrackWeekMap = window.__nswsTrackWeekMap || {};
+        window.__nswsMaxWeek = __nswsMaxWeek;
         window.__nswsCurrentWeek = __nswsMaxWeek;
         window.__nswsIsCurrentWeek = function(trackId) {
             const wk = window.__nswsTrackWeekMap[trackId];
-            return wk == null || wk === window.__nswsCurrentWeek;
+            return wk === window.__nswsCurrentWeek;
         };
         [...__nswsWeeks].sort((a, b) => b.week - a.week).forEach((w) => {
             w.tracks.forEach((t) => {
