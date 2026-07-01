@@ -51514,7 +51514,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 d.innerHTML = "Not the official version. &nbsp;<a href=\"https://www.crazygames.com/game/polytrack\" target=\"_blank\" style=\"color:rgba(120,170,255,0.7);text-decoration:underline;\">Play official here</a>";
                 document.body.appendChild(d);
                 const ds = document.createElement("style");
-                ds.textContent = "body:has(.track-info-ui) #nsws-disclaimer, body:has(.game-ui) #nsws-disclaimer, body:has(.settings-menu-ui) #nsws-disclaimer { display: none !important; } #nsws-disclaimer { pointer-events: auto; }";
+                ds.textContent = "body:has(.track-info-ui) #nsws-disclaimer, body:has(.game-ui) #nsws-disclaimer, body:has(.settings-menu-ui) #nsws-disclaimer, body:has(.customization-ui) #nsws-disclaimer { display: none !important; } #nsws-disclaimer { pointer-events: auto; }";
                 document.head.appendChild(ds);
             }
         }
@@ -52229,7 +52229,7 @@ window.__nswsDecrypt = async function(b64Data) {
             chunks: ["2c7ce662402e8e48", "9a8174de46651153", "edd131c2563262cb", "39f1958b3bea918e"],
             masks: ["700fbdd5827fac5c", "0ced81a7148f4d8a", "73f2b2f5921d7021", "d24bb1c10227d0ec"],
             file: "tracks/community/week1.track",
-            tracks: [{ id: "8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a", name: "1 - race", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_1.png" }, { id: "2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c", name: "2 - trek", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_2.png" }, { id: "84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b", name: "3 - maze", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week1_3.png" }, { id: "0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f", name: "4 - speeeedddd", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week1_4.png" }, { id: "05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e", name: "5 - nosebonkkk", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_5.png" }]
+            tracks: [{ id: "05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e", name: "1 - race", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_1.png" }, { id: "0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f", name: "2 - trek", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_2.png" }, { id: "84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b", name: "3 - maze", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week1_3.png" }, { id: "2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c", name: "4 - speeeedddd", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week1_4.png" }, { id: "8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a", name: "5 - nosebonkkk", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week1_5.png" }]
         },
         {
             week: 2,
