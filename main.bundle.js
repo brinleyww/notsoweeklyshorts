@@ -51358,10 +51358,67 @@ window.__nswsDecrypt = async function(b64Data) {
 
                     let stCurrentWeek = null;
                     let stRefreshInterval = null;
+                    const stWeekCache = {}; // week -> { sorted, maps } snapshot for locked (non-current) weeks
+
+                    function stRenderRows(sorted, maps, gridTemplate) {
+                        const selfNick = window.__nswsSelfNick || "";
+                        listWrap.innerHTML = "";
+                        sorted.forEach(([nick, p], i) => {
+                            const row = document.createElement("div");
+                            const isTop3 = i < 3;
+                            const isSelf = selfNick && nick.toLowerCase() === selfNick.toLowerCase();
+                            const baseBg = isTop3 ? "rgba(255,215,0,0.07)" : isSelf ? "rgba(80,180,255,0.1)" : "transparent";
+                            row.style.cssText = [
+                                "display:grid",
+                                "grid-template-columns:" + gridTemplate,
+                                "gap:0",
+                                "padding:10px 8px",
+                                "border-radius:0",
+                                "margin-bottom:0",
+                                "align-items:center",
+                                "background:" + baseBg,
+                                "border-left:none",
+                                "border-right:none",
+                                "border-top:none",
+                                "border-bottom:" + (isSelf ? "1px solid rgba(80,180,255,0.3)" : "1px solid rgba(255,255,255,0.05)"),
+                            ].join(";");
+                            row.addEventListener("mouseover", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.08)" : isSelf ? "rgba(80,180,255,0.13)" : "rgba(80,130,230,0.07)"; });
+                            row.addEventListener("mouseout", () => { row.style.background = baseBg; });
+
+                            const rankEl = document.createElement("span");
+                            rankEl.textContent = i + 1;
+                            rankEl.style.cssText = "font-size:24px;font-weight:400;color:var(--text-color);opacity:" + (isTop3 ? "1" : "0.5") + ";";
+
+                            const nameEl = document.createElement("span");
+                            nameEl.textContent = nick;
+                            nameEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
+
+                            const totalEl = document.createElement("span");
+                            totalEl.textContent = p.toLocaleString();
+                            totalEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";text-align:right;font-variant-numeric:tabular-nums;";
+
+                            row.appendChild(rankEl);
+                            row.appendChild(nameEl);
+                            row.appendChild(totalEl);
+
+                            maps.forEach(m => {
+                                const r = m[nick];
+                                const cell = document.createElement("span");
+                                cell.textContent = r ? "+" + stCalcPts(r).toLocaleString() : "—";
+                                cell.style.cssText = "font-size:16px;color:var(--text-color);opacity:" + (r ? "0.65" : "0.2") + ";text-align:right;font-variant-numeric:tabular-nums;";
+                                row.appendChild(cell);
+                            });
+
+                            listWrap.appendChild(row);
+                        });
+
+                        if (!sorted.length) listWrap.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:20px;padding:30px 8px;">No runs yet.</div>';
+                    }
 
                     async function stLoad(week) {
                         if (week == null) week = window.__nswsStandingsSelectedWeek ?? window.__nswsMaxWeek;
                         stCurrentWeek = week;
+                        const isCurrentWeek = week === window.__nswsMaxWeek;
                         const LB_TRACKS = stTracksForWeek(week).map(t => ({ id: t.id, name: t.name, short: t.short || stAutoShort(t.name) }));
 
                         weekTriggerLabel.textContent = "Week " + week + " — Standings";
@@ -51378,6 +51435,15 @@ window.__nswsDecrypt = async function(b64Data) {
                             colHdr.appendChild(c);
                         });
 
+                        // Locked (non-current) weeks: serve the cached snapshot instead of re-fetching,
+                        // so their standings stay frozen as of when they were first loaded.
+                        if (!isCurrentWeek && stWeekCache[week]) {
+                            const cached = stWeekCache[week];
+                            stRenderRows(cached.sorted, cached.maps, gridTemplate);
+                            updatedEl.textContent = "";
+                            return;
+                        }
+
                         listWrap.innerHTML = '<div style="color:var(--text-color);opacity:0.4;font-size:20px;padding:30px 8px;">Loading...</div>';
                         updatedEl.textContent = "";
                         try {
@@ -51393,6 +51459,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             ]);
                             if (stCurrentWeek !== week) return;
                             const selfNick = selfEntry && selfEntry.entry ? (selfEntry.entry.nickname || "").trim() : (window.__nswsSelfNick || "");
+                            window.__nswsSelfNick = selfNick || window.__nswsSelfNick;
                             const maps = results.map(data => {
                                 const entries = Array.isArray(data) ? data : (data.entries || []);
                                 const m = {};
@@ -51412,59 +51479,15 @@ window.__nswsDecrypt = async function(b64Data) {
                             });
                             const sorted = Object.entries(pts).sort((a,b) => b[1]-a[1]);
 
-                            const MEDAL_COL = ["#FFD700","#C0C0C0","#CD7F32"];
-                            listWrap.innerHTML = "";
-                            sorted.forEach(([nick, p], i) => {
-                                const row = document.createElement("div");
-                                const isTop3 = i < 3;
-                                const isSelf = selfNick && nick.toLowerCase() === selfNick.toLowerCase();
-                                const baseBg = isTop3 ? "rgba(255,215,0,0.07)" : isSelf ? "rgba(80,180,255,0.1)" : "transparent";
-                                row.style.cssText = [
-                                    "display:grid",
-                                    "grid-template-columns:" + gridTemplate,
-                                    "gap:0",
-                                    "padding:10px 8px",
-                                    "border-radius:0",
-                                    "margin-bottom:0",
-                                    "align-items:center",
-                                    "background:" + baseBg,
-                                    "border-left:none",
-                                    "border-right:none",
-                                    "border-top:none",
-                                    "border-bottom:" + (isSelf ? "1px solid rgba(80,180,255,0.3)" : "1px solid rgba(255,255,255,0.05)"),
-                                ].join(";");
-                                row.addEventListener("mouseover", () => { row.style.background = isTop3 ? "rgba(255,215,0,0.08)" : isSelf ? "rgba(80,180,255,0.13)" : "rgba(80,130,230,0.07)"; });
-                                row.addEventListener("mouseout", () => { row.style.background = baseBg; });
+                            stRenderRows(sorted, maps, gridTemplate);
 
-                                const rankEl = document.createElement("span");
-                                rankEl.textContent = i + 1;
-                                rankEl.style.cssText = "font-size:24px;font-weight:400;color:var(--text-color);opacity:" + (isTop3 ? "1" : "0.5") + ";";
-
-                                const nameEl = document.createElement("span");
-                                nameEl.textContent = nick;
-                                nameEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
-
-                                const totalEl = document.createElement("span");
-                                totalEl.textContent = p.toLocaleString();
-                                totalEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";text-align:right;font-variant-numeric:tabular-nums;";
-
-                                row.appendChild(rankEl);
-                                row.appendChild(nameEl);
-                                row.appendChild(totalEl);
-
-                                maps.forEach(m => {
-                                    const r = m[nick];
-                                    const cell = document.createElement("span");
-                                    cell.textContent = r ? "+" + stCalcPts(r).toLocaleString() : "—";
-                                    cell.style.cssText = "font-size:16px;color:var(--text-color);opacity:" + (r ? "0.65" : "0.2") + ";text-align:right;font-variant-numeric:tabular-nums;";
-                                    row.appendChild(cell);
-                                });
-
-                                listWrap.appendChild(row);
-                            });
-
-                            if (!sorted.length) listWrap.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:20px;padding:30px 8px;">No runs yet.</div>';
-                            updatedEl.textContent = "Updated " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+                            if (!isCurrentWeek) {
+                                // Freeze this week's standings now that we have a snapshot for it.
+                                stWeekCache[week] = { sorted, maps };
+                                updatedEl.textContent = "";
+                            } else {
+                                updatedEl.textContent = "Updated " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+                            }
                         } catch(e) {
                             if (stCurrentWeek === week) {
                                 listWrap.innerHTML = '<div style="color:rgba(255,120,120,0.7);font-size:18px;padding:20px 8px;">Failed to load standings.</div>';
@@ -51473,7 +51496,9 @@ window.__nswsDecrypt = async function(b64Data) {
                     }
                     window.__nswsStandingsLoad = stLoad;
                     if (stRefreshInterval == null) {
-                        stRefreshInterval = setInterval(() => { if (overlay.style.display !== "none") stLoad(stCurrentWeek); }, 60000);
+                        stRefreshInterval = setInterval(() => {
+                            if (overlay.style.display !== "none" && stCurrentWeek === window.__nswsMaxWeek) stLoad(stCurrentWeek);
+                        }, 60000);
                     }
                 }
             })(),
