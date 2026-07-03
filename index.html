@@ -7,6 +7,14 @@
         <link rel="preload" href="images/discord.svg" as="image" type="image/svg+xml"/>
         <link rel="manifest" href="manifest.json"/>
         <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,viewport-fit=cover,user-scalable=no">
+        <script src="https://cdn.jsdelivr.net/npm/disable-devtool@latest/index.min.js"></script>
+        <script>
+            DisableDevtool({
+                ondevtoolopen: () => {
+                    document.body.innerHTML = "<h1 style='color:#fff;text-align:center;margin-top:20vh;font-family:sans-serif;'>Developer tools are disabled.</h1>";
+                }
+            });
+        </script>
         <script defer="defer" src="error_screen.bundle.js"></script>
         <script defer="defer" src="main.bundle.js"></script>
     </head>

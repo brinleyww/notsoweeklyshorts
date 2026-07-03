@@ -51440,7 +51440,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         if (!isCurrentWeek && stWeekCache[week]) {
                             const cached = stWeekCache[week];
                             stRenderRows(cached.sorted, cached.maps, gridTemplate);
-                            updatedEl.textContent = "";
+                            updatedEl.textContent = "Locked";
                             return;
                         }
 
@@ -51484,7 +51484,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             if (!isCurrentWeek) {
                                 // Freeze this week's standings now that we have a snapshot for it.
                                 stWeekCache[week] = { sorted, maps };
-                                updatedEl.textContent = "";
+                                updatedEl.textContent = "Locked";
                             } else {
                                 updatedEl.textContent = "Updated " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
                             }
