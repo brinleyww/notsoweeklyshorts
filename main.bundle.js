@@ -51395,7 +51395,18 @@ window.__nswsDecrypt = async function(b64Data) {
 
                             const nameEl = document.createElement("span");
                             nameEl.textContent = nick;
-                            nameEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
+                            nameEl.style.cssText = "font-size:22px;font-weight:400;color:" + (i===0 ? "#FFD700" : "var(--text-color)") + ";display:block;overflow-x:hidden;overflow-y:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px;";
+                            nameEl.addEventListener("wheel", (e) => {
+                                if (nameEl.scrollWidth > nameEl.clientWidth) {
+                                    e.preventDefault();
+                                    nameEl.style.textOverflow = "clip";
+                                    nameEl.scrollLeft += e.deltaY;
+                                }
+                            }, { passive: false });
+                            nameEl.addEventListener("mouseleave", () => {
+                                nameEl.scrollLeft = 0;
+                                nameEl.style.textOverflow = "ellipsis";
+                            });
 
                             const totalEl = document.createElement("span");
                             totalEl.textContent = p.toLocaleString();
@@ -51466,8 +51477,12 @@ window.__nswsDecrypt = async function(b64Data) {
                             window.__nswsSelfNick = selfNick || window.__nswsSelfNick;
                             const maps = results.map(data => {
                                 const entries = Array.isArray(data) ? data : (data.entries || []);
+                                const __nswsBanlist = (window.__nswsLeaderboardBanlist || []).map(b => b.trim().toLowerCase());
+                                const filteredEntries = __nswsBanlist.length
+                                    ? entries.filter(e => !__nswsBanlist.includes(((e.nickname || e.name || "")).trim().toLowerCase()))
+                                    : entries;
                                 const m = {};
-                                entries.forEach((e, idx) => {
+                                filteredEntries.forEach((e, idx) => {
                                     const nm = (e.nickname || e.name || "").trim();
                                     if (nm && !(nm in m)) m[nm] = idx + 1;
                                 });
