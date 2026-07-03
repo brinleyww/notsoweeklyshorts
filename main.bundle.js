@@ -52370,6 +52370,13 @@ window.__nswsDecrypt = async function(b64Data) {
             masks: ["3c4464a7952794bf", "36ebb67e80fde44f", "996fd0697626fdc1", "49e07f8faa99deee"],
             file: "tracks/community/week2.track",
             tracks: [{ id: "8a5c37b4840713ca9d8c71f7c8bde514f6f63e695914b4edcd70a3fdd7930ee0", name: "1 - Can't Crash Now!", short: "CCN", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_1.png" }, { id: "68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e", name: "2 - Twisty Twasty", short: "TT", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week2_2.png" }, { id: "9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469", name: "3 - A Ternary Trio", short: "ATT", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_3.png" }, { id: "7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2", name: "4 - faht", short: "faht", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week2_4.png" }, { id: "c9c0977d2d40c589420482020762af2a09cdf1aa372807377b6fcdeb48bc714d", name: "5 - antiAO8", short: "AO8", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week2_5.png" }]
+        },
+        {
+            week: 3,
+            chunks: ["d960cfa24097263f", "d5959f3755fe6fd0", "24d9c15c0225677c", "d28c6e42c6cf2127"],
+            masks: ["99f3d6fca3528d9d", "8a45432bace111d8", "b62e9213993e39a6", "de821fc4b800601f"],
+            file: "tracks/community/week3.track",
+            tracks: [{ id: "e8ab7421b7b57a61d4936cd1dcd616cb430b6b7fbe59eec5f042a72289d565a0", name: "1 - desertttt", short: "DSRT", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week3_1.png" }, { id: "a95b8ce106322b1cd8d1cf96a15a8aa9d421037f3f385205e6fda814ed1630ca", name: "2 - Amicus", short: "Amic", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_2.png" }, { id: "443d1017f4883bb049cb6852d636fa9460223306fe3029c785da90bbe3576301", name: "3 - playable mapart", short: "PM", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_3.png" }, { id: "0c19dd161569a92a7327c9ce52df1a38d84317eb52366008e2991536304278a0", name: "4 - Massive Massiveness", short: "MM", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week3_4.png" }, { id: "7da404afa8a3171e1e69d72aaa69819b425e1160262855a63524b86d12ffac41", name: "5 - Stay on the pipe!", short: "SOTP", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
