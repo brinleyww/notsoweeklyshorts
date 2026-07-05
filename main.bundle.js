@@ -56492,10 +56492,18 @@ window.__nswsDecrypt = async function(b64Data) {
 
 (function () {
     var ENABLED_KEY = "_nswsMedalsEnabled";
+    var MIN_PLAYERS_ENABLED_KEY = "_nswsMedalsMinPlayersEnabled";
+    var MIN_PLAYERS_FOR_MEDAL = 100;
     var STORAGE_KEY = "_nswsMedals";
     var PROFILE_SLOT_KEY = "polytrack_v5_prod_user_slot";
+    var PROFILE_KEY_PREFIX = "polytrack_v5_prod_user_";
+    var ENTRY_URL = "https://ptproxy.cwcinc.dev/v6/leaderboardUserEntry?version=0.6.2&onlyVerified=false";
+    var LB_URL = "https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&onlyVerified=false";
+    var SUBMIT_DELAY_MS = 0;
+    var PLACEMENT_SETTLE_DELAY_MS = 1200;
 
-    // Author Times (seconds) per track. Keyed by the same trackId used in __nswsWeeks / the leaderboard.
+    // Author Times (seconds) per track. Beating this earns the top "Author" tier
+    // regardless of leaderboard rank. Keyed by the same trackId used in __nswsWeeks.
     var AT_TIMES = {
         // Week 1
         "8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a": 15.9,
@@ -56517,12 +56525,13 @@ window.__nswsDecrypt = async function(b64Data) {
         "7da404afa8a3171e1e69d72aaa69819b425e1160262855a63524b86d12ffac41": 17.2
     };
 
-    // Tiers, checked in order. `max` is the max allowed ratio of finishTime / authorTime.
+    // Percentile-based tiers (position / total on the leaderboard), same mechanic as before.
+    // "Author" is handled separately below via AT_TIMES, since it's time-based, not rank-based.
+    var AUTHOR_TIER = { id: "author", label: "Author", color: "#8fe3ff", bright: "#8fe3ff", soft: "rgba(143,227,255,0.3)" };
     var TIERS = [
-        { id: "author", label: "Author", max: 1, color: "#8fe3ff", bright: "#8fe3ff", soft: "rgba(143,227,255,0.3)" },
-        { id: "gold", label: "Gold", max: 1.30, color: "#ffd54a", bright: "#ffd54a", soft: "rgba(255,213,74,0.3)" },
-        { id: "silver", label: "Silver", max: 1.50, color: "#d9d9e3", bright: "#d9d9e3", soft: "rgba(217,217,227,0.3)" },
-        { id: "bronze", label: "Bronze", max: 1.85, color: "#d08a4a", bright: "#d08a4a", soft: "rgba(208,138,74,0.3)" }
+        { id: "gold", label: "Gold", max: .30, color: "#ffd54a", bright: "#ffd54a", soft: "rgba(255,213,74,0.3)" },
+        { id: "silver", label: "Silver", max: .50, color: "#d9d9e3", bright: "#d9d9e3", soft: "rgba(217,217,227,0.3)" },
+        { id: "bronze", label: "Bronze", max: .85, color: "#d08a4a", bright: "#d08a4a", soft: "rgba(208,138,74,0.3)" }
     ];
     var TIER_RANK = { author: 4, gold: 3, silver: 2, bronze: 1 };
 
@@ -56534,11 +56543,30 @@ window.__nswsDecrypt = async function(b64Data) {
         if (_stored !== null) enabled = _stored === "true";
     } catch (e) {}
 
-    function tierForRatio(ratio) {
+    // Community-track weekly leaderboards are small, so the "100+ players" gate
+    // is off by default here (unlike misotweaks, which assumed large leaderboards).
+    var minPlayersRuleEnabled = false;
+    try {
+        var _storedMinPlayers = localStorage.getItem(MIN_PLAYERS_ENABLED_KEY);
+        if (_storedMinPlayers !== null) minPlayersRuleEnabled = _storedMinPlayers === "true";
+    } catch (e) {}
+
+    function tierForPercentile(pct) {
         for (var i = 0; i < TIERS.length; i++) {
-            if (ratio <= TIERS[i].max) return TIERS[i];
+            if (pct <= TIERS[i].max) return TIERS[i];
         }
         return null;
+    }
+
+    // Combines the AT check (time-based, instant, always available) with the
+    // percentile check (rank-based, needs a placement fetch) to get the final tier.
+    function determineTier(trackId, finishSeconds, placement) {
+        var at = AT_TIMES[trackId];
+        if (at != null && finishSeconds != null && finishSeconds <= at) return AUTHOR_TIER;
+        if (!placement) return null;
+        if (minPlayersRuleEnabled && placement.total < MIN_PLAYERS_FOR_MEDAL) return null;
+        var pct = placement.position / placement.total;
+        return tierForPercentile(pct);
     }
 
     function getProfileSlot() {
@@ -56569,6 +56597,67 @@ window.__nswsDecrypt = async function(b64Data) {
         try {
             localStorage.setItem(storageKeyForCurrentProfile(), JSON.stringify(store));
         } catch (e) {}
+    }
+
+    function getUserTokenHash() {
+        try {
+            var slotRaw = localStorage.getItem(PROFILE_SLOT_KEY);
+            var slot = slotRaw != null ? JSON.parse(slotRaw) : 0;
+            if (!Number.isSafeInteger(slot) || slot < 0) slot = 0;
+            var profileRaw = localStorage.getItem(PROFILE_KEY_PREFIX + slot.toString());
+            if (!profileRaw) return Promise.resolve(null);
+            var profile = JSON.parse(profileRaw);
+            if (!profile || typeof profile.token !== "string") return Promise.resolve(null);
+            var data = (new TextEncoder).encode(profile.token);
+            return crypto.subtle.digest("SHA-256", data).then(function (buf) {
+                var bytes = new Uint8Array(buf);
+                var hex = "";
+                for (var i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+                return hex;
+            });
+        } catch (e) {
+            return Promise.resolve(null);
+        }
+    }
+
+    function fetchPlacement(trackId) {
+        return getUserTokenHash().then(function (tokenHash) {
+            if (!tokenHash) return null;
+            var entryUrl = ENTRY_URL + "&trackId=" + encodeURIComponent(trackId) + "&userTokenHash=" + encodeURIComponent(tokenHash);
+            return fetch(entryUrl).then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.json();
+            }).then(function (entryData) {
+                if (entryData == null || typeof entryData.position !== "number" || !Number.isSafeInteger(entryData.position)) {
+                    return null;
+                }
+                var lbUrl = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1";
+                return fetch(lbUrl).then(function (r) {
+                    if (!r.ok) throw new Error("HTTP " + r.status);
+                    return r.json();
+                }).then(function (lbData) {
+                    var total = lbData && typeof lbData.total === "number" ? lbData.total : null;
+                    if (!total || total < 1) return null;
+                    return {
+                        position: entryData.position,
+                        total: total,
+                        frames: typeof entryData.frames === "number" ? entryData.frames : null
+                    };
+                });
+            });
+        }).catch(function () {
+            return null;
+        });
+    }
+
+    function fetchLeaderboardTotal(trackId) {
+        var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1";
+        return fetch(url).then(function (r) {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
+        }).then(function (data) {
+            return typeof data.total === "number" ? data.total : null;
+        });
     }
 
     function formatSeconds(sec) {
@@ -56625,6 +56714,17 @@ window.__nswsDecrypt = async function(b64Data) {
         return "\uD83E\uDD49";
     }
 
+    function medalSubText(tier, placement, finishSeconds) {
+        if (tier.id === "author") {
+            return "Beat the Author Time" + (finishSeconds != null ? " \u2022 " + formatSeconds(finishSeconds) : "");
+        }
+        if (placement) {
+            var pctText = placement.position / placement.total < .01 ? "< 1%" : Math.round(placement.position / placement.total * 1e3) / 10 + "%";
+            return "Top " + pctText + " \u2022 Rank #" + placement.position.toLocaleString() + " / " + placement.total.toLocaleString();
+        }
+        return "";
+    }
+
     function findNativeRecordBanner() {
         var panels = document.querySelectorAll(".time-announcer-ui");
         if (!panels.length) return null;
@@ -56633,9 +56733,9 @@ window.__nswsDecrypt = async function(b64Data) {
         return record ? { panel: panel, record: record } : null;
     }
 
-    function announceMedal(tier, finishSeconds, atSeconds, isNewBest) {
+    function announceMedal(tier, placement, finishSeconds, isNewBest) {
         injectCSS();
-        var subText = "Your time: " + formatSeconds(finishSeconds) + " \u2022 Author: " + formatSeconds(atSeconds);
+        var subText = medalSubText(tier, placement, finishSeconds);
         var badgeText = isNewBest ? "New best medal on this track!" : null;
         var native = findNativeRecordBanner();
         if (native) {
@@ -56697,7 +56797,9 @@ window.__nswsDecrypt = async function(b64Data) {
         }, 3500);
     }
 
-    function buildMedalBadgeEl(trackId, pbSeconds) {
+    function buildMedalBadgeEl(trackId) {
+        var store = loadStore();
+        var record = store[trackId];
         var el = document.createElement("div");
         el.className = "nsws-medal-badge";
         var icon = document.createElement("div");
@@ -56710,36 +56812,58 @@ window.__nswsDecrypt = async function(b64Data) {
         detail.className = "detail";
         text.appendChild(title);
         text.appendChild(detail);
-
-        var at = AT_TIMES[trackId];
-        var tier = null;
-        if (at != null && pbSeconds != null) {
-            tier = tierForRatio(pbSeconds / at);
-        }
-
-        if (tier) {
-            icon.appendChild(buildMedalIconNode(tier.id));
-            title.textContent = tier.label + " Medal";
-            title.style.color = tier.color;
-            detail.textContent = "Your time: " + formatSeconds(pbSeconds) + " \u2022 Author: " + formatSeconds(at);
+        if (record) {
+            var tier = record.tier === "author" ? AUTHOR_TIER : null;
+            if (!tier) {
+                for (var i = 0; i < TIERS.length; i++) if (TIERS[i].id === record.tier) {
+                    tier = TIERS[i];
+                    break;
+                }
+            }
+            icon.appendChild(buildMedalIconNode(record.tier));
+            title.textContent = (tier ? tier.label : record.tier) + " Medal";
+            title.style.color = tier ? tier.color : "";
+            if (record.tier === "author") {
+                detail.textContent = "Time: " + formatSeconds(record.time) + " \u2022 Author: " + formatSeconds(record.at);
+            } else {
+                var pct = record.percentile < .01 ? "< 1%" : Math.round(record.percentile * 1e3) / 10 + "%";
+                detail.textContent = "Top " + pct + " \u2022 Rank #" + record.rank.toLocaleString() + " / " + record.total.toLocaleString();
+            }
         } else {
             el.classList.add("no-medal");
             icon.textContent = "\uD83C\uDFC1";
-            if (at == null) {
-                title.textContent = "No medal available";
-                detail.textContent = "This track has no configured author time";
-            } else if (pbSeconds == null) {
-                title.textContent = "No medal yet";
-                detail.textContent = "Author time: " + formatSeconds(at);
-            } else {
-                var bronze = TIERS[TIERS.length - 1];
-                title.textContent = "No medal yet";
-                detail.textContent = "Your time: " + formatSeconds(pbSeconds) + " \u2022 Bronze needs " + formatSeconds(at * bronze.max);
-            }
+            title.textContent = "No medal yet";
+            detail.textContent = "Finish in the top 85% (or beat the Author Time) to earn one";
         }
         el.appendChild(icon);
         el.appendChild(text);
         return el;
+    }
+
+    function refreshMedalRecord(trackId, pbSeconds) {
+        return fetchPlacement(trackId).then(function (placement) {
+            var tier = determineTier(trackId, pbSeconds, placement);
+            if (!tier) return false;
+            var store = loadStore();
+            var prev = store[trackId];
+            var percentile = placement ? placement.position / placement.total : null;
+            var unchanged = prev && prev.tier === tier.id
+                && (tier.id === "author" ? prev.time === pbSeconds : (prev.rank === placement.position && prev.total === placement.total));
+            if (unchanged) return false;
+            store[trackId] = {
+                tier: tier.id,
+                percentile: percentile,
+                rank: placement ? placement.position : null,
+                total: placement ? placement.total : null,
+                time: pbSeconds,
+                at: AT_TIMES[trackId] ?? null,
+                ts: Date.now()
+            };
+            saveStore(store);
+            return true;
+        }).catch(function () {
+            return false;
+        });
     }
 
     function renderMedalBadge(container, trackId, pbSeconds) {
@@ -56752,25 +56876,58 @@ window.__nswsDecrypt = async function(b64Data) {
         var slot = document.createElement("div");
         slot.className = "nsws-medal-badge-slot";
         container.appendChild(slot);
-        slot.appendChild(buildMedalBadgeEl(trackId, pbSeconds));
+        var showBadge = function () {
+            if (!slot.isConnected) return;
+            var old = slot.querySelector(".nsws-medal-badge");
+            if (old) old.remove();
+            slot.appendChild(buildMedalBadgeEl(trackId));
+        };
+        showBadge();
+        refreshMedalRecord(trackId, pbSeconds).then(function (changed) {
+            if (changed) showBadge();
+        });
     }
     window.__nswsRenderMedalBadge = renderMedalBadge;
 
+    function fetchSettledPlacement(trackId) {
+        return fetchPlacement(trackId).then(function (first) {
+            return new Promise(function (resolve) {
+                setTimeout(function () {
+                    fetchPlacement(trackId).then(function (second) {
+                        resolve(second || first);
+                    }).catch(function () {
+                        resolve(first);
+                    });
+                }, PLACEMENT_SETTLE_DELAY_MS);
+            });
+        });
+    }
+
     function handleFinish(trackId, finishSeconds) {
         if (!enabled) return;
-        var at = AT_TIMES[trackId];
-        if (at == null) return;
-        var ratio = finishSeconds / at;
-        var tier = tierForRatio(ratio);
-        if (!tier) return;
-        var store = loadStore();
-        var prev = store[trackId];
-        var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
-        if (isNewBest) {
-            store[trackId] = { tier: tier.id, time: finishSeconds, at: at, ts: Date.now() };
-            saveStore(store);
-        }
-        announceMedal(tier, finishSeconds, at, isNewBest);
+        setTimeout(function () {
+            fetchSettledPlacement(trackId).then(function (placement) {
+                var tier = determineTier(trackId, finishSeconds, placement);
+                if (!tier) return;
+                var store = loadStore();
+                var prev = store[trackId];
+                var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
+                if (isNewBest) {
+                    var percentile = placement ? placement.position / placement.total : null;
+                    store[trackId] = {
+                        tier: tier.id,
+                        percentile: percentile,
+                        rank: placement ? placement.position : null,
+                        total: placement ? placement.total : null,
+                        time: finishSeconds,
+                        at: AT_TIMES[trackId] ?? null,
+                        ts: Date.now()
+                    };
+                    saveStore(store);
+                }
+                announceMedal(tier, placement, finishSeconds, isNewBest);
+            });
+        }, SUBMIT_DELAY_MS);
     }
 
     var currentTrackId = null;
@@ -56804,6 +56961,15 @@ window.__nswsDecrypt = async function(b64Data) {
     };
     window.__nswsGetMedalsEnabled = function () {
         return enabled;
+    };
+    window.__nswsSetMedalsMinPlayersRuleEnabled = function (v) {
+        minPlayersRuleEnabled = !!v;
+        try {
+            localStorage.setItem(MIN_PLAYERS_ENABLED_KEY, minPlayersRuleEnabled ? "true" : "false");
+        } catch (e) {}
+    };
+    window.__nswsGetMedalsMinPlayersRuleEnabled = function () {
+        return minPlayersRuleEnabled;
     };
     window.__nswsGetMedals = function () {
         return loadStore();
