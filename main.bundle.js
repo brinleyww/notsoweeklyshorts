@@ -42328,6 +42328,8 @@ window.__nswsDecrypt = async function(b64Data) {
                     C.get(this, wa, "f").audioVolume = 0) : (C.get(this, wa, "f").isPaused = !1,
                     C.get(this, wa, "f").audioVolume = 1),
                     C.get(this, wa, "f").isControlsDisabled = C.get(this, Ba, "f").isEnabled || C.get(this, _r, "m", Ha).call(this),
+                    window.__getPlayerState = () => C.get(this, wa, "f") ?? null,
+                    window.__getCurrentTrack = () => C.get(this, Yr, "f") ?? null,
                     !C.get(this, Ba, "f").isEnabled && !C.get(this, _r, "m", Ha).call(this)) {
                         const e = C.get(this, ya, "f").getControls();
                         (e.up || e.down) && (C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").start()),
@@ -49444,6 +49446,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 C.get(this, Vo, "f").className = "personal-best",
                 C.get(this, Wo, "f").appendChild(C.get(this, Vo, "f")),
                 C.get(this, Uo, "m", Zo).call(this, v?.time.clone() ?? null, null);
+                "function" == typeof window.__nswsRenderMedalBadge && window.__nswsRenderMedalBadge(C.get(this, Wo, "f"), h, v?.time.time ?? null);
                 const P = document.createElement("div");
                 P.className = "divider",
                 C.get(this, Wo, "f").appendChild(P);
@@ -56486,3 +56489,333 @@ window.__nswsDecrypt = async function(b64Data) {
     )()
 }
 )();
+
+(function () {
+    var ENABLED_KEY = "_nswsMedalsEnabled";
+    var STORAGE_KEY = "_nswsMedals";
+    var PROFILE_SLOT_KEY = "polytrack_v5_prod_user_slot";
+
+    // Author Times (seconds) per track. Keyed by the same trackId used in __nswsWeeks / the leaderboard.
+    var AT_TIMES = {
+        // Week 1
+        "8a12fc3f6ae6bc9fb3d60b8fd56944478e5634f14221ecd91a2a4177106b531a": 15.9,
+        "2909df017040a62807141541da1ec9c2839437bd75a6f882e1609c71ae461b5c": 16.8,
+        "84e8bca12bc7a171e44d4bf377c4abe130a4f2427d8e24b11f62334326deaa3b": 8.8,
+        "0f5e7f9d5bc9806f7ddf46c874909954aa72604299a7d1dd7e5b364080d9d63f": 16.22,
+        "05712abed8a0bf53c32c81489769705a7beb1cbd75f84400d50ef1d270fb416e": 15.55,
+        // Week 2
+        "8a5c37b4840713ca9d8c71f7c8bde514f6f63e695914b4edcd70a3fdd7930ee0": 14.8,
+        "68dedebe6eeed293775cc8593ad14e6070a0529dbc7acceec7441c844e41838e": 13.72,
+        "9af28cca21b8eeb207055536883512df85c6ab31ed380058fec290b6f765e469": 10.3,
+        "7216b418fb57f0a4b2c2f8083caaa1fc1e54563e9cda00bd85bdea61075d7db2": 15.29,
+        "c9c0977d2d40c589420482020762af2a09cdf1aa372807377b6fcdeb48bc714d": 19.6,
+        // Week 3
+        "e8ab7421b7b57a61d4936cd1dcd616cb430b6b7fbe59eec5f042a72289d565a0": 15.7,
+        "a95b8ce106322b1cd8d1cf96a15a8aa9d421037f3f385205e6fda814ed1630ca": 15.8,
+        "443d1017f4883bb049cb6852d636fa9460223306fe3029c785da90bbe3576301": 11.3,
+        "0c19dd161569a92a7327c9ce52df1a38d84317eb52366008e2991536304278a0": 18,
+        "7da404afa8a3171e1e69d72aaa69819b425e1160262855a63524b86d12ffac41": 17.2
+    };
+
+    // Tiers, checked in order. `max` is the max allowed ratio of finishTime / authorTime.
+    var TIERS = [
+        { id: "author", label: "Author", max: 1, color: "#8fe3ff", bright: "#8fe3ff", soft: "rgba(143,227,255,0.3)" },
+        { id: "gold", label: "Gold", max: 1.30, color: "#ffd54a", bright: "#ffd54a", soft: "rgba(255,213,74,0.3)" },
+        { id: "silver", label: "Silver", max: 1.50, color: "#d9d9e3", bright: "#d9d9e3", soft: "rgba(217,217,227,0.3)" },
+        { id: "bronze", label: "Bronze", max: 1.85, color: "#d08a4a", bright: "#d08a4a", soft: "rgba(208,138,74,0.3)" }
+    ];
+    var TIER_RANK = { author: 4, gold: 3, silver: 2, bronze: 1 };
+
+    var AUTHOR_MEDAL_IMAGE_PATH = "images/medals/author.png";
+
+    var enabled = true;
+    try {
+        var _stored = localStorage.getItem(ENABLED_KEY);
+        if (_stored !== null) enabled = _stored === "true";
+    } catch (e) {}
+
+    function tierForRatio(ratio) {
+        for (var i = 0; i < TIERS.length; i++) {
+            if (ratio <= TIERS[i].max) return TIERS[i];
+        }
+        return null;
+    }
+
+    function getProfileSlot() {
+        try {
+            var raw = localStorage.getItem(PROFILE_SLOT_KEY);
+            var slot = raw != null ? JSON.parse(raw) : 0;
+            if (!Number.isSafeInteger(slot) || slot < 0) slot = 0;
+            return slot;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    function storageKeyForCurrentProfile() {
+        return STORAGE_KEY + ":" + getProfileSlot();
+    }
+
+    function loadStore() {
+        try {
+            var raw = localStorage.getItem(storageKeyForCurrentProfile());
+            return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function saveStore(store) {
+        try {
+            localStorage.setItem(storageKeyForCurrentProfile(), JSON.stringify(store));
+        } catch (e) {}
+    }
+
+    function formatSeconds(sec) {
+        return sec.toFixed(2) + "s";
+    }
+
+    function injectCSS() {
+        if (document.getElementById("_nsws-medal-css")) return;
+        var style = document.createElement("style");
+        style.id = "_nsws-medal-css";
+        style.textContent = [
+            ".nsws-medal-subline{margin:2px 0 0 0;padding:0;font-size:22px;text-align:center;color:#fff;text-shadow:2px 2px 0 #000,0 0 3px #000;opacity:0;transition:opacity 0.4s ease-in-out 0.3s;}",
+            ".nsws-medal-subline.show{opacity:0.9;}",
+            ".nsws-medal-badgeline{margin:2px 0 0 0;padding:0;font-size:15px;text-align:center;font-style:italic;color:#fff;text-shadow:1px 1px 0 #000;opacity:0;transition:opacity 0.4s ease-in-out 0.45s;}",
+            ".nsws-medal-badgeline.show{opacity:0.7;}",
+            ".nsws-medal-popup{position:fixed;left:0;top:44%;width:100%;margin:0;padding:10px 0;box-sizing:border-box;text-align:center;pointer-events:none;opacity:0;z-index:9999;font-family:ForcedSquare,Arial,sans-serif;}",
+            ".nsws-medal-popup.show{animation:0.25s ease-out 0s 1 normal forwards running nsws-medal-record-animation;}",
+            ".nsws-medal-popup>.tier{margin:0;font-size:56px;font-weight:bold;text-shadow:3px 3px 0 #000,0 0 3px #000;}",
+            ".nsws-medal-popup>.tier>img.tier-icon{height:1em;vertical-align:middle;margin-right:6px;filter:drop-shadow(3px 3px 0 #000);}",
+            ".nsws-medal-popup>.sub{margin:2px 0 0 0;font-size:22px;color:#fff;text-shadow:2px 2px 0 #000,0 0 3px #000;opacity:0.9;}",
+            ".nsws-medal-popup>.badge{margin:2px 0 0 0;font-size:15px;color:#fff;text-shadow:1px 1px 0 #000;opacity:0.7;font-style:italic;}",
+            "@keyframes nsws-medal-record-animation{" + "0%{opacity:0;transform:scaleX(0.5);background-color:var(--nsws-medal-bright);}" + "80%{opacity:1;transform:scaleX(1.1);}" + "100%{opacity:1;transform:scaleX(1);background-color:var(--nsws-medal-soft);}" + "}",
+            ".nsws-medal-badge{margin:0 0 16px 0;padding:10px 12px;box-sizing:border-box;display:flex;align-items:center;background-color:var(--surface-secondary-color);color:var(--text-color);}",
+            ".nsws-medal-badge>.icon{flex-shrink:0;margin-right:10px;font-size:30px;line-height:1;}",
+            ".nsws-medal-badge>.icon>img.tier-icon{height:1em;vertical-align:middle;}",
+            ".nsws-medal-badge>.text{flex-grow:1;min-width:0;}",
+            ".nsws-medal-badge>.text>.title{font-size:20px;font-weight:bold;color:var(--text-color);}",
+            ".nsws-medal-badge>.text>.detail{font-size:15px;opacity:0.7;color:var(--text-color);}",
+            ".nsws-medal-badge.no-medal{opacity:0.5;}",
+            ".nsws-medal-badge.no-medal>.text>.title{font-weight:normal;font-style:italic;}"
+        ].join("");
+        document.head.appendChild(style);
+    }
+
+    function buildMedalIconNode(tierId) {
+        if (tierId === "author") {
+            var img = document.createElement("img");
+            img.className = "tier-icon";
+            img.src = AUTHOR_MEDAL_IMAGE_PATH;
+            img.alt = "Author medal";
+            img.onerror = function () {
+                this.style.display = "none";
+            };
+            return img;
+        }
+        var span = document.createElement("span");
+        span.textContent = medalEmoji(tierId);
+        return span;
+    }
+
+    function medalEmoji(tierId) {
+        if (tierId === "gold") return "\uD83E\uDD47";
+        if (tierId === "silver") return "\uD83E\uDD48";
+        return "\uD83E\uDD49";
+    }
+
+    function findNativeRecordBanner() {
+        var panels = document.querySelectorAll(".time-announcer-ui");
+        if (!panels.length) return null;
+        var panel = panels[panels.length - 1];
+        var record = panel.querySelector(":scope > .record");
+        return record ? { panel: panel, record: record } : null;
+    }
+
+    function announceMedal(tier, finishSeconds, atSeconds, isNewBest) {
+        injectCSS();
+        var subText = "Your time: " + formatSeconds(finishSeconds) + " \u2022 Author: " + formatSeconds(atSeconds);
+        var badgeText = isNewBest ? "New best medal on this track!" : null;
+        var native = findNativeRecordBanner();
+        if (native) {
+            var record = native.record;
+            record.classList.remove("hidden");
+            record.textContent = "";
+            record.appendChild(buildMedalIconNode(tier.id));
+            record.appendChild(document.createTextNode(" " + tier.label.toUpperCase() + " MEDAL"));
+            record.style.color = tier.color;
+            record.style.textShadow = "3px 3px 0 #000, 0 0 8px " + tier.color;
+            var sub = document.createElement("div");
+            sub.className = "nsws-medal-subline";
+            sub.textContent = subText;
+            native.panel.insertBefore(sub, record.nextSibling);
+            var after = sub;
+            if (badgeText) {
+                var badgeLine = document.createElement("div");
+                badgeLine.className = "nsws-medal-badgeline";
+                badgeLine.textContent = badgeText;
+                native.panel.insertBefore(badgeLine, sub.nextSibling);
+                after = badgeLine;
+            }
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    sub.classList.add("show");
+                    if (badgeText) after.classList.add("show");
+                });
+            });
+            return;
+        }
+        var el = document.createElement("div");
+        el.className = "nsws-medal-popup";
+        el.style.color = tier.color;
+        el.style.setProperty("--nsws-medal-bright", tier.bright);
+        el.style.setProperty("--nsws-medal-soft", tier.soft);
+        var tierLine = document.createElement("div");
+        tierLine.className = "tier";
+        tierLine.appendChild(buildMedalIconNode(tier.id));
+        tierLine.appendChild(document.createTextNode(" " + tier.label.toUpperCase() + " MEDAL"));
+        el.appendChild(tierLine);
+        var subLine = document.createElement("div");
+        subLine.className = "sub";
+        subLine.textContent = subText;
+        el.appendChild(subLine);
+        if (badgeText) {
+            var badge = document.createElement("div");
+            badge.className = "badge";
+            badge.textContent = badgeText;
+            el.appendChild(badge);
+        }
+        document.body.appendChild(el);
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                el.classList.add("show");
+            });
+        });
+        setTimeout(function () {
+            el.remove();
+        }, 3500);
+    }
+
+    function buildMedalBadgeEl(trackId, pbSeconds) {
+        var el = document.createElement("div");
+        el.className = "nsws-medal-badge";
+        var icon = document.createElement("div");
+        icon.className = "icon";
+        var text = document.createElement("div");
+        text.className = "text";
+        var title = document.createElement("div");
+        title.className = "title";
+        var detail = document.createElement("div");
+        detail.className = "detail";
+        text.appendChild(title);
+        text.appendChild(detail);
+
+        var at = AT_TIMES[trackId];
+        var tier = null;
+        if (at != null && pbSeconds != null) {
+            tier = tierForRatio(pbSeconds / at);
+        }
+
+        if (tier) {
+            icon.appendChild(buildMedalIconNode(tier.id));
+            title.textContent = tier.label + " Medal";
+            title.style.color = tier.color;
+            detail.textContent = "Your time: " + formatSeconds(pbSeconds) + " \u2022 Author: " + formatSeconds(at);
+        } else {
+            el.classList.add("no-medal");
+            icon.textContent = "\uD83C\uDFC1";
+            if (at == null) {
+                title.textContent = "No medal available";
+                detail.textContent = "This track has no configured author time";
+            } else if (pbSeconds == null) {
+                title.textContent = "No medal yet";
+                detail.textContent = "Author time: " + formatSeconds(at);
+            } else {
+                var bronze = TIERS[TIERS.length - 1];
+                title.textContent = "No medal yet";
+                detail.textContent = "Your time: " + formatSeconds(pbSeconds) + " \u2022 Bronze needs " + formatSeconds(at * bronze.max);
+            }
+        }
+        el.appendChild(icon);
+        el.appendChild(text);
+        return el;
+    }
+
+    function renderMedalBadge(container, trackId, pbSeconds) {
+        if (!container || trackId == null) return;
+        injectCSS();
+        var oldSlot = container.querySelector(".nsws-medal-badge-slot");
+        if (oldSlot) oldSlot.remove();
+        var oldBadge = container.querySelector(".nsws-medal-badge");
+        if (oldBadge) oldBadge.remove();
+        var slot = document.createElement("div");
+        slot.className = "nsws-medal-badge-slot";
+        container.appendChild(slot);
+        slot.appendChild(buildMedalBadgeEl(trackId, pbSeconds));
+    }
+    window.__nswsRenderMedalBadge = renderMedalBadge;
+
+    function handleFinish(trackId, finishSeconds) {
+        if (!enabled) return;
+        var at = AT_TIMES[trackId];
+        if (at == null) return;
+        var ratio = finishSeconds / at;
+        var tier = tierForRatio(ratio);
+        if (!tier) return;
+        var store = loadStore();
+        var prev = store[trackId];
+        var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
+        if (isNewBest) {
+            store[trackId] = { tier: tier.id, time: finishSeconds, at: at, ts: Date.now() };
+            saveStore(store);
+        }
+        announceMedal(tier, finishSeconds, at, isNewBest);
+    }
+
+    var currentTrackId = null;
+    var wasFinished = false;
+    function update() {
+        requestAnimationFrame(update);
+        var track = typeof window.__getCurrentTrack === "function" ? window.__getCurrentTrack() : null;
+        var trackId = track && typeof track.getId === "function" ? track.getId() : null;
+        if (trackId !== currentTrackId) {
+            currentTrackId = trackId;
+            wasFinished = false;
+        }
+        var playerState = typeof window.__getPlayerState === "function" ? window.__getPlayerState() : null;
+        var finished = playerState ? !!playerState.hasFinished() : false;
+        if (finished && !wasFinished) {
+            wasFinished = true;
+            if (trackId != null && playerState.getFinishTime) {
+                var finishTime = playerState.getFinishTime();
+                if (finishTime) handleFinish(trackId, finishTime.time);
+            }
+        } else if (!finished) {
+            wasFinished = false;
+        }
+    }
+
+    window.__nswsSetMedalsEnabled = function (v) {
+        enabled = !!v;
+        try {
+            localStorage.setItem(ENABLED_KEY, enabled ? "true" : "false");
+        } catch (e) {}
+    };
+    window.__nswsGetMedalsEnabled = function () {
+        return enabled;
+    };
+    window.__nswsGetMedals = function () {
+        return loadStore();
+    };
+
+    function tryInit() {
+        var uiEl = document.getElementById("ui");
+        if (!uiEl) {
+            setTimeout(tryInit, 100);
+            return;
+        }
+        requestAnimationFrame(update);
+    }
+    tryInit();
+})();
