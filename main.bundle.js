@@ -56989,11 +56989,40 @@ window.__nswsDecrypt = async function(b64Data) {
         }
     }
 
-    // Pressing Escape (pause menu) doesn't change the track or un-finish the run, so neither
-    // of the checks in update() above catches it. Listen for it directly so the banner dies
-    // the instant the player backs out, instead of lingering over the pause menu.
+    // Pressing Escape (pause menu), the full restart keybind, or the checkpoint-reset keybind
+    // doesn't change the track or leave hasFinished() false long enough to reliably catch in
+    // update() above, so listen for all of them directly. Reads the player's actual configured
+    // bindings (not just the KeyT/Backspace/KeyR/Enter defaults) in case they've rebound them.
+    var KEY_BINDINGS_STORAGE_KEY = "polytrack_v5_prod_key_bindings";
+    var DEFAULT_CODES_BY_BINDING = {
+        VehicleStartReset: ["KeyT", "Backspace"],
+        VehicleCheckpointReset: ["KeyR", "Enter"]
+    };
+    function getKeyCodesForBinding(bindingName) {
+        var fallback = DEFAULT_CODES_BY_BINDING[bindingName] || [];
+        try {
+            var raw = localStorage.getItem(KEY_BINDINGS_STORAGE_KEY);
+            if (!raw) return fallback;
+            var arr = JSON.parse(raw);
+            if (!Array.isArray(arr)) return fallback;
+            for (var i = 0; i < arr.length; i++) {
+                var entry = arr[i];
+                if (Array.isArray(entry) && entry[0] === bindingName && Array.isArray(entry[1])) {
+                    return entry[1].filter(function (code) {
+                        return code != null;
+                    });
+                }
+            }
+        } catch (e) {}
+        return fallback;
+    }
+    function isResetKeyCode(code) {
+        return getKeyCodesForBinding("VehicleStartReset").indexOf(code) !== -1 ||
+            getKeyCodesForBinding("VehicleCheckpointReset").indexOf(code) !== -1;
+    }
     document.addEventListener("keydown", function (e) {
-        if (e.code === "Escape" && activeBanner) clearActiveBanner();
+        if (!activeBanner) return;
+        if (e.code === "Escape" || isResetKeyCode(e.code)) clearActiveBanner();
     }, true);
 
     window.__nswsSetMedalsEnabled = function (v) {
