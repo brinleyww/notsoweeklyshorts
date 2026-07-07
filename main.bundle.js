@@ -51783,6 +51783,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     C.get(this, Tc, "f").className = "discord-link",
                     C.get(this, Tc, "f").href = "https://discord.gg/v5xrXSfvtE",
                     C.get(this, Tc, "f").target = "_blank",
+                    C.get(this, Tc, "f").style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px;position:absolute;right:calc(30px + var(--safe-area-horizontal));bottom:16px;margin:0;padding:0;pointer-events:auto;text-decoration:none;max-width:min(280px,40vw);text-align:center;",
                     C.get(this, kc, "f").appendChild(C.get(this, Tc, "f"));
                     const e = document.createElement("img");
                     i.hasLoaded() || (e.classList.add("hidden"),
@@ -51791,11 +51792,11 @@ window.__nswsDecrypt = async function(b64Data) {
                     }
                     ))),
                     e.src = "images/discord.svg",
-                    e.style.cssText = "height:70px;",
+                    e.style.cssText = "display:block;height:70px;width:auto;max-width:100%;margin:0;padding:0;flex-shrink:0;",
                     C.get(this, Tc, "f").appendChild(e);
                     const discordLabel = document.createElement("span");
-                    discordLabel.textContent = "Join Discord",
-                    discordLabel.style.cssText = "display:block;color:var(--text-color);font-size:20px;text-align:center;margin-top:4px;",
+                    discordLabel.textContent = "Join Not So Weekly Shorts Discord!",
+                    discordLabel.style.cssText = "display:block;color:var(--text-color);font-size:20px;line-height:1.2;text-align:center;margin:0;padding:0;",
                     C.get(this, Tc, "f").appendChild(discordLabel)
                 }
                 C.set(this, Mc, document.createElement("div"), "f"),
@@ -56522,6 +56523,15 @@ window.__nswsDecrypt = async function(b64Data) {
     var SUBMIT_DELAY_MS = 0;
     var PLACEMENT_SETTLE_DELAY_MS = 1200;
 
+    // Bumped on every reset/respawn (checkpoint reset, start reset, track change). A
+    // handleFinish() call captures the id it started with; if the id has moved on by the
+    // time its async placement fetch resolves, the run it was reporting on no longer
+    // exists on screen and the medal banner must not be shown.
+    var runId = 0;
+    function bumpRunId() {
+        runId++;
+    }
+
     // Author Times (seconds) per track. Beating this earns the top "Author" tier
     // regardless of leaderboard rank. Keyed by the same trackId used in __nswsWeeks.
     var AT_TIMES = {
@@ -57010,6 +57020,7 @@ window.__nswsDecrypt = async function(b64Data) {
 
     function handleFinish(trackId, finishSeconds) {
         if (!enabled) return;
+        var finishRunId = runId;
         setTimeout(function () {
             fetchSettledPlacement(trackId).then(function (placement) {
                 var tier = determineTier(trackId, finishSeconds, placement);
@@ -57033,16 +57044,17 @@ window.__nswsDecrypt = async function(b64Data) {
                         };
                         saveStore(store);
                         // The placement fetch above can settle after the player has already left
-                        // this track (menu, garage, a different track). Don't pop up a banner for
-                        // a track that's no longer on screen.
-                        if (trackId !== currentTrackId) return;
+                        // this track (menu, garage, a different track) or reset/respawned back
+                        // to the start of the same track. Don't pop up a banner for a run that's
+                        // no longer the one on screen.
+                        if (trackId !== currentTrackId || runId !== finishRunId) return;
                         announceMedal(tier, placement, finishSeconds, isNewBest);
                         return;
                     }
                 }
                 // No medal-tier upgrade this run (or no tier at all): the game's normal PB
                 // banner is left alone, but it might still deserve to say "world record" instead.
-                if (trackId !== currentTrackId) return;
+                if (trackId !== currentTrackId || runId !== finishRunId) return;
                 maybeAnnounceWorldRecord(trackId, placement);
             });
         }, SUBMIT_DELAY_MS);
@@ -57058,6 +57070,7 @@ window.__nswsDecrypt = async function(b64Data) {
             // Leaving/changing track: instantly kill any medal banner still showing rather
             // than letting it keep playing over the menu/garage.
             clearActiveBanner();
+            bumpRunId();
             currentTrackId = trackId;
             wasFinished = false;
         }
@@ -57072,7 +57085,10 @@ window.__nswsDecrypt = async function(b64Data) {
         } else if (!finished) {
             // Restarting the run (key, button, whatever) un-finishes the player state before
             // trackId ever changes, so this is where a restart needs to kill the banner too.
-            if (wasFinished) clearActiveBanner();
+            if (wasFinished) {
+                clearActiveBanner();
+                bumpRunId();
+            }
             wasFinished = false;
         }
     }
@@ -57109,8 +57125,11 @@ window.__nswsDecrypt = async function(b64Data) {
             getKeyCodesForBinding("VehicleCheckpointReset").indexOf(code) !== -1;
     }
     document.addEventListener("keydown", function (e) {
-        if (!activeBanner) return;
-        if (e.code === "Escape" || isResetKeyCode(e.code)) clearActiveBanner();
+        if (e.code !== "Escape" && !isResetKeyCode(e.code)) return;
+        // Bump first so any medal-announcement fetch still in flight for the run being left
+        // gets invalidated, even if its banner hasn't appeared on screen yet.
+        bumpRunId();
+        if (activeBanner) clearActiveBanner();
     }, true);
 
     window.__nswsSetMedalsEnabled = function (v) {
