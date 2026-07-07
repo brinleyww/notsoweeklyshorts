@@ -464,13 +464,25 @@ window.__nswsDecrypt = async function(b64Data) {
         var container = document.createElement("div");
         container.className = "clip-menu-container";
         var clipData = getAllClips();
+        function onClipsMenuKeydown(e) {
+            if (e.code === "Escape") {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                closeClipsMenu();
+            }
+        }
+        function closeClipsMenu() {
+            window.removeEventListener("keydown", onClipsMenuKeydown, true);
+            background.remove();
+            if (onClose) onClose();
+        }
+        window.addEventListener("keydown", onClipsMenuKeydown, true);
         var backButton = document.createElement("button");
         backButton.className = "button back";
         backButton.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
         backButton.append("Back");
         backButton.addEventListener("click", function() {
-            background.remove();
-            if (onClose) onClose();
+            closeClipsMenu();
         });
         var exportButton = document.createElement("button");
         exportButton.className = "button";
@@ -517,6 +529,7 @@ window.__nswsDecrypt = async function(b64Data) {
             if (!selected) return;
             var idx = Array.from(container.children).indexOf(selected);
             var clip = clipData[idx];
+            window.removeEventListener("keydown", onClipsMenuKeydown, true);
             background.remove();
             watchClip(clip);
         });
@@ -52102,6 +52115,15 @@ window.__nswsDecrypt = async function(b64Data) {
                     document.body.appendChild(overlay);
 
                     overlay.addEventListener("click", e => { if (e.target === overlay) { overlay.style.display = "none"; closeWeekMenu(); } });
+
+                    window.addEventListener("keydown", e => {
+                        if (e.code === "Escape" && overlay.style.display !== "none") {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            overlay.style.display = "none";
+                            closeWeekMenu();
+                        }
+                    }, true);
 
                     let stCurrentWeek = null;
                     let stRefreshInterval = null;
