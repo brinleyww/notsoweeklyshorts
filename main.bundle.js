@@ -51635,7 +51635,7 @@ window.__nswsDecrypt = async function(b64Data) {
             t.id = "copyright-text",
             t.href = "https://github.com/brinleyww/notsoweeklyshorts",
             t.target = "_blank",
-            t.textContent = "©️2026 brinleyww - Loading...",
+            t.textContent = "© 2026 brinleyww - Loading...",
             C.get(this, Mc, "f").appendChild(t);
 
             async function updateCommitMessage() {
@@ -51654,11 +51654,11 @@ window.__nswsDecrypt = async function(b64Data) {
                     const firstLineMessage = rawMessage.split("\n")[0];
 
                     // 3. Update the text on the screen
-                    textElement.textContent = `©️2026 brinleyww - ${firstLineMessage}`;
+                    textElement.textContent = `© 2026 brinleyww - ${firstLineMessage}`;
                 } catch (error) {
                     console.error("Could not load latest commit message:", error);
                     // Fallback text if offline or if API fails
-                    textElement.textContent = "©️2026 brinleyww";
+                    textElement.textContent = "© 2026 brinleyww";
                 }
             }
             updateCommitMessage();
@@ -51822,7 +51822,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     e.style.cssText = "display:block;height:70px;width:auto;max-width:100%;margin:0;padding:0;flex-shrink:0;",
                     C.get(this, Tc, "f").appendChild(e);
                     const discordLabel = document.createElement("span");
-                    discordLabel.textContent = "Join Not So Weekly Shorts Discord!",
+                    discordLabel.textContent = "Not So Weekly Shorts Discord!",
                     discordLabel.style.cssText = "display:block;color:var(--text-color);font-size:20px;line-height:1.2;text-align:center;margin:0;padding:0;",
                     C.get(this, Tc, "f").appendChild(discordLabel)
                 }
