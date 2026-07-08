@@ -5134,7 +5134,7 @@ window.__nswsDecrypt = async function(b64Data) {
             }
             ,
             f.defaultNickname = "Anonymous",
-            f.maxNumberOfProfiles = 3;
+            f.maxNumberOfProfiles = 1;
             const g = f
         }
         ,
