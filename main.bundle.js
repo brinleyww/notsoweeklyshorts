@@ -479,15 +479,33 @@ window.__nswsDecrypt = async function(b64Data) {
     function _currentTrackId() {
         return window.__getCurrentTrack?.()?.getId?.() ?? null;
     }
-    function _waitForTrackToLoad(trackId, timeoutMs) {
+    // NOTE ON THE FIX BELOW:
+    // `watchClipFunction` (module-level `let`, reassigned by the game's own
+    // track-confirmation screen constructor) is the actual trigger that
+    // builds the race/spectate scene for whichever track that screen was
+    // built for - it resolves the track's data and starts the scene itself.
+    // `_currentTrackId()` (window.__getCurrentTrack()) only becomes accurate
+    // *after* that scene has actually been built, i.e. only after
+    // watchClipFunction() has already been called and done its work.
+    // The previous implementation waited for _currentTrackId() to match the
+    // target track BEFORE ever calling watchClipFunction() - but nothing
+    // was going to make that become true, since building the scene requires
+    // calling watchClipFunction() in the first place. That's why switching
+    // to a track you hadn't already loaded this session would just spin
+    // (showing the loading overlay) until the 15s timeout.
+    // The correct thing to wait for is the *selection* step completing -
+    // i.e. watchClipFunction being rebound to the newly-selected track's
+    // context - and then let _playClipNow's own call to watchClipFunction
+    // do the (near-instant) scene build.
+    function _waitForWatchFunctionRebind(previousFn, timeoutMs) {
         return new Promise(resolve => {
-            if (_currentTrackId() === trackId) {
+            if (watchClipFunction !== previousFn) {
                 resolve(true);
                 return;
             }
             const start = performance.now();
             (function poll() {
-                if (_currentTrackId() === trackId) {
+                if (watchClipFunction !== previousFn) {
                     resolve(true);
                     return;
                 }
@@ -505,6 +523,7 @@ window.__nswsDecrypt = async function(b64Data) {
             _playClipNow(clip);
             return;
         }
+        const previousWatchFn = watchClipFunction;
         const opened = window.__bw_selectTrackById?.(clip.trackId);
         if (!opened) {
             const trackLabel = getTrackNameById(clip.trackId) || clip.trackId;
@@ -513,15 +532,15 @@ window.__nswsDecrypt = async function(b64Data) {
             openClipsMenu();
             return;
         }
-        // The track switch triggered above (window.__bw_selectTrackById) loads
-        // and builds the new track asynchronously under the hood. Previously
-        // this function called _playClipNow() immediately afterward without
-        // waiting, so the clip could start loading/playing against the old
-        // (still-loaded) track, or before the new track's scene was ready.
-        // Preload/wait for the target track to actually become the active
-        // track before starting clip playback.
-        const loadedInTime = await _waitForTrackToLoad(clip.trackId, 15000);
-        if (!loadedInTime) {
+        // Selecting the track (above) synchronously (re)builds that track's
+        // confirmation/record screen, which is what rebinds
+        // watchClipFunction to the newly selected track. Wait briefly for
+        // that rebind (it should happen the same tick, but this guards
+        // against the track list needing to refresh itself first), then
+        // hand off to _playClipNow, whose call to watchClipFunction is what
+        // actually preloads and builds the track's scene before playback.
+        const rebound = await _waitForWatchFunctionRebind(previousWatchFn, 5000);
+        if (!rebound) {
             alert("The track for this clip took too long to load. Please try watching the clip again.");
             hideClipSkyOverlay();
             openClipsMenu();
