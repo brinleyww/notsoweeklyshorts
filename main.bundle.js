@@ -31,6 +31,7 @@ window.__nswsDecrypt = async function(b64Data) {
     let watchingClip;
     let openClipsMenuOnLoad = false;
     let runHasClip = false;
+    let openClipsMenu = () => {};
     (function() {
         var style = document.createElement("style");
         style.id = "_miso-clip-hud-css";
@@ -363,6 +364,7 @@ window.__nswsDecrypt = async function(b64Data) {
         const recording = RecordingClass.deserialize(b64);
         if (!recording) {
             alert("Failed to deserialize clip recording.");
+            openClipsMenu();
             return;
         }
         let carStyle;
@@ -374,6 +376,7 @@ window.__nswsDecrypt = async function(b64Data) {
         const loaded = replayLoaderClass?.loadClip(recording, clip.frames);
         if (!loaded) {
             alert("Failed to load clip.");
+            openClipsMenu();
             return;
         }
         watchingClip = true;
@@ -455,6 +458,7 @@ window.__nswsDecrypt = async function(b64Data) {
         if (!inputCallback) ta.select();
     }
     function createClipsMenu(onClose) {
+        openClipsMenu = () => createClipsMenu(onClose);
         injectClipCSS();
         var ui = document.getElementById("ui");
         var background = document.createElement("div");
@@ -611,6 +615,13 @@ window.__nswsDecrypt = async function(b64Data) {
         var focused = document.activeElement;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
         if (window.__misoClipKeyBindCapturing) return;
+        if (e.code === "Escape" && watchingClip) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            watchingClip = false;
+            openClipsMenu();
+            return;
+        }
         if (e.code === getClipKeyBind() && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
             createClip();
         }
