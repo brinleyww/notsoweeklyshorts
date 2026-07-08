@@ -35,36 +35,65 @@ window.__nswsDecrypt = async function(b64Data) {
     (function() {
         var style = document.createElement("style");
         style.id = "_bw-clip-hud-css";
-        style.textContent = "body.clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .speedometer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .input-visualizer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none!important;visibility:hidden!important;pointer-events:none!important;}.label-speedometer{display:none!important;visibility:hidden!important;}";
+        style.textContent = ".clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .speedometer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .input-visualizer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none!important;visibility:hidden!important;pointer-events:none!important;}";
         document.head.appendChild(style);
     })();
-    (function _clipHudWatcher() {
-        requestAnimationFrame(_clipHudWatcher);
-        var toolbar = document.querySelector(".preview-toolbar-ui");
-        if (watchingClip && toolbar) {
-            document.body.classList.add("clip-watching-hud");
-            var timerEl = document.querySelector(".timer-ui");
-            var speedoEl = document.querySelector(".speedometer-ui");
-            var inputEl = document.querySelector(".input-visualizer-ui");
-            if (timerEl) timerEl.style.display = "none";
-            if (speedoEl) speedoEl.style.display = "none";
-            if (inputEl) inputEl.style.display = "none";
-            var graphBtn = toolbar.querySelector("button:has(img[src=\"images/graph.svg\"])");
-            if (graphBtn) graphBtn.style.display = "none";
-        } else {
-            document.body.classList.remove("clip-watching-hud");
-            var timerEl = document.querySelector(".timer-ui");
-            var speedoEl = document.querySelector(".speedometer-ui");
-            var inputEl = document.querySelector(".input-visualizer-ui");
-            if (timerEl) timerEl.style.display = "";
-            if (speedoEl) speedoEl.style.display = "";
-            if (inputEl) inputEl.style.display = "";
-            if (toolbar) {
-                var graphBtn = toolbar.querySelector("button:has(img[src=\"images/graph.svg\"])");
-                if (graphBtn) graphBtn.style.display = "";
-            }
-            if (!toolbar && watchingClip) watchingClip = false;
+    (function() {
+        // `watchingClip` is the ONLY source of truth for whether the HUD should
+        // be hidden. Earlier versions of this hid/showed the HUD based on
+        // whether `.preview-toolbar-ui` was present in the DOM on a given
+        // animation frame, and even force-reset `watchingClip` to false when it
+        // was momentarily missing. That element is legitimately absent for a
+        // frame or two whenever the game swaps its internal scene/session
+        // object (e.g. while a track is loading), which made the hiding flicker
+        // back on or drop entirely. This version never inspects the toolbar (or
+        // any other transient DOM state) to decide whether clip-watching is
+        // still active - only the two real exit points (the Escape-key handler
+        // and the preview session's own "back"/end callback, both elsewhere in
+        // this file) are allowed to set `watchingClip = false`.
+        //
+        // Hiding itself is layered for robustness: a CSS rule (`!important`,
+        // keyed off a body class) does the bulk of the work declaratively so it
+        // re-applies automatically no matter how many times the game recreates
+        // these elements, and a JS pass backs it up with forced inline styles
+        // (also `!important`) in case a target browser/webview doesn't support
+        // the `:has()` selector used for the graph button. Both layers are
+        // driven purely by `watchingClip` and are reasserted on every animation
+        // frame AND on every DOM mutation, so there is no timing window in
+        // which a freshly (re)created element can slip through unhidden.
+        function findGraphButton(toolbar) {
+            if (!toolbar) return null;
+            var buttons = toolbar.querySelectorAll("button");
+            for (var i = 0; i < buttons.length; i++)
+                if (buttons[i].querySelector('img[src="images/graph.svg"]')) return buttons[i];
+            return null;
         }
+        function applyHudState() {
+            var hide = !!watchingClip;
+            document.body.classList.toggle("clip-watching-hud", hide);
+            var els = [ document.querySelector(".timer-ui"), document.querySelector(".speedometer-ui"), document.querySelector(".input-visualizer-ui"), findGraphButton(document.querySelector(".preview-toolbar-ui")) ];
+            for (var i = 0; i < els.length; i++) {
+                var el = els[i];
+                if (!el) continue;
+                if (hide) {
+                    el.style.setProperty("display", "none", "important");
+                    el.style.setProperty("visibility", "hidden", "important");
+                    el.style.setProperty("pointer-events", "none", "important");
+                } else {
+                    el.style.removeProperty("display");
+                    el.style.removeProperty("visibility");
+                    el.style.removeProperty("pointer-events");
+                }
+            }
+        }
+        requestAnimationFrame(function _clipHudLoop() {
+            applyHudState();
+            requestAnimationFrame(_clipHudLoop);
+        });
+        new MutationObserver(applyHudState).observe(document.body, {
+            childList: true,
+            subtree: true
+        });
     })();
     const CLIPS_STORAGE_KEY = "bw_clips";
     const CLIP_KEYBIND_STORAGE_KEY = "_clipKeyBind";
@@ -406,9 +435,31 @@ window.__nswsDecrypt = async function(b64Data) {
             isSelf: false
         } ]);
     }
-    function watchClip(clip) {
-        const currentTrack = window.__getCurrentTrack?.();
-        const currentTrackId = currentTrack?.getId?.() ?? null;
+    function _currentTrackId() {
+        return window.__getCurrentTrack?.()?.getId?.() ?? null;
+    }
+    function _waitForTrackToLoad(trackId, timeoutMs) {
+        return new Promise(resolve => {
+            if (_currentTrackId() === trackId) {
+                resolve(true);
+                return;
+            }
+            const start = performance.now();
+            (function poll() {
+                if (_currentTrackId() === trackId) {
+                    resolve(true);
+                    return;
+                }
+                if (performance.now() - start >= timeoutMs) {
+                    resolve(false);
+                    return;
+                }
+                requestAnimationFrame(poll);
+            })();
+        });
+    }
+    async function watchClip(clip) {
+        const currentTrackId = _currentTrackId();
         if (!clip.trackId || currentTrackId === clip.trackId) {
             _playClipNow(clip);
             return;
@@ -417,6 +468,19 @@ window.__nswsDecrypt = async function(b64Data) {
         if (!opened) {
             const trackLabel = getTrackNameById(clip.trackId) || clip.trackId;
             alert("This clip is for a different track (" + trackLabel + ") that isn't in your track list right now. Open that track yourself, then try watching the clip again.");
+            return;
+        }
+        // The track switch triggered above (window.__bw_selectTrackById) loads
+        // and builds the new track asynchronously under the hood. Previously
+        // this function called _playClipNow() immediately afterward without
+        // waiting, so the clip could start loading/playing against the old
+        // (still-loaded) track, or before the new track's scene was ready.
+        // Preload/wait for the target track to actually become the active
+        // track before starting clip playback.
+        const loadedInTime = await _waitForTrackToLoad(clip.trackId, 15000);
+        if (!loadedInTime) {
+            alert("The track for this clip took too long to load. Please try watching the clip again.");
+            openClipsMenu();
             return;
         }
         _playClipNow(clip);
