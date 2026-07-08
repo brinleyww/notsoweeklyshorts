@@ -613,6 +613,14 @@ window.__nswsDecrypt = async function(b64Data) {
             });
             btnRow.appendChild(ok);
         } else {
+            var back = document.createElement("button");
+            back.className = "button";
+            back.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
+            back.append("Back");
+            back.addEventListener("click", function() {
+                boxBg.remove();
+            });
+            btnRow.appendChild(back);
             var copy = document.createElement("button");
             copy.className = "button";
             copy.innerHTML = '<img class="button-icon" src="images/apply.svg"> ';
@@ -640,14 +648,6 @@ window.__nswsDecrypt = async function(b64Data) {
                 }
             });
             btnRow.appendChild(copy);
-            var back = document.createElement("button");
-            back.className = "button";
-            back.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
-            back.append("Back");
-            back.addEventListener("click", function() {
-                boxBg.remove();
-            });
-            btnRow.appendChild(back);
         }
         box.appendChild(btnRow);
         boxBg.appendChild(box);
@@ -684,6 +684,30 @@ window.__nswsDecrypt = async function(b64Data) {
         });
         btnRow.appendChild(cancel);
         btnRow.appendChild(confirm);
+        box.appendChild(btnRow);
+        boxBg.appendChild(box);
+        document.body.appendChild(boxBg);
+    }
+    function showClipAlert(message) {
+        injectClipCSS();
+        var boxBg = document.createElement("div");
+        boxBg.className = "clip-box-bg";
+        var box = document.createElement("div");
+        box.className = "clip-box";
+        var msg = document.createElement("p");
+        msg.className = "clip-confirm-message";
+        msg.textContent = message;
+        box.appendChild(msg);
+        var btnRow = document.createElement("div");
+        btnRow.className = "clip-box-buttons";
+        var ok = document.createElement("button");
+        ok.className = "button";
+        ok.innerHTML = '<img class="button-icon" src="images/apply.svg"> ';
+        ok.append("OK");
+        ok.addEventListener("click", function() {
+            boxBg.remove();
+        });
+        btnRow.appendChild(ok);
         box.appendChild(btnRow);
         boxBg.appendChild(box);
         document.body.appendChild(boxBg);
@@ -757,7 +781,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 }
                 var duplicate = _findDuplicateClip(decoded);
                 if (duplicate) {
-                    alert('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '").');
+                    showClipAlert('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '").');
                     return;
                 } else {
                     finishImport();
