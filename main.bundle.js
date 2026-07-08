@@ -34,8 +34,8 @@ window.__nswsDecrypt = async function(b64Data) {
     let openClipsMenu = () => {};
     (function() {
         var style = document.createElement("style");
-        style.id = "_miso-clip-hud-css";
-        style.textContent = "body.clip-watching-hud .timer-ui,body.clip-watching-hud .speedometer-ui,body.clip-watching-hud .input-visualizer-ui,body.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none !important;}";
+        style.id = "_bw-clip-hud-css";
+        style.textContent = "body.clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .speedometer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .input-visualizer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none!important;visibility:hidden!important;pointer-events:none!important;}.label-speedometer{display:none!important;visibility:hidden!important;}";
         document.head.appendChild(style);
     })();
     (function _clipHudWatcher() {
@@ -43,12 +43,30 @@ window.__nswsDecrypt = async function(b64Data) {
         var toolbar = document.querySelector(".preview-toolbar-ui");
         if (watchingClip && toolbar) {
             document.body.classList.add("clip-watching-hud");
+            var timerEl = document.querySelector(".timer-ui");
+            var speedoEl = document.querySelector(".speedometer-ui");
+            var inputEl = document.querySelector(".input-visualizer-ui");
+            if (timerEl) timerEl.style.display = "none";
+            if (speedoEl) speedoEl.style.display = "none";
+            if (inputEl) inputEl.style.display = "none";
+            var graphBtn = toolbar.querySelector("button:has(img[src=\"images/graph.svg\"])");
+            if (graphBtn) graphBtn.style.display = "none";
         } else {
             document.body.classList.remove("clip-watching-hud");
+            var timerEl = document.querySelector(".timer-ui");
+            var speedoEl = document.querySelector(".speedometer-ui");
+            var inputEl = document.querySelector(".input-visualizer-ui");
+            if (timerEl) timerEl.style.display = "";
+            if (speedoEl) speedoEl.style.display = "";
+            if (inputEl) inputEl.style.display = "";
+            if (toolbar) {
+                var graphBtn = toolbar.querySelector("button:has(img[src=\"images/graph.svg\"])");
+                if (graphBtn) graphBtn.style.display = "";
+            }
             if (!toolbar && watchingClip) watchingClip = false;
         }
     })();
-    const CLIPS_STORAGE_KEY = "miso_clips";
+    const CLIPS_STORAGE_KEY = "bw_clips";
     const CLIP_KEYBIND_STORAGE_KEY = "_clipKeyBind";
     const DEFAULT_CLIP_KEYBIND = "KeyC";
     function getClipKeyBind() {
@@ -111,7 +129,7 @@ window.__nswsDecrypt = async function(b64Data) {
     function getTrackNameById(trackId) {
         if (!trackId) return null;
         try {
-            return window.__miso_getTrackName?.(trackId) ?? null;
+            return window.__bw_getTrackName?.(trackId) ?? null;
         } catch (e) {
             return null;
         }
@@ -395,7 +413,7 @@ window.__nswsDecrypt = async function(b64Data) {
             _playClipNow(clip);
             return;
         }
-        const opened = window.__miso_selectTrackById?.(clip.trackId);
+        const opened = window.__bw_selectTrackById?.(clip.trackId);
         if (!opened) {
             const trackLabel = getTrackNameById(clip.trackId) || clip.trackId;
             alert("This clip is for a different track (" + trackLabel + ") that isn't in your track list right now. Open that track yourself, then try watching the clip again.");
@@ -411,9 +429,9 @@ window.__nswsDecrypt = async function(b64Data) {
         return String(min).padStart(2, "0") + ":" + String(sec).padStart(2, "0") + "." + String(msec).padStart(3, "0");
     }
     function injectClipCSS() {
-        if (document.getElementById("_miso-clip-css")) return;
+        if (document.getElementById("_bw-clip-css")) return;
         var style = document.createElement("style");
-        style.id = "_miso-clip-css";
+        style.id = "_bw-clip-css";
         style.textContent = [ ".clip-menu-bg{display:flex;flex-direction:column;position:absolute;left:calc(50% - 750px / 2);top:150px;z-index:2;margin:0;padding:0;width:750px;height:calc(100% - 150px * 2);box-sizing:border-box;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-bg>h2{margin:0;padding:10px 20px;font-weight:normal;font-size:38px;text-align:center;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-container{margin:0;padding:10px;flex-grow:1;min-height:0;box-sizing:border-box;background-color:var(--surface-secondary-color);overflow-x:hidden;overflow-y:scroll;pointer-events:auto;}", "button.clip-menu-entry{position:relative;margin:0 0 10px 0;padding:10px 20px;display:block;width:100%;box-sizing:border-box;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);text-align:left;white-space:nowrap;}", "button.clip-menu-entry:last-of-type{margin-bottom:0;}", "button.clip-menu-entry.selected{background-color:var(--button-hover-color);}", "button.clip-menu-entry>h2{margin:0;padding:0 0 6px 0;font-weight:normal;font-size:24px;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>p{margin:0;font-size:18px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>.checkmark{display:none;position:absolute;right:0;top:0;margin:6px;width:14px;}", "button.clip-menu-entry.selected>.checkmark{display:block;animation:clip-menu-checkmark-spawn 0.15s ease-out;}", "@keyframes clip-menu-checkmark-spawn{0%{transform:scale(0);}90%{transform:scale(1.2);}100%{transform:scale(1);}}", ".clip-menu-wrapper{display:flex;align-items:center;flex-wrap:wrap;padding:10px;}", ".clip-menu-wrapper>.button{margin:0 0 0 10px;}", ".clip-menu-wrapper>.button.back{margin-left:0;margin-right:auto;}", ".clip-box-bg{position:fixed;inset:0;background-color:rgba(20,20,30,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;}", ".clip-box{background-color:var(--surface-color);color:var(--text-color);width:500px;max-width:90vw;box-sizing:border-box;display:flex;flex-direction:column;}", ".clip-box>textarea{margin:10px;box-sizing:border-box;width:calc(100% - 20px);height:120px;background-color:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-family:inherit;font-size:16px;padding:10px;resize:none;}", ".clip-box>.clip-box-buttons{display:flex;justify-content:space-between;padding:0 10px 10px 10px;}", ".clip-saved-notification{position:fixed;left:50%;bottom:150px;margin:0;padding:0;text-align:center;font-size:32px;color:#fff;text-shadow:2px 2px 0 #112052,0 0 2px #000;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px);transition:opacity 0.25s ease-in-out, transform 0.25s ease-in-out;z-index:9999;}", ".clip-saved-notification.show{opacity:1;transform:translateX(-50%) translateY(0);}" ].join("");
         document.head.appendChild(style);
     }
@@ -614,7 +632,7 @@ window.__nswsDecrypt = async function(b64Data) {
     window.addEventListener("keydown", function(e) {
         var focused = document.activeElement;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
-        if (window.__misoClipKeyBindCapturing) return;
+        if (window.__bwClipKeyBindCapturing) return;
         if (e.code === "Escape" && watchingClip) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -9606,7 +9624,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     i.set(this, E, o, "f"),
                     i.set(this, T, l, "f"),
                     i.set(this, M, u, "f"),
-                    window.__miso_selectTrackById = trackId => {
+                    window.__bw_selectTrackById = trackId => {
                         let entry = i.get(this, B, "f").find(e => e.trackId === trackId);
                         if (!entry) {
                             this.refresh();
@@ -9616,7 +9634,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         u(entry.trackMetadata, entry.trackEnvironment, entry.trackData, entry.category, entry.trackId, entry.thumbnail);
                         return true;
                     },
-                    window.__miso_getTrackName = trackId => {
+                    window.__bw_getTrackName = trackId => {
                         let entry = i.get(this, B, "f").find(e => e.trackId === trackId);
                         if (!entry) {
                             this.refresh();
@@ -49297,18 +49315,18 @@ window.__nswsDecrypt = async function(b64Data) {
                 _keyBtn.textContent = formatClipKeyName(getClipKeyBind());
                 _keyBtn.addEventListener("click", ( () => {
                     _keyBtn.textContent = "Press any key...";
-                    window.__misoClipKeyBindCapturing = true;
+                    window.__bwClipKeyBindCapturing = true;
                     const _capture = ev => {
                         if (ev.code === "Escape") {
                             _keyBtn.textContent = formatClipKeyName(getClipKeyBind());
                             window.removeEventListener("keydown", _capture);
-                            window.__misoClipKeyBindCapturing = false;
+                            window.__bwClipKeyBindCapturing = false;
                             return;
                         }
                         setClipKeyBind(ev.code);
                         _keyBtn.textContent = formatClipKeyName(ev.code);
                         window.removeEventListener("keydown", _capture);
-                        window.__misoClipKeyBindCapturing = false;
+                        window.__bwClipKeyBindCapturing = false;
                         ev.preventDefault();
                     };
                     window.addEventListener("keydown", _capture);
@@ -57261,8 +57279,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     Q = new Rf(f,v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
                         if (watchingClip) {
                             watchingClip = false,
-                            openClipsMenuOnLoad = true,
-                            M(!1, null)
+                            openClipsMenu()
                         } else
                             W(e, t, n, i, null)
                     }
