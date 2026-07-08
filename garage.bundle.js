@@ -1416,8 +1416,31 @@
             for (let t = 0; t < i.get(this, Tn, "f").length; t++) {
                 const n = i.get(this, Tn, "f")[t]
                   , e = i.get(this, Hn, "f").getUserProfile(t);
-                null != e && t != i.get(this, te, "f") ? (n.setCarStyle(e.carStyle),
-                n.setVisible(!0)) : n.setVisible(!1)
+                if (null != e && t != i.get(this, te, "f"))
+                    n.setCarStyle(e.carStyle),
+                    n.setVisible(!0);
+                else {
+                    const p = Math.floor(Math.random() * y.A.patterns.length)
+                      , r = Math.floor(Math.random() * y.A.rims.length)
+                      , x = Math.floor(Math.random() * y.A.exhausts.length)
+                      , h = 360 * Math.random();
+                    let s, l;
+                    Math.random() < .9 ? (s = 100 * (1 - Math.pow(Math.random(), 2)),
+                    l = 100 * (.05 + .25 * (1 - Math.pow(Math.random(), 2)))) : (s = 0,
+                    l = 100 * Math.random());
+                    const pc = new THREE.Color("hsl(" + h.toString() + "," + s.toString() + "%," + l.toString() + "%)").getHex();
+                    let h2, s2, l2;
+                    h2 = Math.random() < .5 ? (h + 180) % 360 : Math.random() < .5 ? (h + 120) % 360 : (h - 120) % 360,
+                    Math.random() < .9 ? (s2 = s,
+                    l2 = 100 * (.05 + .25 * (1 - Math.pow(Math.random(), 2)))) : (s2 = 0,
+                    l2 = 100 * Math.random());
+                    const sc = new THREE.Color("hsl(" + h2.toString() + "," + s2.toString() + "%," + l2.toString() + "%)").getHex();
+                    let fc, rc;
+                    fc = Math.random() < .5 ? 1250067 : Math.random() < .4 ? pc : sc,
+                    rc = Math.random() < .5 ? 6710886 : fc == pc ? sc : fc == sc || Math.random() < .4 ? pc : sc,
+                    n.setCarStyle(new y.A(p,r,x,pc,sc,fc,rc)),
+                    n.setVisible(!0)
+                }
             }
         }
         ,
