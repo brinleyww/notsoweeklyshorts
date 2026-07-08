@@ -757,16 +757,8 @@ window.__nswsDecrypt = async function(b64Data) {
                 }
                 var duplicate = _findDuplicateClip(decoded);
                 if (duplicate) {
-                    showClipConfirm('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '"). Do you wish to replace it?', "Replace", function() {
-                        var idx = clipData.indexOf(duplicate);
-                        if (idx !== -1) {
-                            var entryEl = container.children[idx];
-                            if (entryEl) entryEl.remove();
-                            clipData.splice(idx, 1);
-                        }
-                        localDeleteClip(duplicate.id);
-                        finishImport();
-                    });
+                    alert('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '").');
+                    return;
                 } else {
                     finishImport();
                 }
