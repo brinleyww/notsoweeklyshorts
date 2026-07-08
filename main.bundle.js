@@ -54356,7 +54356,8 @@ window.__nswsDecrypt = async function(b64Data) {
                 C.get(this, Rd, "m", Nd).call(this),
                 C.get(this, Rd, "m", Dd).call(this),
                 C.get(this, Rd, "m", Bd).call(this),
-                C.get(this, Rd, "m", Vd).call(this)))
+                C.get(this, Rd, "m", Vd).call(this))),
+                this.migrateActiveProfileToSlotZero()
             }
             saveStartupInfo(e) {
                 try {
@@ -54475,6 +54476,34 @@ window.__nswsDecrypt = async function(b64Data) {
                     const t = C.get(this, Id, "f").getAllKeys();
                     for (const n of t)
                         n.startsWith(C.get(Pd, Pd, "f", Kd) + e.toString() + "_") && C.get(this, Id, "f").removeItem(n)
+                } catch (e) {
+                    console.error(e)
+                }
+            }
+            migrateActiveProfileToSlotZero() {
+                try {
+                    const e = this.loadUserProfileSlot();
+                    if (null == e || 0 === e)
+                        return;
+                    const t = this.loadUserProfile(e);
+                    if (null != t)
+                        this.saveUserProfile(0, t);
+                    try {
+                        const n = C.get(this, Id, "f").getAllKeys()
+                          , i = C.get(Pd, Pd, "f", Kd) + e.toString() + "_"
+                          , r = C.get(Pd, Pd, "f", Kd) + "0_";
+                        for (const o of n)
+                            if (o.startsWith(i)) {
+                                const l = r + o.substring(i.length)
+                                  , c = C.get(this, Id, "f").getItem(o);
+                                null != c && C.get(this, Id, "f").setItem(l, c),
+                                C.get(this, Id, "f").removeItem(o)
+                            }
+                    } catch (e) {
+                        console.error(e)
+                    }
+                    this.deleteUserProfile(e),
+                    this.saveUserProfileSlot(0)
                 } catch (e) {
                     console.error(e)
                 }
