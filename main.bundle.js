@@ -23,6 +23,25 @@ window.__nswsDecrypt = async function(b64Data) {
     );
     return new TextDecoder().decode(decrypted);
 };
+(function() {
+    // The Visual FX post-processing pass (below) grabs the live pixels of the
+    // #screen canvas every frame via texImage2D. WebGL canvases normally clear
+    // their drawing buffer as soon as the browser composites the frame, and
+    // since our capture runs in an independently-scheduled rAF callback, it can
+    // easily land after that clear - producing garbage/uninitialized GPU memory
+    // (visible as static-like scanline noise) instead of the real frame. Forcing
+    // preserveDrawingBuffer on that specific canvas's context keeps its buffer
+    // intact between frames so the capture always reads valid pixels. This must
+    // run before the game creates its WebGL context, so it's patched here at the
+    // very top of the file, before anything else executes.
+    const _origGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, attribs) {
+        if (this.id === "screen" && (type === "webgl2" || type === "webgl" || type === "experimental-webgl")) {
+            attribs = Object.assign({}, attribs || {}, { preserveDrawingBuffer: true });
+        }
+        return _origGetContext.call(this, type, attribs);
+    };
+})();
 ( () => {
     let frameClass;
     let recordingClass;
