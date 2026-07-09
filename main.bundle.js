@@ -52873,6 +52873,24 @@ window.__nswsDecrypt = async function(b64Data) {
                 ))),
                 C.get(this, Ec, "f").src = "images/logo.svg",
                 C.get(this, kc, "f").appendChild(C.get(this, Ec, "f"));
+                {
+                    const subtitle = document.createElement("div");
+                    subtitle.id = "nsws-subtitle",
+                    subtitle.textContent = "CHANGE YOUR USERNAME IN THE GARAGE TO BE RANKED",
+                    subtitle.style.cssText = "margin:18px auto 0 auto;max-width:900px;font-size:22px;font-weight:bold;color:var(--text-color);text-align:center;letter-spacing:1px;",
+                    C.get(this, kc, "f").appendChild(subtitle);
+                    if (!document.getElementById("_nsws-subtitle-style")) {
+                        const st = document.createElement("style");
+                        st.id = "_nsws-subtitle-style";
+                        // Only the true home screen shows this subtitle. Every other
+                        // screen it could otherwise bleed onto (track preview/leaderboard,
+                        // the track list, settings, garage/customization, and the game
+                        // itself) is matched here and forces it hidden, the same way
+                        // #nsws-disclaimer already guards itself elsewhere in this file.
+                        st.textContent = "body:has(.track-info-ui) #nsws-subtitle, body:has(.game-ui) #nsws-subtitle, body:has(.settings-menu-ui) #nsws-subtitle, body:has(.customization-ui) #nsws-subtitle, body:has(.track-selection-ui:not(.hidden)) #nsws-subtitle { display: none !important; }";
+                        document.head.appendChild(st);
+                    }
+                }
                 _o() || Ro() ? (C.set(this, zc, document.createElement("div"), "f"),
                 C.get(this, zc, "f").className = "warning-message",
                 _o() && C.get(this, zc, "f").classList.add("modded"),
