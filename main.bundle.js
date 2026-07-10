@@ -53993,6 +53993,13 @@ window.__nswsDecrypt = async function(b64Data) {
             masks: ["99f3d6fca3528d9d", "8a45432bace111d8", "b62e9213993e39a6", "de821fc4b800601f"],
             file: "tracks/community/week3.track",
             tracks: [{ id: "e8ab7421b7b57a61d4936cd1dcd616cb430b6b7fbe59eec5f042a72289d565a0", name: "1 - desertttt", short: "DSRT", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week3_1.png" }, { id: "a95b8ce106322b1cd8d1cf96a15a8aa9d421037f3f385205e6fda814ed1630ca", name: "2 - Amicus", short: "Amic", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_2.png" }, { id: "443d1017f4883bb049cb6852d636fa9460223306fe3029c785da90bbe3576301", name: "3 - playable mapart", short: "PM", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_3.png" }, { id: "0c19dd161569a92a7327c9ce52df1a38d84317eb52366008e2991536304278a0", name: "4 - Massive Massiveness", short: "MM", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week3_4.png" }, { id: "7da404afa8a3171e1e69d72aaa69819b425e1160262855a63524b86d12ffac41", name: "5 - Stay on the pipe!", short: "SOTP", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week3_5.png" }]
+        },
+        {
+            week: 4,
+            chunks: ["7f7da4798dbd8090", "76fa31b6ff053b4e", "408e27e42fc89df7", "cc0f7b6f2cd28972"],
+            masks: ["d6d84eebeb1d8221", "2a5a6fc924eafc7b", "775c30d2b0b4587a", "fb651f379b068751"],
+            file: "tracks/community/week4.track",
+            tracks: [{ id: "8d9efd262d1f14aadd2d6311fd77671e0fe07bee76823ee42a2473f5acbaa42f", name: "1 - desert styleway", short: "Style", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week4_1.png" }, { id: "1b72d6514c1a0af3f4164740b3dffaf955c2f846e0fb196b5e218691b45f57ea", name: "2 - inside line gaming", short: "ILG", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week4_2.png" }, { id: "b40500a0532442fdc064ac90fe84f88b55be8722056c373dd11d7e6844f3d701", name: "3 - Monster Truck Stadium", short: "MTS", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_3.png" }, { id: "1f43428a669b61fa3c3d7a1eba1069e933827428c23c0c521519ef0a76e8bb6d", name: "4 - jail", short: "Jail", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_4.png" }, { id: "934290e7f5d95eb0f0915ed8f9ce6503851b4b87d1ea5926a0c8a3e6ea9dbd8d", name: "5 - dropper of doom", short: "DOD", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
