@@ -58176,14 +58176,11 @@ window.__nswsDecrypt = async function(b64Data) {
     // tier regardless of leaderboard rank. Gold/Silver/Bronze are then time windows off
     // of that same AT (rounded to the nearest second), instead of leaderboard percentile.
     var BENCHMARK_NICKNAME = "Cookedbyapringle";
-    // If Cookedbyapringle has no run on a track, AT falls back to 0.5s slower than
-    // whoever currently holds the world record on that track.
-    var BENCHMARK_FALLBACK_OFFSET = 0.5;
-    // How many leaderboard entries to scan (in one page) looking for Cookedbyapringle's
-    // run. Community weekly leaderboards are small, so this comfortably covers them;
-    // if Cookedbyapringle is ranked outside this window they're treated the same as
-    // having no run at all (i.e. the fallback below kicks in).
-    var BENCHMARK_SCAN_LIMIT = 500;
+    // Page size per leaderboard request while searching for his entry.
+    var BENCHMARK_PAGE_SIZE = 500;
+    // Hard cap on total entries scanned (across pages) as a safety net against
+    // hammering the API on a leaderboard with tens of thousands of runs.
+    var BENCHMARK_SCAN_HARD_CAP = 20000;
     var GOLD_MULTIPLIER = 1.05;
     var SILVER_MULTIPLIER = 1.1;
     var BRONZE_MULTIPLIER = 1.2;
@@ -58228,38 +58225,38 @@ window.__nswsDecrypt = async function(b64Data) {
         if (cached && (Date.now() - cached.ts) < BENCHMARK_CACHE_TTL_MS) {
             return Promise.resolve(cached.value);
         }
-        var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=" + BENCHMARK_SCAN_LIMIT;
-        return fetch(url).then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-        }).then(function (data) {
-            var entries = data && Array.isArray(data.entries) ? data.entries : [];
-            var target = BENCHMARK_NICKNAME.trim().toLowerCase();
-            var at = null;
-            for (var i = 0; i < entries.length; i++) {
-                var e = entries[i];
-                if (e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target && !isNicknameBanned(e.nickname)) {
-                    at = extractTimeSeconds(e.time);
-                    break;
-                }
-            }
-            if (at == null) {
-                // Cookedbyapringle has no run here (or is ranked outside the scan window):
-                // fall back to 0.5s behind whoever holds the *legitimate* world record.
-                // onlyVerified=false means entries[0] can be a banned/cheated time, so walk
-                // down until we hit a non-banned nickname (mirrors isWorldRecord's logic).
-                var wrTime = null;
-                for (var j = 0; j < entries.length; j++) {
-                    var wrEntry = entries[j];
-                    if (wrEntry && !isNicknameBanned(wrEntry.nickname)) {
-                        wrTime = extractTimeSeconds(wrEntry.time);
-                        break;
+        var target = BENCHMARK_NICKNAME.trim().toLowerCase();
+
+        function fetchPage(skip) {
+            var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=" + skip + "&amount=" + BENCHMARK_PAGE_SIZE;
+            return fetch(url).then(function (r) {
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.json();
+            });
+        }
+
+        function scan(skip) {
+            if (skip >= BENCHMARK_SCAN_HARD_CAP) return null;
+            return fetchPage(skip).then(function (data) {
+                var entries = data && Array.isArray(data.entries) ? data.entries : [];
+                var total = typeof data?.total === "number" ? data.total : null;
+                for (var i = 0; i < entries.length; i++) {
+                    var e = entries[i];
+                    if (e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target && !isNicknameBanned(e.nickname)) {
+                        return extractTimeSeconds(e.time);
                     }
                 }
-                at = wrTime != null ? wrTime + BENCHMARK_FALLBACK_OFFSET : null;
-            }
+                var nextSkip = skip + entries.length;
+                // Stop once we've scanned every entry the leaderboard actually has, or a
+                // page comes back short/empty (nothing left to page through).
+                if (!entries.length || (total != null && nextSkip >= total)) return null;
+                return scan(nextSkip);
+            });
+        }
+
+        return scan(0).then(function (at) {
             benchmarkCache[trackId] = { value: at, ts: Date.now() };
-            console.debug("[nsws] benchmark AT for track", trackId, "=", at, "(matched entry:", entries.find(function (e) { return e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target; }) || null, ", top entry:", entries[0] || null, ")");
+            console.debug("[nsws] benchmark AT for track", trackId, "=", at);
             return at;
         }).catch(function () {
             return null;
