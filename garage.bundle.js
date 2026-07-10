@@ -1588,10 +1588,19 @@
                 i.get(this, qn, "f")?.dispose(),
                 i.set(this, qn, null, "f");
                 const n = i.get(this, Hn, "f").firstFreeProfileSlot();
-                null == n ? i.get(this, On, "f").show(i.get(this, zn, "f").get("You need a free user profile slot to import a new user profile"), i.get(this, zn, "f").get("Ok"), ( () => {
+                if (null != n) {
+                    i.get(this, Wn, "m", he).call(this, n, "");
+                    return
+                }
+                const __nswsReplaceSlot = i.get(this, Hn, "f").firstOccupiedProfileSlot() ?? 0;
+                i.get(this, On, "f").showConfirm(i.get(this, zn, "f").get("Importing a user token will replace your current profile.") + "\n\n" + i.get(this, zn, "f").get("Make sure you have exported your current private token first if you want to keep it."), i.get(this, zn, "f").get("Cancel"), i.get(this, zn, "f").get("Confirm"), ( () => {
                     i.get(this, Wn, "m", t).call(this)
                 }
-                )) : i.get(this, Wn, "m", he).call(this, n, "")
+                ), ( () => {
+                    i.get(this, Hn, "f").deleteProfileSlot(__nswsReplaceSlot),
+                    i.get(this, Wn, "m", he).call(this, __nswsReplaceSlot, "")
+                }
+                ))
             }
             ),(t => {
                 i.get(this, qn, "f")?.dispose(),
