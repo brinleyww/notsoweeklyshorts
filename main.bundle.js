@@ -50537,7 +50537,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             const __nswsBanlist = (window.__nswsLeaderboardBanlist || []).map(b => b.trim().toLowerCase());
                             const __nswsVpsEntries = (__nswsVpsResult && Array.isArray(__nswsVpsResult.entries))
                                 ? __nswsVpsResult.entries
-                                    .filter(ve => !__nswsRawEntries.some(pe => pe.id == ve.id))
+                                    .filter(ve => !__nswsRawEntries.some(pe => pe.nickname === ve.nickname && pe.time.numberOfFrames === ve.time.numberOfFrames))
                                     .map(ve => Object.assign({}, ve, {__nswsIsVps: true}))
                                 : [];
                             const __nswsMerged = __nswsRawEntries.concat(__nswsVpsEntries).sort(((x, y) => x.time.numberOfFrames - y.time.numberOfFrames));
