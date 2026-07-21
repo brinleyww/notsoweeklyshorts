@@ -10105,6 +10105,32 @@ window.__nswsDecrypt = async function(b64Data) {
             K = new WeakMap,
             v = new WeakSet,
             q = function(e, t, n, r, a, s, o, l=null) {
+                if (null === n && "string" == typeof t) {
+                    let h, d;
+                    switch (e) {
+                    case "official":
+                        h = i.get(this, I, "f"),
+                        d = i.get(this, z, "f");
+                        break;
+                    case "community":
+                        h = i.get(this, L, "f"),
+                        d = i.get(this, N, "f");
+                        break;
+                    case "custom":
+                        h = i.get(this, U, "f"),
+                        d = i.get(this, D, "f")
+                    }
+                    if (null == d.get(t)) {
+                        const wrap = document.createElement("div");
+                        d.set(t, wrap);
+                        h.appendChild(wrap);
+                        const titleEl = document.createElement("div");
+                        titleEl.className = "group-title",
+                        titleEl.textContent = t,
+                        wrap.appendChild(titleEl)
+                    }
+                    return
+                }
                 const c = document.createElement("div");
                 let h, d;
                 switch (c.className = "track",
@@ -52783,7 +52809,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         return words.length > 1 ? words.map(w => w[0].toUpperCase()).join("").slice(0, 5) : base.slice(0, 5);
                     };
                     const stWeeksSorted = () => [...(window.__nswsWeeks || [])].sort((a, b) => b.week - a.week);
-                    const stTracksForWeek = week => ((window.__nswsWeeks || []).find(w => w.week === week)?.tracks) ?? [];
+                    const stTracksForWeek = week => window.__nswsTracksForWeek ? window.__nswsTracksForWeek(week) : [];
 
                     const overlay = document.createElement("div");
                     overlay.id = "nsws-standings-overlay";
@@ -52856,21 +52882,6 @@ window.__nswsDecrypt = async function(b64Data) {
 
                     function renderWeekMenu(selectedWeek) {
                         weekMenu.innerHTML = "";
-                        (window.__nswsUpcoming || []).forEach(u => {
-                            const item = document.createElement("button");
-                            item.disabled = true;
-                            item.style.cssText = [
-                                "display:flex","align-items:center","justify-content:space-between",
-                                "width:100%","padding:12px 18px","background:transparent",
-                                "border:none","border-bottom:1px solid rgba(255,255,255,0.06)",
-                                "color:var(--text-color)","font-size:18px","font-family:inherit",
-                                "cursor:default","text-align:left","opacity:0.45",
-                            ].join(";");
-                            const label = document.createElement("span");
-                            label.textContent = u.label;
-                            item.appendChild(label);
-                            weekMenu.appendChild(item);
-                        });
                         stWeeksSorted().forEach(w => {
                             const isCurrent = w.week === window.__nswsMaxWeek;
                             const isSelected = w.week === selectedWeek;
@@ -54041,17 +54052,23 @@ window.__nswsDecrypt = async function(b64Data) {
         },
         {
             week: 5,
-            label: "Week 5 Part 1",
-            chunks: ["b40359bfffc60b5a", "464a5d2944cd587c", "5f968c5b85b24370", "ff77daeba734e321"],
-            masks: ["bc19978c08b08b83", "1ec57daaf8f8b1de", "6ac1c0aa66898e92", "0e266b71ad779e2d"],
-            file: "tracks/community/week5_1.track",
-            tracks: [{ id: "8af6950dc1e38c606797f591eb4c60ae996b2e8fe7cc01718b7a987fea909341", name: "1 - Obtesticle", short: "Obst", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_1.png" }, { id: "72b9d30f3548dc3b770a951412ff28f9d59e5a7597afc2e60469927d56e7efa0", name: "2 - Teeech", short: "Teee", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_2.png" }, { id: "29b7260122a63b6dd63efb537f18bed2d89fbbd0d796a87c804d2efc33c6c7e4", name: "3 - Fullspeed", short: "FSpd", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_3.png" }, { id: "e0dc89694db7b8a5f53bd3231d98d36526f430a607231fb097d0ca6501501f13", name: "4 - Puzzle", short: "Pzl", author: "Herny", env: "Winter", thumb: "tracks/community/thumbnails/5_1_4.png" }, { id: "6262c19c77323652f6392faedd396f0fc1bcca81db93a038b3483a760cb5928d", name: "5 - Bonkz", short: "Bnkz", author: "Herny", env: "Desert", thumb: "tracks/community/thumbnails/5_1_5.png" }]
+            label: "Week 5",
+            parts: [
+                {
+                    label: "Week 5 Part 1",
+                    chunks: ["b40359bfffc60b5a", "464a5d2944cd587c", "5f968c5b85b24370", "ff77daeba734e321"],
+                    masks: ["bc19978c08b08b83", "1ec57daaf8f8b1de", "6ac1c0aa66898e92", "0e266b71ad779e2d"],
+                    file: "tracks/community/week5_1.track",
+                    tracks: [{ id: "8af6950dc1e38c606797f591eb4c60ae996b2e8fe7cc01718b7a987fea909341", name: "1 - Obtesticle", short: "Obst", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_1.png" }, { id: "72b9d30f3548dc3b770a951412ff28f9d59e5a7597afc2e60469927d56e7efa0", name: "2 - Teeech", short: "Teee", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_2.png" }, { id: "29b7260122a63b6dd63efb537f18bed2d89fbbd0d796a87c804d2efc33c6c7e4", name: "3 - Fullspeed", short: "FSpd", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_3.png" }, { id: "e0dc89694db7b8a5f53bd3231d98d36526f430a607231fb097d0ca6501501f13", name: "4 - Puzzle", short: "Pzl", author: "Herny", env: "Winter", thumb: "tracks/community/thumbnails/5_1_4.png" }, { id: "6262c19c77323652f6392faedd396f0fc1bcca81db93a038b3483a760cb5928d", name: "5 - Bonkz", short: "Bnkz", author: "Herny", env: "Desert", thumb: "tracks/community/thumbnails/5_1_5.png" }]
+                },
+                {
+                    label: "Week 5 Part 2 (Coming Soon)",
+                    tracks: []
+                }
+            ]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
-        window.__nswsUpcoming = [
-            { label: "Week 5 Part 2 (Coming soon)" }
-        ];
 
         const __nswsWeekKey = (chunks, masks) => {
             const _x = (h1, h2) => {
@@ -54062,15 +54079,24 @@ window.__nswsDecrypt = async function(b64Data) {
             return chunks.map((c, i) => _x(c, masks[i])).join("");
         };
 
-        if (!window.__nswsWeekTrackCache) window.__nswsWeekTrackCache = {};
-        if (!window.__nswsWeekKeyCache) window.__nswsWeekKeyCache = {};
+        // Every loadable track container (whether from a legacy flat week or a week's part) is
+        // cached and keyed by its file path, so a week can be backed by any number of parts and
+        // the standings/track lists just aggregate over whichever parts currently have tracks.
+        const __nswsPartsOf = (w) => w.parts || [{ label: w.label, chunks: w.chunks, masks: w.masks, file: w.file, tracks: w.tracks || [] }];
+
+        if (!window.__nswsFileTrackCache) window.__nswsFileTrackCache = {};
+        if (!window.__nswsFileKeyCache) window.__nswsFileKeyCache = {};
         __nswsWeeks.forEach((w) => {
-            window.__nswsWeekKeyCache[w.week] = { keyHex: __nswsWeekKey(w.chunks, w.masks), file: w.file };
+            __nswsPartsOf(w).forEach((p) => {
+                if (p.file && p.chunks && p.masks) {
+                    window.__nswsFileKeyCache[p.file] = { keyHex: __nswsWeekKey(p.chunks, p.masks), file: p.file };
+                }
+            });
         });
 
-        window.__nswsLoadWeekContainer = async function(week) {
-            if (window.__nswsWeekTrackCache[week]) return window.__nswsWeekTrackCache[week];
-            const info = window.__nswsWeekKeyCache[week];
+        window.__nswsLoadTrackContainer = async function(file) {
+            if (window.__nswsFileTrackCache[file]) return window.__nswsFileTrackCache[file];
+            const info = window.__nswsFileKeyCache[file];
             const res = await fetch(info.file);
             const b64 = (await res.text()).trim();
             const keyBytes = new Uint8Array(info.keyHex.match(/../g).map(h => parseInt(h, 16)));
@@ -54084,7 +54110,7 @@ window.__nswsDecrypt = async function(b64Data) {
             const json = JSON.parse(new TextDecoder().decode(decrypted));
             const byId = {};
             json.tracks.forEach(t => { byId[t.id] = t.trackExportString; });
-            window.__nswsWeekTrackCache[week] = byId;
+            window.__nswsFileTrackCache[file] = byId;
             return byId;
         };
 
@@ -54097,17 +54123,41 @@ window.__nswsDecrypt = async function(b64Data) {
             const wk = window.__nswsTrackWeekMap[trackId];
             return wk === window.__nswsCurrentWeek;
         };
+        // Standings combine every part of a week into one leaderboard automatically —
+        // once Part 2 gets real tracks added to its `tracks` array, no other code needs to change.
+        window.__nswsTracksForWeek = function(week) {
+            const w = (window.__nswsWeeks || []).find(w => w.week === week);
+            if (!w) return [];
+            return __nswsPartsOf(w).flatMap(p => p.tracks || []);
+        };
         [...__nswsWeeks].sort((a, b) => b.week - a.week).forEach((w) => {
-            w.tracks.forEach((t) => {
-                window.__nswsTrackWeekMap[t.id] = w.week;
-                entries.push({
-                    id: t.id,
-                    group: w.label || ("Week " + w.week),
-                    trackMetadata: { name: t.name, author: t.author, lastModified: null },
-                    environment: TrackEnvironment[t.env],
-                    trackUrl: null,
-                    weekRef: { week: w.week, id: t.contentId ?? t.id },
-                    thumbnail: t.thumb
+            const parts = [...__nswsPartsOf(w)].reverse();
+            parts.forEach((p, pIdx) => {
+                const groupLabel = p.label || w.label || ("Week " + w.week);
+                if (!p.tracks || p.tracks.length === 0) {
+                    // Empty part: still show its category header in the play menu, with no tracks under it.
+                    entries.push({
+                        id: "__nsws_empty_" + w.week + "_" + pIdx,
+                        group: groupLabel,
+                        trackMetadata: null,
+                        environment: null,
+                        trackUrl: null,
+                        weekRef: null,
+                        thumbnail: null
+                    });
+                    return;
+                }
+                p.tracks.forEach((t) => {
+                    window.__nswsTrackWeekMap[t.id] = w.week;
+                    entries.push({
+                        id: t.id,
+                        group: groupLabel,
+                        trackMetadata: { name: t.name, author: t.author, lastModified: null },
+                        environment: TrackEnvironment[t.env],
+                        trackUrl: null,
+                        weekRef: { file: p.file, id: t.contentId ?? t.id },
+                        thumbnail: t.thumb
+                    });
                 });
             });
         });
@@ -54123,7 +54173,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             return t.then(( ({trackData: e}) => e));
                         const n = e.weekRef
                             ? (async () => {
-                                const container = await window.__nswsLoadWeekContainer(e.weekRef.week);
+                                const container = await window.__nswsLoadTrackContainer(e.weekRef.file);
                                 const raw = container[e.weekRef.id];
                                 if (null == raw) throw new Error("Track not found in week container");
                                 const parsed = TrackDataModule.A.fromExportString(raw);
