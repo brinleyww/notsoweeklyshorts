@@ -53052,7 +53052,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         const LB_TRACKS = stTracksForWeek(week).map(t => ({ id: t.id, name: t.name, short: t.short || stAutoShort(t.name) }));
 
                         const weekObj = (window.__nswsWeeks || []).find(w => w.week === week);
-                        weekTriggerLabel.textContent = (weekObj && weekObj.label || ("Week " + week)) + " — Standings";
+                        weekTriggerLabel.textContent = (weekObj && weekObj.standingsHeader) || (((weekObj && weekObj.label) || ("Week " + week)) + " — Standings");
                         renderWeekMenu(week);
 
                         const gridTemplate = "56px 1fr repeat(" + (LB_TRACKS.length + 1) + ",88px)";
@@ -54052,7 +54052,8 @@ window.__nswsDecrypt = async function(b64Data) {
         },
         {
             week: 5,
-            label: "Week 5",
+            label: "Week 5 Combined",
+            standingsHeader: "Week 5 - Combined - Standings",
             parts: [
                 {
                     label: "Week 5 Part 1",
