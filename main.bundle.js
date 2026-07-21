@@ -52856,6 +52856,21 @@ window.__nswsDecrypt = async function(b64Data) {
 
                     function renderWeekMenu(selectedWeek) {
                         weekMenu.innerHTML = "";
+                        (window.__nswsUpcoming || []).forEach(u => {
+                            const item = document.createElement("button");
+                            item.disabled = true;
+                            item.style.cssText = [
+                                "display:flex","align-items:center","justify-content:space-between",
+                                "width:100%","padding:12px 18px","background:transparent",
+                                "border:none","border-bottom:1px solid rgba(255,255,255,0.06)",
+                                "color:var(--text-color)","font-size:18px","font-family:inherit",
+                                "cursor:default","text-align:left","opacity:0.45",
+                            ].join(";");
+                            const label = document.createElement("span");
+                            label.textContent = u.label;
+                            item.appendChild(label);
+                            weekMenu.appendChild(item);
+                        });
                         stWeeksSorted().forEach(w => {
                             const isCurrent = w.week === window.__nswsMaxWeek;
                             const isSelected = w.week === selectedWeek;
@@ -52870,7 +52885,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             item.addEventListener("mouseover", () => { item.style.background = "rgba(80,130,230,0.15)"; });
                             item.addEventListener("mouseout", () => { item.style.background = isSelected ? "rgba(80,180,255,0.12)" : "transparent"; });
                             const label = document.createElement("span");
-                            label.textContent = "Week " + w.week;
+                            label.textContent = w.label || ("Week " + w.week);
                             item.appendChild(label);
                             if (isCurrent) {
                                 const badge = document.createElement("span");
@@ -53025,7 +53040,8 @@ window.__nswsDecrypt = async function(b64Data) {
                         const isCurrentWeek = week === window.__nswsMaxWeek;
                         const LB_TRACKS = stTracksForWeek(week).map(t => ({ id: t.id, name: t.name, short: t.short || stAutoShort(t.name) }));
 
-                        weekTriggerLabel.textContent = "Week " + week + " — Standings";
+                        const weekObj = (window.__nswsWeeks || []).find(w => w.week === week);
+                        weekTriggerLabel.textContent = (weekObj && weekObj.label || ("Week " + week)) + " — Standings";
                         renderWeekMenu(week);
 
                         const gridTemplate = "56px 1fr repeat(" + (LB_TRACKS.length + 1) + ",88px)";
@@ -54022,9 +54038,20 @@ window.__nswsDecrypt = async function(b64Data) {
             masks: ["d6d84eebeb1d8221", "2a5a6fc924eafc7b", "775c30d2b0b4587a", "fb651f379b068751"],
             file: "tracks/community/week4.track",
             tracks: [{ id: "8d9efd262d1f14aadd2d6311fd77671e0fe07bee76823ee42a2473f5acbaa42f", name: "1 - desert styleway", short: "Style", author: "Not So Weekly Shorts", env: "Desert", thumb: "tracks/community/thumbnails/week4_1.png" }, { id: "1b72d6514c1a0af3f4164740b3dffaf955c2f846e0fb196b5e218691b45f57ea", name: "2 - inside line gaming", short: "ILG", author: "Not So Weekly Shorts", env: "Winter", thumb: "tracks/community/thumbnails/week4_2.png" }, { id: "b40500a0532442fdc064ac90fe84f88b55be8722056c373dd11d7e6844f3d701", name: "3 - Monster Truck Stadium", short: "MTS", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_3.png" }, { id: "1f43428a669b61fa3c3d7a1eba1069e933827428c23c0c521519ef0a76e8bb6d", name: "4 - jail", short: "Jail", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_4.png" }, { id: "934290e7f5d95eb0f0915ed8f9ce6503851b4b87d1ea5926a0c8a3e6ea9dbd8d", name: "5 - dropper of doom", short: "DOD", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/week4_5.png" }]
+        },
+        {
+            week: 5,
+            label: "Week 5 Part 1",
+            chunks: ["b40359bfffc60b5a", "464a5d2944cd587c", "5f968c5b85b24370", "ff77daeba734e321"],
+            masks: ["bc19978c08b08b83", "1ec57daaf8f8b1de", "6ac1c0aa66898e92", "0e266b71ad779e2d"],
+            file: "tracks/community/week5_1.track",
+            tracks: [{ id: "8af6950dc1e38c606797f591eb4c60ae996b2e8fe7cc01718b7a987fea909341", name: "1 - Obtesticle", short: "Obst", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_1.png" }, { id: "72b9d30f3548dc3b770a951412ff28f9d59e5a7597afc2e60469927d56e7efa0", name: "2 - Teeech", short: "Teee", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_2.png" }, { id: "29b7260122a63b6dd63efb537f18bed2d89fbbd0d796a87c804d2efc33c6c7e4", name: "3 - Fullspeed", short: "FSpd", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/5_1_3.png" }, { id: "e0dc89694db7b8a5f53bd3231d98d36526f430a607231fb097d0ca6501501f13", name: "4 - Puzzle", short: "Pzl", author: "Herny", env: "Winter", thumb: "tracks/community/thumbnails/5_1_4.png" }, { id: "6262c19c77323652f6392faedd396f0fc1bcca81db93a038b3483a760cb5928d", name: "5 - Bonkz", short: "Bnkz", author: "Herny", env: "Desert", thumb: "tracks/community/thumbnails/5_1_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
+        window.__nswsUpcoming = [
+            { label: "Week 5 Part 2 (Coming soon)" }
+        ];
 
         const __nswsWeekKey = (chunks, masks) => {
             const _x = (h1, h2) => {
@@ -54075,7 +54102,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 window.__nswsTrackWeekMap[t.id] = w.week;
                 entries.push({
                     id: t.id,
-                    group: "Week " + w.week,
+                    group: w.label || ("Week " + w.week),
                     trackMetadata: { name: t.name, author: t.author, lastModified: null },
                     environment: TrackEnvironment[t.env],
                     trackUrl: null,
