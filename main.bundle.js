@@ -1,3 +1,12 @@
+window.__nswsGenerateName = function() {
+    const prefixes = ["Turbo", "Nitro", "Blaze", "Shadow", "Cosmic", "Frost", "Solar", "Lunar", "Rapid", "Silent", "Crimson", "Golden", "Silver", "Iron", "Steel", "Neon", "Electric", "Quantum", "Phantom", "Rogue", "Feral", "Wild", "Savage", "Mystic", "Arcane", "Toxic", "Venom", "Vortex", "Cyclone", "Thunder", "Lightning", "Blizzard", "Inferno", "Volcanic", "Glacial", "Polar", "Cobalt", "Crystal", "Diamond", "Ruby", "Sapphire", "Emerald", "Obsidian", "Titanium", "Chrome", "Plasma", "Photon", "Atomic", "Nuclear", "Radiant", "Prismatic", "Velvet", "Sonic", "Hyper", "Ultra", "Mega", "Alpha", "Omega", "Zeta", "Delta", "Gamma", "Nova", "Astro", "Stellar", "Galactic", "Nebula", "Comet", "Meteor", "Eclipse", "Twilight", "Midnight", "Scarlet", "Azure", "Indigo", "Violet", "Amber", "Jade", "Onyx", "Pearl", "Copper", "Bronze", "Platinum", "Rusty", "Grim", "Fierce", "Brave", "Bold", "Reckless", "Daring", "Cunning", "Sly", "Sneaky", "Nimble", "Agile", "Chaotic", "Frantic", "Jolly", "Zesty", "Spicy", "Dizzy"];
+    const suffixes = ["Racer", "Drifter", "Rider", "Cruiser", "Dasher", "Sprinter", "Charger", "Runner", "Glider", "Roamer", "Wanderer", "Voyager", "Pilot", "Driver", "Speedster", "Rocket", "Bolt", "Blazer", "Meteorite", "Falcon", "Hawk", "Eagle", "Panther", "Tiger", "Wolf", "Fox", "Viper", "Cobra", "Dragon", "Phoenix", "Griffin", "Raven", "Cheetah", "Jaguar", "Lynx", "Puma", "Stallion", "Mustang", "Bull", "Ram", "Shark", "Barracuda", "Hornet", "Wasp", "Scorpion", "Spider", "Beetle", "Cricket", "Ninja", "Samurai", "Knight", "Warrior", "Titan", "Giant", "Golem", "Wizard", "Sorcerer", "Mage", "Rebel", "Renegade", "Outlaw", "Bandit", "Maverick", "Nomad", "Pioneer", "Legend", "Champion", "Hero", "Ace", "Maestro", "Virtuoso", "Genius", "Wizardry", "Machine", "Engine", "Gearhead", "Mechanic", "Racecar", "Trailblazer", "Pathfinder", "Explorer", "Adventurer", "Daredevil", "Stuntman", "Jester", "Prankster", "Trickster", "Goblin", "Imp", "Sprite", "Pixie", "Gremlin", "Yeti", "Specter", "Kraken", "Leviathan", "Basilisk", "Wyvern", "Chimera", "Hydra"];
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+    const num1 = Math.floor(Math.random() * 10);
+    const num2 = Math.floor(Math.random() * 10);
+    return prefix + suffix + num1 + num2;
+};
 window.__nswsDecrypt = async function(b64Data) {
     const _x = (h1, h2) => {
         const a = h1.match(/../g).map(h => parseInt(h, 16));
@@ -5551,7 +5560,7 @@ window.__nswsDecrypt = async function(b64Data) {
             i = new WeakSet,
             l = function(e) {
                 const t = r.createToken()
-                  , n = r.defaultNickname
+                  , n = (window.__nswsGenerateName ? window.__nswsGenerateName() : r.defaultNickname)
                   , i = u.A.default();
                 h.get(this, a, "f").saveUserProfile(e, new p.A(t,n,null,i,!1))
             }
