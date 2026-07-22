@@ -53229,6 +53229,117 @@ window.__nswsDecrypt = async function(b64Data) {
                 C.get(this, Bc, "f").appendChild(t),
                 C.get(this, Gc, "f").push(t)
             }
+
+            {
+                const creditsBtn = document.createElement("button");
+                creditsBtn.className = "button right";
+                creditsBtn.textContent = "Credits";
+                creditsBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    document.getElementById("nsws-credits-overlay").style.display = "flex";
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(creditsBtn);
+                C.get(this, Gc, "f").push(creditsBtn);
+
+                if (!document.getElementById("nsws-credits-overlay")) {
+                    const overlay = document.createElement("div");
+                    overlay.id = "nsws-credits-overlay";
+                    overlay.style.cssText = [
+                        "display:none",
+                        "position:fixed",
+                        "left:0","top:0","width:100%","height:100%",
+                        "z-index:9999",
+                        "align-items:center",
+                        "justify-content:center",
+                        "background:rgba(0,0,0,0.75)",
+                        "backdrop-filter:blur(6px)",
+                        "-webkit-backdrop-filter:blur(6px)",
+                    ].join(";");
+
+                    const panel = document.createElement("div");
+                    panel.style.cssText = [
+                        "width:min(520px,92vw)",
+                        "max-height:min(640px,86vh)",
+                        "background:var(--surface-color)",
+                        "border:none",
+                        "border-radius:0",
+                        "display:flex",
+                        "flex-direction:column",
+                        "overflow:hidden",
+                        "font-family:inherit",
+                        "clip-path:polygon(0 0,100% 0,calc(100% - 12px) 100%,0 100%)",
+                    ].join(";");
+
+                    const panelHdr = document.createElement("div");
+                    panelHdr.style.cssText = "display:flex;align-items:center;justify-content:space-between;padding:16px 24px 14px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;background:var(--surface-secondary-color);";
+
+                    const titleEl = document.createElement("span");
+                    titleEl.textContent = "Credits";
+                    titleEl.style.cssText = "font-size:32px;font-weight:400;color:var(--text-color);letter-spacing:0;";
+                    panelHdr.appendChild(titleEl);
+
+                    const creditsCloseBtn = document.createElement("button");
+                    creditsCloseBtn.textContent = "✕";
+                    creditsCloseBtn.style.cssText = "background:none;border:none;color:var(--text-color);opacity:0.6;font-size:20px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center;";
+                    creditsCloseBtn.addEventListener("click", () => { overlay.style.display = "none"; });
+                    panelHdr.appendChild(creditsCloseBtn);
+                    panel.appendChild(panelHdr);
+
+                    const body = document.createElement("div");
+                    body.style.cssText = "overflow-y:auto;flex:1;padding:20px 24px 28px;background:var(--surface-secondary-color);";
+
+                    const makeSectionTitle = (text, first) => {
+                        const h = document.createElement("div");
+                        h.textContent = text;
+                        h.style.cssText = "font-size:16px;color:var(--text-color);opacity:0.5;letter-spacing:0.5px;text-transform:uppercase;margin:" + (first ? "0 0 10px" : "22px 0 10px") + ";";
+                        return h;
+                    };
+
+                    const makeLinkRow = (label, url) => {
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.target = "_blank";
+                        a.rel = "noopener noreferrer";
+                        a.textContent = label;
+                        a.style.cssText = "display:block;padding:8px 0;color:var(--text-color);font-size:20px;text-decoration:none;";
+                        a.addEventListener("mouseenter", () => { a.style.textDecoration = "underline"; });
+                        a.addEventListener("mouseleave", () => { a.style.textDecoration = "none"; });
+                        return a;
+                    };
+
+                    const makeTextRow = label => {
+                        const d = document.createElement("div");
+                        d.textContent = label;
+                        d.style.cssText = "padding:8px 0;color:var(--text-color);font-size:20px;opacity:0.85;";
+                        return d;
+                    };
+
+                    body.appendChild(makeSectionTitle("Site Credits", true));
+                    body.appendChild(makeLinkRow("Kodub", "https://www.kodub.com/apps/polytrack"));
+                    body.appendChild(makeLinkRow("Missonance", "https://missonance.github.io/misotweaks/"));
+
+                    body.appendChild(makeSectionTitle("NSWS Routing Council", false));
+                    body.appendChild(makeTextRow("wecouldbefriendz"));
+                    body.appendChild(makeTextRow("sandheadboi"));
+                    body.appendChild(makeTextRow("vanyayuyay_11133"));
+                    body.appendChild(makeTextRow("bringleyw"));
+
+                    panel.appendChild(body);
+                    overlay.appendChild(panel);
+                    document.body.appendChild(overlay);
+
+                    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.style.display = "none"; });
+
+                    window.addEventListener("keydown", e => {
+                        if (e.code === "Escape" && overlay.style.display !== "none") {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            overlay.style.display = "none";
+                        }
+                    }, true);
+                }
+            }
         }
         ,
         Kc = function(e) {
