@@ -52980,7 +52980,9 @@ window.__nswsDecrypt = async function(b64Data) {
                                 "display:grid",
                                 "grid-template-columns:" + gridTemplate,
                                 "gap:0",
-                                "padding:10px 8px",
+                                "padding:10px 24px",
+                                "margin:0 -16px",
+                                "box-sizing:border-box",
                                 "border-radius:0",
                                 "margin-bottom:0",
                                 "align-items:center",
@@ -53064,7 +53066,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         weekTriggerLabel.textContent = (weekObj && weekObj.standingsHeader) || (((weekObj && weekObj.label) || ("Week " + week)) + " — Standings");
                         renderWeekMenu(week);
 
-                        const gridTemplate = "56px 1fr repeat(" + (LB_TRACKS.length + 1) + ",88px)";
+                        const gridTemplate = "56px minmax(140px,1fr) repeat(" + (LB_TRACKS.length + 1) + ",88px)";
                         colHdr.style.gridTemplateColumns = gridTemplate;
                         colHdr.innerHTML = "";
                         const colLabels = ["#", "Player", "Total", ...LB_TRACKS.map(t => t.short)];
