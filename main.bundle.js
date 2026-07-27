@@ -52938,15 +52938,19 @@ window.__nswsDecrypt = async function(b64Data) {
                     panelHdr.appendChild(hdrRight);
                     panel.appendChild(panelHdr);
 
+                    const colHdrScroll = document.createElement("div");
+                    colHdrScroll.style.cssText = "overflow:hidden;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,0.08);background:var(--surface-secondary-color);";
                     const colHdr = document.createElement("div");
-                    colHdr.style.cssText = "display:grid;gap:0;padding:8px 24px;border-bottom:1px solid rgba(255,255,255,0.08);flex-shrink:0;background:var(--surface-secondary-color);";
-                    panel.appendChild(colHdr);
+                    colHdr.style.cssText = "display:grid;gap:0;padding:8px 24px;box-sizing:border-box;";
+                    colHdrScroll.appendChild(colHdr);
+                    panel.appendChild(colHdrScroll);
 
                     const listWrap = document.createElement("div");
                     listWrap.id = "nsws-st-list";
-                    listWrap.style.cssText = "overflow-y:auto;flex:1;padding:4px 16px 16px;background:var(--surface-secondary-color);";
+                    listWrap.style.cssText = "overflow-y:auto;overflow-x:auto;flex:1;padding:4px 16px 16px;background:var(--surface-secondary-color);";
+                    listWrap.addEventListener("scroll", () => { colHdrScroll.scrollLeft = listWrap.scrollLeft; });
                     const scrollStyle = document.createElement("style");
-                    scrollStyle.textContent = "#nsws-st-list::-webkit-scrollbar{width:6px}#nsws-st-list::-webkit-scrollbar-track{background:transparent}#nsws-st-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:0}";
+                    scrollStyle.textContent = "#nsws-st-list::-webkit-scrollbar{height:6px;width:6px}#nsws-st-list::-webkit-scrollbar-track{background:transparent}#nsws-st-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:0}";
                     document.head.appendChild(scrollStyle);
                     panel.appendChild(listWrap);
 
@@ -52968,7 +52972,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     let stRefreshInterval = null;
                     const stWeekCache = {}; // week -> { sorted, maps } snapshot for locked (non-current) weeks
 
-                    function stRenderRows(sorted, maps, gridTemplate) {
+                    function stRenderRows(sorted, maps, gridTemplate, contentWidth) {
                         const selfNick = window.__nswsSelfNick || "";
                         listWrap.innerHTML = "";
                         sorted.forEach(([nick, p], i) => {
@@ -52982,6 +52986,8 @@ window.__nswsDecrypt = async function(b64Data) {
                                 "gap:0",
                                 "padding:10px 24px",
                                 "margin:0 -16px",
+                                "width:" + contentWidth + "px",
+                                "min-width:calc(100% + 32px)",
                                 "box-sizing:border-box",
                                 "border-radius:0",
                                 "margin-bottom:0",
@@ -53066,8 +53072,11 @@ window.__nswsDecrypt = async function(b64Data) {
                         weekTriggerLabel.textContent = (weekObj && weekObj.standingsHeader) || (((weekObj && weekObj.label) || ("Week " + week)) + " — Standings");
                         renderWeekMenu(week);
 
-                        const gridTemplate = "56px minmax(140px,1fr) repeat(" + (LB_TRACKS.length + 1) + ",88px)";
+                        const gridTemplate = "56px 180px repeat(" + (LB_TRACKS.length + 1) + ",88px)";
+                        const stContentWidth = 56 + 180 + (LB_TRACKS.length + 1) * 88 + 48; // +48 = left/right padding
                         colHdr.style.gridTemplateColumns = gridTemplate;
+                        colHdr.style.width = stContentWidth + "px";
+                        colHdr.style.minWidth = "100%";
                         colHdr.innerHTML = "";
                         const colLabels = ["#", "Player", "Total", ...LB_TRACKS.map(t => t.short)];
                         colLabels.forEach((lbl, i) => {
@@ -53081,7 +53090,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         // so their standings stay frozen as of when they were first loaded.
                         if (!isCurrentWeek && stWeekCache[week]) {
                             const cached = stWeekCache[week];
-                            stRenderRows(cached.sorted, cached.maps, gridTemplate);
+                            stRenderRows(cached.sorted, cached.maps, gridTemplate, stContentWidth);
                             updatedEl.textContent = "Locked";
                             return;
                         }
@@ -53125,7 +53134,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             });
                             const sorted = Object.entries(pts).sort((a,b) => b[1]-a[1]);
 
-                            stRenderRows(sorted, maps, gridTemplate);
+                            stRenderRows(sorted, maps, gridTemplate, stContentWidth);
 
                             if (!isCurrentWeek) {
                                 // Freeze this week's standings now that we have a snapshot for it.
