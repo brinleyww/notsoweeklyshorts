@@ -50201,6 +50201,56 @@ window.__nswsDecrypt = async function(b64Data) {
             )(),
             C.get(this, ms, "m", Ds).call(this, "PolyFX"),
             ( () => {
+                const _storageKey = "_polyfxGraphicsPreset";
+                const _options = [
+                    ["Off", "0"], ["Very Low", "5"], ["Balanced", "1"],
+                    ["Enhanced", "2"], ["Semi-Real", "3"], ["Photoreal (Ultra)", "4"]
+                ];
+                const _get = () => {
+                    try {
+                        const _v = localStorage.getItem(_storageKey);
+                        return _v != null ? _v : "1";
+                    } catch (e) {
+                        return "1";
+                    }
+                };
+                const _set = value => {
+                    try {
+                        localStorage.setItem(_storageKey, value);
+                    } catch (e) {}
+                    const fx = window.__PolyFX;
+                    if (fx) fx.presetOverride = parseInt(value, 10);
+                };
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Graphics preset";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _current = _get();
+                const _buttons = [];
+                for (const [_title, _value] of _options) {
+                    const _btn = document.createElement("button");
+                    _btn.className = _value === _current ? "button selected" : "button";
+                    _btn.textContent = _title;
+                    _btn.addEventListener("click", ( () => {
+                        for (const _b of _buttons) _b.className = "button";
+                        _btn.className = "button selected";
+                        _set(_value);
+                    }
+                    ));
+                    _wrap.appendChild(_btn);
+                    _buttons.push(_btn);
+                }
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+                // Apply on menu build too, in case this is the first time __PolyFX sees an override.
+                _set(_current);
+            }
+            )(),
+            ( () => {
                 const _rows = [
                     ["_polyfxPanelKeyBind", "KeyL", "Tuning panel"],
                     ["_polyfxPhotoKeyBind", "F2", "Photo mode"],

@@ -4,6 +4,25 @@
 // "PolyFX" section of the settings menu writes (see main.bundle.js), instead of hardcoding
 // KeyL / F2 / F9.
 (function () {
+  // Without PolyModLoader, window.__PolyFX has nothing to read a "GraphicsPreset" setting from,
+  // so it falls back to its own hardcoded default of Off (see runtime.js's `let preset = ...
+  // : PRESET.OFF`). At Off, cfgFor() returns {composer:false}, render() returns before ever
+  // calling _ensure(), and _ensure() is the only place `this.panel` / `this.photo` get created —
+  // so the tuning-panel/photo-mode keybinds below silently no-op forever. Setting presetOverride
+  // here (mirroring PML's registered default of '1' = Balanced, and the "Graphics preset" row
+  // added to the settings menu) is what actually fixes that.
+  const fx = window.__PolyFX;
+  if (fx) {
+    try {
+      const stored = localStorage.getItem('_polyfxGraphicsPreset');
+      fx.presetOverride = stored != null ? parseInt(stored, 10) : 1;
+    } catch (e) {
+      fx.presetOverride = 1;
+    }
+  }
+})();
+
+(function () {
   const BINDINGS = {
     panel: { storageKey: '_polyfxPanelKeyBind', defaultCode: 'KeyL' },
     photo: { storageKey: '_polyfxPhotoKeyBind', defaultCode: 'F2' },
