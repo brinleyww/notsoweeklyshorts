@@ -594,12 +594,488 @@ window.__nswsDecrypt = async function(b64Data) {
         });
 
         window.addEventListener("keydown", e => {
-            if (window.__bwClipKeyBindCapturing || window.__bwVisualFxKeyBindCapturing) return;
+            if (window.__bwClipKeyBindCapturing || window.__bwVisualFxKeyBindCapturing || window.__bwPolyFxKeyBindCapturing) return;
             const target = e.target;
             if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
             if (e.code !== getVisualFxKeyBind() || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
             if (!document.querySelector(".game-ui")) return;
             toggleVisualFxMenu();
+        });
+    })();
+
+    // ---------------------------------------------------------------------
+    // PolyFX: bloom / radial speed blur / chromatic aberration / vignette /
+    // dynamic FOV warp / screen shake, layered on top of the game's own
+    // canvas exactly like the "Visual FX" module above (same non-invasive
+    // technique: re-sample the live canvas into an overlay canvas every
+    // frame instead of touching the game's internal Three.js renderer).
+    // Speed is read from the on-screen speedometer text, and "collisions"
+    // are inferred from a sudden drop in that speed - neither requires
+    // reaching into the game's private car/physics objects, so this module
+    // stays stable even if the game's internals change on a future update.
+    // ---------------------------------------------------------------------
+    const POLYFX_KEYBIND_STORAGE_KEY = "_polyFxKeyBind";
+    const DEFAULT_POLYFX_KEYBIND = "KeyF";
+    function getPolyFxKeyBind() {
+        try {
+            return localStorage.getItem(POLYFX_KEYBIND_STORAGE_KEY) || DEFAULT_POLYFX_KEYBIND;
+        } catch (e) {
+            return DEFAULT_POLYFX_KEYBIND;
+        }
+    }
+    function setPolyFxKeyBind(code) {
+        try {
+            localStorage.setItem(POLYFX_KEYBIND_STORAGE_KEY, code);
+        } catch (e) {}
+    }
+    // Every code currently in use by the native game controls, plus the
+    // custom Clip / Visual FX keybinds, so PolyFX's own keybind (and its
+    // rebind UI) can refuse to collide with any of them.
+    function getReservedKeyCodes(excluding) {
+        const reserved = new Set();
+        try {
+            const raw = localStorage.getItem("polytrack_v5_prod_key_bindings");
+            const arr = raw ? JSON.parse(raw) : null;
+            if (Array.isArray(arr)) {
+                for (const entry of arr) {
+                    if (Array.isArray(entry) && Array.isArray(entry[1])) {
+                        for (const code of entry[1]) if (code) reserved.add(code);
+                    }
+                }
+            }
+        } catch (e) {}
+        if (!reserved.size) {
+            // Fall back to the game's documented defaults if nothing has been
+            // saved to localStorage yet (fresh install, never opened Controls).
+            ["ArrowUp", "KeyW", "ArrowDown", "KeyS", "ArrowLeft", "KeyA", "ArrowRight", "KeyD",
+             "KeyT", "Backspace", "KeyR", "Enter", "KeyC"].forEach(c => reserved.add(c));
+        }
+        reserved.add(getClipKeyBind());
+        reserved.add(getVisualFxKeyBind());
+        if (excluding) reserved.delete(excluding);
+        return reserved;
+    }
+    const POLYFX_SETTINGS_STORAGE_KEY = "_polyFxSettings";
+    const POLYFX_DEFAULTS = {
+        bloom: 35,
+        radialBlur: 40,
+        chromaticAberration: 25,
+        vignette: 30,
+        fovWarp: 30,
+        screenShake: 50
+    };
+    function loadPolyFxSettings() {
+        try {
+            const raw = localStorage.getItem(POLYFX_SETTINGS_STORAGE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            return Object.assign({}, POLYFX_DEFAULTS, parsed);
+        } catch (e) {
+            return Object.assign({}, POLYFX_DEFAULTS);
+        }
+    }
+    function savePolyFxSettings(s) {
+        try {
+            localStorage.setItem(POLYFX_SETTINGS_STORAGE_KEY, JSON.stringify(s));
+        } catch (e) {}
+    }
+    (function() {
+        const settings = loadPolyFxSettings();
+        let enabled = true;
+        let menuOpen = false;
+        let menuEl = null;
+        const sliderRefs = {};
+
+        function isEffectActive() {
+            return enabled && (settings.bloom > 0 || settings.radialBlur > 0 ||
+                settings.chromaticAberration > 0 || settings.vignette > 0 ||
+                settings.fovWarp > 0 || settings.screenShake > 0);
+        }
+
+        // ---------- speed + collision detection (DOM-based, non-invasive) ----------
+        let lastSpeedValue = 0;
+        let speedFraction = 0; // 0..1, roughly "how fast", unit-agnostic
+        let shakeMagnitude = 0; // 0..1, decays every frame
+        let shakeSeed = Math.random() * 1000;
+
+        function readSpeedRaw() {
+            try {
+                const el = document.querySelector(".speedometer-ui .box .container");
+                if (!el) return null;
+                const match = (el.textContent || "").match(/[\d.,]+/);
+                if (!match) return null;
+                const val = parseFloat(match[0].replace(/,/g, ""));
+                return Number.isFinite(val) ? val : null;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function updateSpeedAndCollision() {
+            const raw = readSpeedRaw();
+            if (raw == null) {
+                speedFraction *= 0.9;
+                return;
+            }
+            // Unit-agnostic normalization: doesn't matter if the player has
+            // km/h or mph selected, this only drives *relative* effect
+            // strength, not a physically exact value.
+            speedFraction = Math.max(0, Math.min(1, raw / 200));
+            const drop = lastSpeedValue - raw;
+            if (lastSpeedValue > 25 && drop > 20) {
+                // Sudden deceleration = treat as a collision/impact.
+                const triggered = Math.min(1, drop / 60) * (settings.screenShake / 100);
+                shakeMagnitude = Math.max(shakeMagnitude, triggered);
+            }
+            lastSpeedValue = raw;
+        }
+
+        function triggerTestShake() {
+            shakeMagnitude = Math.max(shakeMagnitude, settings.screenShake / 100);
+        }
+        window.__nswsTriggerPolyFxShake = triggerTestShake;
+
+        // ---------- WebGL post-processing overlay ----------
+        let fxCanvas = null, gl = null, glProgram = null;
+        let frameTex = null;
+        let fxWidth = 0, fxHeight = 0;
+        let uLoc = {};
+        const startTime = performance.now();
+
+        const VERT_SRC = "#version 300 es\n" +
+            "void main() {\n" +
+            "    vec2 pos = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n" +
+            "    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);\n" +
+            "}";
+
+        const FRAG_SRC = "#version 300 es\n" +
+            "precision highp float;\n" +
+            "out vec4 outColor;\n" +
+            "uniform sampler2D uFrame;\n" +
+            "uniform float uTime;\n" +
+            "uniform float uSpeed;\n" +
+            "uniform float uBloom;\n" +
+            "uniform float uRadialBlur;\n" +
+            "uniform float uChroma;\n" +
+            "uniform float uVignette;\n" +
+            "uniform float uFovWarp;\n" +
+            "uniform vec2 uShakeOffset;\n" +
+            "uniform float uShakeRot;\n" +
+            "uniform vec2 uResolution;\n" +
+            "vec2 rotateAround(vec2 uv, vec2 center, float a) {\n" +
+            "    float s = sin(a), c = cos(a);\n" +
+            "    vec2 p = uv - center;\n" +
+            "    return vec2(p.x * c - p.y * s, p.x * s + p.y * c) + center;\n" +
+            "}\n" +
+            "void main() {\n" +
+            "    vec2 center = vec2(0.5, 0.5);\n" +
+            "    vec2 uv = gl_FragCoord.xy / uResolution;\n" +
+            // Screen shake: rotate + translate the sample UV.
+            "    uv = rotateAround(uv, center, uShakeRot) + uShakeOffset;\n" +
+            // Dynamic FOV warp: pull UVs outward from center as speed rises,
+            // approximating the "wider FOV at speed" look without touching
+            // the real camera.
+            "    float fovAmount = uFovWarp * uSpeed * 0.18;\n" +
+            "    uv = center + (uv - center) * (1.0 - fovAmount);\n" +
+            "    vec2 toCenter = center - uv;\n" +
+            "    float dist = length(toCenter);\n" +
+            // Radial speed blur.
+            "    vec3 blurred = texture(uFrame, uv).rgb;\n" +
+            "    float blurStrength = uRadialBlur * uSpeed * 0.06;\n" +
+            "    if (blurStrength > 0.0005) {\n" +
+            "        vec3 sum = vec3(0.0);\n" +
+            "        const int SAMPLES = 8;\n" +
+            "        for (int i = 0; i < SAMPLES; i++) {\n" +
+            "            float t = float(i) / float(SAMPLES - 1) - 0.5;\n" +
+            "            vec2 sampleUv = uv + toCenter * (-1.0) * t * blurStrength;\n" +
+            "            sum += texture(uFrame, sampleUv).rgb;\n" +
+            "        }\n" +
+            "        blurred = sum / float(SAMPLES);\n" +
+            "    }\n" +
+            // Chromatic aberration on top of the (possibly blurred) frame.
+            "    float caAmount = uChroma * (1.0 + uSpeed * 1.5) * dist * 0.02;\n" +
+            "    float r = texture(uFrame, uv + toCenter * -caAmount).r;\n" +
+            "    float g = blurred.g;\n" +
+            "    float b = texture(uFrame, uv + toCenter * caAmount).b;\n" +
+            "    vec3 color = vec3(r, g, b);\n" +
+            // Bloom: cheap bright-pass + small blur, added back additively.
+            "    if (uBloom > 0.0005) {\n" +
+            "        vec3 bloomSum = vec3(0.0);\n" +
+            "        const int BSAMPLES = 6;\n" +
+            "        for (int i = 0; i < BSAMPLES; i++) {\n" +
+            "            float angle = (float(i) / float(BSAMPLES)) * 6.28318;\n" +
+            "            vec2 offset = vec2(cos(angle), sin(angle)) * 3.0 / uResolution;\n" +
+            "            vec3 s = texture(uFrame, uv + offset).rgb;\n" +
+            "            float brightness = dot(s, vec3(0.299, 0.587, 0.114));\n" +
+            "            bloomSum += s * smoothstep(0.6, 1.0, brightness);\n" +
+            "        }\n" +
+            "        color += (bloomSum / float(BSAMPLES)) * uBloom * 0.9;\n" +
+            "    }\n" +
+            // Vignette.
+            "    if (uVignette > 0.0005) {\n" +
+            "        float vig = 1.0 - dist * uVignette * 1.15;\n" +
+            "        color *= clamp(vig, 0.0, 1.0);\n" +
+            "    }\n" +
+            "    outColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n" +
+            "}";
+
+        function compileShader(type, src) {
+            const sh = gl.createShader(type);
+            gl.shaderSource(sh, src);
+            gl.compileShader(sh);
+            if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+                console.error("[PolyFX] shader error:", gl.getShaderInfoLog(sh));
+                gl.deleteShader(sh);
+                return null;
+            }
+            return sh;
+        }
+
+        function setupGL() {
+            const vs = compileShader(gl.VERTEX_SHADER, VERT_SRC);
+            const fs = compileShader(gl.FRAGMENT_SHADER, FRAG_SRC);
+            if (!vs || !fs) return false;
+            glProgram = gl.createProgram();
+            gl.attachShader(glProgram, vs);
+            gl.attachShader(glProgram, fs);
+            gl.linkProgram(glProgram);
+            if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) return false;
+            uLoc = {
+                uFrame: gl.getUniformLocation(glProgram, "uFrame"),
+                uTime: gl.getUniformLocation(glProgram, "uTime"),
+                uSpeed: gl.getUniformLocation(glProgram, "uSpeed"),
+                uBloom: gl.getUniformLocation(glProgram, "uBloom"),
+                uRadialBlur: gl.getUniformLocation(glProgram, "uRadialBlur"),
+                uChroma: gl.getUniformLocation(glProgram, "uChroma"),
+                uVignette: gl.getUniformLocation(glProgram, "uVignette"),
+                uFovWarp: gl.getUniformLocation(glProgram, "uFovWarp"),
+                uShakeOffset: gl.getUniformLocation(glProgram, "uShakeOffset"),
+                uShakeRot: gl.getUniformLocation(glProgram, "uShakeRot"),
+                uResolution: gl.getUniformLocation(glProgram, "uResolution")
+            };
+            const t = gl.createTexture();
+            gl.bindTexture(gl.TEXTURE_2D, t);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+            frameTex = t;
+            return true;
+        }
+
+        function ensureFx() {
+            const screenCanvas = document.getElementById("screen");
+            if (!screenCanvas) return false;
+            if (fxCanvas) return true;
+            fxCanvas = document.createElement("canvas");
+            fxCanvas.id = "_polyfx-canvas";
+            fxCanvas.style.cssText = "position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;display:none;";
+            // Insert after the Visual FX canvas (if present) so PolyFX layers
+            // on top of it and the two effect stacks compose correctly.
+            const vfxCanvas = document.getElementById("_visualfx-canvas");
+            (vfxCanvas || screenCanvas).insertAdjacentElement("afterend", fxCanvas);
+            gl = fxCanvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false });
+            if (!gl) return false;
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+            return setupGL();
+        }
+
+        function resizeFx(w, h) {
+            if (w === fxWidth && h === fxHeight) return;
+            fxWidth = w;
+            fxHeight = h;
+            fxCanvas.width = w;
+            fxCanvas.height = h;
+        }
+
+        function getSourceCanvas() {
+            const vfxCanvas = document.getElementById("_visualfx-canvas");
+            if (vfxCanvas && vfxCanvas.style.display !== "none") return vfxCanvas;
+            return document.getElementById("screen");
+        }
+
+        function renderFx(dt) {
+            const source = getSourceCanvas();
+            if (!source || !gl) return;
+            const w = source.width || source.clientWidth;
+            const h = source.height || source.clientHeight;
+            if (!w || !h) return;
+            resizeFx(w, h);
+            gl.bindTexture(gl.TEXTURE_2D, frameTex);
+            try {
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            } catch (e) {
+                return;
+            }
+            shakeMagnitude *= Math.pow(0.001, dt); // fast decay, ~200ms to settle
+            const shakeAmt = shakeMagnitude;
+            const t = (performance.now() - startTime) / 1000;
+            gl.useProgram(glProgram);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, frameTex);
+            gl.uniform1i(uLoc.uFrame, 0);
+            gl.uniform1f(uLoc.uTime, t);
+            gl.uniform1f(uLoc.uSpeed, speedFraction);
+            gl.uniform1f(uLoc.uBloom, settings.bloom / 100);
+            gl.uniform1f(uLoc.uRadialBlur, settings.radialBlur / 100);
+            gl.uniform1f(uLoc.uChroma, settings.chromaticAberration / 100);
+            gl.uniform1f(uLoc.uVignette, settings.vignette / 100);
+            gl.uniform1f(uLoc.uFovWarp, settings.fovWarp / 100);
+            gl.uniform2f(uLoc.uShakeOffset,
+                (Math.sin((t + shakeSeed) * 55.0) * 0.015) * shakeAmt,
+                (Math.cos((t + shakeSeed) * 47.0) * 0.015) * shakeAmt);
+            gl.uniform1f(uLoc.uShakeRot, Math.sin((t + shakeSeed) * 39.0) * 0.02 * shakeAmt);
+            gl.uniform2f(uLoc.uResolution, w, h);
+            gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            gl.viewport(0, 0, w, h);
+            gl.disable(gl.DEPTH_TEST);
+            gl.disable(gl.BLEND);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        let lastFrameTime = performance.now();
+        function fxLoop() {
+            requestAnimationFrame(fxLoop);
+            const now = performance.now();
+            const dt = Math.min(0.1, (now - lastFrameTime) / 1000);
+            lastFrameTime = now;
+            const inGame = !!document.querySelector(".game-ui");
+            if (inGame) updateSpeedAndCollision();
+            const shouldRun = inGame && isEffectActive();
+            if (!fxCanvas) {
+                if (!shouldRun) return;
+                if (!ensureFx()) return;
+            }
+            fxCanvas.style.display = shouldRun ? "block" : "none";
+            if (!shouldRun) return;
+            renderFx(dt);
+        }
+        requestAnimationFrame(fxLoop);
+
+        // ---------- Popup menu ----------
+        function fmtPct(v) {
+            return Math.round(v) + "%";
+        }
+        const SLIDER_DEFS = [
+            { key: "bloom", label: "Bloom" },
+            { key: "radialBlur", label: "Radial Speed Blur" },
+            { key: "chromaticAberration", label: "Chromatic Aberration" },
+            { key: "vignette", label: "Vignette" },
+            { key: "fovWarp", label: "Dynamic FOV Warp" },
+            { key: "screenShake", label: "Screen Shake" }
+        ];
+
+        function ensureStyles() {
+            if (document.getElementById("_polyfx-style")) return;
+            const st = document.createElement("style");
+            st.id = "_polyfx-style";
+            st.textContent = "#_polyfx-menu{position:fixed;top:calc(16px + var(--safe-area-top, 0px));left:calc(16px + var(--safe-area-left, 0px));width:300px;max-width:calc(100vw - 32px);background:var(--surface-color);border:2px solid var(--surface-tertiary-color);clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);padding:14px 18px 16px 18px;z-index:10000;pointer-events:auto;font-family:ForcedSquare,Arial,sans-serif;font-style:italic;color:var(--text-color);box-shadow:0 8px 24px rgba(0,0,0,0.5);}" +
+                "#_polyfx-menu h2{margin:0 0 10px 0;font-size:20px;letter-spacing:1px;text-align:center;}" +
+                "#_polyfx-menu ._pfx-row{margin:0 0 10px 0;}" +
+                "#_polyfx-menu ._pfx-row-label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px;opacity:0.9;}" +
+                "#_polyfx-menu ._pfx-row-label span:last-child{opacity:0.7;}" +
+                "#_polyfx-menu input[type=\"range\"]{-webkit-appearance:none;appearance:none;width:100%;height:16px;display:block;margin:6px 0 2px 0;padding:0;background:transparent;cursor:pointer;}" +
+                "#_polyfx-menu input[type=\"range\"]::-webkit-slider-runnable-track{-webkit-appearance:none;appearance:none;background-color:var(--surface-tertiary-color);height:6px;border-radius:0;}" +
+                "#_polyfx-menu input[type=\"range\"]::-moz-range-track{background-color:var(--surface-tertiary-color);height:6px;border-radius:0;}" +
+                "#_polyfx-menu input[type=\"range\"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:0;background-color:var(--text-color);border:3px solid var(--button-color);outline:1px solid var(--text-color);box-sizing:content-box;}" +
+                "#_polyfx-menu input[type=\"range\"]::-moz-range-thumb{width:14px;height:14px;border-radius:0;background-color:var(--text-color);border:3px solid var(--button-color);outline:1px solid var(--text-color);box-sizing:content-box;}" +
+                "#_polyfx-menu ._pfx-reset{width:100%;margin-top:6px;font-size:16px;padding:6px 10px;text-align:center;}" +
+                "#_polyfx-menu ._pfx-test{width:100%;margin-top:6px;font-size:14px;padding:5px 10px;text-align:center;}" +
+                "#_polyfx-menu ._pfx-hint{margin-top:8px;font-size:11px;text-align:center;opacity:0.55;}";
+            document.head.appendChild(st);
+        }
+
+        function buildMenu() {
+            ensureStyles();
+            menuEl = document.createElement("div");
+            menuEl.id = "_polyfx-menu";
+            const title = document.createElement("h2");
+            title.textContent = "POLYFX";
+            menuEl.appendChild(title);
+            SLIDER_DEFS.forEach(def => {
+                const row = document.createElement("div");
+                row.className = "_pfx-row";
+                const labelRow = document.createElement("div");
+                labelRow.className = "_pfx-row-label";
+                const labelText = document.createElement("span");
+                labelText.textContent = def.label;
+                const valueText = document.createElement("span");
+                valueText.textContent = fmtPct(settings[def.key]);
+                labelRow.appendChild(labelText);
+                labelRow.appendChild(valueText);
+                row.appendChild(labelRow);
+                const input = document.createElement("input");
+                input.type = "range";
+                input.min = "0";
+                input.max = "100";
+                input.step = "1";
+                input.value = String(settings[def.key]);
+                input.addEventListener("input", () => {
+                    settings[def.key] = Number(input.value);
+                    valueText.textContent = fmtPct(settings[def.key]);
+                    savePolyFxSettings(settings);
+                });
+                row.appendChild(input);
+                menuEl.appendChild(row);
+                sliderRefs[def.key] = { input, value: valueText };
+            });
+            const testBtn = document.createElement("button");
+            testBtn.className = "button _pfx-test";
+            testBtn.textContent = "Test Screen Shake";
+            testBtn.addEventListener("click", triggerTestShake);
+            menuEl.appendChild(testBtn);
+            const resetBtn = document.createElement("button");
+            resetBtn.className = "button _pfx-reset";
+            resetBtn.textContent = "Reset to Default";
+            resetBtn.addEventListener("click", () => {
+                Object.assign(settings, POLYFX_DEFAULTS);
+                savePolyFxSettings(settings);
+                SLIDER_DEFS.forEach(def => {
+                    const ref = sliderRefs[def.key];
+                    ref.input.value = settings[def.key];
+                    ref.value.textContent = fmtPct(settings[def.key]);
+                });
+            });
+            menuEl.appendChild(resetBtn);
+            const hint = document.createElement("div");
+            hint.className = "_pfx-hint";
+            hint.textContent = "Press " + formatClipKeyName(getPolyFxKeyBind()) + " to hide - rebind in Settings > Visual Effects";
+            menuEl.appendChild(hint);
+            document.body.appendChild(menuEl);
+        }
+
+        function setMenuVisible(visible) {
+            menuOpen = visible;
+            if (visible) {
+                if (!menuEl) buildMenu();
+                else {
+                    const hint = menuEl.querySelector("._pfx-hint");
+                    if (hint) hint.textContent = "Press " + formatClipKeyName(getPolyFxKeyBind()) + " to hide - rebind in Settings > Visual Effects";
+                }
+                menuEl.style.display = "block";
+            } else if (menuEl) {
+                menuEl.style.display = "none";
+            }
+        }
+
+        function togglePolyFxMenu() {
+            setMenuVisible(!menuOpen);
+        }
+        window.__nswsTogglePolyFxMenu = togglePolyFxMenu;
+
+        new MutationObserver(() => {
+            if (menuOpen && !document.querySelector(".game-ui")) setMenuVisible(false);
+        }).observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        window.addEventListener("keydown", e => {
+            if (window.__bwClipKeyBindCapturing || window.__bwVisualFxKeyBindCapturing || window.__bwPolyFxKeyBindCapturing) return;
+            const target = e.target;
+            if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+            if (e.code !== getPolyFxKeyBind() || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (!document.querySelector(".game-ui")) return;
+            togglePolyFxMenu();
         });
     })();
     function formatClipDate(ms) {
@@ -50198,6 +50674,49 @@ window.__nswsDecrypt = async function(b64Data) {
                 _row.appendChild(_wrap);
                 _container.appendChild(_row);
             }
+            )(),
+            ( () => {
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting key-binding";
+                const _label = document.createElement("p");
+                _label.textContent = "Toggle PolyFX menu";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _keyBtn = document.createElement("button");
+                _keyBtn.className = "button";
+                _keyBtn.textContent = formatClipKeyName(getPolyFxKeyBind());
+                _keyBtn.addEventListener("click", ( () => {
+                    _keyBtn.textContent = "Press any key...";
+                    window.__bwPolyFxKeyBindCapturing = true;
+                    const _capture = ev => {
+                        window.removeEventListener("keydown", _capture);
+                        window.__bwPolyFxKeyBindCapturing = false;
+                        if (ev.code === "Escape") {
+                            _keyBtn.textContent = formatClipKeyName(getPolyFxKeyBind());
+                            return;
+                        }
+                        ev.preventDefault();
+                        const _reserved = getReservedKeyCodes(getPolyFxKeyBind());
+                        if (_reserved.has(ev.code)) {
+                            _keyBtn.textContent = formatClipKeyName(getPolyFxKeyBind()) + " (in use!)";
+                            setTimeout(( () => {
+                                _keyBtn.textContent = formatClipKeyName(getPolyFxKeyBind());
+                            }
+                            ), 1200);
+                            return;
+                        }
+                        setPolyFxKeyBind(ev.code);
+                        _keyBtn.textContent = formatClipKeyName(ev.code);
+                    };
+                    window.addEventListener("keydown", _capture);
+                }
+                ));
+                _wrap.appendChild(_keyBtn);
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
             )()
         }
         ,
@@ -54201,6 +54720,13 @@ window.__nswsDecrypt = async function(b64Data) {
                     tracks: [{ id: "ef9b3977733aaa7414c2f6cd27324fb1c45630f0b000b31551ffb5a7ddb62033", name: "1 - Stadium Drift", short: "Stad", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/5_2_1.png" }, { id: "f3ac24da400a56e12e482733ade8519dfa4b859d56c67f70d9c42dc4f7cf5a2f", name: "2 - desert drift", short: "DDft", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/5_2_2.png" }, { id: "c7c634e654a6592eb9c970b435b08cc96dfde736890fc58dc5faf5c7353cfc1f", name: "3 - sperm racing", short: "Sprm", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/5_2_3.png" }, { id: "4b742980c7970ecc3e3419c2935bc8272a6cc8c0fedb40552b0a2fbeb19b5f2d", name: "4 - Fall to Hell", short: "F2H", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/5_2_4.png" }, { id: "c9540bd316150a2f6a03d08a2669c08befd54c24f1dd7b434b0dfc8de078ef56", name: "5 - Cliff Climbing", short: "Clmb", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/5_2_5.png" }]
                 }
             ]
+        },
+        {
+            week: 6,
+            chunks: ["5fa23848000048b4", "70b825056ead55e7", "b2f47d4559d0b6b7", "d7c0b1a1957820d3"],
+            masks: ["74f7b6920f426bf8", "032e8a457c6d1c15", "9118446136b8351e", "18c3c66a5829c5ba"],
+            file: "tracks/community/week6.track",
+            tracks: [{ id: "fb895534b1f4450b67e4287b7b69531be21364c561879daf3e015dcf410f2185", name: "1 - Cave", short: "Cave", author: "NSWS Community", env: "Summer", thumb: "tracks/community/thumbnails/week6_1.png" }, { id: "03739cc7de391648cd8fe47e4d6f32a42e50cdaba68067d0de9432c23ab141e3", name: "2 - Towering Dunes (bonkkkk)", short: "Dune", author: "NSWS Community", env: "Desert", thumb: "tracks/community/thumbnails/week6_2.png" }, { id: "9d51e945f6633fd93bd23e62e9bda5fa7c3ec723f4ddb562e8137f19bc5f5294", name: "3 - Puzzly track", short: "Pzly", author: "NSWS Community", env: "Summer", thumb: "tracks/community/thumbnails/week6_3.png" }, { id: "d93c6c529f9fc3df432ddf1584130f727b9e5361f9e77d08ac10977cb8f2e6ed", name: "4 - The Stars", short: "Star", author: "NSWS Community", env: "Summer", thumb: "tracks/community/thumbnails/week6_4.png" }, { id: "ca7da5642818d91bbd8f9467b8985cbefb76b8bf5e6324aef44c6fd6570521d6", name: "5 - Absolute Dihnema (hard kacky)", short: "AbDh", author: "NSWS Community", env: "Summer", thumb: "tracks/community/thumbnails/week6_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -58418,6 +58944,17 @@ window.__nswsDecrypt = async function(b64Data) {
     // tier regardless of leaderboard rank. Gold/Silver/Bronze are then time windows off
     // of that same AT (rounded to the nearest second), instead of leaderboard percentile.
     var BENCHMARK_NICKNAME = "Cookedbyapringle";
+    // Per-week overrides: if a track's week (via window.__nswsTrackWeekMap) has an
+    // entry here, its benchmark/Author Time is scanned for under this nickname
+    // instead of BENCHMARK_NICKNAME. Everything not listed keeps using the default.
+    var BENCHMARK_NICKNAME_WEEK_OVERRIDES = { 6: "CookedbyBenjamin's 5th cousin" };
+    function benchmarkNicknameForTrack(trackId) {
+        var wk = (window.__nswsTrackWeekMap || {})[trackId];
+        if (wk != null && Object.prototype.hasOwnProperty.call(BENCHMARK_NICKNAME_WEEK_OVERRIDES, wk)) {
+            return BENCHMARK_NICKNAME_WEEK_OVERRIDES[wk];
+        }
+        return BENCHMARK_NICKNAME;
+    }
     // Page size per leaderboard request while searching for his entry.
     var BENCHMARK_PAGE_SIZE = 500;
     // Hard cap on total entries scanned (across pages) as a safety net against
@@ -58505,7 +59042,7 @@ window.__nswsDecrypt = async function(b64Data) {
         if (cached && (Date.now() - cached.ts) < BENCHMARK_CACHE_TTL_MS) {
             return Promise.resolve(cached.value);
         }
-        var target = BENCHMARK_NICKNAME.trim().toLowerCase();
+        var target = benchmarkNicknameForTrack(trackId).trim().toLowerCase();
 
         function fetchPage(skip) {
             var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=" + skip + "&amount=" + BENCHMARK_PAGE_SIZE;
