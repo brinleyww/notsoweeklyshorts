@@ -49,6 +49,11 @@
     const fx = window.__PolyFX;
     if (!fx) return;
 
+    if (e.code === 'Escape') {
+      if (fx.panel && fx.panel.visible) fx.panel.toggle();
+      // No preventDefault/return here — let Escape still reach the game's own pause/exit menu.
+    }
+
     if (e.code === getCode(BINDINGS.panel)) {
       if (e.repeat || isTypingTarget()) return;
       if (!fx.panel) return;
@@ -71,4 +76,15 @@
       fx.photo.captureQueued = true;
     }
   }, true);
+
+  // .timer-ui is the race clock — main.bundle.js only creates/keeps it in the DOM while a track
+  // is actually loaded (see the `z.A.Timer` setting it reads its display mode from). Its absence
+  // is a reliable "not currently on a track" signal covering every way of leaving one (Escape,
+  // finishing, crashing back to menu, opening the garage — not just the Escape key above), so
+  // poll for it and close the panel the moment it's gone.
+  setInterval(() => {
+    const fx = window.__PolyFX;
+    if (!fx || !fx.panel || !fx.panel.visible) return;
+    if (!document.querySelector('.timer-ui')) fx.panel.toggle();
+  }, 500);
 })();
