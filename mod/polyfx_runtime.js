@@ -19274,6 +19274,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (!Number.isFinite(preset)) preset = PRESET.OFF;
       }
+      if (typeof window !== "undefined" && window.__polyfxInGarage) preset = PRESET.OFF;
       let cfg = cfgFor(preset);
       if (this.photo && this.photo.active) cfg = cfgFor(PRESET.PHOTO_REAL);
       const guardLevel = this.perfGuard.enabled ? this.perfGuard.level : 0;
@@ -19289,6 +19290,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (this.carLights) this.carLights.disableAll();
         if (this.underglow) this.underglow.setEnabled(false);
+        if (this.panel && this.panel.visible) this.panel.toggle();
         renderer.render(scene, camera);
         return;
       }
@@ -20108,6 +20110,65 @@ uniform float polyfxGlowIntensity;`
       const len = vec.length() || 20;
       vec.copy(this.sky.getSunDir()).multiplyScalar(len);
     }
+    // Restores every panel-exposed setting to its construction-time default. Preset-driven values
+    // (AO/Bloom/SSR/God Rays/Color Grade/SMAA/tone mapping/exposure/IBL intensity) come back by
+    // invalidating the cached preset so the next frame's _apply(cfg, ...) re-derives them from
+    // cfgFor(this current preset) — same values a fresh preset switch would produce. Everything
+    // else (weather, glow, underglow, car lights, photo speed) isn't preset-driven, so it's reset
+    // explicitly here to match each subsystem's own constructor defaults.
+    resetToDefaults() {
+      this.preset = -1;
+      this.perfGuard.enabled = true;
+      this.perfGuard.level = 0;
+      this.hourOverride = null;
+      this.carLightsEnabled = true;
+      this.headlightsForce = false;
+      this.bloomDebugHighlight = false;
+      this.godraysDebug = false;
+      if (this.bloom) this.bloom.highPassUniforms["debugHighlightNonFinite"].value = false;
+      if (this.godrays) {
+        this.godrays.material.uniforms.debugShowThreshold.value = false;
+        this._updateSunMarker(null, null);
+      }
+      if (this.carLights) {
+        Object.assign(this.carLights.cfg, {
+          enabled: true,
+          offsetX: 0,
+          offsetY: 0,
+          offsetZ: 0,
+          manualFlip: false,
+          aimDistance: 12,
+          aimDrop: 0.6,
+          color: 16773840,
+          intensity: 220,
+          angle: 0.5,
+          penumbra: 0.6,
+          distance: 22,
+          tailGlow: 0.28,
+          brakeBoost: 3.2,
+          brakeLightIntensity: 65,
+          tailLightIntensity: 8,
+          brakeLightDistance: 2,
+          otherHeadlightsEnabled: true,
+          maxLitOtherCars: 6
+        });
+      }
+      if (this.underglow) {
+        this.underglow.setEnabled(false);
+        this.underglow.applyConfig({ color: 3596543, stripIntensity: 1.4, blobOpacity: 0.55, blobRadius: 1.7, pulse: false });
+      }
+      this.glowTargets.intensity = 2.2;
+      for (const [, state] of this.glowTargets.categoryState) state.on = false;
+      this.glowTargets.setEnabled(false);
+      if (this.weatherEngine) {
+        this.weatherEngine.setPreset(0);
+        this.weather = this.weatherEngine.state;
+      }
+      if (this.photo) {
+        this.photo.speed = 11;
+        if (this.photo.active) this.photo.setActive(false, this.lastCamera);
+      }
+    }
   };
   var PRESET_NAMES = ["Off", "Balanced", "Enhanced", "Semi-Real", "Photoreal", "Very Low"];
   var PANEL_TOGGLES = [
@@ -20219,6 +20280,20 @@ uniform float polyfxGlowIntensity;`
       this.header = document.createElement("div");
       this.header.className = "pf-header";
       el.appendChild(this.header);
+      const resetRow = document.createElement("div");
+      resetRow.className = "pf-row";
+      const resetLabel = document.createElement("span");
+      resetLabel.textContent = "Reset all to defaults";
+      const resetButton = document.createElement("button");
+      resetButton.className = "pf-btn";
+      resetButton.textContent = "Reset";
+      resetButton.onclick = () => {
+        fx.resetToDefaults();
+        this.refresh();
+      };
+      resetRow.appendChild(resetLabel);
+      resetRow.appendChild(resetButton);
+      el.appendChild(resetRow);
       for (const item of PANEL_TOGGLES) {
         if (item.length === 1) {
           el.appendChild(this._sep(item[0]));

@@ -1713,7 +1713,7 @@
                 i.set(this, ne, i.get(this, Hn, "f").getCurrentUserProfile(), "f"),
                 i.set(this, ee, i.get(this, ne, "f").nickname, "f"),
                 i.set(this, ie, i.get(this, ne, "f").countryCode, "f"),
-                i.set(this, Xn, new THREE.PerspectiveCamera(70,1,.1,RenderManager.maxViewDistance), "f"),
+                i.set(this, Xn, new THREE.PerspectiveCamera(70,1,.1,RenderManager.maxViewDistance), "f"),window.__polyfxInGarage = true,
                 i.get(this, Xn, "f").position.set(0, 2, 6),
                 o.scene.add(i.get(this, Xn, "f")),
                 i.set(this, Yn, new OrbitControls(i.get(this, Xn, "f"),o.canvas), "f"),
@@ -1862,7 +1862,7 @@
                     }
                     ))
                 }
-                i.get(this, Pn, "f").scene.remove(i.get(this, Xn, "f")),
+                i.get(this, Pn, "f").scene.remove(i.get(this, Xn, "f")),window.__polyfxInGarage = false,
                 window.removeEventListener("keydown", i.get(this, Rn, "f")),
                 i.get(this, $n, "f").dispose(),
                 i.get(this, Dn, "f").removeChild(i.get(this, _n, "f")),
