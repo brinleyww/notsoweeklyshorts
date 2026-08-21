@@ -19275,7 +19275,7 @@ uniform float polyfxGlowIntensity;`
         if (!Number.isFinite(preset)) preset = PRESET.OFF;
       }
       if (typeof window !== "undefined" && window.__polyfxInGarage) preset = PRESET.OFF;
-      if (renderer && renderer.domElement && renderer.domElement.id !== "screen") preset = PRESET.OFF;
+      if (renderer && renderer.domElement && !renderer.domElement.isConnected) preset = PRESET.OFF;
       let cfg = cfgFor(preset);
       if (this.photo && this.photo.active) cfg = cfgFor(PRESET.PHOTO_REAL);
       const guardLevel = this.perfGuard.enabled ? this.perfGuard.level : 0;
