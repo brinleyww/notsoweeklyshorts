@@ -59365,6 +59365,10 @@ window.__nswsDecrypt = async function(b64Data) {
             cpsEl.classList.add("hidden");
             return;
         }
+        if (window.__PolyFX && window.__PolyFX.photo && window.__PolyFX.photo.active) {
+            cpsEl.classList.add("hidden");
+            return;
+        }
         cpsEl.classList.remove("hidden");
 
         var playerState = typeof window.__getPlayerState === "function" ? window.__getPlayerState() : null;
