@@ -20345,10 +20345,9 @@ uniform float polyfxGlowIntensity;`
         input.max = max;
         input.step = step;
         input.oninput = () => {
-          val.textContent = this._format(parseFloat(input.value), step, path);
-        };
-        input.onchange = () => {
-          fx.setParam(path, parseFloat(input.value));
+          const v = parseFloat(input.value);
+          val.textContent = this._format(v, step, path);
+          fx.setParam(path, v);
         };
         top.appendChild(name);
         top.appendChild(val);
@@ -20389,10 +20388,9 @@ uniform float polyfxGlowIntensity;`
       intensityInput.max = 6;
       intensityInput.step = 0.05;
       intensityInput.oninput = () => {
-        intensityVal.textContent = parseFloat(intensityInput.value).toFixed(2);
-      };
-      intensityInput.onchange = () => {
-        fx.setParam("glow.intensity", parseFloat(intensityInput.value));
+        const v = parseFloat(intensityInput.value);
+        intensityVal.textContent = v.toFixed(2);
+        fx.setParam("glow.intensity", v);
       };
       intensityTop.appendChild(intensityName);
       intensityTop.appendChild(intensityVal);
