@@ -20196,7 +20196,7 @@ uniform float polyfxGlowIntensity;`
   var PANEL_SLIDERS = [
     ...WEATHER_ENABLED ? [
       ["Weather"],
-      ["Preset", "weather.preset", 0, WEATHER_NAMES.length - 1, 1],
+      ["Preset", "weather.preset", WEATHER_NAMES],
       ["Transition", "weather.transition", 0.1, 12, 0.1],
       ["Intensity", "weather.intensity", 0, 1, 0.01],
       ["Rain rate", "weather.rain", 0, 1, 0.01],
@@ -20211,15 +20211,15 @@ uniform float polyfxGlowIntensity;`
     ["Time of Day"],
     ["Hour", "hour", 0, 24, 0.1],
     ["Global"],
-    ["Tone mapping", "toneMode", 0, TONE_MODES.length - 1, 1],
+    ["Tone mapping", "toneMode", TONE_MODES.map((m) => m.name)],
     ["Exposure", "exposure", 0.2, 2, 0.01],
     ["IBL intensity", "envIntensity", 0, 1.5, 0.01],
     ["Ambient Occlusion"],
     ["AO intensity", "ao.intensity", 0, 6, 0.05],
     ["AO radius", "ao.radius", 0.1, 6, 0.05],
     ["AO falloff", "ao.falloff", 0.1, 4, 0.05],
-    ["AO half-res", "ao.halfRes", 0, 1, 1],
-    ["AO render mode (0 combined, 1 AO only, 2 no AO, 3 split, 4 split AO)", "ao.renderMode", 0, 4, 1],
+    ["AO half-res", "ao.halfRes", ["No", "Yes"]],
+    ["AO render mode", "ao.renderMode", ["Combined", "AO only", "No AO", "Split", "Split AO"]],
     ["Bloom"],
     ["Bloom strength", "bloom.strength", 0, 1.5, 0.01],
     ["Bloom radius", "bloom.radius", 0, 1, 0.01],
@@ -20250,7 +20250,7 @@ uniform float polyfxGlowIntensity;`
     ["Offset X", "head.offsetX", -1.5, 1.5, 0.02],
     ["Offset Y", "head.offsetY", -1.5, 1.5, 0.02],
     ["Offset Z", "head.offsetZ", -1.5, 1.5, 0.02],
-    ["Flip direction", "head.manualFlip", 0, 1, 1],
+    ["Flip direction", "head.manualFlip", ["Normal", "Flipped"]],
     ["Brake / Tail Lights"],
     ["Tail glow", "brake.tailGlow", 0, 2, 0.02],
     ["Brake boost", "brake.boost", 1, 8, 0.1],
@@ -20262,7 +20262,7 @@ uniform float polyfxGlowIntensity;`
   ];
   var PANEL_CSS = `
 .polyfx-panel{position:fixed;top:16px;left:16px;z-index:99999;width:324px;max-height:90vh;overflow-y:auto;display:none;font-family:ForcedSquare,Arial,sans-serif;color:var(--text-color,#fff);background:var(--surface-transparent-color,rgba(33,43,82,.68));border:2px solid var(--surface-color,#28346a);border-radius:8px;padding:12px 14px;box-shadow:0 8px 30px rgba(0,0,0,.55);backdrop-filter:blur(4px);user-select:none}
-.polyfx-panel .pf-header{display:flex;justify-content:space-between;align-items:baseline;font-size:24px;margin-bottom:10px}.polyfx-panel .pf-sub{font-size:14px;color:#9fb0e0}.polyfx-panel .pf-sep{margin:12px 0 4px;font-size:15px;color:#8ea2d6;text-transform:uppercase}.polyfx-panel .pf-row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:5px 0;font-size:17px}.polyfx-panel .pf-btn{font-family:inherit;font-size:15px;color:var(--text-color,#fff);background:var(--button-color,#112052);border:none;border-radius:6px;padding:5px 14px;cursor:pointer;min-width:56px}.polyfx-panel .pf-btn.on{background:#2f63c6}.polyfx-panel .pf-slider{margin:6px 0;font-size:15px}.polyfx-panel .pf-slider .pf-top{display:flex;justify-content:space-between;gap:8px}.polyfx-panel .pf-val{color:#9fd0ff}.polyfx-panel input[type=range]{width:100%;accent-color:#2f63c6;height:4px;margin-top:3px}.polyfx-panel .pf-hint{margin-top:10px;font-size:13px;color:#7f90bd}.polyfx-panel .pf-row span{flex:1;min-width:0}.polyfx-panel input.pf-color{flex:none;width:28px;height:24px;padding:0;border:1px solid rgba(255,255,255,.3);border-radius:4px;background:none;cursor:pointer}
+.polyfx-panel .pf-header{display:flex;justify-content:space-between;align-items:baseline;font-size:24px;margin-bottom:10px}.polyfx-panel .pf-sub{font-size:14px;color:#9fb0e0}.polyfx-panel .pf-sep{margin:12px 0 4px;font-size:15px;color:#8ea2d6;text-transform:uppercase}.polyfx-panel .pf-row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:5px 0;font-size:17px}.polyfx-panel .pf-btn{font-family:inherit;font-size:15px;color:var(--text-color,#fff);background:var(--button-color,#112052);border:none;border-radius:6px;padding:5px 14px;cursor:pointer;min-width:56px}.polyfx-panel .pf-btn.on{background:#2f63c6}.polyfx-panel .pf-slider{margin:6px 0;font-size:15px}.polyfx-panel .pf-slider .pf-top{display:flex;justify-content:space-between;gap:8px}.polyfx-panel .pf-val{color:#9fd0ff}.polyfx-panel input[type=range]{width:100%;accent-color:#2f63c6;height:4px;margin-top:3px}.polyfx-panel .pf-hint{margin-top:10px;font-size:13px;color:#7f90bd}.polyfx-panel .pf-row span{flex:1;min-width:0}.polyfx-panel input.pf-color{flex:none;width:28px;height:24px;padding:0;border:1px solid rgba(255,255,255,.3);border-radius:4px;background:none;cursor:pointer}.polyfx-panel .pf-choice{margin:6px 0;font-size:15px}.polyfx-panel .pf-choice .pf-top{margin-bottom:4px}.polyfx-panel .pf-choice-buttons{display:flex;flex-wrap:wrap;gap:4px}.polyfx-panel .pf-choice-buttons .pf-btn{padding:4px 8px;font-size:13px;min-width:0}
 `;
   var PolyFXPanel = class {
     constructor(fx) {
@@ -20270,6 +20270,7 @@ uniform float polyfxGlowIntensity;`
       this.visible = false;
       this.buttons = {};
       this.sliders = {};
+      this.choices = {};
       if (!document.getElementById("polyfx-panel-style")) {
         const style = document.createElement("style");
         style.id = "polyfx-panel-style";
@@ -20310,6 +20311,11 @@ uniform float polyfxGlowIntensity;`
       for (const item of PANEL_SLIDERS) {
         if (item.length === 1) {
           el.appendChild(this._sep(item[0]));
+          continue;
+        }
+        if (Array.isArray(item[2])) {
+          const [label2, path2, options] = item;
+          this._choiceRow(el, label2, path2, options);
           continue;
         }
         const [label, path, min, max, step] = item;
@@ -20427,13 +20433,40 @@ uniform float polyfxGlowIntensity;`
       parent.appendChild(row);
       return button;
     }
+    _choiceRow(parent, label, path, options) {
+      const row = document.createElement("div");
+      row.className = "pf-choice";
+      const top = document.createElement("div");
+      top.className = "pf-top";
+      const name = document.createElement("span");
+      name.textContent = label;
+      top.appendChild(name);
+      row.appendChild(top);
+      const wrap = document.createElement("div");
+      wrap.className = "pf-choice-buttons";
+      const buttons = [];
+      options.forEach((optionLabel, index) => {
+        const btn = document.createElement("button");
+        btn.className = "pf-btn";
+        btn.textContent = optionLabel;
+        btn.onclick = () => {
+          for (const b of buttons) b.classList.remove("on");
+          btn.classList.add("on");
+          this.fx.setParam(path, index);
+          if (path === "weather.preset") this.refresh();
+        };
+        wrap.appendChild(btn);
+        buttons.push(btn);
+      });
+      row.appendChild(wrap);
+      parent.appendChild(row);
+      this.choices[path] = buttons;
+    }
     _setButton(button, on) {
       button.classList.toggle("on", !!on);
       button.textContent = on ? "ON" : "OFF";
     }
     _format(value, step, path = "") {
-      if (path === "weather.preset") return WEATHER_NAMES[Math.round(value)] || "Custom";
-      if (path === "toneMode") return (TONE_MODES[Math.round(value)] || TONE_MODES[DEFAULT_TONE_INDEX]).name;
       return step >= 1 ? String(Math.round(value)) : Number(value).toFixed(step < 0.01 ? 3 : 2);
     }
     toggle() {
@@ -20455,6 +20488,13 @@ uniform float polyfxGlowIntensity;`
         if (value == null) continue;
         slider.input.value = value;
         slider.val.textContent = this._format(Number(value), Number(slider.step), path);
+      }
+      for (const path in this.choices) {
+        const buttons = this.choices[path];
+        const value = state.params[path];
+        if (value == null) continue;
+        const idx = Math.round(Number(value));
+        buttons.forEach((b, i) => b.classList.toggle("on", i === idx));
       }
       if (this.glowEnabledButton) this._setButton(this.glowEnabledButton, this.fx.glowTargets.enabled);
       for (const id in this.glowCategoryRows) {
