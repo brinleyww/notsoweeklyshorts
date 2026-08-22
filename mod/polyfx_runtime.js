@@ -19199,6 +19199,8 @@ uniform float polyfxGlowIntensity;`
       this.skyHour = 12;
       this.lastTod = null;
       this.hourOverride = null;
+      this.fogDistanceMult = 1;
+      this._origFogFar = null;
       this.carLights = null;
       this.underglow = null;
       this.headlightsForce = false;
@@ -19363,6 +19365,10 @@ uniform float polyfxGlowIntensity;`
         }
         this._applyEnv(scene);
         this._applySmokeTint(scene);
+        if (scene.fog) {
+          if (this._origFogFar == null) this._origFogFar = scene.fog.far;
+          scene.fog.far = this._origFogFar * this.fogDistanceMult;
+        }
         let carLightsSetting = this.carLightsOverride != null ? this.carLightsOverride : 1;
         if (this.carLightsOverride == null) {
           try {
@@ -19899,6 +19905,9 @@ uniform float polyfxGlowIntensity;`
         case "hour":
           this.hourOverride = value;
           break;
+        case "vanillaFog.far":
+          this.fogDistanceMult = value;
+          break;
         case "ao.intensity":
           if (this.n8ao) this.n8ao.configuration.intensity = value;
           break;
@@ -20066,6 +20075,7 @@ uniform float polyfxGlowIntensity;`
           exposure: this.renderer ? this.renderer.toneMappingExposure : 1,
           envIntensity: this.lastScene ? this.lastScene.environmentIntensity ?? 1 : 1,
           hour: this.skyActive ? this.skyHour : 12,
+          "vanillaFog.far": this.fogDistanceMult,
           "ao.intensity": this.n8ao ? this.n8ao.configuration.intensity : 0,
           "ao.radius": this.n8ao ? this.n8ao.configuration.aoRadius : 0,
           "ao.falloff": this.n8ao ? this.n8ao.configuration.distanceFalloff : 0,
@@ -20122,7 +20132,7 @@ uniform float polyfxGlowIntensity;`
       this.perfGuard.enabled = true;
       this.perfGuard.level = 0;
       this.hourOverride = null;
-      this.carLightsEnabled = true;
+      this.fogDistanceMult = 1;
       this.headlightsForce = false;
       this.bloomDebugHighlight = false;
       this.godraysDebug = false;
@@ -20210,6 +20220,8 @@ uniform float polyfxGlowIntensity;`
     ] : [],
     ["Time of Day"],
     ["Hour", "hour", 0, 24, 0.1],
+    ["Visibility"],
+    ["Fog distance", "vanillaFog.far", 1, 8, 0.25],
     ["Global"],
     ["Tone mapping", "toneMode", TONE_MODES.map((m) => m.name)],
     ["Exposure", "exposure", 0.2, 2, 0.01],
