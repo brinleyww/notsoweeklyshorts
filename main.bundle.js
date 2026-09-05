@@ -9418,7 +9418,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         i.setDecoderPath("lib/draco/"),
                         n.setDRACOLoader(i),
                         n.load("models/car.glb", (n => {
-                            function r(e, t, g) {
+                            function r(e, t, g, h) {
                                 const i = (g || n.scene).getObjectByName(e);
                                 if (null == i)
                                     throw new Error('Mesh "' + e + '" does not exist');
@@ -9428,7 +9428,7 @@ window.__nswsDecrypt = async function(b64Data) {
                                     const n = i;
                                     return t && (n.updateMatrixWorld(!0),
                                     n.geometry.applyMatrix4(n.matrix.clone()),
-                                    n.geometry.computeVertexNormals(),
+                                    h || n.geometry.computeVertexNormals(),
                                     n.matrix.identity()),
                                     n
                                 }
@@ -9442,7 +9442,7 @@ window.__nswsDecrypt = async function(b64Data) {
                                   , s = BufferGeometryUtils.mergeGeometries(a, !0);
                                 t && (i.updateMatrixWorld(!0),
                                 s.applyMatrix4(i.matrix.clone())),
-                                s.computeVertexNormals();
+                                h || s.computeVertexNormals();
                                 const o = r.map((e => e.material))
                                   , l = new THREE.Mesh(s,o);
                                 return l.name = e,
@@ -9477,7 +9477,7 @@ window.__nswsDecrypt = async function(b64Data) {
                                 for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
                                     if (!S.A.isValidBody(bodyIndex))
                                         throw new Error("Invalid car style body");
-                                    carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene)))
+                                    carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene, !0)))
                                 }
                                 F.models = {
                                     chassis: carBodies.get(0),
