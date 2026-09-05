@@ -906,7 +906,7 @@
             }
         }
         ;
-        var Yt, _t, jt, Zt, Jt, Kt, $t, tn, nn, en, sn, on, an, ln, cn, rn, hn, dn, gn, fn, pn, un, mn, vn, wn, bn, xn = e(5387);
+        var Yt, _t, jt, Zt, Jt, Kt, $t, tn, nn, en, sn, on, an, ln, cn, rn, hn, dn, gn, fn, pn, un, mn, vn, wn, bn, bodyIdx, bodyPanel, bodyButtons, bodyUpdate, bodyScroll, xn = e(5387);
         class kn {
             constructor(t, n, e, o, a, l, c) {
                 Yt.add(this),
@@ -916,12 +916,15 @@
                 Kt.set(this, y.A.defaultPattern),
                 $t.set(this, y.A.defaultRims),
                 tn.set(this, y.A.defaultExhaust),
+                bodyIdx.set(this, y.A.defaultBody),
                 nn.set(this, void 0),
                 en.set(this, new Map),
                 sn.set(this, void 0),
                 on.set(this, new Map),
                 an.set(this, void 0),
                 ln.set(this, new Map),
+                bodyPanel.set(this, void 0),
+                bodyButtons.set(this, new Map),
                 cn.set(this, []),
                 rn.set(this, void 0),
                 hn.set(this, new xt.A),
@@ -1090,6 +1093,38 @@
                     l.appendChild(a)),
                     i.get(this, ln, "f").set(o, l)
                 }
+                i.set(this, bodyPanel, document.createElement("div"), "f"),
+                i.get(this, bodyPanel, "f").className = "panel options-panel hidden",
+                i.get(this, Jt, "f").appendChild(i.get(this, bodyPanel, "f"));
+                for (let o = 0; o < y.A.bodies.length; o++) {
+                    if (!y.A.isValidBody(o))
+                        throw new Error("Invalid car style body");
+                    const l = document.createElement("button");
+                    l.title = y.A.bodies[o].name,
+                    l.addEventListener("click", ( () => {
+                        t.playUIClick(),
+                        i.set(this, bodyIdx, o, "f"),
+                        i.get(this, Yt, "m", bodyUpdate).call(this),
+                        i.get(this, Yt, "m", dn).call(this)
+                    }
+                    )),
+                    o == i.get(this, bodyIdx, "f") && l.classList.add("selected"),
+                    i.get(this, bodyPanel, "f").appendChild(l);
+                    const c = new y.A(y.A.defaultPattern,y.A.defaultRims,y.A.defaultExhaust,9868950,9868950,1250067,6710886,o)
+                      , r = document.createElement("img");
+                    r.className = "loading",
+                    kt.F(c, i.get(this, hn, "f"), {
+                        position: new THREE.Vector3(1000.1,1000.3,1e3),
+                        look: new THREE.Vector3(.1,.3,0),
+                        zoom: .4
+                    }).then((t => {
+                        r.src = t,
+                        r.classList.remove("loading")
+                    }
+                    )),
+                    l.appendChild(r),
+                    i.get(this, bodyButtons, "f").set(o, l)
+                }
                 const f = [{
                     title: n.get("Paint"),
                     icon: "images/paint.svg",
@@ -1106,6 +1141,10 @@
                     title: n.get("Exhaust"),
                     icon: "images/exhaust.svg",
                     panel: i.get(this, an, "f")
+                }, {
+                    title: n.get("Car"),
+                    icon: "images/car_body.svg",
+                    panel: i.get(this, bodyPanel, "f")
                 }];
                 let p = f[0];
                 const u = [];
@@ -1121,12 +1160,14 @@
                         i.get(this, nn, "f").classList.add("hidden"),
                         i.get(this, sn, "f").classList.add("hidden"),
                         i.get(this, an, "f").classList.add("hidden"),
+                        i.get(this, bodyPanel, "f").classList.add("hidden"),
                         e.classList.add("selected"),
                         n.panel.classList.remove("hidden"),
                         p != n && (n.panel == h ? c(new THREE.Vector3(0,2,6)) : n.panel == i.get(this, nn, "f") ? (i.get(this, Yt, "m", un).call(this),
                         c(new THREE.Vector3(0,2,6))) : n.panel == i.get(this, sn, "f") ? (i.get(this, Yt, "m", mn).call(this),
-                        c(new THREE.Vector3(-.5155052947032,.74948865866975,3.8370986018837385))) : n.panel == i.get(this, an, "f") && (i.get(this, Yt, "m", vn).call(this),
-                        c(new THREE.Vector3(2.874291197536667,.9837316369014955,-.7283975369068978)))),
+                        c(new THREE.Vector3(-.5155052947032,.74948865866975,3.8370986018837385))) : n.panel == i.get(this, an, "f") ? (i.get(this, Yt, "m", vn).call(this),
+                        c(new THREE.Vector3(2.874291197536667,.9837316369014955,-.7283975369068978))) : n.panel == i.get(this, bodyPanel, "f") && (i.get(this, Yt, "m", bodyScroll).call(this),
+                        c(new THREE.Vector3(3.5,1.8,5.2)))),
                         p = n
                     }
                     )),
@@ -1150,6 +1191,7 @@
                 i.set(this, Kt, t.pattern, "f"),
                 i.set(this, $t, t.rims, "f"),
                 i.set(this, tn, t.exhaust, "f"),
+                i.set(this, bodyIdx, y.A.isValidBody(t.body) ? t.body : y.A.defaultBody, "f"),
                 i.get(this, jt, "f").isPatternUnlocked(i.get(this, Kt, "f")) || i.get(this, jt, "f").unlockPattern(i.get(this, Kt, "f")),
                 i.get(this, jt, "f").isRimsUnlocked(i.get(this, $t, "f")) || i.get(this, jt, "f").unlockRims(i.get(this, $t, "f")),
                 i.get(this, jt, "f").isExhaustUnlocked(i.get(this, tn, "f")) || i.get(this, jt, "f").unlockExhaust(i.get(this, tn, "f")),
@@ -1159,6 +1201,8 @@
                 i.get(this, Yt, "m", un).call(this),
                 i.get(this, Yt, "m", mn).call(this),
                 i.get(this, Yt, "m", vn).call(this),
+                i.get(this, Yt, "m", bodyUpdate).call(this),
+                i.get(this, Yt, "m", bodyScroll).call(this),
                 i.get(this, cn, "f")[0].color = t.primaryColor,
                 i.get(this, cn, "f")[1].color = t.secondaryColor,
                 i.get(this, cn, "f")[2].color = t.frameColor,
@@ -1181,9 +1225,12 @@
         cn = new WeakMap,
         rn = new WeakMap,
         hn = new WeakMap,
+        bodyIdx = new WeakMap,
+        bodyPanel = new WeakMap,
+        bodyButtons = new WeakMap,
         Yt = new WeakSet,
         dn = function() {
-            const t = new y.A(i.get(this, Kt, "f"),i.get(this, $t, "f"),i.get(this, tn, "f"),i.get(this, cn, "f")[0].color.getHex(),i.get(this, cn, "f")[1].color.getHex(),i.get(this, cn, "f")[2].color.getHex(),i.get(this, cn, "f")[3].color.getHex());
+            const t = new y.A(i.get(this, Kt, "f"),i.get(this, $t, "f"),i.get(this, tn, "f"),i.get(this, cn, "f")[0].color.getHex(),i.get(this, cn, "f")[1].color.getHex(),i.get(this, cn, "f")[2].color.getHex(),i.get(this, cn, "f")[3].color.getHex(),i.get(this, bodyIdx, "f"));
             i.get(this, rn, "f").call(this, t)
         }
         ,
@@ -1215,6 +1262,16 @@
         vn = function() {
             const t = i.get(this, ln, "f").get(i.get(this, tn, "f"));
             null != t && i.get(_t, _t, "m", wn).call(_t, i.get(this, an, "f"), t)
+        }
+        ,
+        bodyUpdate = function() {
+            for (const [t,n] of i.get(this, bodyButtons, "f"))
+                t == i.get(this, bodyIdx, "f") ? n.classList.add("selected") : n.classList.remove("selected")
+        }
+        ,
+        bodyScroll = function() {
+            const t = i.get(this, bodyButtons, "f").get(i.get(this, bodyIdx, "f"));
+            null != t && i.get(_t, _t, "m", wn).call(_t, i.get(this, bodyPanel, "f"), t)
         }
         ,
         wn = function(t, n) {

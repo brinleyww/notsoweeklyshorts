@@ -2164,7 +2164,7 @@ window.__nswsDecrypt = async function(b64Data) {
             });
             var i, r, a, s, o, l, c = __webpack_require__(1635), THREE = __webpack_require__(4922), d = __webpack_require__(2244);
             class u {
-                constructor(e, t, n, i, l, h, d) {
+                constructor(e, t, n, i, l, h, d, b = 0) {
                     r.set(this, void 0),
                     a.set(this, void 0),
                     s.set(this, void 0),
@@ -2172,6 +2172,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     this.pattern = e,
                     this.rims = t,
                     this.exhaust = n,
+                    this.body = b,
                     c.set(this, r, i, "f"),
                     c.set(this, a, l, "f"),
                     c.set(this, s, h, "f"),
@@ -2228,10 +2229,10 @@ window.__nswsDecrypt = async function(b64Data) {
                     return new THREE.Color(c.get(this, o, "f"))
                 }
                 equals(e) {
-                    return this.pattern == e.pattern && this.rims == e.rims && this.exhaust == e.exhaust && this.primaryHex == e.primaryHex && this.secondaryHex == e.secondaryHex && this.frameHex == e.frameHex && this.rimsHex == e.rimsHex
+                    return this.pattern == e.pattern && this.rims == e.rims && this.exhaust == e.exhaust && this.body == e.body && this.primaryHex == e.primaryHex && this.secondaryHex == e.secondaryHex && this.frameHex == e.frameHex && this.rimsHex == e.rimsHex
                 }
                 clone() {
-                    return new i(this.pattern,this.rims,this.exhaust,c.get(this, r, "f"),c.get(this, a, "f"),c.get(this, s, "f"),c.get(this, o, "f"))
+                    return new i(this.pattern,this.rims,this.exhaust,c.get(this, r, "f"),c.get(this, a, "f"),c.get(this, s, "f"),c.get(this, o, "f"),this.body)
                 }
                 serialize() {
                     return d.l(this.serializeBinary())
@@ -2251,7 +2252,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     return e[0] = 0,
                     e[1] = this.pattern,
                     e[2] = this.rims,
-                    e[3] = this.exhaust,
+                    e[3] = this.exhaust | this.body << 4,
                     e.set([255 & c.get(this, r, "f"), c.get(this, r, "f") >> 8 & 255, c.get(this, r, "f") >> 16 & 255], 4),
                     e.set([255 & c.get(this, a, "f"), c.get(this, a, "f") >> 8 & 255, c.get(this, a, "f") >> 16 & 255], 7),
                     e.set([255 & c.get(this, s, "f"), c.get(this, s, "f") >> 8 & 255, c.get(this, s, "f") >> 16 & 255], 10),
@@ -2269,14 +2270,17 @@ window.__nswsDecrypt = async function(b64Data) {
                     const n = e[2];
                     if (!i.isValidRims(n))
                         throw new Error("Invalid car style rims");
-                    const r = e[3];
+                    const r = 15 & e[3]
+                      , b = e[3] >> 4 & 15;
                     if (!i.isValidExhaust(r))
                         throw new Error("Invalid car style exhaust");
+                    if (!i.isValidBody(b))
+                        throw new Error("Invalid car style body");
                     const a = e[4] | e[5] << 8 | e[6] << 16
                       , s = e[7] | e[8] << 8 | e[9] << 16
                       , o = e[10] | e[11] << 8 | e[12] << 16
                       , l = e[13] | e[14] << 8 | e[15] << 16;
-                    return new i(t,n,r,a,s,o,l)
+                    return new i(t,n,r,a,s,o,l,b)
                 }
                 static get defaultPattern() {
                     return 0
@@ -2287,6 +2291,9 @@ window.__nswsDecrypt = async function(b64Data) {
                 static get defaultExhaust() {
                     return 0
                 }
+                static get defaultBody() {
+                    return 0
+                }
                 static isValidPattern(e) {
                     return Number.isSafeInteger(e) && e >= 0 && e < i.patterns.length
                 }
@@ -2295,6 +2302,9 @@ window.__nswsDecrypt = async function(b64Data) {
                 }
                 static isValidExhaust(e) {
                     return Number.isSafeInteger(e) && e >= 0 && e < i.exhausts.length
+                }
+                static isValidBody(e) {
+                    return Number.isSafeInteger(e) && e >= 0 && e < i.bodies.length
                 }
             }
             i = u,
@@ -2426,6 +2436,39 @@ window.__nswsDecrypt = async function(b64Data) {
                 },
                 e[7] = {
                     model: "Exhaust7"
+                },
+                e.map((e => Object.freeze(e)))
+            }
+            )()),
+            u.bodies = Object.freeze(( () => {
+                const e = [];
+                return e[0] = {
+                    model: "Body",
+                    name: "Classic"
+                },
+                e[1] = {
+                    model: "BodyRally",
+                    name: "Rally"
+                },
+                e[2] = {
+                    model: "BodyCybertruck",
+                    name: "Cybertruck"
+                },
+                e[3] = {
+                    model: "BodyNascar",
+                    name: "Stock Car"
+                },
+                e[4] = {
+                    model: "BodyF1",
+                    name: "Formula"
+                },
+                e[5] = {
+                    model: "BodyFrame",
+                    name: "Chassis"
+                },
+                e[6] = {
+                    model: "BodyPengu",
+                    name: "Pengu"
                 },
                 e.map((e => Object.freeze(e)))
             }
@@ -9040,7 +9083,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     l.set(this, _e, {
                         value: new THREE.Vector3(0,0,0)
                     }, "f"),
-                    l.set(this, we, F.models.chassis.clone(), "f"),
+                    l.set(this, we, (F.models.bodies?.get(l.get(this, Ce, "f").body) ?? F.models.chassis).clone(), "f"),
                     l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
                     l.set(this, xe, F.models.suspension.clone(), "f"),
                     l.get(this, G, "m", Ve).call(this, l.get(this, xe, "f")),
@@ -9203,6 +9246,20 @@ window.__nswsDecrypt = async function(b64Data) {
                                 l.get(this, ve, "f").add(i),
                                 l.get(this, ke, "f")[t] = i
                             }
+                        if (e.body != l.get(this, Ce, "f").body) {
+                            const t = l.get(this, we, "f");
+                            t.remove(l.get(this, Se, "f")),
+                            l.get(this, ve, "f").remove(t),
+                            l.get(this, Ae, "f").removeMaterial(t.material),
+                            l.set(this, we, (F.models.bodies?.get(e.body) ?? F.models.chassis).clone(), "f"),
+                            l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
+                            l.get(this, we, "f").matrixAutoUpdate = t.matrixAutoUpdate,
+                            l.get(this, we, "f").matrix.copy(t.matrix),
+                            l.get(this, we, "f").position.copy(t.position),
+                            l.get(this, we, "f").quaternion.copy(t.quaternion),
+                            l.get(this, ve, "f").add(l.get(this, we, "f")),
+                            l.get(this, we, "f").add(l.get(this, Se, "f"))
+                        }
                         e.exhaust != l.get(this, Ce, "f").exhaust && (l.get(this, we, "f").remove(l.get(this, Se, "f")),
                         l.get(this, Ae, "f").removeMaterial(l.get(this, Se, "f").material),
                         l.set(this, Se, l.get(F, F, "m", Ke).call(F, e.exhaust), "f"),
@@ -9214,7 +9271,7 @@ window.__nswsDecrypt = async function(b64Data) {
                                 let n;
                                 n = Array.isArray(t.material) ? t.material : [t.material];
                                 for (const t of n)
-                                    "Main" == t.name ? t.color.set(e.primaryColor) : "Metal" == t.name ? t.color.set(e.frameColor) : "Rim" == t.name && t.color.set(e.rimsColor)
+                                    "Main" == t.name || "MainPlain" == t.name ? t.color.set(e.primaryColor) : "Metal" == t.name ? t.color.set(e.frameColor) : "Rim" == t.name && t.color.set(e.rimsColor)
                             }
                         }
                         )),
@@ -9361,8 +9418,8 @@ window.__nswsDecrypt = async function(b64Data) {
                         i.setDecoderPath("lib/draco/"),
                         n.setDRACOLoader(i),
                         n.load("models/car.glb", (n => {
-                            function r(e, t) {
-                                const i = n.scene.getObjectByName(e);
+                            function r(e, t, g) {
+                                const i = (g || n.scene).getObjectByName(e);
                                 if (null == i)
                                     throw new Error('Mesh "' + e + '" does not exist');
                                 if (0 == i.children.length) {
@@ -9412,17 +9469,30 @@ window.__nswsDecrypt = async function(b64Data) {
                                     throw new Error("Invalid car style exhaust");
                                 o.set(e, a(r(S.A.exhausts[e].model, !0)))
                             }
-                            F.models = {
-                                chassis: a(r("Body", !0)),
-                                suspension: a(r("Suspension", !0)),
-                                rims: s,
-                                exhausts: o,
-                                collisionShapeVertices: l.get(F, F, "m", rt).call(F, r("Collision", !0))
-                            },
-                            l.get(F, F, "m", at).call(F).then((t => {
-                                e(t)
+                            const carBodies = new Map
+                              , carSuspension = a(r("Suspension", !0))
+                              , carCollision = l.get(F, F, "m", rt).call(F, r("Collision", !0));
+                            carBodies.set(0, a(r(S.A.bodies[0].model, !0))),
+                            (new d.B).load("models/car_bodies.glb", (bodiesGltf => {
+                                for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
+                                    if (!S.A.isValidBody(bodyIndex))
+                                        throw new Error("Invalid car style body");
+                                    carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene)))
+                                }
+                                F.models = {
+                                    chassis: carBodies.get(0),
+                                    bodies: carBodies,
+                                    suspension: carSuspension,
+                                    rims: s,
+                                    exhausts: o,
+                                    collisionShapeVertices: carCollision
+                                },
+                                l.get(F, F, "m", at).call(F).then((t => {
+                                    e(t)
+                                }
+                                )).catch(t)
                             }
-                            )).catch(t)
+                            ), void 0, t)
                         }
                         ), void 0, t)
                     }
@@ -44083,6 +44153,23 @@ window.__nswsDecrypt = async function(b64Data) {
                 "uk-UA": "Візерунок",
                 "zh-CN": "图案",
                 "zh-TW": "圖案"
+            },
+            Car: {
+                ar: "السيارة",
+                "de-DE": "Auto",
+                "es-ES": "Coche",
+                "fr-FR": "Voiture",
+                "it-IT": "Auto",
+                "ja-JP": "車",
+                "ko-KR": "차량",
+                "pl-PL": "Samochód",
+                "pt-BR": "Carro",
+                "pt-PT": "Carro",
+                "ru-RU": "Машина",
+                "tr-TR": "Araba",
+                "uk-UA": "Машина",
+                "zh-CN": "车辆",
+                "zh-TW": "車輛"
             },
             Exhaust: {
                 ar: "العادم",
