@@ -9472,8 +9472,13 @@ window.__nswsDecrypt = async function(b64Data) {
                             const carBodies = new Map
                               , carSuspension = a(r("Suspension", !0))
                               , carCollision = l.get(F, F, "m", rt).call(F, r("Collision", !0));
-                            carBodies.set(0, a(r(S.A.bodies[0].model, !0))),
-                            (new d.B).load("models/car_bodies.glb", (bodiesGltf => {
+                            carBodies.set(0, a(r(S.A.bodies[0].model, !0)));
+                            const bodiesDraco = new DRACOLoader
+                              , bodiesLoader = new d.B;
+                            bodiesDraco.setDecoderPath("lib/draco/"),
+                            bodiesLoader.setDRACOLoader(bodiesDraco),
+                            bodiesLoader.load("models/car_bodies.glb", (bodiesGltf => {
+                                bodiesDraco.dispose();
                                 for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
                                     if (!S.A.isValidBody(bodyIndex))
                                         throw new Error("Invalid car style body");
