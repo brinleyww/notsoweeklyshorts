@@ -2444,30 +2444,37 @@ window.__nswsDecrypt = async function(b64Data) {
                 const e = [];
                 return e[0] = {
                     model: "Body",
+                    lowModel: "Body",
                     name: "Classic"
                 },
                 e[1] = {
                     model: "BodyRally",
+                    lowModel: "BodyRallyLow",
                     name: "Rally"
                 },
                 e[2] = {
                     model: "BodyCybertruck",
+                    lowModel: "BodyCybertruck",
                     name: "Cybertruck"
                 },
                 e[3] = {
                     model: "BodyNascar",
+                    lowModel: "BodyNascarLow",
                     name: "Stock Car"
                 },
                 e[4] = {
                     model: "BodyF1",
+                    lowModel: "BodyF1Low",
                     name: "Formula"
                 },
                 e[5] = {
                     model: "BodyFrame",
+                    lowModel: "BodyFrame",
                     name: "Chassis"
                 },
                 e[6] = {
                     model: "BodyPengu",
+                    lowModel: "BodyPengu",
                     name: "Pengu"
                 },
                 e.map((e => Object.freeze(e)))
@@ -8669,7 +8676,8 @@ window.__nswsDecrypt = async function(b64Data) {
                 e[e.CheckpointVolume = 20] = "CheckpointVolume",
                 e[e.GhostCarSoundsEnabled = 21] = "GhostCarSoundsEnabled",
                 e[e.VibrationEnabled = 22] = "VibrationEnabled",
-                e[e.TouchSteeringSide = 23] = "TouchSteeringSide"
+                e[e.TouchSteeringSide = 23] = "TouchSteeringSide",
+                e[e.LowPerformanceMode = 24] = "LowPerformanceMode"
             }(i || (i = {}));
             const r = i
         }
@@ -9083,7 +9091,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     l.set(this, _e, {
                         value: new THREE.Vector3(0,0,0)
                     }, "f"),
-                    l.set(this, we, (F.models.bodies?.get(l.get(this, Ce, "f").body) ?? F.models.chassis).clone(), "f"),
+                    l.set(this, we, ((l.get(this, Ie, "f")?.getSettingBoolean(st.A.LowPerformanceMode) ? F.models.bodiesLow : F.models.bodies)?.get(l.get(this, Ce, "f").body) ?? F.models.chassis).clone(), "f"),
                     l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
                     l.set(this, xe, F.models.suspension.clone(), "f"),
                     l.get(this, G, "m", Ve).call(this, l.get(this, xe, "f")),
@@ -9251,7 +9259,7 @@ window.__nswsDecrypt = async function(b64Data) {
                             t.remove(l.get(this, Se, "f")),
                             l.get(this, ve, "f").remove(t),
                             l.get(this, Ae, "f").removeMaterial(t.material),
-                            l.set(this, we, (F.models.bodies?.get(e.body) ?? F.models.chassis).clone(), "f"),
+                            l.set(this, we, ((l.get(this, Ie, "f")?.getSettingBoolean(st.A.LowPerformanceMode) ? F.models.bodiesLow : F.models.bodies)?.get(e.body) ?? F.models.chassis).clone(), "f"),
                             l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
                             l.get(this, we, "f").matrixAutoUpdate = t.matrixAutoUpdate,
                             l.get(this, we, "f").matrix.copy(t.matrix),
@@ -9470,9 +9478,11 @@ window.__nswsDecrypt = async function(b64Data) {
                                 o.set(e, a(r(S.A.exhausts[e].model, !0)))
                             }
                             const carBodies = new Map
+                              , carBodiesLow = new Map
                               , carSuspension = a(r("Suspension", !0))
                               , carCollision = l.get(F, F, "m", rt).call(F, r("Collision", !0));
-                            carBodies.set(0, a(r(S.A.bodies[0].model, !0)));
+                            carBodies.set(0, a(r(S.A.bodies[0].model, !0))),
+                            carBodiesLow.set(0, carBodies.get(0));
                             const bodiesDraco = new DRACOLoader
                               , bodiesLoader = new d.B;
                             bodiesDraco.setDecoderPath("lib/draco/"),
@@ -9482,11 +9492,14 @@ window.__nswsDecrypt = async function(b64Data) {
                                 for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
                                     if (!S.A.isValidBody(bodyIndex))
                                         throw new Error("Invalid car style body");
-                                    carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene, !0)))
+                                    carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene, !0)));
+                                    const lowModel = S.A.bodies[bodyIndex].lowModel;
+                                    carBodiesLow.set(bodyIndex, lowModel == S.A.bodies[bodyIndex].model ? carBodies.get(bodyIndex) : a(r(lowModel, !0, bodiesGltf.scene, !0)))
                                 }
                                 F.models = {
                                     chassis: carBodies.get(0),
                                     bodies: carBodies,
+                                    bodiesLow: carBodiesLow,
                                     suspension: carSuspension,
                                     rims: s,
                                     exhausts: o,
@@ -30657,6 +30670,11 @@ window.__nswsDecrypt = async function(b64Data) {
                         n = TrackPartColorId.Desert
                     }
                     const h = m.get(this, r, "f").isTrackShadowsEnabled();
+                    // Low performance mode drops the flat ground shadows the track
+                    // casts at the "Low" shadow setting. They are a second draw of
+                    // every part's full geometry, so this is about half of the
+                    // track's per-frame triangles.
+                    m.get(this, a, "f").getSettingBoolean(k.A.LowPerformanceMode) && (c = null);
                     for (const e of m.get(this, s, "f").getAllParts())
                         for (const [i,a] of e.colors) {
                             const s = [];
@@ -44159,6 +44177,23 @@ window.__nswsDecrypt = async function(b64Data) {
                 "zh-CN": "图案",
                 "zh-TW": "圖案"
             },
+            "Low performance mode": {
+                ar: "وضع الأداء المنخفض",
+                "de-DE": "Leistungssparmodus",
+                "es-ES": "Modo de bajo rendimiento",
+                "fr-FR": "Mode performances réduites",
+                "it-IT": "Modalità prestazioni ridotte",
+                "ja-JP": "低負荷モード",
+                "ko-KR": "저사양 모드",
+                "pl-PL": "Tryb niskiej wydajności",
+                "pt-BR": "Modo de baixo desempenho",
+                "pt-PT": "Modo de baixo desempenho",
+                "ru-RU": "Режим низкой производительности",
+                "tr-TR": "Düşük performans modu",
+                "uk-UA": "Режим низької продуктивності",
+                "zh-CN": "低性能模式",
+                "zh-TW": "低效能模式"
+            },
             Car: {
                 ar: "السيارة",
                 "de-DE": "Auto",
@@ -50006,6 +50041,16 @@ window.__nswsDecrypt = async function(b64Data) {
                 value: "true"
             }], R.A.TouchSteeringSide),
             C.get(this, ms, "m", Ds).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Graphics")),
+            C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Low performance mode"), [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.LowPerformanceMode, ( () => {
+                C.get(this, ws, "f").generateMeshes()
+            }
+            )),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Shadows"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
                 value: "0",
@@ -57044,7 +57089,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 null != n && C.get(this, Mu, "m", Pu).call(this, n)
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
