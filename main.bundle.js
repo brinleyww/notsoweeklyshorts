@@ -50819,9 +50819,11 @@ window.__nswsDecrypt = async function(b64Data) {
                                     .map(ve => Object.assign({}, ve, {__nswsIsVps: true}))
                                 : [];
                             const __nswsMerged = __nswsRawEntries.concat(__nswsVpsEntries).sort(((x, y) => x.time.numberOfFrames - y.time.numberOfFrames));
-                            const s = __nswsBanlist.length
-                                ? __nswsMerged.filter(e => !__nswsBanlist.includes((e.nickname || "").trim().toLowerCase()))
-                                : __nswsMerged;
+                            // Rank is taken from the unfiltered position, so numbering stays true
+                            // across page boundaries. A banned player leaves a gap at their own rank
+                            // instead of shifting everyone below them up by one (which previously made
+                            // the first rank of the next page vanish entirely).
+                            const s = __nswsMerged;
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
                             C.get(this, oo, "f").textContent = C.get(this, Zs, "f").get("{0} players", [Mo(a)]),
@@ -50829,6 +50831,8 @@ window.__nswsDecrypt = async function(b64Data) {
                             for (let e = 0; e < s.length; e++) {
                                 const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, __nswsIsVps: v} = s[e]
                                   , d = r + e + 1;
+                                if (__nswsBanlist.length && __nswsBanlist.includes((i || "").trim().toLowerCase()))
+                                    continue;
                                 C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, !!v)
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
