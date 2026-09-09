@@ -1,0 +1,5 @@
+node_modules
+.wrangler
+
+# Local backups of patched files
+*.bak

@@ -1,0 +1,15 @@
+# Standalone leaderboard proxy.
+#
+# The site itself is served by GitHub Pages, which cannot run a Worker, so this
+# deploys on its own and the site calls it cross-origin. Deploy from this
+# directory:  npx wrangler deploy
+name = "pt-leaderboard-proxy"
+main = "src/worker.js"
+compatibility_date = "2026-07-01"
+
+[observability]
+enabled = true
+
+[vars]
+UPSTREAM = "https://vps.kodub.com"
+UPSTREAM_ORIGIN = "https://www.kodub.com"

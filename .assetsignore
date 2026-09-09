@@ -20,6 +20,9 @@ wrangler.toml
 .wrangler
 .assetsignore
 
+# Local backups of patched files
+*.bak
+
 # Misc dev files
 *.md
 .gitignore

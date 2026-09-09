@@ -16,6 +16,11 @@
             });
         </script>
         <script>
+            // Leaderboard proxy base URL. Must end with a slash.
+            // Set this to the URL `wrangler deploy` prints for the Worker in proxy/.
+            window.__nswsApiBase = "https://pt-leaderboard-proxy.bringleyw.workers.dev/";
+        </script>
+        <script>
             // Nicknames hidden from leaderboard and standings displays.
             window.__nswsLeaderboardBanlist = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"];
         </script>

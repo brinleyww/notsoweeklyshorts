@@ -53343,11 +53343,11 @@ window.__nswsDecrypt = async function(b64Data) {
                         try {
                             const [results, selfEntry] = await Promise.all([
                                 Promise.all(LB_TRACKS.map(t =>
-                                    fetch("https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
+                                    fetch(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
                                         .then(r => r.json())
                                 )),
                                 LB_TRACKS.length > 0
-                                    ? fetch("https://ptproxy.cwcinc.dev/v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false")
+                                    ? fetch(window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false")
                                         .then(r => r.json()).catch(() => null)
                                     : Promise.resolve(null)
                             ]);
@@ -56544,7 +56544,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 ku.set(this, "v6/")
             }
             getLeaderboard(e, t, n, i, r, __nswsHost) {
-                let a = (__nswsHost || "https://ptproxy.cwcinc.dev/") + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString();
+                let a = (__nswsHost || window.__nswsApiBase + "") + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString();
                 return this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e)),
                 new Promise(( (t, n) => {
                     const i = new XMLHttpRequest;
@@ -56661,7 +56661,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 ))
             }
             getLeaderboardUserEntry(e, t, n) {
-                const i = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false"; window.__nswsUserToken = encodeURIComponent(e);
+                const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false"; window.__nswsUserToken = encodeURIComponent(e);
                 return new Promise(( (e, t) => {
                     const n = new XMLHttpRequest;
                     n.timeout = C.get(this, wu, "f"),
@@ -56710,7 +56710,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 ))
             }
             getRecordings(e) {
-                const t = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "recordings?version=0.6.2&ids=" + e.join(",");
+                const t = window.__nswsApiBase + "" + C.get(this, ku, "f") + "recordings?version=0.6.2&ids=" + e.join(",");
                 return new Promise(( (e, n) => {
                     if (this.determinismState != Js.Ok)
                         n(new Error("Getting recordings not allowed"));
@@ -56782,7 +56782,7 @@ window.__nswsDecrypt = async function(b64Data) {
                         if (h.length >= C.get(this, Su, "f"))
                             c(new Error("Recording is too large"));
                         else {
-                            const o = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "leaderboard";
+                            const o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard";
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;
@@ -56854,7 +56854,7 @@ window.__nswsDecrypt = async function(b64Data) {
             }
             submitUserProfile(e, t, n, i) {
                 return new Promise(( (r, a) => {
-                    const s = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "user"
+                    const s = window.__nswsApiBase + "" + C.get(this, ku, "f") + "user"
                       , o = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize()
                       , l = new XMLHttpRequest;
                     l.timeout = C.get(this, wu, "f"),
@@ -56874,7 +56874,7 @@ window.__nswsDecrypt = async function(b64Data) {
                     if (this.determinismState != Js.Ok)
                         s(new Error("Submit not allowed"));
                     else {
-                        const o = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "verifyRecordings"
+                        const o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "verifyRecordings"
                           , l = "version=0.6.2&userToken=" + encodeURIComponent(e) + (null != t ? "&trackId=" + t : "") + "&maxFrames=" + n.toString() + "&getEstimatedRemaining=" + i.toString() + "&recordings=" + encodeURIComponent(JSON.stringify(r))
                           , c = new XMLHttpRequest;
                         c.timeout = C.get(this, xu, "f"),
@@ -56948,7 +56948,7 @@ window.__nswsDecrypt = async function(b64Data) {
             }
             getUser(e) {
                 return new Promise(( (t, n) => {
-                    const i = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "user?version=0.6.2&userToken=" + encodeURIComponent(e)
+                    const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "user?version=0.6.2&userToken=" + encodeURIComponent(e)
                       , r = new XMLHttpRequest;
                     r.timeout = C.get(this, wu, "f"),
                     r.overrideMimeType("text/plain"),
@@ -57000,16 +57000,16 @@ window.__nswsDecrypt = async function(b64Data) {
             createMultiplayerHostWebSocket() {
                 if (this.determinismState != Js.Ok)
                     throw new Error("WebSocket creation not allowed with non-deterministic physics");
-                return new WebSocket("https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "multiplayer/host")
+                return new WebSocket(window.__nswsApiBase + "" + C.get(this, ku, "f") + "multiplayer/host")
             }
             createMultiplayerJoinWebSocket() {
                 if (this.determinismState != Js.Ok)
                     throw new Error("WebSocket creation not allowed with non-deterministic physics");
-                return new WebSocket("https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "multiplayer/join")
+                return new WebSocket(window.__nswsApiBase + "" + C.get(this, ku, "f") + "multiplayer/join")
             }
             getIceServers() {
                 return new Promise(( (e, t) => {
-                    const n = "https://ptproxy.cwcinc.dev/" + C.get(this, ku, "f") + "iceServers?version=0.6.2"
+                    const n = window.__nswsApiBase + "" + C.get(this, ku, "f") + "iceServers?version=0.6.2"
                       , i = new XMLHttpRequest;
                     i.timeout = C.get(this, wu, "f"),
                     i.overrideMimeType("text/plain"),
@@ -58656,8 +58656,8 @@ window.__nswsDecrypt = async function(b64Data) {
     var STORAGE_KEY = "_nswsMedals";
     var PROFILE_SLOT_KEY = "polytrack_v5_prod_user_slot";
     var PROFILE_KEY_PREFIX = "polytrack_v5_prod_user_";
-    var ENTRY_URL = "https://ptproxy.cwcinc.dev/v6/leaderboardUserEntry?version=0.6.2&onlyVerified=false";
-    var LB_URL = "https://ptproxy.cwcinc.dev/v6/leaderboard?version=0.6.2&onlyVerified=false";
+    var ENTRY_URL = window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&onlyVerified=false";
+    var LB_URL = window.__nswsApiBase + "v6/leaderboard?version=0.6.2&onlyVerified=false";
     var SUBMIT_DELAY_MS = 0;
     var PLACEMENT_SETTLE_DELAY_MS = 1200;
 
