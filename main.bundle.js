@@ -83,6 +83,9 @@ window.__nswsTrackQuery = function(trackId) {
     let openClipsMenuOnLoad = false;
     let runHasClip = false;
     let openClipsMenu = () => {};
+    // The replay session on screen (the game's "Watch" view), or null when not
+    // watching. Set and cleared by that session's own constructor/dispose.
+    let watchSession = null;
     (function() {
         var style = document.createElement("style");
         style.id = "_bw-clip-hud-css";
@@ -860,6 +863,46 @@ window.__nswsTrackQuery = function(trackId) {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
         }
     }
+    // Clips the run of the car the Watch view is focused on. That run is already
+    // complete, so the clip always covers it from start to finish, wherever
+    // playback currently is.
+    function clipWatchedRun() {
+        const run = watchSession?.getFocusedRun();
+        if (!run) return;
+        const frames = run.time?.numberOfFrames ?? 0;
+        if (!Number.isSafeInteger(frames) || frames < 1) {
+            alert("No run to clip.");
+            return;
+        }
+        const pako = window.__clipPako?.Ay ?? window.__clipPako;
+        const inf = new pako.Inflate;
+        inf.push(_base64ToBytes(run.recording.serialize().replace(/-/g, "+").replace(/_/g, "/")), true);
+        if (inf.err) {
+            alert("Failed to read recording.");
+            return;
+        }
+        const now = Date.now();
+        const clip = {
+            id: "clip_" + now,
+            name: formatClipDate(now),
+            playerName: run.nickname || "Anonymous",
+            trackId: run.trackId,
+            carStyle: run.carStyle?.serialize?.() ?? "",
+            frames: frames,
+            recordingBytes: _bytesToBase64(inf.result),
+            createdAt: now
+        };
+        // Watching a clip, or a run clipped earlier, would otherwise save a copy.
+        if (_findDuplicateClip(clip)) {
+            showRunAlreadyClippedNotification();
+            return;
+        }
+        if (localAddClip(clip)) {
+            showClipSavedNotification();
+        } else {
+            alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
+        }
+    }
     function showClipSavedNotification() {
         injectClipCSS();
         const el = document.createElement("div");
@@ -1009,7 +1052,8 @@ window.__nswsTrackQuery = function(trackId) {
         _playClipNow(clip);
     }
     function framesToTime(frames) {
-        var ms = Math.round(frames * 1e3 / 60);
+        // A game frame is one millisecond (the game's own timer divides frames by 1000).
+        var ms = frames;
         var min = Math.floor(ms / 6e4);
         var sec = Math.floor(ms % 6e4 / 1e3);
         var msec = ms % 1e3;
@@ -1387,7 +1431,11 @@ window.__nswsTrackQuery = function(trackId) {
             return;
         }
         if (e.code === getClipKeyBind() && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-            createClip();
+            if (watchSession) {
+                if (!e.repeat) clipWatchedRun();
+            } else {
+                createClip();
+            }
         }
     });
     var e, t = {
@@ -58153,9 +58201,19 @@ window.__nswsTrackQuery = function(trackId) {
                         e.hasFinished() || C.get(this, cf, "f").getSettingBoolean(R.A.CockpitCameraToggle) || (C.get(this, cf, "f").getSettingBoolean(R.A.DefaultCameraMode) ? C.get(this, sf, "f").setCamera(e.cameraCockpit) : C.get(this, sf, "f").setCamera(e.cameraOrbit))
                     }
                 }
-                ), "f"))
+                ), "f"));
+                watchSession = this;
+            }
+            // The focused car's run (the one "Switch car" cycles to), for the clip key.
+            getFocusedRun() {
+                const e = C.get(this, uf, "f")[C.get(this, df, "f")];
+                return null == e ? null : {
+                    ...e.settings,
+                    trackId: C.get(this, tf, "f").getId()
+                }
             }
             dispose() {
+                if (watchSession === this) watchSession = null;
                 C.get(this, $p, "f").clear(),
                 C.get(this, rf, "f").clearMountains();
                 for (const e of C.get(this, uf, "f"))
