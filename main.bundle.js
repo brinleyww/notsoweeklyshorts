@@ -32,6 +32,29 @@ window.__nswsDecrypt = async function(b64Data) {
     );
     return new TextDecoder().decode(decrypted);
 };
+// The leaderboard proxy needs two things about a Not So Weekly Shorts track that the game's
+// own requests don't carry: its week (times on the week still running are kept secret) and
+// the player's token, which is how the proxy tells the player's own run from everyone else's.
+// The token hash the game sends can't do that - it is the public userId on every entry.
+window.__nswsTrackWeek = function(trackId) {
+    const week = (window.__nswsTrackWeekMap || {})[trackId];
+    return Number.isSafeInteger(week) ? week : null;
+};
+window.__nswsProfileToken = function() {
+    try {
+        const slot = parseInt(localStorage.getItem("polytrack_v5_prod_user_slot") ?? "0", 10);
+        const profile = JSON.parse(localStorage.getItem("polytrack_v5_prod_user_" + (slot >= 0 ? slot : 0)));
+        return profile && "string" == typeof profile.token ? profile.token : null;
+    } catch {
+        return null;
+    }
+};
+window.__nswsTrackQuery = function(trackId) {
+    const week = window.__nswsTrackWeek(trackId);
+    if (null == week) return "";
+    const token = window.__nswsProfileToken();
+    return "&nswsWeek=" + week + (token ? "&userToken=" + encodeURIComponent(token) : "");
+};
 (function() {
     // The Visual FX post-processing pass (below) grabs the live pixels of the
     // #screen canvas every frame via texImage2D. WebGL canvases normally clear
@@ -50801,39 +50824,19 @@ window.__nswsDecrypt = async function(b64Data) {
             setTimeout(( () => {
                 if (!n.isCancelled) {
                     const i = 20
-                      , r = C.get(this, Ao, "f") * i
-                      , __nswsTokenHash = C.get(this, to, "f").getCurrentUserProfile().tokenHash
-                      , __nswsTrackId = C.get(this, Ys, "f")
-                      , __nswsIsNSWSTrack = !C.get(this, mo, "f");
-                    Promise.all([
-                        C.get(this, $s, "f").getLeaderboard(__nswsTokenHash, __nswsTrackId, r, i, false),
-                        __nswsIsNSWSTrack
-                            ? C.get(this, $s, "f").getLeaderboard(__nswsTokenHash, __nswsTrackId, r, i, false, "https://vps.kodub.com/").catch(( () => null))
-                            : Promise.resolve(null)
-                    ]).then(( ([{total: a, entries: __nswsRawEntries, userEntry: o}, __nswsVpsResult]) => {
+                      , r = C.get(this, Ao, "f") * i;
+                    // The proxy has already taken banned players out and counted ranks and the
+                    // total without them, so a row's rank is just its place in the list.
+                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o}) => {
                         if (!n.isCancelled) {
-                            const __nswsBanlist = (window.__nswsLeaderboardBanlist || []).map(b => b.trim().toLowerCase());
-                            const __nswsVpsEntries = (__nswsVpsResult && Array.isArray(__nswsVpsResult.entries))
-                                ? __nswsVpsResult.entries
-                                    .filter(ve => !__nswsRawEntries.some(pe => pe.nickname === ve.nickname && pe.time.numberOfFrames === ve.time.numberOfFrames))
-                                    .map(ve => Object.assign({}, ve, {__nswsIsVps: true}))
-                                : [];
-                            const __nswsMerged = __nswsRawEntries.concat(__nswsVpsEntries).sort(((x, y) => x.time.numberOfFrames - y.time.numberOfFrames));
-                            // Rank is taken from the unfiltered position, so numbering stays true
-                            // across page boundaries. A banned player leaves a gap at their own rank
-                            // instead of shifting everyone below them up by one (which previously made
-                            // the first rank of the next page vanish entirely).
-                            const s = __nswsMerged;
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
                             C.get(this, oo, "f").textContent = C.get(this, Zs, "f").get("{0} players", [Mo(a)]),
                             C.get(this, oo, "f").classList.add("fade-in");
                             for (let e = 0; e < s.length; e++) {
-                                const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, __nswsIsVps: v} = s[e]
+                                const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, hidden: v} = s[e]
                                   , d = r + e + 1;
-                                if (__nswsBanlist.length && __nswsBanlist.includes((i || "").trim().toLowerCase()))
-                                    continue;
-                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, !!v)
+                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v)
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
                             C.get(this, ho, "f").disabled = !1,
@@ -50869,13 +50872,16 @@ window.__nswsDecrypt = async function(b64Data) {
             ), 500)
         }
         ,
-        ko = function(e, t, n, i, r, a, s, o, l, __nswsIsVpsEntry) {
+        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden) {
+            // __nswsHidden: the proxy withheld this run's time and recording (someone else's run
+            // on a week still in progress), so there is nothing real to show or race against.
+            const __nswsSecret = !s && (!!__nswsHidden || window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
             const c = document.createElement("button");
             c.className = "button main",
             s && (C.set(this, bo, c, "f"),
             c.classList.add("self")),
             c.addEventListener("click", ( () => {
-                if (!s && window.__nswsIsCurrentWeek(C.get(this, Ys, "f"))) return;
+                if (__nswsSecret) return;
                 C.get(this, eo, "f").playUIClick(),
                 C.get(this, wo, "f").some((e => e.recordingId == o)) ? (C.set(this, wo, C.get(this, wo, "f").filter((e => e.recordingId != o)), "f"),
                 c.classList.remove("selected"),
@@ -50909,7 +50915,7 @@ window.__nswsDecrypt = async function(b64Data) {
             p.className = "checkmark",
             p.src = "images/checkmark.svg",
             c.appendChild(p);
-            if (C.get(this, mo, "f") || __nswsIsVpsEntry) {
+            if (C.get(this, mo, "f")) {
                 const w = document.createElement("img");
                 w.className = "vps-warning",
                 w.src = "images/warning.svg",
@@ -50928,9 +50934,8 @@ window.__nswsDecrypt = async function(b64Data) {
             m.textContent = Qe(e),
             g.appendChild(m);
             const A = document.createElement("p");
-            const __nswsShowReal = s || !window.__nswsIsCurrentWeek(C.get(this, Ys, "f"));
-            A.textContent = __nswsShowReal ? Ve.A.formatTimeString(i) : "SECRET",
-            __nswsShowReal || (A.style.cssText = "opacity:0.83;"),
+            A.textContent = __nswsSecret ? "SECRET" : Ve.A.formatTimeString(i),
+            __nswsSecret && (A.style.cssText = "opacity:0.83;"),
             f.appendChild(A);
             const v = document.createElement("div");
             v.className = "right",
@@ -53347,11 +53352,11 @@ window.__nswsDecrypt = async function(b64Data) {
                         try {
                             const [results, selfEntry] = await Promise.all([
                                 Promise.all(LB_TRACKS.map(t =>
-                                    fetch(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false")
+                                    fetch(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false" + window.__nswsTrackQuery(t.id))
                                         .then(r => r.json())
                                 )),
                                 LB_TRACKS.length > 0
-                                    ? fetch(window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false")
+                                    ? fetch(window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false" + window.__nswsTrackQuery(LB_TRACKS[0].id))
                                         .then(r => r.json()).catch(() => null)
                                     : Promise.resolve(null)
                             ]);
@@ -53359,13 +53364,11 @@ window.__nswsDecrypt = async function(b64Data) {
                             const selfNick = selfEntry && selfEntry.entry ? (selfEntry.entry.nickname || "").trim() : (window.__nswsSelfNick || "");
                             window.__nswsSelfNick = selfNick || window.__nswsSelfNick;
                             const maps = results.map(data => {
+                                // Banned players never reach the page - the proxy drops them - so the
+                                // list position is already the rank.
                                 const entries = Array.isArray(data) ? data : (data.entries || []);
-                                const __nswsBanlist = (window.__nswsLeaderboardBanlist || []).map(b => b.trim().toLowerCase());
-                                const filteredEntries = __nswsBanlist.length
-                                    ? entries.filter(e => !__nswsBanlist.includes(((e.nickname || e.name || "")).trim().toLowerCase()))
-                                    : entries;
                                 const m = {};
-                                filteredEntries.forEach((e, idx) => {
+                                entries.forEach((e, idx) => {
                                     const nm = (e.nickname || e.name || "").trim();
                                     if (nm && !(nm in m)) m[nm] = idx + 1;
                                 });
@@ -56547,8 +56550,8 @@ window.__nswsDecrypt = async function(b64Data) {
                 Su.set(this, 1e4),
                 ku.set(this, "v6/")
             }
-            getLeaderboard(e, t, n, i, r, __nswsHost) {
-                let a = (__nswsHost || window.__nswsApiBase + "") + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString();
+            getLeaderboard(e, t, n, i, r) {
+                let a = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString() + window.__nswsTrackQuery(t);
                 return this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e)),
                 new Promise(( (t, n) => {
                     const i = new XMLHttpRequest;
@@ -56617,7 +56620,8 @@ window.__nswsDecrypt = async function(b64Data) {
                                             time: new yt.A(t.frames),
                                             carStyle: jt.A.deserializeSafe(t.carStyle),
                                             verifiedState: t.verifiedState,
-                                            isSelf: t.userId == e
+                                            isSelf: t.userId == e,
+                                            hidden: !0 === t.hidden
                                         })
                                     }
                                     if (!("userEntry"in r))
@@ -56665,7 +56669,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 ))
             }
             getLeaderboardUserEntry(e, t, n) {
-                const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false"; window.__nswsUserToken = encodeURIComponent(e);
+                const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false" + window.__nswsTrackQuery(t); window.__nswsUserToken = encodeURIComponent(e);
                 return new Promise(( (e, t) => {
                     const n = new XMLHttpRequest;
                     n.timeout = C.get(this, wu, "f"),
@@ -56786,7 +56790,8 @@ window.__nswsDecrypt = async function(b64Data) {
                         if (h.length >= C.get(this, Su, "f"))
                             c(new Error("Recording is too large"));
                         else {
-                            const o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard";
+                            const __nswsWeek = window.__nswsTrackWeek(r)
+                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek);
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;
@@ -58780,7 +58785,7 @@ window.__nswsDecrypt = async function(b64Data) {
         var target = benchmarkNicknameForTrack(trackId).trim().toLowerCase();
 
         function fetchPage(skip) {
-            var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=" + skip + "&amount=" + BENCHMARK_PAGE_SIZE;
+            var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=" + skip + "&amount=" + BENCHMARK_PAGE_SIZE + window.__nswsTrackQuery(trackId);
             return fetch(url).then(function (r) {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.json();
@@ -58794,7 +58799,11 @@ window.__nswsDecrypt = async function(b64Data) {
                 var total = typeof data?.total === "number" ? data.total : null;
                 for (var i = 0; i < entries.length; i++) {
                     var e = entries[i];
-                    if (e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target && !isNicknameBanned(e.nickname)) {
+                    if (e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target) {
+                        // The proxy withholds times on the week in progress unless the nickname is in
+                        // its PUBLIC_NICKNAMES. Treat that as "can't tell", not "no Author Time",
+                        // so earned medals aren't wiped.
+                        if (e.hidden === true) throw new Error("Author Time is hidden by the leaderboard proxy");
                         return extractTimeSeconds(e);
                     }
                 }
@@ -58899,7 +58908,7 @@ window.__nswsDecrypt = async function(b64Data) {
     function fetchPlacement(trackId) {
         return getUserTokenHash().then(function (tokenHash) {
             if (!tokenHash) return null;
-            var entryUrl = ENTRY_URL + "&trackId=" + encodeURIComponent(trackId) + "&userTokenHash=" + encodeURIComponent(tokenHash);
+            var entryUrl = ENTRY_URL + "&trackId=" + encodeURIComponent(trackId) + "&userTokenHash=" + encodeURIComponent(tokenHash) + window.__nswsTrackQuery(trackId);
             return fetch(entryUrl).then(function (r) {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.json();
@@ -58907,7 +58916,7 @@ window.__nswsDecrypt = async function(b64Data) {
                 if (entryData == null || typeof entryData.position !== "number" || !Number.isSafeInteger(entryData.position)) {
                     return null;
                 }
-                var lbUrl = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1";
+                var lbUrl = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1" + window.__nswsTrackQuery(trackId);
                 return fetch(lbUrl).then(function (r) {
                     if (!r.ok) throw new Error("HTTP " + r.status);
                     return r.json();
@@ -58927,7 +58936,7 @@ window.__nswsDecrypt = async function(b64Data) {
     }
 
     function fetchLeaderboardTotal(trackId) {
-        var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1";
+        var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=1" + window.__nswsTrackQuery(trackId);
         return fetch(url).then(function (r) {
             if (!r.ok) throw new Error("HTTP " + r.status);
             return r.json();
@@ -58936,49 +58945,10 @@ window.__nswsDecrypt = async function(b64Data) {
         });
     }
 
-    // Shares the same banlist that index.html uses to hide banned players from the
-    // leaderboard/standings displays, so a banned player's #1 time never blocks a real
-    // world-record announcement for anyone else.
-    function isNicknameBanned(nickname) {
-        var banlist = (window.__nswsLeaderboardBanlist || []).map(function (n) {
-            return String(n).trim().toLowerCase();
-        });
-        if (!banlist.length) return false;
-        return banlist.indexOf(String(nickname || "").trim().toLowerCase()) !== -1;
-    }
-    window.__nswsIsNicknameBanned = isNicknameBanned;
-
-    // Fetches the nicknames of the top `count` leaderboard entries (i.e. everyone ranked
-    // above the player). Returns null on fetch failure so callers can fail safe.
-    function fetchTopNicknames(trackId, count) {
-        if (!count || count <= 0) return Promise.resolve([]);
-        var url = LB_URL + "&trackId=" + encodeURIComponent(trackId) + "&skip=0&amount=" + count;
-        return fetch(url).then(function (r) {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-        }).then(function (data) {
-            var entries = data && Array.isArray(data.entries) ? data.entries : [];
-            return entries.map(function (e) {
-                return e && typeof e.nickname === "string" ? e.nickname : "";
-            });
-        }).catch(function () {
-            return null;
-        });
-    }
-
-    // A run counts as a world record if nobody ranked above the player has a legitimate
-    // (non-banned) time. Rank #1 always qualifies; otherwise every entry above the player's
-    // position has to be a banned nickname.
-    function isWorldRecord(trackId, placement) {
-        if (!placement || !placement.position) return Promise.resolve(false);
-        if (placement.position === 1) return Promise.resolve(true);
-        return fetchTopNicknames(trackId, placement.position - 1).then(function (names) {
-            if (names == null || !names.length) return false;
-            for (var i = 0; i < names.length; i++) {
-                if (!isNicknameBanned(names[i])) return false;
-            }
-            return true;
-        });
+    // The leaderboard proxy counts positions without banned players, so a banned player's
+    // time never blocks a real world record: being ranked #1 is the world record.
+    function isWorldRecord(placement) {
+        return Promise.resolve(!!placement && placement.position === 1);
     }
 
     // If this finish just triggered the game's own "NEW PERSONAL BEST" banner (not a medal
@@ -58989,7 +58959,7 @@ window.__nswsDecrypt = async function(b64Data) {
         if (!native) return;
         var record = native.record;
         if (!record.classList.contains("personal-best")) return;
-        isWorldRecord(trackId, placement).then(function (isWR) {
+        isWorldRecord(placement).then(function (isWR) {
             if (!isWR) return;
             // Make sure the player hasn't already left, and this is still the same banner.
             if (trackId !== currentTrackId) return;

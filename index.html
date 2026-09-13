@@ -20,10 +20,7 @@
             // Set this to the URL `wrangler deploy` prints for the Worker in proxy/.
             window.__nswsApiBase = "https://pt-leaderboard-proxy.bringleyw.workers.dev/";
         </script>
-        <script>
-            // Nicknames hidden from leaderboard and standings displays.
-            window.__nswsLeaderboardBanlist = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"];
-        </script>
+        <!-- Banned leaderboard nicknames are set in proxy/wrangler.toml (BANNED_NICKNAMES). -->
         <script defer="defer" src="./mod/polyfx_runtime.js"></script>
         <script defer="defer" src="./mod/polyfx_keybinds.js"></script>
         <script defer="defer" src="error_screen.bundle.js"></script>

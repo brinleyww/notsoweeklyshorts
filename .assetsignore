@@ -18,6 +18,7 @@ android
 # Wrangler / Cloudflare config itself
 wrangler.toml
 .wrangler
+.dev.vars
 .assetsignore
 
 # Local backups of patched files

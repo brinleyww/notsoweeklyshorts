@@ -1,5 +1,7 @@
 node_modules
 .wrangler
+# Local Worker secrets (TRACK_SALT) for `wrangler dev`
+.dev.vars
 
 # Local backups of patched files
 *.bak

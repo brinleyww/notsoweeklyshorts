@@ -10,6 +10,36 @@ compatibility_date = "2026-07-01"
 [observability]
 enabled = true
 
+[observability.logs]
+# Invocation logs record every request URL, and leaderboard reads carry the
+# player's userToken in the query string. Keep them off.
+invocation_logs = false
+
 [vars]
 UPSTREAM = "https://vps.kodub.com"
 UPSTREAM_ORIGIN = "https://www.kodub.com"
+
+# Sites allowed to call the proxy. Everything else gets 403 - including opening
+# a proxy URL straight in a browser tab.
+ALLOWED_ORIGINS = ["https://brinleyww.github.io"]
+
+# Removed from every leaderboard and from standings; ranks and player counts
+# are recounted without them. Not case-sensitive.
+BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
+
+# The week running now. On its tracks (and any later week's) other players'
+# times and recordings are never sent to the browser. Bump this whenever a new
+# week goes live in main.bundle.js.
+CURRENT_WEEK = 7
+
+# Times that stay visible during the week: the medals' Author Time is read from
+# these players' entries. Keep in step with BENCHMARK_NICKNAME and
+# BENCHMARK_NICKNAME_WEEK_OVERRIDES in main.bundle.js.
+PUBLIC_NICKNAMES = ["Cookedbyapringle", "CookedbyBenjamin's 5th cousin"]
+
+# First week whose runs are stored on Kodub under a secret track id, so nobody
+# can read them from Kodub directly. Takes effect only once the TRACK_SALT
+# secret is set:  npx wrangler secret put TRACK_SALT  (a long random string).
+# Never raise this, change TRACK_SALT or renumber weeks once runs exist - runs
+# stored under the old ids would stop showing.
+HIDDEN_FROM_WEEK = 7
