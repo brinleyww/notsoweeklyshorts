@@ -27,7 +27,12 @@ cannot run a Worker. So the proxy deploys on its own Cloudflare hostname and the
 site calls it cross-origin.
 
     brinleyww.github.io/notsoweeklyshorts/   ->  static site (GitHub Pages)
+    notweeklyshorts.github.io/               ->  the same site, from a fork
     <worker>.workers.dev/v6/*               ->  this proxy  ->  vps.kodub.com
+
+Every address the site is served from must be listed in `ALLOWED_ORIGINS`.
+The proxy answers any other site with `403`, so a new address's leaderboards
+fail to load until it is added and the Worker is deployed.
 
 ## Deploy
 
@@ -82,7 +87,7 @@ under the real id, so nothing disappears when you switch it on.
 | ------------------ | -------------------------------------------------------------- |
 | `UPSTREAM`         | Where requests are forwarded (`https://vps.kodub.com`)         |
 | `UPSTREAM_ORIGIN`  | The `Origin` value upstream will accept                        |
-| `ALLOWED_ORIGINS`  | Sites allowed to call the proxy                                |
+| `ALLOWED_ORIGINS`  | Sites allowed to call the proxy (`https://` + host, no path)   |
 | `BANNED_NICKNAMES` | Removed from leaderboards and standings (not case-sensitive)   |
 | `CURRENT_WEEK`     | Week in progress; its runs and later weeks' runs are secret    |
 | `PUBLIC_NICKNAMES` | Times left visible during the week (the medals' Author Time)   |

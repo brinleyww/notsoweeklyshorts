@@ -20,8 +20,10 @@ UPSTREAM = "https://vps.kodub.com"
 UPSTREAM_ORIGIN = "https://www.kodub.com"
 
 # Sites allowed to call the proxy. Everything else gets 403 - including opening
-# a proxy URL straight in a browser tab.
-ALLOWED_ORIGINS = ["https://brinleyww.github.io"]
+# a proxy URL straight in a browser tab. Every address the site is served from
+# needs to be here (scheme + host, no path), or its leaderboards fail to load.
+# notweeklyshorts.github.io is the fork notweeklyshorts/notweeklyshorts.github.io.
+ALLOWED_ORIGINS = ["https://brinleyww.github.io", "https://notweeklyshorts.github.io"]
 
 # Removed from every leaderboard and from standings; ranks and player counts
 # are recounted without them. Not case-sensitive.
