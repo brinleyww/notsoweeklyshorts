@@ -16,11 +16,9 @@
             });
         </script>
         <script>
-            // Leaderboard proxy base URL. Must end with a slash.
-            // Set this to the URL `wrangler deploy` prints for the Worker in proxy/.
+            // Must end with a slash.
             window.__nswsApiBase = "https://pt-leaderboard-proxy.bringleyw.workers.dev/";
         </script>
-        <!-- Banned leaderboard nicknames are set in proxy/wrangler.toml (BANNED_NICKNAMES). -->
         <script defer="defer" src="./mod/polyfx_runtime.js"></script>
         <script defer="defer" src="./mod/polyfx_keybinds.js"></script>
         <script defer="defer" src="error_screen.bundle.js"></script>

@@ -1,29 +1,5 @@
-/**
- * NSWS leaderboard proxy.
- *
- * vps.kodub.com only answers requests whose Origin header is one of Kodub's own
- * sites, and it never sends CORS headers, so the browser cannot talk to it
- * directly from notsoweeklyshorts. This Worker sits in front of it: it forwards
- * the request with an accepted Origin and hands the response back with CORS
- * headers attached.
- *
- * Leaderboard reads are rebuilt here instead of in the page, because anything
- * the page receives can be read out of the browser's network panel:
- *
- *  - Banned nicknames are dropped before the data leaves the Worker, and ranks,
- *    totals and the player's own position are recounted without them.
- *  - For a week still in progress (week >= CURRENT_WEEK) nobody else's time or
- *    recording id is sent. A player gets their own entry back only by sending
- *    their userToken: the userTokenHash the game sends is public (it is every
- *    entry's userId), so it can't be trusted to mean "me".
- *  - With the TRACK_SALT secret set, runs on weeks >= HIDDEN_FROM_WEEK are
- *    stored upstream under a track id derived from that secret. The real track
- *    ids are public (they are in main.bundle.js), so without this anyone could
- *    read the times straight from Kodub through some other proxy.
- *
- * It never logs request bodies or query strings (both can carry a player's
- * userToken, which is an account secret).
- */
+// NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
+// URLs or bodies: both can carry a player's userToken, which is an account secret.
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -34,10 +10,8 @@ const DEFAULT_VERSION = "0.6.2";
 // open relay to arbitrary hosts.
 const ALLOWED_PREFIXES = ["/v6/"];
 
-// Edge cache TTL in seconds for endpoints passed straight through. Anything not
-// listed is never cached. Leaderboard reads are not here: they are rebuilt per
-// caller. Keep userToken-bearing endpoints (`user`) out of this map - that query
-// string carries a raw account secret and must not be stored.
+// Edge cache TTLs (seconds) for passed-through GETs; anything unlisted is never cached.
+// Never add an endpoint whose URL carries a userToken, such as `user`.
 const CACHE_TTL = {
     "/v6/recordings": 3600, // recordings are addressed by immutable id
 };
@@ -50,11 +24,11 @@ const PAGE_SIZE = 500;
 // ranks are corrected only for the bans found in the part that was read.
 const SCAN_LIMIT_COMMUNITY = 5000;
 const SCAN_LIMIT_OTHER = PAGE_SIZE;
-// Each Worker instance re-reads a leaderboard from upstream at most this often.
 const BOARD_TTL_MS = 10_000;
 const BOARD_CACHE_MAX = 64;
 // Shorter than this, TRACK_SALT could be guessed, so it is ignored.
 const MIN_SALT_LENGTH = 16;
+const CREATOR_KEY_PREFIX = "nsws-creator:";
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -74,9 +48,6 @@ class UpstreamError extends Error {
         this.status = status;
     }
 }
-
-// ---------------------------------------------------------------------------
-// Configuration (wrangler.toml [vars], plus the TRACK_SALT secret)
 
 // A list var may be a TOML array, a JSON array string, or a comma-separated string.
 function listVar(value, fallback) {
@@ -121,15 +92,13 @@ function readConfig(env) {
         currentWeek: intVar(env.CURRENT_WEEK),
         hiddenFromWeek: intVar(env.HIDDEN_FROM_WEEK),
         trackSalt: salt.length >= MIN_SALT_LENGTH ? salt : null,
+        creatorKeys: new Set(listVar(env.CREATOR_KEY_HASHES, []).map((h) => h.trim().toLowerCase()).filter((h) => HEX64.test(h))),
     };
 }
 
 function isBanned(entry, cfg) {
     return cfg.banned.has(normalizeNickname(entry.nickname));
 }
-
-// ---------------------------------------------------------------------------
-// Who may call, and the CORS headers they get
 
 function isAllowedOrigin(origin, cfg) {
     return !!origin && (cfg.allowedOrigins.includes(origin) || cfg.allowedOrigins.includes("*"));
@@ -216,9 +185,6 @@ function upstreamRequestHeaders(request, upstreamOrigin) {
     return headers;
 }
 
-// ---------------------------------------------------------------------------
-// Hashing
-
 const encoder = new TextEncoder();
 let saltKey = null;
 
@@ -242,9 +208,6 @@ async function hiddenTrackId(salt, week, trackId) {
     }
     return hex(await crypto.subtle.sign("HMAC", saltKey.key, encoder.encode(`nsws-week-${week}:${trackId}`)));
 }
-
-// ---------------------------------------------------------------------------
-// Request parameters
 
 async function trackContext(cfg, trackId, weekParam) {
     if (!HEX64.test(trackId ?? "")) throw new BadRequest();
@@ -285,8 +248,14 @@ async function callerHash(params, track) {
     return claimed && HEX64.test(claimed) ? claimed : null;
 }
 
-// ---------------------------------------------------------------------------
-// Reading leaderboards
+// Creators see every run in full, even on the week in progress. Only the token
+// itself can prove it: CREATOR_KEY_HASHES holds sha256(CREATOR_KEY_PREFIX + token),
+// which, unlike the plain token hash, is not anyone's public userId.
+async function isCreator(params, cfg) {
+    const token = params.get("userToken");
+    if (!cfg.creatorKeys.size || !token || !HEX64.test(token)) return false;
+    return cfg.creatorKeys.has(await sha256Hex(CREATOR_KEY_PREFIX + token));
+}
 
 async function fetchUpstreamJson(cfg, request, path, params) {
     const target = new URL(path, cfg.upstream);
@@ -446,9 +415,6 @@ function shield(entry, position, callerHashValue, cfg) {
     };
 }
 
-// ---------------------------------------------------------------------------
-// Handlers
-
 async function handleLeaderboard(request, url, cfg, origin) {
     const params = url.searchParams;
     const track = await trackContext(cfg, params.get("trackId"), params.get("nswsWeek"));
@@ -456,6 +422,7 @@ async function handleLeaderboard(request, url, cfg, origin) {
     const amount = intParam(params.get("amount"), 1, PAGE_SIZE);
     const read = readOptions(params);
     const hash = await callerHash(params, track);
+    const creator = track.secret && await isCreator(params, cfg);
 
     const view = await loadView(cfg, request, track, read);
     const ranked = view.entries.filter((e) => !isBanned(e, cfg));
@@ -464,13 +431,15 @@ async function handleLeaderboard(request, url, cfg, origin) {
         const rawSkip = Math.max(skip, ranked.length) + (view.entries.length - ranked.length);
         page = page.concat(await readPastScan(cfg, request, track, read, rawSkip, amount - page.length));
     }
-    if (track.secret) page = page.map((entry, i) => shield(entry, skip + i + 1, hash, cfg));
+    if (track.secret && !creator) page = page.map((entry, i) => shield(entry, skip + i + 1, hash, cfg));
 
-    return json({
+    const body = {
         total: filteredTotal(view, cfg),
         entries: page,
         userEntry: hash ? await ownEntry(cfg, request, track, read, view, hash) : null,
-    }, origin);
+    };
+    if (creator) body.creator = true;
+    return json(body, origin);
 }
 
 async function handleUserEntry(request, url, cfg, origin) {

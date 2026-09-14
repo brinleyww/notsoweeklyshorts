@@ -32,10 +32,8 @@ window.__nswsDecrypt = async function(b64Data) {
     );
     return new TextDecoder().decode(decrypted);
 };
-// The leaderboard proxy needs two things about a Not So Weekly Shorts track that the game's
-// own requests don't carry: its week (times on the week still running are kept secret) and
-// the player's token, which is how the proxy tells the player's own run from everyone else's.
-// The token hash the game sends can't do that - it is the public userId on every entry.
+// The proxy needs the track's week (the running week's times are secret) and the
+// player's token: the userTokenHash the game sends is every entry's public userId.
 window.__nswsTrackWeek = function(trackId) {
     const week = (window.__nswsTrackWeekMap || {})[trackId];
     return Number.isSafeInteger(week) ? week : null;
@@ -56,16 +54,9 @@ window.__nswsTrackQuery = function(trackId) {
     return "&nswsWeek=" + week + (token ? "&userToken=" + encodeURIComponent(token) : "");
 };
 (function() {
-    // The Visual FX post-processing pass (below) grabs the live pixels of the
-    // #screen canvas every frame via texImage2D. WebGL canvases normally clear
-    // their drawing buffer as soon as the browser composites the frame, and
-    // since our capture runs in an independently-scheduled rAF callback, it can
-    // easily land after that clear - producing garbage/uninitialized GPU memory
-    // (visible as static-like scanline noise) instead of the real frame. Forcing
-    // preserveDrawingBuffer on that specific canvas's context keeps its buffer
-    // intact between frames so the capture always reads valid pixels. This must
-    // run before the game creates its WebGL context, so it's patched here at the
-    // very top of the file, before anything else executes.
+    // Visual FX reads the #screen canvas from its own rAF callback, which can land after
+    // WebGL has cleared the buffer. preserveDrawingBuffer keeps the frame readable, and it
+    // has to be set before the game creates its context, so this runs first.
     const _origGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(type, attribs) {
         if (this.id === "screen" && (type === "webgl2" || type === "webgl" || type === "experimental-webgl")) {
@@ -93,28 +84,10 @@ window.__nswsTrackQuery = function(trackId) {
         document.head.appendChild(style);
     })();
     (function() {
-        // `watchingClip` is the ONLY source of truth for whether the HUD should
-        // be hidden. Earlier versions of this hid/showed the HUD based on
-        // whether `.preview-toolbar-ui` was present in the DOM on a given
-        // animation frame, and even force-reset `watchingClip` to false when it
-        // was momentarily missing. That element is legitimately absent for a
-        // frame or two whenever the game swaps its internal scene/session
-        // object (e.g. while a track is loading), which made the hiding flicker
-        // back on or drop entirely. This version never inspects the toolbar (or
-        // any other transient DOM state) to decide whether clip-watching is
-        // still active - only the two real exit points (the Escape-key handler
-        // and the preview session's own "back"/end callback, both elsewhere in
-        // this file) are allowed to set `watchingClip = false`.
-        //
-        // Hiding itself is layered for robustness: a CSS rule (`!important`,
-        // keyed off a body class) does the bulk of the work declaratively so it
-        // re-applies automatically no matter how many times the game recreates
-        // these elements, and a JS pass backs it up with forced inline styles
-        // (also `!important`) in case a target browser/webview doesn't support
-        // the `:has()` selector used for the graph button. Both layers are
-        // driven purely by `watchingClip` and are reasserted on every animation
-        // frame AND on every DOM mutation, so there is no timing window in
-        // which a freshly (re)created element can slip through unhidden.
+        // Only `watchingClip` decides whether the HUD is hidden, and only the Escape handler
+        // and the preview session's end callback clear it. Don't go by `.preview-toolbar-ui`:
+        // the game drops it for a frame or two whenever it swaps scenes. The CSS rule does
+        // the hiding; the inline styles back it up where `:has()` isn't supported.
         function findGraphButton(toolbar) {
             if (!toolbar) return null;
             var buttons = toolbar.querySelectorAll("button");
@@ -139,13 +112,8 @@ window.__nswsTrackQuery = function(trackId) {
                     el.style.removeProperty("pointer-events");
                 }
             }
-            // The clips list panel (`.clip-menu-bg`) is only a centered box, not
-            // a full-screen overlay, so whatever scene/screen is behind it
-            // (typically the home screen, including after returning from a
-            // watched clip) is otherwise still fully visible and clickable
-            // around its edges. Hide and disable that underlying home-screen
-            // menu chrome for as long as the panel is present, the same way the
-            // game itself does when its own "Clips" button opens this panel.
+            // The clips panel is only a centred box, so the home screen around it would stay
+            // visible and clickable. Hide it while the panel is open, as the game's Clips button does.
             var clipsMenuOpen = !!document.querySelector(".clip-menu-bg");
             document.body.classList.toggle("clips-menu-open", clipsMenuOpen);
             var homeEls = [ document.querySelector(".menu-ui > .main-buttons-container"), document.querySelector(".menu-ui > .logo"), document.querySelector(".menu-ui > .discord-link"), document.querySelector(".menu-ui > .info"), document.querySelector(".menu-ui > .warning-message"), document.querySelector(".menu-ui > .button-bar"), document.getElementById("nsws-subtitle"), document.getElementById("nsws-disclaimer") ];
@@ -221,7 +189,6 @@ window.__nswsTrackQuery = function(trackId) {
             return key.replace(/([a-z])([A-Z])/g, "$1 $2");
         });
     }
-    // ---- Key combinations ----
     // A key binding is a KeyboardEvent.code, optionally after the modifiers that
     // must be held with it, written in this order: "KeyC", "Shift+KeyC",
     // "Control+Alt+KeyX". The game's own bindings and the mod's all use this.
@@ -405,19 +372,15 @@ window.__nswsTrackQuery = function(trackId) {
             localStorage.setItem(VISUALFX_SETTINGS_STORAGE_KEY, JSON.stringify(s));
         } catch (e) {}
     }
-    // Self-contained "Visual FX" system: a keybind-toggled popup (top-right, only
-    // while actually playing a track) with sliders for Depth of Field, Motion Blur,
-    // Chromatic Aberration, Film Grain, Vignette, and Saturation, backed by a small
-    // WebGL2 post-processing pass layered directly on top of the game's own canvas.
-    // Settings persist in localStorage and are NOT touched by opening/closing the
-    // popup - only the "Reset to Default" button changes them.
+    // Visual FX: a popup of post-processing sliders (only while driving), drawn by a WebGL2
+    // pass over the game's canvas. Settings persist in localStorage, and only "Reset to
+    // Default" changes them; opening or closing the popup doesn't.
     (function() {
         const settings = loadVisualFxSettings();
         let menuOpen = false;
         let menuEl = null;
         const sliderRefs = {};
 
-        // ---------- WebGL post-processing overlay ----------
         let fxCanvas = null, gl = null, glProgram = null;
         let frameTex = null, texA = null, texB = null, fboA = null, fboB = null;
         let readIsA = true;
@@ -651,7 +614,6 @@ window.__nswsTrackQuery = function(trackId) {
         }
         requestAnimationFrame(fxLoop);
 
-        // ---------- Popup menu ----------
         function fmtPct(v) {
             return Math.round(v) + "%";
         }
@@ -759,8 +721,6 @@ window.__nswsTrackQuery = function(trackId) {
         }
         window.__nswsToggleVisualFxMenu = toggleVisualFxMenu;
 
-        // Auto-minimize (never reset the sliders) if the player leaves the
-        // track/game screen while the popup happens to be open.
         new MutationObserver(() => {
             if (menuOpen && !document.querySelector(".game-ui")) setMenuVisible(false);
         }).observe(document.body, {
@@ -1131,24 +1091,9 @@ window.__nswsTrackQuery = function(trackId) {
     function _currentTrackId() {
         return window.__getCurrentTrack?.()?.getId?.() ?? null;
     }
-    // NOTE ON THE FIX BELOW:
-    // `watchClipFunction` (module-level `let`, reassigned by the game's own
-    // track-confirmation screen constructor) is the actual trigger that
-    // builds the race/spectate scene for whichever track that screen was
-    // built for - it resolves the track's data and starts the scene itself.
-    // `_currentTrackId()` (window.__getCurrentTrack()) only becomes accurate
-    // *after* that scene has actually been built, i.e. only after
-    // watchClipFunction() has already been called and done its work.
-    // The previous implementation waited for _currentTrackId() to match the
-    // target track BEFORE ever calling watchClipFunction() - but nothing
-    // was going to make that become true, since building the scene requires
-    // calling watchClipFunction() in the first place. That's why switching
-    // to a track you hadn't already loaded this session would just spin
-    // (showing the loading overlay) until the 15s timeout.
-    // The correct thing to wait for is the *selection* step completing -
-    // i.e. watchClipFunction being rebound to the newly-selected track's
-    // context - and then let _playClipNow's own call to watchClipFunction
-    // do the (near-instant) scene build.
+    // Selecting a track makes its confirmation screen rebind watchClipFunction, and calling
+    // watchClipFunction is what builds the scene. _currentTrackId() only changes once the
+    // scene exists, so wait for the rebind, not for the track id.
     function _waitForWatchFunctionRebind(previousFn, timeoutMs) {
         return new Promise(resolve => {
             if (watchClipFunction !== previousFn) {
@@ -1184,13 +1129,7 @@ window.__nswsTrackQuery = function(trackId) {
             openClipsMenu();
             return;
         }
-        // Selecting the track (above) synchronously (re)builds that track's
-        // confirmation/record screen, which is what rebinds
-        // watchClipFunction to the newly selected track. Wait briefly for
-        // that rebind (it should happen the same tick, but this guards
-        // against the track list needing to refresh itself first), then
-        // hand off to _playClipNow, whose call to watchClipFunction is what
-        // actually preloads and builds the track's scene before playback.
+        // Usually rebound in the same tick; the wait covers the track list refreshing first.
         const rebound = await _waitForWatchFunctionRebind(previousWatchFn, 5000);
         if (!rebound) {
             alert("The track for this clip took too long to load. Please try watching the clip again.");
@@ -1665,10 +1604,10 @@ window.__nswsTrackQuery = function(trackId) {
         405: (module, exports, __webpack_require__) => { // TrackPartManager
             "use strict";
             __webpack_require__.d(exports, {
-                getPart: () => f,    // Function: PartID -> PartObject
-                checkpointPartIds: () => g,    // All checkpoint part ids
-                startPartIds: () => m,    // All start part ids
-                allParts: () => u     // All parts (array)
+                getPart: () => f,
+                checkpointPartIds: () => g,
+                startPartIds: () => m,
+                allParts: () => u
             });
             var THREE = __webpack_require__(4922)
               , PartCategory = __webpack_require__(1882).A
@@ -30904,10 +30843,8 @@ window.__nswsTrackQuery = function(trackId) {
                         n = TrackPartColorId.Desert
                     }
                     const h = m.get(this, r, "f").isTrackShadowsEnabled();
-                    // Low performance mode drops the flat ground shadows the track
-                    // casts at the "Low" shadow setting. They are a second draw of
-                    // every part's full geometry, so this is about half of the
-                    // track's per-frame triangles.
+                    // Low performance mode drops the track's flat ground shadows at the "Low" shadow
+                    // setting: a second draw of every part, about half the track's triangles.
                     m.get(this, a, "f").getSettingBoolean(k.A.LowPerformanceMode) && (c = null);
                     for (const e of m.get(this, s, "f").getAllParts())
                         for (const [i,a] of e.colors) {
@@ -50949,7 +50886,7 @@ window.__nswsTrackQuery = function(trackId) {
                       , r = C.get(this, Ao, "f") * i;
                     // The proxy has already taken banned players out and counted ranks and the
                     // total without them, so a row's rank is just its place in the list.
-                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o}) => {
+                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, creator: __nswsCreator}) => {
                         if (!n.isCancelled) {
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
@@ -50958,7 +50895,7 @@ window.__nswsTrackQuery = function(trackId) {
                             for (let e = 0; e < s.length; e++) {
                                 const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, hidden: v} = s[e]
                                   , d = r + e + 1;
-                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v)
+                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsCreator)
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
                             C.get(this, ho, "f").disabled = !1,
@@ -50994,10 +50931,10 @@ window.__nswsTrackQuery = function(trackId) {
             ), 500)
         }
         ,
-        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden) {
+        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsCreator) {
             // __nswsHidden: the proxy withheld this run's time and recording (someone else's run
-            // on a week still in progress), so there is nothing real to show or race against.
-            const __nswsSecret = !s && (!!__nswsHidden || window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
+            // on a week still in progress). __nswsCreator: the proxy sent this creator every run in full.
+            const __nswsSecret = !s && (!!__nswsHidden || !__nswsCreator && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
             const c = document.createElement("button");
             c.className = "button main",
             s && (C.set(this, bo, c, "f"),
@@ -53509,7 +53446,6 @@ window.__nswsTrackQuery = function(trackId) {
                             stRenderRows(sorted, maps, gridTemplate, stContentWidth);
 
                             if (!isCurrentWeek) {
-                                // Freeze this week's standings now that we have a snapshot for it.
                                 stWeekCache[week] = { sorted, maps };
                                 updatedEl.textContent = "Locked";
                             } else {
@@ -53738,22 +53674,18 @@ window.__nswsTrackQuery = function(trackId) {
                 const textElement = document.getElementById("copyright-text");
 
                 try {
-                    // 1. Fetch the latest commit info from GitHub API
                     const response = await fetch("https://api.github.com/repos/brinleyww/notsoweeklyshorts/commits/main");
 
                     if (!response.ok) throw new Error("Failed to fetch commit");
 
                     const data = await response.json();
 
-                    // 2. Extract the first line of the commit message
                     const rawMessage = data.commit.message;
                     const firstLineMessage = rawMessage.split("\n")[0];
 
-                    // 3. Update the text on the screen
                     textElement.textContent = `© 2026 brinleyww - ${firstLineMessage}`;
                 } catch (error) {
                     console.error("Could not load latest commit message:", error);
-                    // Fallback text if offline or if API fails
                     textElement.textContent = "© 2026 brinleyww";
                 }
             }
@@ -53899,11 +53831,7 @@ window.__nswsTrackQuery = function(trackId) {
                     if (!document.getElementById("_nsws-subtitle-style")) {
                         const st = document.createElement("style");
                         st.id = "_nsws-subtitle-style";
-                        // Only the true home screen shows this subtitle. Every other
-                        // screen it could otherwise bleed onto (track preview/leaderboard,
-                        // the track list, settings, garage/customization, and the game
-                        // itself) is matched here and forces it hidden, the same way
-                        // #nsws-disclaimer already guards itself elsewhere in this file.
+                        // The subtitle belongs to the home screen only.
                         st.textContent = "body:has(.track-info-ui) #nsws-subtitle, body:has(.game-ui) #nsws-subtitle, body:has(.settings-menu-ui) #nsws-subtitle, body:has(.customization-ui) #nsws-subtitle, body:has(.track-selection-ui:not(.hidden)) #nsws-subtitle { display: none !important; }";
                         document.head.appendChild(st);
                     }
@@ -54604,9 +54532,7 @@ window.__nswsTrackQuery = function(trackId) {
             return chunks.map((c, i) => _x(c, masks[i])).join("");
         };
 
-        // Every loadable track container (whether from a legacy flat week or a week's part) is
-        // cached and keyed by its file path, so a week can be backed by any number of parts and
-        // the standings/track lists just aggregate over whichever parts currently have tracks.
+        // A week is one or more parts, each its own encrypted .track file, cached by file path.
         const __nswsPartsOf = (w) => w.parts || [{ label: w.label, chunks: w.chunks, masks: w.masks, file: w.file, tracks: w.tracks || [] }];
 
         if (!window.__nswsFileTrackCache) window.__nswsFileTrackCache = {};
@@ -54648,8 +54574,6 @@ window.__nswsTrackQuery = function(trackId) {
             const wk = window.__nswsTrackWeekMap[trackId];
             return wk === window.__nswsCurrentWeek;
         };
-        // Standings combine every part of a week into one leaderboard automatically —
-        // once Part 2 gets real tracks added to its `tracks` array, no other code needs to change.
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
             if (!w) return [];
@@ -56780,7 +56704,8 @@ window.__nswsTrackQuery = function(trackId) {
                                     t({
                                         total: a,
                                         entries: o,
-                                        userEntry: l
+                                        userEntry: l,
+                                        creator: !0 === r.creator
                                     })
                                 } catch (e) {
                                     n(new Error("Unknown error: " + String(e)))
@@ -58825,23 +58750,18 @@ window.__nswsTrackQuery = function(trackId) {
     var SUBMIT_DELAY_MS = 0;
     var PLACEMENT_SETTLE_DELAY_MS = 1200;
 
-    // Bumped on every reset/respawn (checkpoint reset, start reset, track change). A
-    // handleFinish() call captures the id it started with; if the id has moved on by the
-    // time its async placement fetch resolves, the run it was reporting on no longer
-    // exists on screen and the medal banner must not be shown.
+    // Bumped on every reset, respawn and track change. A finish whose placement fetch
+    // resolves after the id has moved on is for a run that is gone: no banner for it.
     var runId = 0;
     function bumpRunId() {
         runId++;
     }
 
-    // The "Author Time" (AT) for a track is Cookedbyapringle's own leaderboard time on
-    // that track, fetched live rather than hardcoded. Beating it earns the top "Author"
-    // tier regardless of leaderboard rank. Gold/Silver/Bronze are then time windows off
-    // of that same AT (rounded to the nearest second), instead of leaderboard percentile.
+    // The Author Time (AT) is the benchmark player's own leaderboard time, fetched live.
+    // Beating it earns the Author tier; Gold/Silver/Bronze are time windows off the AT.
     var BENCHMARK_NICKNAME = "Cookedbyapringle";
-    // Per-week overrides: if a track's week (via window.__nswsTrackWeekMap) has an
-    // entry here, its benchmark/Author Time is scanned for under this nickname
-    // instead of BENCHMARK_NICKNAME. Everything not listed keeps using the default.
+    // Weeks whose Author Time is set by someone else. Keep in step with PUBLIC_NICKNAMES
+    // in proxy/wrangler.toml.
     var BENCHMARK_NICKNAME_WEEK_OVERRIDES = { 6: "CookedbyBenjamin's 5th cousin" };
     function benchmarkNicknameForTrack(trackId) {
         var wk = (window.__nswsTrackWeekMap || {})[trackId];
@@ -58850,10 +58770,7 @@ window.__nswsTrackQuery = function(trackId) {
         }
         return BENCHMARK_NICKNAME;
     }
-    // Page size per leaderboard request while searching for his entry.
     var BENCHMARK_PAGE_SIZE = 500;
-    // Hard cap on total entries scanned (across pages) as a safety net against
-    // hammering the API on a leaderboard with tens of thousands of runs.
     var BENCHMARK_SCAN_HARD_CAP = 20000;
     var GOLD_MULTIPLIER = 1.05;
     var SILVER_MULTIPLIER = 1.1;
@@ -58870,11 +58787,7 @@ window.__nswsTrackQuery = function(trackId) {
 
     var AUTHOR_MEDAL_IMAGE_PATH = "images/medals/author.png";
 
-    // One-time cleanup: earlier versions of this benchmark search could cache a wrong
-    // AT (e.g. from the old top-500-only scan / WR fallback). Wipe every previously
-    // stored medal record, across all profile slots, exactly once, so nothing wrong
-    // survives from before the fix. Guarded by a version flag so this doesn't run again
-    // (and doesn't erase legitimately-recomputed records) on every load.
+    // Changing this wipes every stored medal record (all profile slots) once, on next load.
     var STORAGE_SCHEMA_VERSION = "2";
     var STORAGE_SCHEMA_VERSION_KEY = "_nswsMedalsSchemaVersion";
     try {
@@ -58895,20 +58808,15 @@ window.__nswsTrackQuery = function(trackId) {
         if (_stored !== null) enabled = _stored === "true";
     } catch (e) {}
 
-    // Community-track weekly leaderboards are small, so the "100+ players" gate
-    // is off by default here (unlike misotweaks, which assumed large leaderboards).
+    // Off by default: weekly boards are small, so a 100-player minimum would block most medals.
     var minPlayersRuleEnabled = false;
     try {
         var _storedMinPlayers = localStorage.getItem(MIN_PLAYERS_ENABLED_KEY);
         if (_storedMinPlayers !== null) minPlayersRuleEnabled = _storedMinPlayers === "true";
     } catch (e) {}
 
-    // The leaderboard entry's `.time` field is an ISO-8601 submission TIMESTAMP
-    // ("2026-07-06T08:33:24.000Z"), not the race time — that was the actual bug.
-    // The real finish time lives in `.frames` (the game simulates at 1000Hz, same
-    // as the frames/1e3 conversions used elsewhere in main.bundle.js), so it has
-    // to be divided by 1000 to get seconds. Takes the whole leaderboard entry now,
-    // not just its .time field, so it can reach .frames.
+    // An entry's `.time` is when it was submitted, not the race time. The race time is
+    // `.frames` (one frame is 1 ms).
     function extractTimeSeconds(entry) {
         if (entry == null) return null;
         if (typeof entry === "number") return entry;
@@ -58918,18 +58826,12 @@ window.__nswsTrackQuery = function(trackId) {
         return null;
     }
 
-    // Sentinel distinguishing "the fetch/scan itself failed" (network error, HTTP
-    // error, bad JSON) from a legitimate result of null (scanned the whole
-    // leaderboard and Cookedbyapringle genuinely has no entry on this track).
-    // Conflating these two was the bug: a transient failure was being read as
-    // "confirmed no AT", which wiped out valid, previously-earned medal records.
+    // Returned when the scan itself failed. null means the whole board was read and has
+    // no Author Time, and reading a failure as null would wipe earned medals.
     var FETCH_FAILED = {};
 
-    // In-memory cache of the fetched AT per track, so we're not re-hitting the
-    // leaderboard endpoint on every single tier check within the same session.
     var benchmarkCache = {};
-    // Last computed pb/at/tier per track, purely for surfacing via a hover tooltip on
-    // the badge (devtools-free way to see exactly what values were used/found).
+    // Last pb/at/tier per track, shown in the badge's hover tooltip.
     var lastDebugInfo = {};
 
     function fetchBenchmarkAT(trackId) {
@@ -58963,8 +58865,6 @@ window.__nswsTrackQuery = function(trackId) {
                     }
                 }
                 var nextSkip = skip + entries.length;
-                // Stop once we've scanned every entry the leaderboard actually has, or a
-                // page comes back short/empty (nothing left to page through).
                 if (!entries.length || (total != null && nextSkip >= total)) return null;
                 return scan(nextSkip);
             });
@@ -58975,21 +58875,17 @@ window.__nswsTrackQuery = function(trackId) {
             console.debug("[nsws] benchmark AT for track", trackId, "=", at);
             return at;
         }).catch(function (err) {
-            // Do NOT cache this and do NOT return null here: null is the "confirmed
-            // absent" result and gets treated as such by every caller. A thrown
-            // network/HTTP/parse error means we simply don't know yet.
+            // Neither cached nor null: null means "no Author Time", while a failed
+            // fetch only means we don't know yet.
             console.debug("[nsws] benchmark AT fetch FAILED for track", trackId, err && err.message);
             return FETCH_FAILED;
         });
     }
 
-    // Gold/Silver/Bronze are time windows off of AT (rounded to the nearest second),
-    // checked in order from tightest to loosest.
     function tierForTime(finishSeconds, at) {
         if (at == null || finishSeconds == null) return null;
-        // Small tolerance: the locally-tracked PB and the leaderboard-reported time for
-        // the same run can differ by a hair due to rounding, so a run that's really a
-        // tie with AT shouldn't miss the Author tier by a fraction of a millisecond.
+        // The local PB and the leaderboard's time for the same run can differ by
+        // rounding, and a tie with the AT must still earn the Author tier.
         var EPS = 0.001;
         if (finishSeconds <= at + EPS) return AUTHOR_TIER;
         if (finishSeconds <= Math.round(at * GOLD_MULTIPLIER)) return TIERS[0];
@@ -58998,8 +58894,6 @@ window.__nswsTrackQuery = function(trackId) {
         return null;
     }
 
-    // Combines the live AT fetch (Cookedbyapringle's time, or the world-record fallback)
-    // with the time-window check above to get the final tier for a run.
     function determineTierAsync(trackId, finishSeconds) {
         return fetchBenchmarkAT(trackId).then(function (at) {
             if (at === FETCH_FAILED) {
@@ -59106,9 +59000,8 @@ window.__nswsTrackQuery = function(trackId) {
         return Promise.resolve(!!placement && placement.position === 1);
     }
 
-    // If this finish just triggered the game's own "NEW PERSONAL BEST" banner (not a medal
-    // banner, which takes precedence and is handled separately), check whether it's actually
-    // a world record once banned players are excluded, and relabel the banner if so.
+    // Relabels the game's own "NEW PERSONAL BEST" banner when the run is also the world
+    // record. Medal banners take precedence and are handled separately.
     function maybeAnnounceWorldRecord(trackId, placement) {
         var native = findNativeRecordBanner();
         if (!native) return;
@@ -59196,9 +59089,7 @@ window.__nswsTrackQuery = function(trackId) {
         return record ? { panel: panel, record: record } : null;
     }
 
-    // Tracks whatever medal banner is currently on screen (native-hijack lines or the
-    // standalone popup) so it can be killed instantly on track exit instead of only ever
-    // being cleaned up by its own animation timeout.
+    // The medal banner on screen, if any, so leaving the track can remove it at once.
     var activeBanner = null;
     function clearActiveBanner() {
         if (!activeBanner) return;
@@ -59353,13 +59244,10 @@ window.__nswsTrackQuery = function(trackId) {
                 var store = loadStore();
                 var prev = store[trackId];
                 if (!tier) {
-                    // If the benchmark leaderboard scan itself failed (network error, proxy
-                    // hiccup, etc.), that is NOT the same as confirming no AT exists. Leave
-                    // any previously-earned record alone instead of erasing it — we'll just
-                    // try again the next time this panel opens.
+                    // A failed scan doesn't mean there is no Author Time: keep the
+                    // earned record and try again next time the panel opens.
                     if (result.fetchFailed) return false;
-                    // No tier could be determined this time (e.g. no AT could be found).
-                    // Don't leave a stale/possibly-wrong record sitting there forever.
+                    // No tier (e.g. no Author Time): drop the stale record.
                     if (prev) {
                         delete store[trackId];
                         saveStore(store);
@@ -59437,9 +59325,8 @@ window.__nswsTrackQuery = function(trackId) {
                     var store = loadStore();
                     var prev = store[trackId];
                     var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
-                    // Only a genuine tier improvement counts as a "new medal". A faster PB that
-                    // doesn't change your tier (e.g. still Gold) should leave the game's normal
-                    // PB banner alone instead of getting hijacked into the medal banner.
+                    // Only a better tier is a new medal. A faster PB in the same tier keeps the
+                    // game's normal PB banner.
                     if (isNewBest) {
                         var percentile = placement ? placement.position / placement.total : null;
                         store[trackId] = {
@@ -59452,17 +59339,13 @@ window.__nswsTrackQuery = function(trackId) {
                             ts: Date.now()
                         };
                         saveStore(store);
-                        // The placement fetch above can settle after the player has already left
-                        // this track (menu, garage, a different track) or reset/respawned back
-                        // to the start of the same track. Don't pop up a banner for a run that's
-                        // no longer the one on screen.
+                        // The fetches can settle after the player has left, restarted or respawned.
                         if (trackId !== currentTrackId || runId !== finishRunId) return;
                         announceMedal(tier, placement, finishSeconds, isNewBest, at);
                         return;
                     }
                 }
-                // No medal-tier upgrade this run (or no tier at all): the game's normal PB
-                // banner is left alone, but it might still deserve to say "world record" instead.
+                // No new medal: the game's PB banner stays, but may still be a world record.
                 if (trackId !== currentTrackId || runId !== finishRunId) return;
                 maybeAnnounceWorldRecord(trackId, placement);
             });
@@ -59476,8 +59359,6 @@ window.__nswsTrackQuery = function(trackId) {
         var track = typeof window.__getCurrentTrack === "function" ? window.__getCurrentTrack() : null;
         var trackId = track && typeof track.getId === "function" ? track.getId() : null;
         if (trackId !== currentTrackId) {
-            // Leaving/changing track: instantly kill any medal banner still showing rather
-            // than letting it keep playing over the menu/garage.
             clearActiveBanner();
             bumpRunId();
             currentTrackId = trackId;
@@ -59502,10 +59383,8 @@ window.__nswsTrackQuery = function(trackId) {
         }
     }
 
-    // Pressing Escape (pause menu), the full restart keybind, or the checkpoint-reset keybind
-    // doesn't change the track or leave hasFinished() false long enough to reliably catch in
-    // update() above, so listen for all of them directly. Reads the player's actual configured
-    // bindings (not just the KeyT/Backspace/KeyR/Enter defaults) in case they've rebound them.
+    // Escape and the reset keys don't reliably show up in update() above, so listen
+    // for them directly, using the player's own bindings.
     var KEY_BINDINGS_STORAGE_KEY = "polytrack_v5_prod_key_bindings";
     var DEFAULT_CODES_BY_BINDING = {
         VehicleStartReset: ["KeyT", "Backspace"],
@@ -59575,13 +59454,8 @@ window.__nswsTrackQuery = function(trackId) {
 })();
 
 (function () {
-    // --- CPS (clicks per second) counter, shown in the top-right corner while driving. ---
-    // Reads the game's own resolved control state each frame instead of listening to raw
-    // keyboard events. This is also the correct source of truth while watching a replay of
-    // your own run: the player state's getControls() transparently returns the replay's
-    // recorded controls (instead of the live keyboard) whenever the local player is being
-    // driven by a replay, so live driving and replay watching both feed the same counter
-    // through the exact same code path.
+    // CPS counter, top right while driving. It reads the player's resolved controls each
+    // frame, so a replay of your own run is counted the same way as live driving.
     var inputTimes = [];
     var totalInputs = 0;
     var burstFlashTimeout = null;
@@ -59626,8 +59500,6 @@ window.__nswsTrackQuery = function(trackId) {
         if (!cpsEl) return;
         var inGame = !!document.querySelector(".game-ui");
         if (!prevInGame && inGame) {
-            // Freshly entering gameplay (loading into a track, or opening a replay): start
-            // from a clean slate.
             clearAll();
             prevHasStarted = false;
             runActive = false;
@@ -59649,27 +59521,16 @@ window.__nswsTrackQuery = function(trackId) {
         var hasStarted = playerState ? !!playerState.hasStarted() : false;
         var paused = playerState ? !!playerState.isPaused : false;
         if (hasStarted && !prevHasStarted) {
-            // The run's timer just started (forward/backward pressed/replayed at the start
-            // line). Wipe out anything counted beforehand (e.g. left/right spam while
-            // waiting) and start fresh, seeded at 1 for the press that just started the run
-            // (rather than 0), since that press is itself an input. Sync prevControls to the
-            // current frame's state so the edge-detection loop below doesn't also count that
-            // same press a second time.
+            // The timer just started. Drop anything counted while waiting at the start and
+            // count the press that started the run; syncing prevControls stops it counting twice.
             clearAll();
             totalInputs = 1;
             inputTimes.push(performance.now());
             runActive = true;
             if (controls) prevControls = { up: !!controls.up, down: !!controls.down, left: !!controls.left, right: !!controls.right };
         } else if (!hasStarted && prevHasStarted) {
-            // The only moment a run's timer actually goes back to zero is when
-            // hasStarted() flips from true back to false: that happens for a full
-            // restart (the start-reset keybind/replay input) AND for a checkpoint-reset
-            // that falls back to a full restart because there's no valid checkpoint to
-            // respawn at (a "double respawn"). Catching that transition here - rather than
-            // only reacting to the checkpoint-reset flag - covers every kind of restart,
-            // while a normal mid-run checkpoint respawn (which keeps hasStarted() true)
-            // correctly leaves the counter alone since the timer keeps running through it.
-            // Go back to idle until the next start.
+            // hasStarted() only goes back to false on a restart, including a checkpoint reset
+            // with no checkpoint to return to. A normal respawn keeps the timer and the count.
             clearAll();
             runActive = false;
         }

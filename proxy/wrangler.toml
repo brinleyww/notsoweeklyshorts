@@ -1,8 +1,4 @@
-# Standalone leaderboard proxy.
-#
-# The site itself is served by GitHub Pages, which cannot run a Worker, so this
-# deploys on its own and the site calls it cross-origin. Deploy from this
-# directory:  npx wrangler deploy
+# Deploy from this directory:  npx wrangler deploy
 name = "pt-leaderboard-proxy"
 main = "src/worker.js"
 compatibility_date = "2026-07-01"
@@ -19,29 +15,27 @@ invocation_logs = false
 UPSTREAM = "https://vps.kodub.com"
 UPSTREAM_ORIGIN = "https://www.kodub.com"
 
-# Sites allowed to call the proxy. Everything else gets 403 - including opening
-# a proxy URL straight in a browser tab. Every address the site is served from
-# needs to be here (scheme + host, no path), or its leaderboards fail to load.
-# notweeklyshorts.github.io is the fork notweeklyshorts/notweeklyshorts.github.io.
+# Scheme + host, no path. Every other site gets 403, so every address the site
+# is served from must be here or its leaderboards fail to load.
 ALLOWED_ORIGINS = ["https://brinleyww.github.io", "https://notweeklyshorts.github.io"]
 
-# Removed from every leaderboard and from standings; ranks and player counts
-# are recounted without them. Not case-sensitive.
+# Not case-sensitive. Ranks and player counts are recounted without them.
 BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
 
-# The week running now. On its tracks (and any later week's) other players'
-# times and recordings are never sent to the browser. Bump this whenever a new
-# week goes live in main.bundle.js.
+# The week in progress: other players' times and recordings on it (and on any
+# later week) stay secret. Bump it whenever a new week goes live.
 CURRENT_WEEK = 7
 
-# Times that stay visible during the week: the medals' Author Time is read from
-# these players' entries. Keep in step with BENCHMARK_NICKNAME and
-# BENCHMARK_NICKNAME_WEEK_OVERRIDES in main.bundle.js.
+# Author Time players, whose times stay visible during the week. Keep in step
+# with BENCHMARK_NICKNAME and BENCHMARK_NICKNAME_WEEK_OVERRIDES in main.bundle.js.
 PUBLIC_NICKNAMES = ["Cookedbyapringle", "CookedbyBenjamin's 5th cousin"]
 
-# First week whose runs are stored on Kodub under a secret track id, so nobody
-# can read them from Kodub directly. Takes effect only once the TRACK_SALT
-# secret is set:  npx wrangler secret put TRACK_SALT  (a long random string).
-# Never raise this, change TRACK_SALT or renumber weeks once runs exist - runs
-# stored under the old ids would stop showing.
+# First week stored on Kodub under a secret track id (needs the TRACK_SALT
+# secret). Never raise it, change TRACK_SALT or renumber weeks once runs exist:
+# runs stored under the old ids would stop showing.
 HIDDEN_FROM_WEEK = 7
+
+# Players who see every run, times and recordings, even on the week in progress.
+# Each entry is sha256("nsws-creator:" + private token), never the token itself:
+#   node -e "console.log(require('crypto').createHash('sha256').update('nsws-creator:' + process.argv[1]).digest('hex'))" <token>
+CREATOR_KEY_HASHES = ["04b7b29923a4ad49da408fb84076c12c69af78260e5a1605baec71e01411f499"]

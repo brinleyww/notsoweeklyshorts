@@ -92,6 +92,7 @@ under the real id, so nothing disappears when you switch it on.
 | `CURRENT_WEEK`     | Week in progress; its runs and later weeks' runs are secret    |
 | `PUBLIC_NICKNAMES` | Times left visible during the week (the medals' Author Time)   |
 | `HIDDEN_FROM_WEEK` | First week stored under secret track ids (needs `TRACK_SALT`)  |
+| `CREATOR_KEY_HASHES` | Creators, who see every run in full during the week (below) |
 
 `PUBLIC_NICKNAMES` has to match `BENCHMARK_NICKNAME` and
 `BENCHMARK_NICKNAME_WEEK_OVERRIDES` in `main.bundle.js`, or current-week medals
@@ -99,6 +100,18 @@ show "Couldn't check medal".
 
 Vars can also be edited in the Cloudflare dashboard (Worker → Settings →
 Variables), but the next `wrangler deploy` puts back what is in the file.
+
+## Creator access
+
+A player whose private token matches an entry in `CREATOR_KEY_HASHES` gets
+every run on the week in progress in full (times and recordings, so they can be
+watched), and the page stops showing those runs as "SECRET". Only the token the
+game already sends proves it; the public `userTokenHash` never does.
+
+Entries are `sha256("nsws-creator:" + token)`, never the token itself. To add
+someone, compute theirs and deploy the Worker:
+
+    node -e "console.log(require('crypto').createHash('sha256').update('nsws-creator:' + process.argv[1]).digest('hex'))" <token>
 
 `proxy/src/worker.js`:
 

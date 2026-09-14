@@ -1,16 +1,9 @@
-// Wires up PolyFX's hotkeys natively — ported from PolyFX's main.mod.js pml.registerKeybind()
-// calls, which only work through PolyModLoader. NSWS doesn't run PML, so this replaces that
-// registration with a plain keydown listener that reads the same rebindable codes the
-// "PolyFX" section of the settings menu writes (see main.bundle.js), instead of hardcoding
-// KeyL / F2 / F9.
+// PolyFX's hotkeys. NSWS doesn't run PolyModLoader, so this listens for the bindings
+// the settings menu's "PolyFX" rows save (see POLYFX_KEYBINDS in main.bundle.js).
 (function () {
-  // Without PolyModLoader, window.__PolyFX has nothing to read a "GraphicsPreset" setting from,
-  // so it falls back to its own hardcoded default of Off (see runtime.js's `let preset = ...
-  // : PRESET.OFF`). At Off, cfgFor() returns {composer:false}, render() returns before ever
-  // calling _ensure(), and _ensure() is the only place `this.panel` / `this.photo` get created —
-  // so the tuning-panel/photo-mode keybinds below silently no-op forever. Setting presetOverride
-  // here (mirroring PML's registered default of '1' = Balanced, and the "Graphics preset" row
-  // added to the settings menu) is what actually fixes that.
+  // Without PolyModLoader, __PolyFX has no GraphicsPreset setting and falls back to Off,
+  // which never creates the tuning panel or photo mode, so the hotkeys below would do
+  // nothing. Default to Balanced (1), as PML did.
   const fx = window.__PolyFX;
   if (fx) {
     try {
@@ -83,11 +76,8 @@
     }
   }, true);
 
-  // .timer-ui is the race clock — main.bundle.js only creates/keeps it in the DOM while a track
-  // is actually loaded (see the `z.A.Timer` setting it reads its display mode from). Its absence
-  // is a reliable "not currently on a track" signal covering every way of leaving one (Escape,
-  // finishing, crashing back to menu, opening the garage — not just the Escape key above), so
-  // poll for it and close the panel the moment it's gone.
+  // .timer-ui only exists while a track is loaded, so its absence covers every way of
+  // leaving one, not just Escape.
   setInterval(() => {
     const fx = window.__PolyFX;
     if (!fx || !fx.panel || !fx.panel.visible) return;
