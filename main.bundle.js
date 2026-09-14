@@ -2686,6 +2686,20 @@ window.__nswsTrackQuery = function(trackId) {
                         reset: (f.get(this, i, "m", d).call(this, e, f.get(this, c, "f")) + 1) % 2 != 0
                     }
                 }
+                // How many frames the press of key e ("up", "right", "down", "left" or
+                // "reset") that covers frame t lasts: 0 if the key isn't held at t,
+                // Infinity if it is never released.
+                getPressLength(e, t) {
+                    const n = f.get(this, {
+                        up: a,
+                        right: s,
+                        down: o,
+                        left: l,
+                        reset: c
+                    }[e], "f")
+                      , x = f.get(this, i, "m", d).call(this, t, n);
+                    return x % 2 != 0 ? 0 : x + 1 < n.length ? n[x + 1] - n[x] : 1 / 0
+                }
                 serialize() {
                     const e = new Uint8Array(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length + 3 + 3 * f.get(this, c, "f").length);
                     f.get(this, i, "m", u).call(this, f.get(this, a, "f"), e.subarray(0, 3 + 3 * f.get(this, a, "f").length)),
@@ -58123,7 +58137,7 @@ window.__nswsTrackQuery = function(trackId) {
                         e.car.update(t);
                     const i = C.get(this, uf, "f")[C.get(this, df, "f")].car;
                     C.get(this, vf, "f").time = new yt.A(n),
-                    C.get(this, bf, "f").update(i.getControls()),
+                    C.get(this, bf, "f").update(this.getDisplayedControls()),
                     C.get(this, wf, "f").update(i),
                     C.get(this, xf, "f").update(i),
                     C.get(this, Sf, "f").update(i)
@@ -58212,6 +58226,20 @@ window.__nswsTrackQuery = function(trackId) {
                     trackId: C.get(this, tf, "f").getId()
                 }
             }
+            // The focused car's controls for the input display, minus any press shorter
+            // than 50 ms (a frame is 1 ms). The car still makes those presses; the display
+            // just doesn't light them up. A car state carries the controls the recording
+            // has for the frame before it.
+            getDisplayedControls() {
+                const {car: e, settings: t} = C.get(this, uf, "f")[C.get(this, df, "f")]
+                  , n = {
+                    ...e.getControls()
+                }
+                  , i = e.getTime().numberOfFrames - 1;
+                for (const r of ["up", "right", "down", "left"])
+                    n[r] && t.recording.getPressLength(r, i) < 50 && (n[r] = !1);
+                return n
+            }
             dispose() {
                 if (watchSession === this) watchSession = null;
                 C.get(this, $p, "f").clear(),
@@ -58271,7 +58299,7 @@ window.__nswsTrackQuery = function(trackId) {
                 }
                 C.get(this, vf, "f").time = C.get(this, uf, "f")[C.get(this, df, "f")].car.getTime(),
                 C.get(this, vf, "f").loadedTime = n,
-                C.get(this, bf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car.getControls()),
+                C.get(this, bf, "f").update(this.getDisplayedControls()),
                 C.get(this, wf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car),
                 C.get(this, xf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car),
                 C.get(this, Sf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car);
