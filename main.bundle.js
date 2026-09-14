@@ -174,7 +174,7 @@ window.__nswsTrackQuery = function(trackId) {
     })();
     const CLIPS_STORAGE_KEY = "bw_clips";
     const CLIP_KEYBIND_STORAGE_KEY = "_clipKeyBind";
-    const DEFAULT_CLIP_KEYBIND = "KeyC";
+    const DEFAULT_CLIP_KEYBIND = "Shift+KeyC";
     function getClipKeyBind() {
         try {
             return localStorage.getItem(CLIP_KEYBIND_STORAGE_KEY) || DEFAULT_CLIP_KEYBIND;
@@ -215,9 +215,158 @@ window.__nswsTrackQuery = function(trackId) {
     }
     function formatClipKeyName(code) {
         if (!code) return "—";
-        if (code.startsWith("Key")) return code.slice(3);
-        if (code.startsWith("Digit")) return code.slice(5);
-        return code.replace(/([a-z])([A-Z])/g, "$1 $2");
+        return formatKeyBinding(code, key => {
+            if (key.startsWith("Key")) return key.slice(3);
+            if (key.startsWith("Digit")) return key.slice(5);
+            return key.replace(/([a-z])([A-Z])/g, "$1 $2");
+        });
+    }
+    // ---- Key combinations ----
+    // A key binding is a KeyboardEvent.code, optionally after the modifiers that
+    // must be held with it, written in this order: "KeyC", "Shift+KeyC",
+    // "Control+Alt+KeyX". The game's own bindings and the mod's all use this.
+    const KEY_MODIFIERS = { Control: "ctrlKey", Alt: "altKey", Shift: "shiftKey", Meta: "metaKey" };
+    const KEY_MODIFIER_LABELS = { Control: "Ctrl", Alt: "Alt", Shift: "Shift", Meta: "Meta" };
+    const MODIFIER_KEY_CODES = new Set(["ControlLeft", "ControlRight", "AltLeft", "AltRight", "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"]);
+    // PolyFX's hotkeys, which mod/polyfx_keybinds.js reads from the same keys.
+    const POLYFX_KEYBINDS = [
+        ["_polyfxPanelKeyBind", "KeyL", "Tuning panel"],
+        ["_polyfxPhotoKeyBind", "F2", "Photo mode"],
+        ["_polyfxScreenshotKeyBind", "F9", "Save screenshot"]
+    ];
+    function getPolyFxKeyBind(storageKey, defaultCode) {
+        try {
+            return localStorage.getItem(storageKey) || defaultCode;
+        } catch (e) {
+            return defaultCode;
+        }
+    }
+    // The game's settings object (its constructor sets this), for its bindings.
+    let keyBindSettings = null;
+    function splitKeyBinding(binding) {
+        const parts = binding.split("+");
+        return { code: parts.pop(), modifiers: parts };
+    }
+    function sameModifiers(a, b) {
+        return a.length === b.length && a.every(m => b.includes(m));
+    }
+    function sameKeyBinding(a, b) {
+        const x = splitKeyBinding(a), y = splitKeyBinding(b);
+        return x.code === y.code && sameModifiers(x.modifiers, y.modifiers);
+    }
+    function heldModifiers(e) {
+        return Object.keys(KEY_MODIFIERS).filter(m => e[KEY_MODIFIERS[m]]);
+    }
+    // The binding a key press is: a modifier key on its own is just its code.
+    function keyBindingFromEvent(e) {
+        return MODIFIER_KEY_CODES.has(e.code) ? e.code : heldModifiers(e).concat(e.code).join("+");
+    }
+    function formatKeyBinding(binding, formatKey) {
+        const { code, modifiers } = splitKeyBinding(binding);
+        return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
+    }
+    function isKeyBindingInUse(binding) {
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
+        return all.some(b => null != b && sameKeyBinding(b, binding));
+    }
+    // What each key last went down as, so its release matches the same bindings
+    // its press did, even with a modifier let go in between.
+    const keyPresses = new Map;
+    window.addEventListener("keydown", e => {
+        e.repeat || keyPresses.set(e.code, keyBindingFromEvent(e));
+    }, true);
+    // Whether key event e triggers binding. A combination needs exactly its
+    // modifiers held. A single key also fires with modifiers held, as the game
+    // always allowed, unless that exact combination is bound to something else:
+    // with the clip on Shift+C, Shift+C must not also switch the camera on C.
+    function keyBindingMatches(e, binding) {
+        if (!binding) return false;
+        const { code, modifiers } = splitKeyBinding(binding);
+        if (e.code !== code) return false;
+        if (MODIFIER_KEY_CODES.has(code)) return true;
+        const pressed = ("keyup" === e.type && keyPresses.get(code)) || keyBindingFromEvent(e);
+        const held = splitKeyBinding(pressed).modifiers;
+        if (modifiers.length) return sameModifiers(held, modifiers);
+        return !held.length || !isKeyBindingInUse(pressed);
+    }
+    window.__nswsKeyBindingMatches = keyBindingMatches;
+    // Records a key binding from the keys pressed next: one key, or one key with
+    // Ctrl/Alt/Shift/Meta held. A modifier pressed and released with nothing else
+    // pressed meanwhile is recorded by itself. Escape cancels with onDone(null),
+    // unless passThrough(e) claims it: keys passThrough claims are left to the
+    // caller. onModifiers(label) shows the modifiers held so far ("Shift + ...",
+    // or "" once none are). The mod's hotkeys stay quiet meanwhile. Returns a
+    // function that stops without calling onDone.
+    function recordKeyBinding(passThrough, onModifiers, onDone) {
+        const modifiersDown = new Set;
+        let alone = null;
+        const showModifiers = e => {
+            const held = heldModifiers(e);
+            onModifiers(held.length ? held.map(m => KEY_MODIFIER_LABELS[m]).concat("...").join(" + ") : "");
+        };
+        const stop = () => {
+            window.__nswsKeyBindCapturing = false;
+            window.removeEventListener("keydown", onKeyDown);
+            window.removeEventListener("keyup", onKeyUp);
+            window.removeEventListener("blur", onBlur);
+        };
+        const finish = binding => {
+            stop();
+            onDone(binding);
+        };
+        const onKeyDown = e => {
+            if (passThrough(e)) {
+                alone = null;
+                return;
+            }
+            e.preventDefault();
+            if (e.repeat) return;
+            if (e.code === "Escape") {
+                finish(null);
+            } else if (MODIFIER_KEY_CODES.has(e.code)) {
+                alone = modifiersDown.size ? null : e.code;
+                modifiersDown.add(e.code);
+                showModifiers(e);
+            } else {
+                finish(keyBindingFromEvent(e));
+            }
+        };
+        const onKeyUp = e => {
+            if (!modifiersDown.delete(e.code)) return;
+            if (e.code === alone) finish(alone);
+            else showModifiers(e);
+        };
+        const onBlur = () => {
+            modifiersDown.clear();
+            alone = null;
+            onModifiers("");
+        };
+        window.__nswsKeyBindCapturing = true;
+        window.addEventListener("keydown", onKeyDown);
+        window.addEventListener("keyup", onKeyUp);
+        window.addEventListener("blur", onBlur);
+        return stop;
+    }
+    // Makes a settings button show a binding and record a new one when clicked.
+    // Clicking anywhere cancels, so leaving the menu can't leave it recording.
+    function bindKeyBindingButton(button, get, set) {
+        button.textContent = formatClipKeyName(get());
+        button.addEventListener("click", () => {
+            button.textContent = "Press any key...";
+            const done = binding => {
+                window.removeEventListener("pointerdown", cancel, true);
+                if (binding) set(binding);
+                button.textContent = formatClipKeyName(get());
+            };
+            const stop = recordKeyBinding(() => false, label => {
+                button.textContent = label || "Press any key...";
+            }, done);
+            const cancel = () => {
+                stop();
+                done(null);
+            };
+            window.addEventListener("pointerdown", cancel, true);
+        });
     }
     const VISUALFX_KEYBIND_STORAGE_KEY = "_visualFxKeyBind";
     const DEFAULT_VISUALFX_KEYBIND = "KeyV";
@@ -620,10 +769,10 @@ window.__nswsTrackQuery = function(trackId) {
         });
 
         window.addEventListener("keydown", e => {
-            if (window.__bwClipKeyBindCapturing || window.__bwVisualFxKeyBindCapturing) return;
+            if (window.__nswsKeyBindCapturing) return;
             const target = e.target;
             if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-            if (e.code !== getVisualFxKeyBind() || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+            if (!keyBindingMatches(e, getVisualFxKeyBind())) return;
             if (!document.querySelector(".game-ui")) return;
             toggleVisualFxMenu();
         });
@@ -1415,7 +1564,7 @@ window.__nswsTrackQuery = function(trackId) {
     window.addEventListener("keydown", function(e) {
         var focused = document.activeElement;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
-        if (window.__bwClipKeyBindCapturing) return;
+        if (window.__nswsKeyBindCapturing) return;
         if (e.code === "Escape" && watchingClip) {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -1430,7 +1579,7 @@ window.__nswsTrackQuery = function(trackId) {
             setTimeout(hideClipSkyOverlay, 400);
             return;
         }
-        if (e.code === getClipKeyBind() && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        if (keyBindingMatches(e, getClipKeyBind())) {
             if (watchSession) {
                 if (!e.repeat) clipWatchedRun();
             } else {
@@ -39968,8 +40117,7 @@ window.__nswsTrackQuery = function(trackId) {
         var KeyBind = i(5818).A;
         const KEY_DISPLAY_NAMES = new Map([["ArrowUp", "Arrow Up"], ["ArrowDown", "Arrow Down"], ["ArrowLeft", "Arrow Left"], ["ArrowRight", "Arrow Right"], ["ShiftLeft", "Shift Left"], ["ShiftRight", "Shift Right"], ["ControlLeft", "Control Left"], ["ControlRight", "Control Right"], ["AltLeft", "Alt Left"], ["AltRight", "Alt Right"], ["CapsLock", "Caps Lock"], ["ScrollLock", "Scroll Lock"], ["PageUp", "Page Up"], ["PageDown", "Page Down"], ["Equal", "="], ["BracketLeft", "["], ["BracketRight", "]"], ["Semicolon", ";"], ["Quote", "'"], ["Backquote", "`"], ["Backslash", "\\"], ["Comma", ","], ["Period", "."], ["Slash", "/"], ["KeyA", "A"], ["KeyB", "B"], ["KeyC", "C"], ["KeyD", "D"], ["KeyE", "E"], ["KeyF", "F"], ["KeyG", "G"], ["KeyH", "H"], ["KeyI", "I"], ["KeyJ", "J"], ["KeyK", "K"], ["KeyL", "L"], ["KeyM", "M"], ["KeyN", "N"], ["KeyO", "O"], ["KeyP", "P"], ["KeyQ", "Q"], ["KeyR", "R"], ["KeyS", "S"], ["KeyT", "T"], ["KeyU", "U"], ["KeyV", "V"], ["KeyW", "W"], ["KeyX", "X"], ["KeyY", "Y"], ["KeyZ", "Z"], ["Digit0", "0"], ["Digit1", "1"], ["Digit2", "2"], ["Digit3", "3"], ["Digit4", "4"], ["Digit5", "5"], ["Digit6", "6"], ["Digit7", "7"], ["Digit8", "8"], ["Digit9", "9"], ["NumpadMultiply", "Numpad *"], ["NumpadAdd", "Numpad +"], ["NumpadSubtract", "Numpad -"], ["NumpadDivide", "Numpad /"], ["NumpadDecimal", "Numpad ."], ["NumpadEqual", "Numpad ="], ["Numpad0", "Numpad 0"], ["Numpad1", "Numpad 1"], ["Numpad2", "Numpad 2"], ["Numpad3", "Numpad 3"], ["Numpad4", "Numpad 4"], ["Numpad5", "Numpad 5"], ["Numpad6", "Numpad 6"], ["Numpad7", "Numpad 7"], ["Numpad8", "Numpad 8"], ["Numpad9", "Numpad 9"]]);
         function getKeyDisplayName(e) {
-            const t = KEY_DISPLAY_NAMES.get(e);
-            return null != t ? t : e
+            return formatKeyBinding(e, e => KEY_DISPLAY_NAMES.get(e) ?? e)
         }
         var ve, hint_parentElement, hint_localization, hint_inputManager, hint_settings, hint_element, hint_titleElement, hint_subtitleElement, hint_delayTimer, hint_onInputChanged, hint_hide, hint_resetTimer;
         hint_parentElement = new WeakMap,
@@ -50285,26 +50433,7 @@ window.__nswsTrackQuery = function(trackId) {
                 _wrap.className = "button-wrapper";
                 const _keyBtn = document.createElement("button");
                 _keyBtn.className = "button";
-                _keyBtn.textContent = formatClipKeyName(getClipKeyBind());
-                _keyBtn.addEventListener("click", ( () => {
-                    _keyBtn.textContent = "Press any key...";
-                    window.__bwClipKeyBindCapturing = true;
-                    const _capture = ev => {
-                        if (ev.code === "Escape") {
-                            _keyBtn.textContent = formatClipKeyName(getClipKeyBind());
-                            window.removeEventListener("keydown", _capture);
-                            window.__bwClipKeyBindCapturing = false;
-                            return;
-                        }
-                        setClipKeyBind(ev.code);
-                        _keyBtn.textContent = formatClipKeyName(ev.code);
-                        window.removeEventListener("keydown", _capture);
-                        window.__bwClipKeyBindCapturing = false;
-                        ev.preventDefault();
-                    };
-                    window.addEventListener("keydown", _capture);
-                }
-                ));
+                bindKeyBindingButton(_keyBtn, getClipKeyBind, setClipKeyBind);
                 _wrap.appendChild(_keyBtn);
                 _row.appendChild(_wrap);
                 _container.appendChild(_row);
@@ -50396,26 +50525,7 @@ window.__nswsTrackQuery = function(trackId) {
                 _wrap.className = "button-wrapper";
                 const _keyBtn = document.createElement("button");
                 _keyBtn.className = "button";
-                _keyBtn.textContent = formatClipKeyName(getVisualFxKeyBind());
-                _keyBtn.addEventListener("click", ( () => {
-                    _keyBtn.textContent = "Press any key...";
-                    window.__bwVisualFxKeyBindCapturing = true;
-                    const _capture = ev => {
-                        if (ev.code === "Escape") {
-                            _keyBtn.textContent = formatClipKeyName(getVisualFxKeyBind());
-                            window.removeEventListener("keydown", _capture);
-                            window.__bwVisualFxKeyBindCapturing = false;
-                            return;
-                        }
-                        setVisualFxKeyBind(ev.code);
-                        _keyBtn.textContent = formatClipKeyName(ev.code);
-                        window.removeEventListener("keydown", _capture);
-                        window.__bwVisualFxKeyBindCapturing = false;
-                        ev.preventDefault();
-                    };
-                    window.addEventListener("keydown", _capture);
-                }
-                ));
+                bindKeyBindingButton(_keyBtn, getVisualFxKeyBind, setVisualFxKeyBind);
                 _wrap.appendChild(_keyBtn);
                 _row.appendChild(_wrap);
                 _container.appendChild(_row);
@@ -50473,19 +50583,8 @@ window.__nswsTrackQuery = function(trackId) {
             }
             )(),
             ( () => {
-                const _rows = [
-                    ["_polyfxPanelKeyBind", "KeyL", "Tuning panel"],
-                    ["_polyfxPhotoKeyBind", "F2", "Photo mode"],
-                    ["_polyfxScreenshotKeyBind", "F9", "Save screenshot"]
-                ];
-                for (const [_storageKey, _defaultCode, _label] of _rows) {
-                    const _get = () => {
-                        try {
-                            return localStorage.getItem(_storageKey) || _defaultCode;
-                        } catch (e) {
-                            return _defaultCode;
-                        }
-                    };
+                for (const [_storageKey, _defaultCode, _label] of POLYFX_KEYBINDS) {
+                    const _get = () => getPolyFxKeyBind(_storageKey, _defaultCode);
                     const _set = code => {
                         try {
                             localStorage.setItem(_storageKey, code);
@@ -50501,26 +50600,7 @@ window.__nswsTrackQuery = function(trackId) {
                     _wrap.className = "button-wrapper";
                     const _keyBtn = document.createElement("button");
                     _keyBtn.className = "button";
-                    _keyBtn.textContent = formatClipKeyName(_get());
-                    _keyBtn.addEventListener("click", ( () => {
-                        _keyBtn.textContent = "Press any key...";
-                        window.__polyfxKeyBindCapturing = true;
-                        const _capture = ev => {
-                            if (ev.code === "Escape") {
-                                _keyBtn.textContent = formatClipKeyName(_get());
-                                window.removeEventListener("keydown", _capture);
-                                window.__polyfxKeyBindCapturing = false;
-                                return;
-                            }
-                            _set(ev.code);
-                            _keyBtn.textContent = formatClipKeyName(ev.code);
-                            window.removeEventListener("keydown", _capture);
-                            window.__polyfxKeyBindCapturing = false;
-                            ev.preventDefault();
-                        };
-                        window.addEventListener("keydown", _capture);
-                    }
-                    ));
+                    bindKeyBindingButton(_keyBtn, _get, _set);
                     _wrap.appendChild(_keyBtn);
                     _row.appendChild(_wrap);
                     _container.appendChild(_row);
@@ -50608,66 +50688,46 @@ window.__nswsTrackQuery = function(trackId) {
             const r = document.createElement("div");
             r.className = "button-wrapper",
             n.appendChild(r);
-            const a = C.get(this, Is, "f").get(t) ?? C.get(this, bs, "f").getKeyBindings(t)
-              , s = document.createElement("button");
-            s.className = "button",
-            s.textContent = getKeyDisplayName(a[0] ?? ""),
-            s.addEventListener("click", ( () => {
+            const a = C.get(this, Is, "f").get(t) ?? C.get(this, bs, "f").getKeyBindings(t);
+            // Records binding slot `slot` (0 or 1) of this row behind the "Press any
+            // key" box, which keeps Escape, Tab and Enter on a focused button for itself.
+            const recordSlot = (slot, button) => {
                 C.get(this, vs, "f").playUIClick(),
                 C.get(this, ms, "m", Ls).call(this);
-                const e = t => {
-                    "Escape" == t.code || "Tab" == t.code || "Enter" == t.code && null != document.activeElement && document.activeElement != document.body || (C.get(this, xs, "f").hide(),
-                    a[0] = t.code,
-                    s.textContent = getKeyDisplayName(t.code),
-                    C.get(this, ms, "m", Us).call(this),
-                    window.removeEventListener("keydown", e),
-                    t.preventDefault())
+                const message = gs.getFromLanguage(C.get(this, Cs, "f"), "Press any key...\n\nPress [Escape] to cancel.")
+                  , hintAt = message.indexOf("\n\n")
+                  , stop = recordKeyBinding(e => "Escape" == e.code || "Tab" == e.code || "Enter" == e.code && null != document.activeElement && document.activeElement != document.body, label => {
+                    C.get(this, xs, "f").setMessage(!label ? message : hintAt < 0 ? label : label + message.slice(hintAt))
                 }
-                ;
-                window.addEventListener("keydown", e),
-                C.get(this, xs, "f").showConfirm(gs.getFromLanguage(C.get(this, Cs, "f"), "Press any key...\n\nPress [Escape] to cancel."), gs.getFromLanguage(C.get(this, Cs, "f"), "Cancel"), gs.getFromLanguage(C.get(this, Cs, "f"), "Clear"), ( () => {
+                , binding => {
+                    C.get(this, xs, "f").hide(),
+                    a[slot] = binding,
+                    button.textContent = getKeyDisplayName(binding),
+                    C.get(this, ms, "m", Us).call(this)
+                }
+                );
+                C.get(this, xs, "f").showConfirm(message, gs.getFromLanguage(C.get(this, Cs, "f"), "Cancel"), gs.getFromLanguage(C.get(this, Cs, "f"), "Clear"), ( () => {
                     C.get(this, ms, "m", Us).call(this),
-                    window.removeEventListener("keydown", e)
+                    stop()
                 }
                 ), ( () => {
-                    s.textContent = "",
-                    a[0] = null,
-                    window.removeEventListener("keydown", e),
+                    button.textContent = "",
+                    a[slot] = null,
+                    stop(),
                     C.get(this, ms, "m", Us).call(this)
                 }
                 ))
             }
-            )),
+            ;
+            const s = document.createElement("button");
+            s.className = "button",
+            s.textContent = getKeyDisplayName(a[0] ?? ""),
+            s.addEventListener("click", ( () => recordSlot(0, s))),
             r.appendChild(s);
             const o = document.createElement("button");
             o.className = "button",
             o.textContent = getKeyDisplayName(a[1] ?? ""),
-            o.addEventListener("click", ( () => {
-                C.get(this, vs, "f").playUIClick(),
-                C.get(this, ms, "m", Ls).call(this);
-                const e = t => {
-                    "Escape" == t.code || "Tab" == t.code || "Enter" == t.code && null != document.activeElement && document.activeElement != document.body || (C.get(this, xs, "f").hide(),
-                    a[1] = t.code,
-                    o.textContent = getKeyDisplayName(t.code),
-                    C.get(this, ms, "m", Us).call(this),
-                    window.removeEventListener("keydown", e),
-                    t.preventDefault())
-                }
-                ;
-                window.addEventListener("keydown", e),
-                C.get(this, xs, "f").showConfirm(gs.getFromLanguage(C.get(this, Cs, "f"), "Press any key...\n\nPress [Escape] to cancel."), gs.getFromLanguage(C.get(this, Cs, "f"), "Cancel"), gs.getFromLanguage(C.get(this, Cs, "f"), "Clear"), ( () => {
-                    C.get(this, ms, "m", Us).call(this),
-                    window.removeEventListener("keydown", e)
-                }
-                ), ( () => {
-                    o.textContent = "",
-                    a[1] = null,
-                    window.removeEventListener("keydown", e),
-                    C.get(this, ms, "m", Us).call(this)
-                }
-                ))
-            }
-            )),
+            o.addEventListener("click", ( () => recordSlot(1, o))),
             r.appendChild(o),
             C.get(this, ks, "f").appendChild(n)
         }
@@ -54182,6 +54242,10 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, Th, null, "f"),
                 C.get(this, vh, "m", _h).call(this)
             }
+            // Replaces the text of the open box.
+            setMessage(e) {
+                C.get(this, xh, "f").textContent = e
+            }
             hide() {
                 C.set(this, yh, null, "f"),
                 C.get(this, bh, "f").className = "hidden",
@@ -57164,7 +57228,8 @@ window.__nswsTrackQuery = function(trackId) {
                 const t = e.loadSettings();
                 null != t && this.updateSettings(t);
                 const n = e.loadKeyBindings();
-                null != n && C.get(this, Mu, "m", Pu).call(this, n)
+                null != n && C.get(this, Mu, "m", Pu).call(this, n);
+                keyBindSettings = this;
             }
             defaultSettings() {
                 return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"]])
@@ -57210,9 +57275,13 @@ window.__nswsTrackQuery = function(trackId) {
             checkKeyBinding(e, t) {
                 const n = C.get(this, Ru, "f").get(t) ?? [];
                 for (const t of n)
-                    if (null != t && e.code == t)
+                    if (keyBindingMatches(e, t))
                         return !0;
                 return !1
+            }
+            // Every binding set, for telling a combination apart from its key alone.
+            getAllKeyBindings() {
+                return Array.from(C.get(this, Ru, "f").values()).flat()
             }
         }
         ;

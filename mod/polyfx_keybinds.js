@@ -42,9 +42,15 @@
     return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   }
 
+  // Bindings can be key combinations ("Shift+KeyL"); main.bundle.js matches them
+  // the same way it matches the game's own bindings.
+  function matches(e, binding) {
+    return window.__nswsKeyBindingMatches ? window.__nswsKeyBindingMatches(e, binding) : e.code === binding;
+  }
+
   window.addEventListener('keydown', (e) => {
     // Don't act on the keypress the settings menu is currently capturing as a new binding.
-    if (window.__polyfxKeyBindCapturing || window.__bwClipKeyBindCapturing || window.__bwVisualFxKeyBindCapturing) return;
+    if (window.__nswsKeyBindCapturing) return;
 
     const fx = window.__PolyFX;
     if (!fx) return;
@@ -54,7 +60,7 @@
       // No preventDefault/return here — let Escape still reach the game's own pause/exit menu.
     }
 
-    if (e.code === getCode(BINDINGS.panel)) {
+    if (matches(e, getCode(BINDINGS.panel))) {
       if (e.repeat || isTypingTarget()) return;
       if (!fx.panel) return;
       e.preventDefault();
@@ -62,7 +68,7 @@
       return;
     }
 
-    if (e.code === getCode(BINDINGS.photo)) {
+    if (matches(e, getCode(BINDINGS.photo))) {
       if (e.repeat || isTypingTarget()) return;
       if (!fx.photo) return;
       e.preventDefault();
@@ -70,7 +76,7 @@
       return;
     }
 
-    if (e.code === getCode(BINDINGS.screenshot)) {
+    if (matches(e, getCode(BINDINGS.screenshot))) {
       if (!fx.photo || !fx.photo.active) return;
       e.preventDefault();
       fx.photo.captureQueued = true;
