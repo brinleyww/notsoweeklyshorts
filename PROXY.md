@@ -93,6 +93,7 @@ under the real id, so nothing disappears when you switch it on.
 | `PUBLIC_NICKNAMES` | Times left visible during the week (the medals' Author Time)   |
 | `HIDDEN_FROM_WEEK` | First week stored under secret track ids (needs `TRACK_SALT`)  |
 | `CREATOR_KEY_HASHES` | Creators, who see every run in full during the week (below) |
+| `OWNER_KEY_HASHES` | The owner, who alone can read the site traffic stats (below)  |
 
 `PUBLIC_NICKNAMES` has to match `BENCHMARK_NICKNAME` and
 `BENCHMARK_NICKNAME_WEEK_OVERRIDES` in `main.bundle.js`, or current-week medals
@@ -112,6 +113,31 @@ Entries are `sha256("nsws-creator:" + token)`, never the token itself. To add
 someone, compute theirs and deploy the Worker:
 
     node -e "console.log(require('crypto').createHash('sha256').update('nsws-creator:' + process.argv[1]).digest('hex'))" <token>
+
+## Site traffic (Race Control)
+
+`mod/nsws_traffic.js` runs on every page. It sends a small "beat" to
+`/nsws/beat` when the site opens, every minute while the tab is visible (every
+4 minutes in the background), and when the page closes. A beat carries a random
+session id, a random visitor id kept in `localStorage` (`nsws_visitor`), the
+nickname, what the player is doing, and counts of races, finishes, uploads and
+so on. It never carries the account token. The Worker adds a coarse country,
+device, system and browser, and stores everything in one SQLite Durable Object,
+`TrafficStats` (`proxy/src/traffic.js`). IP addresses are only held in memory to
+cap new sessions at 120 per address per hour; they are never stored.
+
+`/nsws/stats` and `/nsws/live` answer only the owner: the request body must hold
+a token whose `sha256("nsws-owner:" + token)` is in `OWNER_KEY_HASHES`. The page
+checks the same hash (in `nsws_traffic.js`) before showing the "Race Control"
+button and loading `mod/nsws_owner.js`. To change the owner, compute the new
+hash, put it in both places, deploy the Worker, then push the site:
+
+    node -e "console.log(require('crypto').createHash('sha256').update('nsws-owner:' + process.argv[1]).digest('hex'))" <token>
+
+On the Workers Free plan each beat is one Worker request and one Durable Object
+request, with about two SQLite rows written. That is roughly 1,440 beats a day
+for each player who keeps the site open, so the free limits (100,000 requests
+and 100,000 rows written a day) cover about 30 players online around the clock.
 
 `proxy/src/worker.js`:
 

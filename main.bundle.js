@@ -967,6 +967,7 @@ window.__nswsTrackQuery = function(trackId) {
         };
         if (localAddClip(clip)) {
             runHasClip = true;
+            window.__nswsTraffic?.event("clips");
             showClipSavedNotification();
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
@@ -1007,6 +1008,7 @@ window.__nswsTrackQuery = function(trackId) {
             return;
         }
         if (localAddClip(clip)) {
+            window.__nswsTraffic?.event("clips");
             showClipSavedNotification();
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
@@ -43084,6 +43086,8 @@ window.__nswsTrackQuery = function(trackId) {
                 a = null;
             const s = new VisualCar(C.get(this, Cr, "f"),i,null,C.get(this, ya, "f"),C.get(this, zr, "f"),C.get(this, Nr, "f"),C.get(this, Ir, "f"),C.get(this, Pr, "f"),C.get(this, Yr, "f"),C.get(this, Gr, "f"),a);
             recordingClass = s;
+            const __nswsTrackId = C.get(this, Yr, "f").getId();
+            window.__nswsTraffic?.event("attempts", __nswsTrackId);
             return s.notificationAudioEnabled = !0,
             s.addResetCallback(( () => {
                 C.get(this, ya, "f").reset = !1,
@@ -43104,6 +43108,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
             )),
             s.addFinishCallback((e => {
+                window.__nswsTraffic?.event("finishes", __nswsTrackId);
                 const t = e.getTime()
                   , i = e.getRecording()
                   , r = e.getCarStyle();
@@ -53111,6 +53116,7 @@ window.__nswsTrackQuery = function(trackId) {
                 stBtn.appendChild(stLabel);
                 stBtn.addEventListener("click", () => {
                     n.playUIClick();
+                    window.__nswsTraffic?.event("standings");
                     document.getElementById("nsws-standings-overlay").style.display = "flex";
                     if (window.__nswsStandingsSelectedWeek == null) {
                         window.__nswsStandingsSelectedWeek = window.__nswsMaxWeek;
@@ -53547,6 +53553,25 @@ window.__nswsTrackQuery = function(trackId) {
                 )),
                 C.get(this, Bc, "f").appendChild(t),
                 C.get(this, Gc, "f").push(t)
+            }
+
+            {
+                const ownerBtn = document.createElement("button");
+                ownerBtn.className = "button";
+                ownerBtn.style.display = "none";
+                ownerBtn.innerHTML = '<img src="images/graph.svg"> ';
+                ownerBtn.append("Race Control");
+                ownerBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsOwner?.open().catch(( () => {}));
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(ownerBtn);
+                C.get(this, Gc, "f").push(ownerBtn);
+                window.__nswsOwner?.check().then(( ok => {
+                    if (ok) ownerBtn.style.display = "";
+                }
+                ));
             }
 
             {
@@ -56841,6 +56866,7 @@ window.__nswsTrackQuery = function(trackId) {
                         if (h.length >= C.get(this, Su, "f"))
                             c(new Error("Recording is too large"));
                         else {
+                            window.__nswsTraffic?.event("uploads", r);
                             const __nswsWeek = window.__nswsTrackWeek(r)
                               , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek);
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
@@ -58211,6 +58237,7 @@ window.__nswsTrackQuery = function(trackId) {
                 }
                 ), "f"));
                 watchSession = this;
+                window.__nswsTraffic?.event("replays");
             }
             // The focused car's run (the one "Switch car" cycles to), for the clip key.
             getFocusedRun() {
@@ -58529,7 +58556,8 @@ window.__nswsTrackQuery = function(trackId) {
             const _ = () => {
                 o.trigger((async () => {
                     P.bQ(),
-                    P.pS();
+                    P.pS(),
+                    window.__nswsTraffic?.event("garage");
                     try {
                         const {default: t} = await i.e('garage').then(i.bind(i, 3280));
                         await t.initResources(),
@@ -58551,6 +58579,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
               , C = () => {
                 o.trigger((async () => {
+                    window.__nswsTraffic?.event("editor");
                     try {
                         await P.RN("start-editor")
                     } finally {

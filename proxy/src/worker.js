@@ -1,6 +1,10 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
+import { TrafficStats, readBeat, describeClient } from "./traffic.js";
+
+export { TrafficStats };
+
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
 const DEFAULT_ALLOWED_ORIGINS = ["https://brinleyww.github.io"];
@@ -29,6 +33,9 @@ const BOARD_CACHE_MAX = 64;
 // Shorter than this, TRACK_SALT could be guessed, so it is ignored.
 const MIN_SALT_LENGTH = 16;
 const CREATOR_KEY_PREFIX = "nsws-creator:";
+const OWNER_KEY_PREFIX = "nsws-owner:";
+const TRAFFIC_PREFIX = "/nsws/";
+const MAX_TRAFFIC_BODY = 4096;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -75,6 +82,10 @@ function normalizeNickname(name) {
     return String(name ?? "").trim().toLowerCase();
 }
 
+function hashSet(value) {
+    return new Set(listVar(value, []).map((h) => h.trim().toLowerCase()).filter((h) => HEX64.test(h)));
+}
+
 let warnedShortSalt = false;
 
 function readConfig(env) {
@@ -92,7 +103,8 @@ function readConfig(env) {
         currentWeek: intVar(env.CURRENT_WEEK),
         hiddenFromWeek: intVar(env.HIDDEN_FROM_WEEK),
         trackSalt: salt.length >= MIN_SALT_LENGTH ? salt : null,
-        creatorKeys: new Set(listVar(env.CREATOR_KEY_HASHES, []).map((h) => h.trim().toLowerCase()).filter((h) => HEX64.test(h))),
+        creatorKeys: hashSet(env.CREATOR_KEY_HASHES),
+        ownerKeys: hashSet(env.OWNER_KEY_HASHES),
     };
 }
 
@@ -604,10 +616,68 @@ async function passThrough(request, url, cfg, origin, ctx) {
     return withCors(response, origin);
 }
 
+async function readSmallBody(request) {
+    const length = Number(request.headers.get("Content-Length"));
+    if (length > MAX_TRAFFIC_BODY) return null;
+    const text = await request.text();
+    return text.length > MAX_TRAFFIC_BODY ? null : text;
+}
+
+// The owner dashboard. Only the owner's private token opens it: OWNER_KEY_HASHES holds
+// sha256(OWNER_KEY_PREFIX + token), the same scheme as CREATOR_KEY_HASHES.
+async function isOwner(token, cfg) {
+    if (!cfg.ownerKeys.size || typeof token !== "string" || !HEX64.test(token)) return false;
+    return cfg.ownerKeys.has(await sha256Hex(OWNER_KEY_PREFIX + token));
+}
+
+async function handleTraffic(request, url, env, cfg, origin, ctx) {
+    if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+    if (!env.TRAFFIC) return plain(503, "Traffic stats are off", origin);
+    const stub = env.TRAFFIC.get(env.TRAFFIC.idFromName("global"));
+    const text = await readSmallBody(request);
+    if (text == null) return plain(413, "Too large", origin);
+
+    if (url.pathname === TRAFFIC_PREFIX + "beat") {
+        const beat = readBeat(text);
+        if (!beat) return plain(400, "Bad request", origin);
+        const client = describeClient(request);
+        const meta = { ...client, site: new URL(origin).host, ip: request.headers.get("CF-Connecting-IP") };
+        ctx.waitUntil(stub.beat(beat, meta).catch((err) => console.error("traffic beat failed:", err && err.message)));
+        return new Response(null, { status: 204, headers: { "Cache-Control": "no-store", ...corsHeaders(origin) } });
+    }
+
+    let body;
+    try {
+        body = JSON.parse(text);
+    } catch {
+        return plain(400, "Bad request", origin);
+    }
+    if (!(await isOwner(body?.token, cfg))) return plain(403, "Forbidden", origin);
+    if (url.pathname === TRAFFIC_PREFIX + "live") return json(await stub.liveStats(), origin);
+    if (url.pathname === TRAFFIC_PREFIX + "stats") {
+        return json(await stub.stats(String(body.range ?? "day"), Number(body.tz) || 0), origin);
+    }
+    return plain(404, "Not found", origin);
+}
+
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const cfg = readConfig(env);
+
+        if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
+            const origin = request.headers.get("Origin");
+            if (isNavigation(request) || !isAllowedOrigin(origin, cfg)) return forbidden();
+            if (request.method === "OPTIONS") {
+                return new Response(null, { status: 204, headers: corsHeaders(origin) });
+            }
+            try {
+                return await handleTraffic(request, url, env, cfg, origin, ctx);
+            } catch (err) {
+                console.error("traffic error:", err && err.message);
+                return plain(500, "Traffic stats failed", origin);
+            }
+        }
 
         if (!ALLOWED_PREFIXES.some((p) => url.pathname.startsWith(p))) {
             // Not an API path. If assets are bound, let the site handle it.

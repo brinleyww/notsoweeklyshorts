@@ -1,0 +1,187 @@
+// Site traffic for the owner dashboard. Beats carry random ids, the nickname and what the
+// player is doing; never the account token.
+(function () {
+    const API = window.__nswsApiBase;
+    if (!API || !window.fetch || !window.crypto || !crypto.getRandomValues) return;
+
+    // sha256("nsws-owner:" + token); the Worker checks the same hash before sending any stats.
+    const OWNER_HASH = "965911be14a967812d548ebc4dd604e6d1a16601ffa26dc995532628fd0b6a6a";
+    const VISITOR_KEY = "nsws_visitor";
+    const BEAT_VISIBLE_S = 60;
+    const BEAT_HIDDEN_S = 240;
+    const MIN_GAP_MS = 15000;
+    // A longer gap between samples means the tab was frozen or the machine slept.
+    const MAX_SAMPLE_VISIBLE_S = 5;
+    const MAX_SAMPLE_HIDDEN_S = 75;
+    const TRACK_ID = /^[0-9a-f]{64}$/;
+    const TRACK_EVENTS = { attempts: 0, finishes: 1, uploads: 2 };
+
+    const randomHex = (bytes) => Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+    const sessionId = randomHex(16);
+    let visitorId = null;
+    try {
+        visitorId = localStorage.getItem(VISITOR_KEY);
+    } catch {}
+    if (!/^[0-9a-f]{32}$/.test(visitorId || "")) {
+        visitorId = randomHex(16);
+        try {
+            localStorage.setItem(VISITOR_KEY, visitorId);
+        } catch {}
+    }
+
+    function readProfile() {
+        try {
+            const slot = parseInt(localStorage.getItem("polytrack_v5_prod_user_slot") ?? "0", 10);
+            return JSON.parse(localStorage.getItem("polytrack_v5_prod_user_" + (slot >= 0 ? slot : 0)));
+        } catch {
+            return null;
+        }
+    }
+
+    let runtime = 0;
+    let focus = 0;
+    let driving = 0;
+    let events = {};
+    let tracks = {};
+    let seq = 0;
+    let sentNick = null;
+    let currentTrack = null;
+    let lastSample = performance.now();
+    let lastBeat = -Infinity;
+
+    function currentState() {
+        if (document.querySelector(".editor-ui")) return "editor";
+        if (document.querySelector(".preview-toolbar-ui")) return "watch";
+        if (document.querySelector(".game-ui")) return "race";
+        if (document.querySelector(".customization-ui")) return "garage";
+        return "menu";
+    }
+
+    function sample() {
+        const now = performance.now();
+        const hidden = document.visibilityState === "hidden";
+        const seconds = Math.min((now - lastSample) / 1000, hidden ? MAX_SAMPLE_HIDDEN_S : MAX_SAMPLE_VISIBLE_S);
+        lastSample = now;
+        if (!(seconds > 0)) return;
+        runtime += seconds;
+        if (!hidden && document.hasFocus()) {
+            focus += seconds;
+            if (currentState() === "race") driving += seconds;
+        }
+    }
+
+    function beat(end) {
+        sample();
+        const state = currentState();
+        const hidden = document.visibilityState === "hidden";
+        const body = {
+            s: sessionId,
+            v: visitorId,
+            n: seq++,
+            rt: Math.round(runtime * 10) / 10,
+            ft: Math.round(focus * 10) / 10,
+            dt: Math.round(driving * 10) / 10,
+            nx: hidden ? BEAT_HIDDEN_S : BEAT_VISIBLE_S,
+            st: state,
+            tk: state === "race" ? currentTrack : null,
+            ev: events,
+            tr: tracks,
+        };
+        if (end) body.end = 1;
+        if (body.n === 0 && document.referrer) {
+            try {
+                const host = new URL(document.referrer).host;
+                if (host && host !== location.host) body.ref = host;
+            } catch {}
+        }
+        const nick = readProfile()?.nickname;
+        if (typeof nick === "string" && nick !== sentNick) body.nick = nick;
+
+        const sent = { runtime, focus, driving, events, tracks };
+        runtime = focus = driving = 0;
+        events = {};
+        tracks = {};
+        lastBeat = performance.now();
+        fetch(API + "nsws/beat", {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(body),
+            keepalive: true,
+            credentials: "omit",
+        }).then((response) => {
+            if (response.ok && body.nick) sentNick = body.nick;
+        }).catch(() => {
+            // Try again with the next beat, unless the page is going away.
+            if (end) return;
+            runtime += sent.runtime;
+            focus += sent.focus;
+            driving += sent.driving;
+            for (const [k, v] of Object.entries(sent.events)) events[k] = (events[k] || 0) + v;
+            for (const [k, v] of Object.entries(sent.tracks)) {
+                const t = tracks[k] || (tracks[k] = [0, 0, 0]);
+                for (let i = 0; i < 3; i++) t[i] += v[i];
+            }
+        });
+    }
+
+    setInterval(() => {
+        sample();
+        const hidden = document.visibilityState === "hidden";
+        if (performance.now() - lastBeat >= (hidden ? BEAT_HIDDEN_S : BEAT_VISIBLE_S) * 1000) beat(false);
+    }, 1000);
+
+    document.addEventListener("visibilitychange", () => {
+        if (performance.now() - lastBeat >= MIN_GAP_MS) beat(false);
+    });
+    window.addEventListener("pagehide", () => beat(true));
+    window.addEventListener("pageshow", (e) => {
+        if (e.persisted) {
+            lastSample = performance.now();
+            beat(false);
+        }
+    });
+
+    window.__nswsTraffic = {
+        event(name, track) {
+            events[name] = (events[name] || 0) + 1;
+            if (typeof track !== "string" || !TRACK_ID.test(track) || !(name in TRACK_EVENTS)) return;
+            const t = tracks[track] || (tracks[track] = [0, 0, 0]);
+            t[TRACK_EVENTS[name]]++;
+            if (name === "attempts") currentTrack = track;
+        },
+    };
+
+    async function ownerToken() {
+        const token = readProfile()?.token;
+        if (typeof token !== "string" || !TRACK_ID.test(token) || !crypto.subtle) return null;
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nsws-owner:" + token));
+        const hash = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+        return hash === OWNER_HASH ? token : null;
+    }
+
+    let panelScript = null;
+    window.__nswsOwner = {
+        check: () => ownerToken().then((token) => !!token, () => false),
+        token: ownerToken,
+        api: API,
+        async open() {
+            if (!(await ownerToken())) return;
+            if (!panelScript) {
+                panelScript = new Promise((resolve, reject) => {
+                    const script = document.createElement("script");
+                    script.src = "mod/nsws_owner.js";
+                    script.onload = resolve;
+                    script.onerror = () => {
+                        panelScript = null;
+                        reject(new Error("Failed to load the owner dashboard"));
+                    };
+                    document.head.appendChild(script);
+                });
+            }
+            await panelScript;
+            window.__nswsOwnerPanel.open();
+        },
+    };
+
+    beat(false);
+})();
