@@ -145,10 +145,12 @@ function corsHeaders(origin) {
     };
 }
 
+const BLANK_PAGE = '<!doctype html><html style="background:#000"><head><meta name="color-scheme" content="dark"><title></title></head><body style="margin:0;background:#000"></body></html>';
+
 function forbidden() {
-    return new Response("Forbidden", {
+    return new Response(BLANK_PAGE, {
         status: 403,
-        headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     });
 }
 

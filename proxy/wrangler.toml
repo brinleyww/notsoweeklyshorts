@@ -24,7 +24,7 @@ BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
 
 # The week in progress: other players' times and recordings on it (and on any
 # later week) stay secret. Bump it whenever a new week goes live.
-CURRENT_WEEK = 7
+CURRENT_WEEK = 8
 
 # Author Time players, whose times stay visible during the week. Keep in step
 # with BENCHMARK_NICKNAME and BENCHMARK_NICKNAME_WEEK_OVERRIDES in main.bundle.js.
