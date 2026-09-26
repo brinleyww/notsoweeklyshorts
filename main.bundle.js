@@ -3098,6 +3098,17 @@ window.__nswsTrackQuery = function(trackId) {
                 A: () => A
             });
             var i, r = __webpack_require__(1635), VisualCar = __webpack_require__(4078).A, s = __webpack_require__(9507);
+            // What the physics check needs for a track, built exactly as validate() below builds it.
+            window.__nswsVerifyPayload = trackData => {
+                if (null == trackData.getStartTransform())
+                    return null;
+                const m = s.A.createMountainVertices(trackData.getBounds());
+                return {
+                    trackData: trackData.toSaveString(),
+                    mountainVertices: Array.from(m.vertices),
+                    mountainOffset: { x: m.offset.x, y: m.offset.y, z: m.offset.z }
+                };
+            };
             !function(e) {
                 e[e.Init = 0] = "Init",
                 e[e.Verify = 1] = "Verify",
@@ -50891,7 +50902,7 @@ window.__nswsTrackQuery = function(trackId) {
                       , r = C.get(this, Ao, "f") * i;
                     // The proxy has already taken banned players out and counted ranks and the
                     // total without them, so a row's rank is just its place in the list.
-                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, creator: __nswsCreator}) => {
+                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, owner: __nswsOwner}) => {
                         if (!n.isCancelled) {
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
@@ -50900,7 +50911,7 @@ window.__nswsTrackQuery = function(trackId) {
                             for (let e = 0; e < s.length; e++) {
                                 const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, hidden: v} = s[e]
                                   , d = r + e + 1;
-                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsCreator)
+                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsOwner)
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
                             C.get(this, ho, "f").disabled = !1,
@@ -50936,10 +50947,10 @@ window.__nswsTrackQuery = function(trackId) {
             ), 500)
         }
         ,
-        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsCreator) {
+        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsOwner) {
             // __nswsHidden: the proxy withheld this run's time and recording (someone else's run
-            // on a week still in progress). __nswsCreator: the proxy sent this creator every run in full.
-            const __nswsSecret = !s && (!!__nswsHidden || !__nswsCreator && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
+            // on a week still in progress). __nswsOwner: the proxy sent the owner every run in full.
+            const __nswsSecret = !s && (!!__nswsHidden || !__nswsOwner && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
             const c = document.createElement("button");
             c.className = "button main",
             s && (C.set(this, bo, c, "f"),
@@ -54604,6 +54615,20 @@ window.__nswsTrackQuery = function(trackId) {
             if (!w) return [];
             return __nswsPartsOf(w).flatMap(p => p.tracks || []);
         };
+        // For the owner's anti-cheat track sync (mod/nsws_traffic.js).
+        window.__nswsTrackCheckData = async function(trackId) {
+            for (const w of __nswsWeeks) {
+                for (const p of __nswsPartsOf(w)) {
+                    const t = (p.tracks || []).find(t => t.id === trackId);
+                    if (!t) continue;
+                    const container = await window.__nswsLoadTrackContainer(p.file);
+                    const parsed = TrackDataModule.A.fromExportString(container[t.contentId ?? t.id]);
+                    const payload = parsed && window.__nswsVerifyPayload(parsed.trackData);
+                    return payload ? { id: trackId, week: w.week, payload } : null;
+                }
+            }
+            return null;
+        };
         [...__nswsWeeks].sort((a, b) => b.week - a.week).forEach((w) => {
             const parts = [...__nswsPartsOf(w)].reverse();
             parts.forEach((p, pIdx) => {
@@ -56730,7 +56755,7 @@ window.__nswsTrackQuery = function(trackId) {
                                         total: a,
                                         entries: o,
                                         userEntry: l,
-                                        creator: !0 === r.creator
+                                        owner: !0 === r.owner
                                     })
                                 } catch (e) {
                                     n(new Error("Unknown error: " + String(e)))
@@ -56926,6 +56951,9 @@ window.__nswsTrackQuery = function(trackId) {
                                         } catch (e) {
                                             c(new Error("Unknown error: " + String(e)))
                                         }
+                                    else if (422 == u.status)
+                                        window.__nswsRunRejected?.(),
+                                        c(new Error("Run failed the anti-cheat check"));
                                     else
                                         c(new Error("Failed to connect to server"))
                             }

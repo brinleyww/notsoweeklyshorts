@@ -35,14 +35,23 @@ PUBLIC_NICKNAMES = ["Cookedbyapringle", "CookedbyBenjamin's 5th cousin"]
 # runs stored under the old ids would stop showing.
 HIDDEN_FROM_WEEK = 7
 
-# Players who see every run, times and recordings, even on the week in progress.
-# Each entry is sha256("nsws-creator:" + private token), never the token itself:
-#   node -e "console.log(require('crypto').createHash('sha256').update('nsws-creator:' + process.argv[1]).digest('hex'))" <token>
-CREATOR_KEY_HASHES = ["04b7b29923a4ad49da408fb84076c12c69af78260e5a1605baec71e01411f499"]
-
-# The owner, who alone can open the site traffic dashboard. Same scheme as above,
-# with the prefix "nsws-owner:" instead of "nsws-creator:".
+# The owner, and nobody else, gets past every restriction: sees every run on the week
+# in progress in full, uses the proxy from any site or tool, skips the anti-cheat, and
+# opens the traffic dashboard. Each entry is sha256("nsws-owner:" + private token),
+# never the token itself:
+#   node -e "console.log(require('crypto').createHash('sha256').update('nsws-owner:' + process.argv[1]).digest('hex'))" <token>
 OWNER_KEY_HASHES = ["965911be14a967812d548ebc4dd604e6d1a16601ffa26dc995532628fd0b6a6a"]
+
+# The owner's public userId (plain sha256 of the token, the same id every leaderboard
+# entry shows). Runs by this account always show, wherever they were uploaded from;
+# only the owner's key can create runs under it.
+OWNER_USER_IDS = ["ab5cf70f37b29f3c54305072e863ef1dd9d78abe490f850afe9050535d7d47a8"]
+
+# init.bin (the game's physics meshes for the anti-cheat) is imported as an ArrayBuffer.
+[[rules]]
+type = "Data"
+globs = ["**/*.bin"]
+fallthrough = true
 
 # Site traffic for the owner dashboard (src/traffic.js).
 [[durable_objects.bindings]]
@@ -52,3 +61,16 @@ class_name = "TrafficStats"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TrafficStats"]
+
+# Anti-cheat (src/anticheat.js): verdicts and synced tracks, and the physics replays.
+[[durable_objects.bindings]]
+name = "ANTICHEAT"
+class_name = "AntiCheat"
+
+[[durable_objects.bindings]]
+name = "RUN_CHECKER"
+class_name = "RunChecker"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["AntiCheat", "RunChecker"]

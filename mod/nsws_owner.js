@@ -9,10 +9,17 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"]];
     const LIVE_REFRESH_MS = 10000;
     const STATS_REFRESH_MS = 60000;
     const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const REASONS = {
+        "no-finish": "Doesn't cross the finish on its time",
+        "not-uploaded-here": "Uploaded outside this site",
+        "no-recording": "Recording missing",
+        "unreadable": "Recording unreadable",
+        "bad-time": "Impossible time",
+    };
 
     const CSS = `
 #nrc-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
@@ -439,6 +446,9 @@
         runtimeMode: "total",
         opensMode: "rate",
         loading: 0,
+        anti: null,
+        antiError: null,
+        antiBusy: "",
     };
 
     async function post(path, extra) {
@@ -476,6 +486,16 @@
             ui.error = err;
         }
         render();
+    }
+
+    async function loadAnti() {
+        try {
+            ui.anti = await post("anticheat", {});
+            ui.antiError = null;
+        } catch (err) {
+            ui.antiError = err;
+        }
+        if (ui.overlay && ui.tab === "anticheat") render();
     }
 
     async function loadLive() {
@@ -898,6 +918,134 @@
         body.appendChild(grid2);
     }
 
+    function raceTime(frames) {
+        const ms = Math.max(0, Math.round(frames || 0));
+        const m = Math.floor(ms / 60000);
+        return m + ":" + String(Math.floor(ms / 1000) % 60).padStart(2, "0") + "." + String(ms % 1000).padStart(3, "0");
+    }
+
+    function allTrackIds() {
+        const ids = new Set();
+        for (const w of window.__nswsWeeks || []) {
+            for (const t of window.__nswsTracksForWeek ? window.__nswsTracksForWeek(w.week) : []) ids.add(t.id);
+        }
+        return ids;
+    }
+
+    async function syncTracks(force) {
+        ui.antiBusy = force ? "Re-sending every track…" : "Sending missing tracks…";
+        render();
+        try {
+            const { synced, total } = await window.__nswsOwner.syncTracks(force);
+            ui.antiBusy = total ? `Sent ${synced} of ${total} tracks.` : "Every track is already synced.";
+        } catch {
+            ui.antiBusy = "Sync failed. Try again in a moment.";
+        }
+        await loadAnti();
+    }
+
+    function renderAntiCheat(body) {
+        if (ui.antiError && !ui.anti) {
+            body.appendChild(el("div", "nrc-status", "Couldn't load the anti-cheat status."));
+            return;
+        }
+        const a = ui.anti;
+        if (!a) {
+            body.appendChild(el("div", "nrc-status", "Loading anti-cheat…"));
+            return;
+        }
+        const count = (pred) => a.counts.filter(pred).reduce((n, r) => n + r.n, 0);
+        const passed = count((r) => r.state === "valid");
+        const hidden = count((r) => r.state === "invalid");
+        const outside = count((r) => r.state === "invalid" && r.source === "outside");
+        const ids = allTrackIds();
+        const synced = a.tracks.filter((t) => ids.has(t.id)).length;
+
+        const rules = card("How runs are checked", "verified");
+        const list = el("div", "nrc-keys");
+        list.style.cssText = "flex-direction:column;gap:8px;font-size:14px;";
+        for (const text of [
+            "Every run is replayed with the game's own physics. It must pass every checkpoint and cross the finish on exactly the time it claims.",
+            "Runs must be uploaded through this site. Runs sent to Kodub any other way are hidden.",
+            "Your owner key skips every check: your runs always show, and your uploads are never replayed.",
+            "The proxy only answers the game on brinleyww.github.io and notweeklyshorts.github.io.",
+            "Runs already on a board when anti-cheat started stay up while they're replayed once in the background.",
+        ]) {
+            const row = el("span");
+            row.style.alignItems = "flex-start";
+            const tick = el("i");
+            tick.style.cssText = "background:" + GOOD + ";flex-shrink:0;margin-top:2px;";
+            row.appendChild(tick);
+            row.appendChild(document.createTextNode(text));
+            list.appendChild(row);
+        }
+        rules.appendChild(list);
+        body.appendChild(rules);
+
+        const tiles = el("div", "nrc-tiles");
+        tiles.style.marginTop = "14px";
+        tiles.appendChild(tile("Runs passed", num(passed), "shown on the boards"));
+        tiles.appendChild(tile("Hidden runs", num(hidden), num(outside) + " uploaded elsewhere"));
+        tiles.appendChild(tile("Rejected uploads", num(a.rejectTotals.runs), num(a.rejectTotals.attempts) + " attempts blocked"));
+        tiles.appendChild(tile("Waiting for replay", num(a.queue.n), a.queue.waiting ? num(a.queue.waiting) + " need a track sync" : "background check"));
+        tiles.appendChild(tile("Tracks synced", num(synced) + " / " + num(ids.size), num(a.boards) + " boards watched"));
+        body.appendChild(tiles);
+
+        const sync = card("Track sync", "refresh", "The Worker can't read the encrypted tracks, so your game sends each track's physics data. That happens by itself when you open the site; use these after changing a track.");
+        const buttons = el("div", "nrc-toggle");
+        const missing = el("button", "button", "Send missing tracks");
+        missing.addEventListener("click", () => syncTracks(false));
+        const all = el("button", "button", "Re-send all tracks");
+        all.addEventListener("click", () => syncTracks(true));
+        buttons.appendChild(missing);
+        buttons.appendChild(all);
+        sync.appendChild(buttons);
+        if (ui.antiBusy) {
+            const note = el("p", "nrc-sub", ui.antiBusy);
+            note.style.margin = "10px 0 0";
+            sync.appendChild(note);
+        }
+        const unsynced = [...ids].filter((id) => !a.tracks.some((t) => t.id === id));
+        if (unsynced.length) {
+            const note = el("p", "nrc-sub", "Not synced yet: " + unsynced.map(trackName).join(", "));
+            note.style.margin = "10px 0 0";
+            sync.appendChild(note);
+        }
+        sync.style.marginBottom = "14px";
+        body.appendChild(sync);
+
+        const rej = card("Rejected uploads", "cancel", "Runs refused at upload because the replay didn't match. They never reached Kodub.");
+        if (!a.rejects.length) rej.appendChild(el("div", "nrc-empty", "No rejected uploads."));
+        else {
+            rej.appendChild(table(
+                [["Last try", "num"], ["Player", "name"], ["Track", "name"], ["Claimed", "num"], ["Why"], ["Tries", "num"]],
+                a.rejects.map((r) => [fmt.dateTime(r.last), r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason, num(r.attempts)])));
+        }
+        rej.style.marginBottom = "14px";
+        body.appendChild(rej);
+
+        const blocked = card("Hidden from the boards", "state_invalid", "Runs on Kodub that the boards no longer show. Allow one if you're sure it's fine.");
+        if (!a.blocked.length) blocked.appendChild(el("div", "nrc-empty", "Nothing hidden."));
+        else {
+            blocked.appendChild(table(
+                [["Player", "name"], ["Track", "name"], ["Time", "num"], ["Why"], ["Found", "num"], [""]],
+                a.blocked.map((r) => {
+                    const allow = el("button", "button", "Allow");
+                    allow.style.cssText = "font-size:13px;padding:4px 12px;";
+                    allow.addEventListener("click", async () => {
+                        allow.disabled = true;
+                        try {
+                            await post("anticheat/approve", { id: r.id });
+                        } catch {}
+                        loadAnti();
+                    });
+                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason || "", fmt.dateTime(r.at), allow];
+                })));
+        }
+        body.appendChild(blocked);
+        body.appendChild(el("div", "nrc-foot", "Owner only. Refreshes every minute while this tab is open."));
+    }
+
     function render() {
         if (!ui.overlay) return;
         const body = ui.body;
@@ -923,6 +1071,10 @@
                 box.appendChild(retry);
             }
             body.appendChild(box);
+            return;
+        }
+        if (ui.tab === "anticheat") {
+            renderAntiCheat(body);
             return;
         }
         if (!ui.stats || !ui.live) {
@@ -1023,6 +1175,7 @@
                 ui.tab = key;
                 ui.body.scrollTop = 0;
                 render();
+                if (key === "anticheat") loadAnti();
             });
             tabs.appendChild(b);
         }
@@ -1042,6 +1195,7 @@
         window.addEventListener("resize", onResize);
         ui.timers.push(setInterval(loadLive, LIVE_REFRESH_MS));
         ui.timers.push(setInterval(loadStats, STATS_REFRESH_MS));
+        ui.timers.push(setInterval(() => ui.tab === "anticheat" && loadAnti(), STATS_REFRESH_MS));
         ui.raf = requestAnimationFrame(tick);
         render();
         loadStats();

@@ -2,8 +2,9 @@
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
 import { TrafficStats, readBeat, describeClient } from "./traffic.js";
+import { AntiCheat, RunChecker } from "./anticheat.js";
 
-export { TrafficStats };
+export { TrafficStats, AntiCheat, RunChecker };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -32,10 +33,13 @@ const BOARD_TTL_MS = 10_000;
 const BOARD_CACHE_MAX = 64;
 // Shorter than this, TRACK_SALT could be guessed, so it is ignored.
 const MIN_SALT_LENGTH = 16;
-const CREATOR_KEY_PREFIX = "nsws-creator:";
 const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
+const MAX_TRACK_SYNC_BODY = 400_000;
+// How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
+// seen yet is always classified at once.
+const ANTICHEAT_TTL_MS = 15_000;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -103,13 +107,19 @@ function readConfig(env) {
         currentWeek: intVar(env.CURRENT_WEEK),
         hiddenFromWeek: intVar(env.HIDDEN_FROM_WEEK),
         trackSalt: salt.length >= MIN_SALT_LENGTH ? salt : null,
-        creatorKeys: hashSet(env.CREATOR_KEY_HASHES),
         ownerKeys: hashSet(env.OWNER_KEY_HASHES),
+        // The owner's public userId (sha256 of the token), whose runs may come from anywhere.
+        ownerUserIds: [...hashSet(env.OWNER_USER_IDS)],
+        // Ids of runs the anti-cheat hides on this request's board; set per request.
+        blocked: null,
+        // The request carries the owner's key in nswsOwner; set per request.
+        owner: false,
     };
 }
 
+// Hidden from a board: a banned player, or a run the anti-cheat hasn't passed.
 function isBanned(entry, cfg) {
-    return cfg.banned.has(normalizeNickname(entry.nickname));
+    return cfg.banned.has(normalizeNickname(entry.nickname)) || (cfg.blocked?.has(entry.id) ?? false);
 }
 
 function isAllowedOrigin(origin, cfg) {
@@ -260,13 +270,24 @@ async function callerHash(params, track) {
     return claimed && HEX64.test(claimed) ? claimed : null;
 }
 
-// Creators see every run in full, even on the week in progress. Only the token
-// itself can prove it: CREATOR_KEY_HASHES holds sha256(CREATOR_KEY_PREFIX + token),
-// which, unlike the plain token hash, is not anyone's public userId.
-async function isCreator(params, cfg) {
-    const token = params.get("userToken");
-    if (!cfg.creatorKeys.size || !token || !HEX64.test(token)) return false;
-    return cfg.creatorKeys.has(await sha256Hex(CREATOR_KEY_PREFIX + token));
+// Only the owner's key proves ownership: OWNER_KEY_HASHES holds sha256(OWNER_KEY_PREFIX + token),
+// which, unlike the plain token hash, is not anyone's public userId. The owner gets
+// past every restriction here; nobody else gets any exception.
+async function isOwner(token, cfg) {
+    if (!cfg.ownerKeys.size || typeof token !== "string" || !HEX64.test(token)) return false;
+    return cfg.ownerKeys.has(await sha256Hex(OWNER_KEY_PREFIX + token));
+}
+
+// For a request from outside the allowed sites (another tool or site, or a tab):
+// it is let through only if it carries the owner's key, as nswsOwner, as the userToken
+// of a read, or as the userToken of an upload.
+async function carriesOwnerKey(request, url, cfg) {
+    if (cfg.owner || await isOwner(url.searchParams.get("userToken"), cfg)) return true;
+    if (request.method !== "POST") return false;
+    const length = Number(request.headers.get("Content-Length"));
+    if (length > 2_000_000) return false;
+    const form = new URLSearchParams(await request.clone().text());
+    return isOwner(form.get("userToken"), cfg);
 }
 
 async function fetchUpstreamJson(cfg, request, path, params) {
@@ -427,30 +448,61 @@ function shield(entry, position, callerHashValue, cfg) {
     };
 }
 
-async function handleLeaderboard(request, url, cfg, origin) {
+function antiCheat(env) {
+    return env.ANTICHEAT ? env.ANTICHEAT.get(env.ANTICHEAT.idFromName("global")) : null;
+}
+
+// One instance: each replay is its own call, so an upload waits behind at most one
+// background replay, and only one copy of the physics is in memory.
+function runChecker(env) {
+    return env.RUN_CHECKER.get(env.RUN_CHECKER.idFromName("main"));
+}
+
+// track id -> { at, known: Set of classified ids, blocked: Set }
+const verdicts = new Map();
+
+async function blockedRuns(env, cfg, track, view) {
+    const anti = antiCheat(env);
+    if (!anti || track.week == null) return null;
+    const hit = verdicts.get(track.trackId);
+    if (hit && Date.now() - hit.at < ANTICHEAT_TTL_MS && view.entries.every((e) => hit.known.has(e.id))) return hit.blocked;
+    const entries = view.entries.map((e) => ({ id: e.id, userId: e.userId, frames: e.frames, nickname: e.nickname }));
+    const blocked = new Set(await anti.classify(track.trackId, track.week, entries, cfg.ownerUserIds));
+    verdicts.delete(track.trackId);
+    verdicts.set(track.trackId, { at: Date.now(), known: new Set(view.entries.map((e) => e.id)), blocked });
+    if (verdicts.size > BOARD_CACHE_MAX) verdicts.delete(verdicts.keys().next().value);
+    return blocked;
+}
+
+async function handleLeaderboard(request, url, env, cfg, origin) {
     const params = url.searchParams;
     const track = await trackContext(cfg, params.get("trackId"), params.get("nswsWeek"));
     const skip = intParam(params.get("skip"), 0, Number.MAX_SAFE_INTEGER);
     const amount = intParam(params.get("amount"), 1, PAGE_SIZE);
     const read = readOptions(params);
     const hash = await callerHash(params, track);
-    const creator = track.secret && await isCreator(params, cfg);
+    const owner = cfg.owner || await isOwner(params.get("userToken"), cfg);
 
     const view = await loadView(cfg, request, track, read);
+    // If the anti-cheat is unreachable the board still loads, unfiltered, rather than failing.
+    cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
+        console.error("anti-cheat unavailable:", err && err.message);
+        return null;
+    });
     const ranked = view.entries.filter((e) => !isBanned(e, cfg));
     let page = ranked.slice(skip, skip + amount);
     if (!view.complete && !track.hiddenId && page.length < amount) {
         const rawSkip = Math.max(skip, ranked.length) + (view.entries.length - ranked.length);
         page = page.concat(await readPastScan(cfg, request, track, read, rawSkip, amount - page.length));
     }
-    if (track.secret && !creator) page = page.map((entry, i) => shield(entry, skip + i + 1, hash, cfg));
+    if (track.secret && !owner) page = page.map((entry, i) => shield(entry, skip + i + 1, hash, cfg));
 
     const body = {
         total: filteredTotal(view, cfg),
         entries: page,
         userEntry: hash ? await ownEntry(cfg, request, track, read, view, hash) : null,
     };
-    if (creator) body.creator = true;
+    if (owner && track.secret) body.owner = true;
     return json(body, origin);
 }
 
@@ -499,9 +551,14 @@ function forgetBoards(...trackIds) {
     for (const key of boards.keys()) {
         if (trackIds.some((id) => id && key.includes("|" + id + "|"))) boards.delete(key);
     }
+    for (const id of trackIds) verdicts.delete(id);
 }
 
-async function handleSubmit(request, url, cfg, origin) {
+function antiCheatRejected(origin) {
+    return plain(422, "Run failed the anti-cheat check", origin);
+}
+
+async function handleSubmit(request, url, env, cfg, origin) {
     const raw = await request.text();
     const form = new URLSearchParams(raw);
     const trackId = form.get("trackId") ?? "";
@@ -514,6 +571,7 @@ async function handleSubmit(request, url, cfg, origin) {
 
     const track = await trackContext(cfg, trackId, url.searchParams.get("nswsWeek"));
     const hash = await sha256Hex(token);
+    const ownerUpload = cfg.owner || await isOwner(token, cfg);
     const read = readOptions(form);
     const body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
 
@@ -521,7 +579,31 @@ async function handleSubmit(request, url, cfg, origin) {
     // banned players (and, for a hidden week, missing the runs still under the
     // real id). The board from just before the run lets both be recounted the
     // way the leaderboard shows them.
+    // Runs on these boards are replayed first; a run that doesn't really finish on the
+    // time it claims never reaches Kodub.
+    const anti = track.week != null && !ownerUpload ? antiCheat(env) : null;
+    let check = null;
+    if (anti) {
+        const recording = form.get("recording") ?? "";
+        const nickname = (form.get("nickname") ?? "").slice(0, 64);
+        const key = await sha256Hex(trackId + "|" + frames + "|" + recording);
+        const prep = await anti.prepareSubmit(trackId, key);
+        if (prep.rejected) return antiCheatRejected(origin);
+        let state = "pending";
+        if (prep.payload) {
+            const result = await runChecker(env).check(prep.payload, recording, frames);
+            if (!result.valid) {
+                await anti.reject({ key, track: trackId, week: track.week, userId: hash, nickname, frames, reason: result.reason });
+                return antiCheatRejected(origin);
+            }
+            state = "valid";
+        }
+        await anti.expect({ track: trackId, userId: hash, frames, state });
+        check = { recording, nickname, state };
+    }
+
     const before = await loadView(cfg, request, track, read).catch(() => null);
+    if (before) cfg.blocked = await blockedRuns(env, cfg, track, before).catch(() => null);
     const response = await postUpstream(request, cfg, url.pathname, body);
     forgetBoards(track.trackId, track.hiddenId);
     const text = await response.text();
@@ -530,6 +612,13 @@ async function handleSubmit(request, url, cfg, origin) {
         result = JSON.parse(text);
     } catch {
         /* not JSON - handed back untouched below */
+    }
+    if (check && response.ok) {
+        const uploadId = typeof result === "number" ? result : result?.uploadId;
+        await anti.confirm({
+            track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
+            state: check.state, recording: check.state === "pending" ? check.recording : null,
+        });
     }
     if (!response.ok || !result || typeof result !== "object" || !Number.isSafeInteger(result.newPosition)) {
         return new Response(text, {
@@ -616,25 +705,30 @@ async function passThrough(request, url, cfg, origin, ctx) {
     return withCors(response, origin);
 }
 
-async function readSmallBody(request) {
+async function readSmallBody(request, limit) {
     const length = Number(request.headers.get("Content-Length"));
-    if (length > MAX_TRAFFIC_BODY) return null;
+    if (length > limit) return null;
     const text = await request.text();
-    return text.length > MAX_TRAFFIC_BODY ? null : text;
+    return text.length > limit ? null : text;
 }
 
-// The owner dashboard. Only the owner's private token opens it: OWNER_KEY_HASHES holds
-// sha256(OWNER_KEY_PREFIX + token), the same scheme as CREATOR_KEY_HASHES.
-async function isOwner(token, cfg) {
-    if (!cfg.ownerKeys.size || typeof token !== "string" || !HEX64.test(token)) return false;
-    return cfg.ownerKeys.has(await sha256Hex(OWNER_KEY_PREFIX + token));
+// A track as the owner's game builds it for the physics check.
+function readTrackSync(t) {
+    const p = t?.payload;
+    const v = p?.mountainVertices;
+    const o = p?.mountainOffset;
+    if (!HEX64.test(t?.id ?? "") || !Number.isSafeInteger(t.week)) return null;
+    if (typeof p?.trackData !== "string" || !p.trackData || !Array.isArray(v) || v.length > 200_000) return null;
+    if (!v.every(Number.isFinite) || ![o?.x, o?.y, o?.z].every(Number.isFinite)) return null;
+    return { id: t.id, week: t.week, payload: { trackData: p.trackData, mountainVertices: v, mountainOffset: { x: o.x, y: o.y, z: o.z } } };
 }
 
 async function handleTraffic(request, url, env, cfg, origin, ctx) {
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
     if (!env.TRAFFIC) return plain(503, "Traffic stats are off", origin);
     const stub = env.TRAFFIC.get(env.TRAFFIC.idFromName("global"));
-    const text = await readSmallBody(request);
+    const syncing = url.pathname === TRAFFIC_PREFIX + "anticheat/tracks";
+    const text = await readSmallBody(request, syncing ? MAX_TRACK_SYNC_BODY : MAX_TRAFFIC_BODY);
     if (text == null) return plain(413, "Too large", origin);
 
     if (url.pathname === TRAFFIC_PREFIX + "beat") {
@@ -657,6 +751,19 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     if (url.pathname === TRAFFIC_PREFIX + "stats") {
         return json(await stub.stats(String(body.range ?? "day"), Number(body.tz) || 0), origin);
     }
+    const anti = antiCheat(env);
+    if (url.pathname.startsWith(TRAFFIC_PREFIX + "anticheat") && !anti) return plain(503, "Anti-cheat is off", origin);
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat") return json(await anti.summary(), origin);
+    if (syncing) {
+        if (!Array.isArray(body.tracks) || body.tracks.length > 2) return plain(400, "Bad request", origin);
+        const tracks = body.tracks.map(readTrackSync);
+        if (tracks.some((t) => !t)) return plain(400, "Bad request", origin);
+        return json(await anti.putTracks(tracks), origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        return json(await anti.approve(body.id), origin);
+    }
     return plain(404, "Not found", origin);
 }
 
@@ -664,10 +771,15 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const cfg = readConfig(env);
+        cfg.owner = await isOwner(url.searchParams.get("nswsOwner"), cfg);
+        url.searchParams.delete("nswsOwner");
 
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
-            const origin = request.headers.get("Origin");
-            if (isNavigation(request) || !isAllowedOrigin(origin, cfg)) return forbidden();
+            const requestOrigin = request.headers.get("Origin");
+            const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
+            // Owner endpoints check the owner's key themselves, so they work from anywhere.
+            if (!fromSite && url.pathname === TRAFFIC_PREFIX + "beat") return forbidden();
+            const origin = requestOrigin || "*";
             if (request.method === "OPTIONS") {
                 return new Response(null, { status: 204, headers: corsHeaders(origin) });
             }
@@ -688,17 +800,21 @@ export default {
         // The API is only for the game on our own site. Opening a proxy URL in
         // a tab sends no Origin, and another site sends its own - both get 403,
         // and without CORS headers a page on another site can't read it anyway.
-        const origin = request.headers.get("Origin");
-        if (isNavigation(request) || !isAllowedOrigin(origin, cfg)) return forbidden();
-
+        // The owner's key is the one exception.
+        const requestOrigin = request.headers.get("Origin");
+        const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
         if (request.method === "OPTIONS") {
-            return new Response(null, { status: 204, headers: corsHeaders(origin) });
+            if (!fromSite && !requestOrigin) return forbidden();
+            // A preflight carries no key; the request that follows is checked in full.
+            return new Response(null, { status: 204, headers: corsHeaders(requestOrigin) });
         }
+        if (!fromSite && !(await carriesOwnerKey(request, url, cfg))) return forbidden();
+        const origin = requestOrigin || "*";
 
         try {
             if (url.pathname === "/v6/leaderboard") {
-                if (request.method === "GET") return await handleLeaderboard(request, url, cfg, origin);
-                if (request.method === "POST") return await handleSubmit(request, url, cfg, origin);
+                if (request.method === "GET") return await handleLeaderboard(request, url, env, cfg, origin);
+                if (request.method === "POST") return await handleSubmit(request, url, env, cfg, origin);
             } else if (url.pathname === "/v6/leaderboardUserEntry" && request.method === "GET") {
                 return await handleUserEntry(request, url, cfg, origin);
             }

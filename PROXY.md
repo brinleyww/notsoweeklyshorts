@@ -92,8 +92,8 @@ under the real id, so nothing disappears when you switch it on.
 | `CURRENT_WEEK`     | Week in progress; its runs and later weeks' runs are secret    |
 | `PUBLIC_NICKNAMES` | Times left visible during the week (the medals' Author Time)   |
 | `HIDDEN_FROM_WEEK` | First week stored under secret track ids (needs `TRACK_SALT`)  |
-| `CREATOR_KEY_HASHES` | Creators, who see every run in full during the week (below) |
-| `OWNER_KEY_HASHES` | The owner, who alone can read the site traffic stats (below)  |
+| `OWNER_KEY_HASHES` | The owner, the only one who gets past any restriction (below) |
+| `OWNER_USER_IDS`   | The owner's public userId; their runs always show            |
 
 `PUBLIC_NICKNAMES` has to match `BENCHMARK_NICKNAME` and
 `BENCHMARK_NICKNAME_WEEK_OVERRIDES` in `main.bundle.js`, or current-week medals
@@ -102,17 +102,28 @@ show "Couldn't check medal".
 Vars can also be edited in the Cloudflare dashboard (Worker → Settings →
 Variables), but the next `wrangler deploy` puts back what is in the file.
 
-## Creator access
+## Owner access
 
-A player whose private token matches an entry in `CREATOR_KEY_HASHES` gets
-every run on the week in progress in full (times and recordings, so they can be
-watched), and the page stops showing those runs as "SECRET". Only the token the
-game already sends proves it; the public `userTokenHash` never does.
+The owner's private token (the "owner key") is the only thing that gets past the
+proxy's restrictions, and nobody else gets any exception. With it:
 
-Entries are `sha256("nsws-creator:" + token)`, never the token itself. To add
-someone, compute theirs and deploy the Worker:
+- Every run on the week in progress comes back in full (times and recordings), and
+  the page stops showing them as "SECRET".
+- The proxy works from any site or tool, and from a tab. The key counts when it is
+  the `userToken` of a read or an upload, or when it is added to any request as
+  `?nswsOwner=<key>` (removed before anything is sent to Kodub).
+- The owner's uploads skip the anti-cheat replay, and runs by the owner's account
+  (`OWNER_USER_IDS`) always show, wherever they were uploaded from.
+- The traffic dashboard and the anti-cheat controls open.
 
-    node -e "console.log(require('crypto').createHash('sha256').update('nsws-creator:' + process.argv[1]).digest('hex'))" <token>
+`OWNER_KEY_HASHES` holds `sha256("nsws-owner:" + token)`, never the token itself. The
+plain `sha256(token)` is the public `userId` on every leaderboard entry, so it is
+only used to recognise the owner's runs, never as proof of the key. To change the
+owner, compute the new hash, put it in `OWNER_KEY_HASHES` and in `OWNER_HASH` in
+`mod/nsws_traffic.js`, set `OWNER_USER_IDS` to the new `sha256(token)`, deploy the
+Worker, then push the site:
+
+    node -e "console.log(require('crypto').createHash('sha256').update('nsws-owner:' + process.argv[1]).digest('hex'))" <token>
 
 ## Site traffic (Race Control)
 
@@ -126,13 +137,10 @@ device, system and browser, and stores everything in one SQLite Durable Object,
 `TrafficStats` (`proxy/src/traffic.js`). IP addresses are only held in memory to
 cap new sessions at 120 per address per hour; they are never stored.
 
-`/nsws/stats` and `/nsws/live` answer only the owner: the request body must hold
-a token whose `sha256("nsws-owner:" + token)` is in `OWNER_KEY_HASHES`. The page
-checks the same hash (in `nsws_traffic.js`) before showing the "Race Control"
-button and loading `mod/nsws_owner.js`. To change the owner, compute the new
-hash, put it in both places, deploy the Worker, then push the site:
-
-    node -e "console.log(require('crypto').createHash('sha256').update('nsws-owner:' + process.argv[1]).digest('hex'))" <token>
+`/nsws/stats`, `/nsws/live` and `/nsws/anticheat*` answer only the owner: the request
+body must hold the owner key (see "Owner access"). The page checks the same hash
+(in `nsws_traffic.js`) before showing the "Race Control" button and loading
+`mod/nsws_owner.js`.
 
 On the Workers Free plan each beat is one Worker request and one Durable Object
 request, with about two SQLite rows written. That is roughly 1,440 beats a day
@@ -146,6 +154,58 @@ and 100,000 rows written a day) cover about 30 players online around the clock.
 - `CACHE_TTL` — edge cache for passed-through endpoints (recordings). Leaderboard
   reads are rebuilt per caller and never shared between players; each Worker
   instance keeps the raw boards for 10 seconds.
+
+## Anti-cheat
+
+Every Not So Weekly Shorts board (any request carrying `nswsWeek`) only shows runs
+that pass two checks:
+
+- **The run really finishes.** The Worker replays the run's inputs through the
+  game's own physics (`proxy/src/sim/`, built from `simulation_worker.bundle.js`,
+  the same code Kodub's verifiers run). The car has to pass every checkpoint and
+  cross the finish on exactly the frame the run claims. A replay takes about
+  0.1-0.3 s.
+- **It came through this proxy.** Kodub's API is public, so anyone can upload to
+  a track id directly. A run the proxy didn't let through is hidden.
+
+The owner skips both checks (see "Owner access").
+
+How it works (`proxy/src/anticheat.js`):
+
+- **Uploads** are replayed before they are sent on. One that fails gets `422` and
+  never reaches Kodub. The game then shows "This run failed the anti-cheat check".
+  The same run sent again is refused without replaying it.
+- **Runs already on a board** the first time the Worker sees that board after the
+  anti-cheat is deployed count as legacy. They stay visible while each one is
+  replayed once in the background (a few per second), and any that fail are
+  hidden. Everything uploaded later has to come through the proxy.
+- Hidden runs are dropped the same way banned players are: ranks close up and the
+  player count leaves them out. A player still gets their own entry back, so the
+  game doesn't keep uploading it.
+- The owner dashboard's **Anti-cheat** tab lists rejected uploads and hidden runs,
+  and has an **Allow** button for a run you know is fine.
+
+**Tracks have to be synced.** The Worker can't decrypt the `.track` files, so the
+owner's game sends each track's physics data (`window.__nswsTrackCheckData`). That
+happens automatically a few seconds after the owner opens the site, for any track
+the Worker doesn't have yet. Until a track is synced, its uploads are accepted but
+stay hidden until they can be replayed. After changing a track that is already
+live, use **Re-send all tracks** on the Anti-cheat tab.
+
+**Rebuilding the physics.** `proxy/src/sim/` is generated; don't edit it by hand. If
+the game's simulation ever changes, rebuild it with `node proxy/tools/build-sim.js`.
+`init.bin` (the game's physics meshes) only changes with the game's 3D models. To
+rebuild it, capture the non-realtime `Init` message the game posts to
+`simulation_worker.bundle.js`, save it as JSON (typed arrays as plain arrays), and
+pass that file to the build script.
+
+**Why not lock the proxy to one page's path?** The proxy already answers only
+`https://brinleyww.github.io` and `https://notweeklyshorts.github.io` (see
+`ALLOWED_ORIGINS`), and only their owners can publish pages there. A browser sends
+only the site, not the page path, on these requests, so a path check would need the
+Referer header. Privacy tools strip that, so real players would be blocked. Nothing
+outside a browser has to tell the truth about any header, which is why the checks
+above are done on the run itself.
 
 ## Privacy note
 

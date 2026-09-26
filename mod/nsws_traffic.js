@@ -1,4 +1,5 @@
-// Site traffic for the owner dashboard. Beats carry random ids, the nickname and what the
+// Site traffic for the owner dashboard, the owner's anti-cheat track sync, and the notice
+// shown when a run fails the anti-cheat. Beats carry random ids, the nickname and what the
 // player is doing; never the account token.
 (function () {
     const API = window.__nswsApiBase;
@@ -159,9 +160,55 @@
         return hash === OWNER_HASH ? token : null;
     }
 
+    function ownerPost(path, token, extra) {
+        return fetch(API + "nsws/" + path, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify({ token, ...extra }),
+            credentials: "omit",
+            cache: "no-store",
+        });
+    }
+
+    // The Worker can't decrypt or build tracks itself, so the owner's game sends each
+    // Not So Weekly Shorts track's physics data the first time it is missing there.
+    let syncing = null;
+    function syncTracks(force) {
+        if (syncing) return syncing;
+        syncing = (async () => {
+            const token = await ownerToken();
+            if (!token || !window.__nswsTrackCheckData || !window.__nswsTracksForWeek) return { synced: 0, total: 0 };
+            const status = await ownerPost("anticheat", token, {});
+            if (!status.ok) throw new Error("HTTP " + status.status);
+            const have = new Set((await status.json()).tracks.map((t) => t.id));
+            const ids = [...new Set((window.__nswsWeeks || []).flatMap((w) => window.__nswsTracksForWeek(w.week).map((t) => t.id)))]
+                .filter((id) => force || !have.has(id));
+            let synced = 0;
+            // One track per request keeps each one well inside the Worker's CPU limit.
+            for (const id of ids) {
+                const track = await window.__nswsTrackCheckData(id).catch(() => null);
+                if (!track) continue;
+                const response = await ownerPost("anticheat/tracks", token, { tracks: [track] });
+                if (response.ok) synced++;
+            }
+            return { synced, total: ids.length };
+        })().finally(() => {
+            syncing = null;
+        });
+        return syncing;
+    }
+
+    let autoSynced = false;
     let panelScript = null;
     window.__nswsOwner = {
-        check: () => ownerToken().then((token) => !!token, () => false),
+        check: () => ownerToken().then((token) => {
+            if (token && !autoSynced) {
+                autoSynced = true;
+                setTimeout(() => syncTracks(false).catch(() => {}), 4000);
+            }
+            return !!token;
+        }, () => false),
+        syncTracks,
         token: ownerToken,
         api: API,
         async open() {
@@ -181,6 +228,19 @@
             await panelScript;
             window.__nswsOwnerPanel.open();
         },
+    };
+
+    let lastNotice = 0;
+    window.__nswsRunRejected = () => {
+        if (Date.now() - lastNotice < 15000) return;
+        lastNotice = Date.now();
+        const note = document.createElement("div");
+        note.textContent = "This run failed the anti-cheat check, so it wasn't uploaded.";
+        note.style.cssText = "position:fixed;left:50%;bottom:72px;transform:translateX(-50%);z-index:10003;" +
+            "background:var(--surface-color,#28346a);color:#fff;padding:12px 22px;font-size:18px;" +
+            "clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);box-shadow:0 8px 24px rgba(0,0,0,.4);pointer-events:none;";
+        document.body.appendChild(note);
+        setTimeout(() => note.remove(), 6000);
     };
 
     beat(false);
