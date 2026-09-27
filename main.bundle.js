@@ -50721,7 +50721,7 @@ window.__nswsTrackQuery = function(trackId) {
             { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4" }
         ];
         const DEVICE_PRESET_ICONS = {
-            low: '<rect x="17" y="3" width="30" height="58" rx="8"/><rect x="21.5" y="7.5" width="21" height="49" rx="4.5" stroke-width="2"/><path d="M14 15v4M14 22v7M50 19v8"/>',
+            low: '<rect x="17" y="5" width="30" height="54" rx="6"/><path d="M28 11h8M29 52h6"/>',
             high: '<rect x="5" y="10" width="54" height="34" rx="3"/><path d="M27 44l-2 10M37 44l2 10M19 54h26"/>',
             ultra: '<rect x="5" y="10" width="54" height="34" rx="3"/><path d="M27 44l-2 10M37 44l2 10M19 54h26"/><path d="M29 16q1.5 9 10 11q-8.5 2-10 11q-1.5-9-10-11q8.5-2 10-11z"/><path d="M46 15q.6 3.4 4 4q-3.4.6-4 4q-.6-3.4-4-4q3.4-.6 4-4z"/>'
         };
