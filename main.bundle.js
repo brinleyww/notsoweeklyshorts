@@ -50092,6 +50092,46 @@ window.__nswsTrackQuery = function(trackId) {
         ,
         Ns = function() {
             C.get(this, ks, "f").innerHTML = "",
+            ( () => {
+                ensureDevicePresetStyle();
+                const renderer = C.get(this, ys, "f")
+                  , pending = C.get(this, Ps, "f")
+                  , settings = C.get(this, bs, "f")
+                  , current = n => pending.get(n) ?? settings.getSetting(n)
+                  , bar = document.createElement("div");
+                bar.className = "device-preset-bar";
+                const buttons = new Map;
+                for (const preset of DEVICE_PRESETS) {
+                    const button = document.createElement("button");
+                    button.className = "button";
+                    button.innerHTML = devicePresetIcon(preset.id);
+                    const label = document.createElement("span");
+                    label.textContent = preset.title;
+                    button.appendChild(label);
+                    button.addEventListener("click", ( () => {
+                        C.get(this, vs, "f").playUIClick();
+                        for (const [k, v] of devicePresetSettings(preset, renderer))
+                            pending.set(k, v);
+                        settings.updateSettings(Array.from(pending));
+                        C.get(this, ws, "f").generateMeshes();
+                        setPolyFxPreset(preset.polyFx);
+                        const scroll = C.get(this, ks, "f").scrollTop;
+                        C.get(this, ms, "m", Ns).call(this);
+                        C.get(this, ks, "f").scrollTop = scroll;
+                    }
+                    ));
+                    bar.appendChild(button);
+                    buttons.set(preset, button);
+                }
+                refreshDevicePresetBar = () => {
+                    const match = matchingDevicePreset(current, renderer);
+                    for (const [preset, button] of buttons)
+                        button.classList.toggle("selected", preset === match);
+                };
+                refreshDevicePresetBar();
+                C.get(this, ks, "f").appendChild(bar);
+            }
+            )(),
             C.get(this, ms, "m", Ds).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Language")),
             C.get(this, ms, "m", Gs).call(this, null, [{
                 title: "العربية",
@@ -50486,26 +50526,12 @@ window.__nswsTrackQuery = function(trackId) {
             )(),
             C.get(this, ms, "m", Ds).call(this, "PolyFX"),
             ( () => {
-                const _storageKey = "_polyfxGraphicsPreset";
                 const _options = [
                     ["Off", "0"], ["Very Low", "5"], ["Balanced", "1"],
                     ["Enhanced", "2"], ["Semi-Real", "3"], ["Photoreal (Ultra)", "4"]
                 ];
-                const _get = () => {
-                    try {
-                        const _v = localStorage.getItem(_storageKey);
-                        return _v != null ? _v : "1";
-                    } catch (e) {
-                        return "1";
-                    }
-                };
-                const _set = value => {
-                    try {
-                        localStorage.setItem(_storageKey, value);
-                    } catch (e) {}
-                    const fx = window.__PolyFX;
-                    if (fx) fx.presetOverride = parseInt(value, 10);
-                };
+                const _get = getPolyFxPreset;
+                const _set = setPolyFxPreset;
                 const _container = C.get(this, ks, "f");
                 const _row = document.createElement("div");
                 _row.className = "setting";
@@ -50524,6 +50550,7 @@ window.__nswsTrackQuery = function(trackId) {
                         for (const _b of _buttons) _b.className = "button";
                         _btn.className = "button selected";
                         _set(_value);
+                        refreshDevicePresetBar?.();
                     }
                     ));
                     _wrap.appendChild(_btn);
@@ -50600,7 +50627,8 @@ window.__nswsTrackQuery = function(trackId) {
                     t.className = "button selected",
                     C.get(this, Ps, "f").set(n, a),
                     C.get(this, bs, "f").updateSettings(Array.from(C.get(this, Ps, "f"))),
-                    null != i && i()
+                    null != i && i(),
+                    refreshDevicePresetBar?.()
                 }
                 )),
                 s.appendChild(t),
@@ -50685,6 +50713,115 @@ window.__nswsTrackQuery = function(trackId) {
             C.get(this, ks, "f").appendChild(n)
         }
         ;
+        const DEVICE_PRESET_STORAGE_KEY = "_nswsDevicePreset";
+        const POLYFX_PRESET_STORAGE_KEY = "_polyfxGraphicsPreset";
+        const DEVICE_PRESETS = [
+            { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", renderScale: "0.75", polyFx: "0" },
+            { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", renderScale: "1", polyFx: "1" },
+            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4" }
+        ];
+        const DEVICE_PRESET_ICONS = {
+            low: '<rect x="17" y="3" width="30" height="58" rx="8"/><rect x="21.5" y="7.5" width="21" height="49" rx="4.5" stroke-width="2"/><path d="M14 15v4M14 22v7M50 19v8"/>',
+            high: '<rect x="5" y="10" width="54" height="34" rx="3"/><path d="M27 44l-2 10M37 44l2 10M19 54h26"/>',
+            ultra: '<rect x="5" y="10" width="54" height="34" rx="3"/><path d="M27 44l-2 10M37 44l2 10M19 54h26"/><path d="M29 16q1.5 9 10 11q-8.5 2-10 11q-1.5-9-10-11q8.5-2 10-11z"/><path d="M46 15q.6 3.4 4 4q-3.4.6-4 4q-.6-3.4-4-4q3.4-.6 4-4z"/>'
+        };
+        function devicePresetIcon(id) {
+            return '<svg class="device-preset-icon" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' + DEVICE_PRESET_ICONS[id] + "</svg>";
+        }
+        // Ultra shadows need a shadow texture larger than some GPUs allow.
+        function devicePresetSettings(preset, renderer) {
+            let shadows = preset.shadows;
+            for (; shadows > 0 && !renderer.isShadowQualitySupported(shadows); )
+                shadows--;
+            return [[R.A.LowPerformanceMode, preset.lowPerformance], [R.A.ShadowQuality, shadows.toString()], [R.A.CloudsEnabled, preset.effects], [R.A.ParticlesEnabled, preset.effects], [R.A.FogEnabled, preset.effects], [R.A.RenderScale, preset.renderScale]];
+        }
+        function getPolyFxPreset() {
+            try {
+                return localStorage.getItem(POLYFX_PRESET_STORAGE_KEY) ?? "1";
+            } catch (e) {
+                return "1";
+            }
+        }
+        function setPolyFxPreset(value) {
+            try {
+                localStorage.setItem(POLYFX_PRESET_STORAGE_KEY, value);
+            } catch (e) {}
+            const fx = window.__PolyFX;
+            if (fx) fx.presetOverride = parseInt(value, 10);
+        }
+        function hasChosenDevicePreset() {
+            try {
+                return null != localStorage.getItem(DEVICE_PRESET_STORAGE_KEY);
+            } catch (e) {
+                return true;
+            }
+        }
+        function matchingDevicePreset(getSetting, renderer) {
+            return DEVICE_PRESETS.find(p => p.polyFx === getPolyFxPreset() && devicePresetSettings(p, renderer).every(([k, v]) => getSetting(k) === v)) ?? null;
+        }
+        let refreshDevicePresetBar = null;
+        function ensureDevicePresetStyle() {
+            if (document.getElementById("nsws-device-preset-style")) return;
+            const style = document.createElement("style");
+            style.id = "nsws-device-preset-style";
+            style.textContent = `
+.device-preset-ui { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; display: flex; flex-direction: column; width: 780px; max-width: calc(100% - 20px); max-height: calc(100% - 20px); background-color: var(--surface-color); pointer-events: auto; }
+.device-preset-ui > h2 { margin: 0; padding: 10px 20px 0 20px; font-size: 38px; text-align: center; color: var(--text-color); }
+.device-preset-ui > h3 { margin: 0; padding: 4px 20px 12px 20px; font-size: 22px; font-weight: normal; text-align: center; color: var(--text-color); opacity: 0.8; }
+.device-preset-ui > .options { display: flex; gap: 12px; padding: 20px; background-color: var(--surface-secondary-color); overflow-y: auto; }
+.device-preset-ui > .options > .button { flex: 1 1 0; min-width: 0; padding: 18px 16px; display: flex; flex-direction: column; align-items: center; gap: 12px; font-size: 28px; }
+.device-preset-ui > .options > .button > .device-preset-icon { width: 110px; height: 110px; pointer-events: none; }
+.device-preset-ui > .options > .button > .hint { font-size: 18px; opacity: 0.8; white-space: normal; text-align: center; }
+@media (max-width: 640px) { .device-preset-ui > .options { flex-direction: column; } .device-preset-ui > .options > .button > .device-preset-icon { width: 64px; height: 64px; } }
+.settings-menu-ui > .container > .device-preset-bar { display: flex; gap: 8px; margin: 10px; }
+.settings-menu-ui > .container > .device-preset-bar > .button { flex: 1 1 0; min-width: 0; height: 64px; padding: 8px 14px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 22px; white-space: nowrap; }
+.settings-menu-ui > .container > .device-preset-bar > .button.selected { background-color: var(--button-hover-color); }
+.settings-menu-ui > .container > .device-preset-bar > .button > .device-preset-icon { flex-shrink: 0; width: 34px; height: 34px; pointer-events: none; }
+.settings-menu-ui > .container > .device-preset-bar > .button > span { overflow: hidden; text-overflow: ellipsis; }
+`;
+            document.head.appendChild(style);
+        }
+        function showDevicePresetPopup(container, audio, renderer, settings, meshes, done) {
+            ensureDevicePresetStyle();
+            const popup = document.createElement("div");
+            popup.className = "device-preset-ui";
+            const title = document.createElement("h2");
+            title.textContent = "Choose your graphics";
+            popup.appendChild(title);
+            const subtitle = document.createElement("h3");
+            subtitle.textContent = "You can change this any time at the top of Settings.";
+            popup.appendChild(subtitle);
+            const options = document.createElement("div");
+            options.className = "options";
+            popup.appendChild(options);
+            for (const preset of DEVICE_PRESETS) {
+                const button = document.createElement("button");
+                button.className = "button";
+                const label = document.createElement("span");
+                label.textContent = preset.title;
+                button.appendChild(label);
+                button.insertAdjacentHTML("beforeend", devicePresetIcon(preset.id));
+                const hint = document.createElement("span");
+                hint.className = "hint";
+                hint.textContent = preset.hint;
+                button.appendChild(hint);
+                button.addEventListener("click", ( () => {
+                    audio.playUIClick();
+                    settings.updateSettings(devicePresetSettings(preset, renderer));
+                    settings.saveSettings();
+                    meshes.generateMeshes();
+                    setPolyFxPreset(preset.polyFx);
+                    try {
+                        localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, preset.id);
+                    } catch (e) {}
+                    container.removeChild(popup);
+                    done();
+                }
+                ));
+                options.appendChild(button);
+            }
+            container.appendChild(popup);
+        }
         const Ws = class {
             constructor(e, t, n, i, r, a, s, o) {
                 ms.add(this),
@@ -50721,6 +50858,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, ks, document.createElement("div"), "f"),
                 C.get(this, ks, "f").className = "container",
                 C.get(this, Ss, "f").appendChild(C.get(this, ks, "f"));
+                const polyFxAtOpen = getPolyFxPreset();
                 const c = document.createElement("div");
                 c.className = "button-wrapper",
                 C.get(this, Ss, "f").appendChild(c),
@@ -50729,6 +50867,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, Es, "f").addEventListener("click", ( () => {
                     n.playUIClick(),
                     r.updateSettings(Array.from(C.get(this, Rs, "f"))),
+                    setPolyFxPreset(polyFxAtOpen),
                     a.generateMeshes(),
                     o()
                 }
@@ -50761,6 +50900,7 @@ window.__nswsTrackQuery = function(trackId) {
                 c.appendChild(C.get(this, Ms, "f")),
                 window.addEventListener("keydown", C.set(this, _s, (e => {
                     "Escape" == e.code && (r.updateSettings(Array.from(C.get(this, Rs, "f"))),
+                    setPolyFxPreset(polyFxAtOpen),
                     a.generateMeshes(),
                     o(),
                     e.preventDefault())
@@ -50769,6 +50909,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, ms, "m", zs).call(this)
             }
             dispose() {
+                refreshDevicePresetBar = null,
                 C.get(this, As, "f").removeChild(C.get(this, Ss, "f")),
                 window.removeEventListener("keydown", C.get(this, _s, "f"))
             }
@@ -53918,21 +54059,24 @@ window.__nswsTrackQuery = function(trackId) {
                     const n = C.get(this, _c, "f");
                     n?.fadeOut(( () => {
                         n.dispose();
-                        const i = () => {
+                        const showMenu = () => {
+                            hasChosenDevicePreset() ? (C.get(this, vc, "m", Yc).call(this),
+                            C.get(this, vc, "m", Qc).call(this)) : (C.get(this, vc, "m", qc).call(this),
+                            C.get(this, vc, "m", Xc).call(this),
+                            showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
+                        }
+                          , i = () => {
                             C.get(this, bc, "f").isUsingSoftwareRenderer ? u.show(e.get("Hardware acceleration is disabled. Performance may be reduced.") + "\n\n" + e.get("Please make sure hardware acceleration is enabled in your browser settings."), e.get("Ok"), ( () => {
-                                C.get(this, vc, "m", Yc).call(this),
-                                C.get(this, vc, "m", Qc).call(this)
+                                showMenu()
                             }
                             )) : C.get(this, xc, "f").shouldShowUpdatePopup() ? (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             C.set(this, Cc, new Ac(C.get(this, kc, "f"),t,e,( () => {
                                 C.get(this, Cc, "f")?.dispose(),
                                 C.set(this, Cc, null, "f"),
-                                C.get(this, vc, "m", Yc).call(this),
-                                C.get(this, vc, "m", Qc).call(this)
+                                showMenu()
                             }
-                            )), "f")) : (C.get(this, vc, "m", Yc).call(this),
-                            C.get(this, vc, "m", Qc).call(this))
+                            )), "f")) : showMenu()
                         }
                         ;
                         Ro() && !_o() || (il ? c.determinismState == Js.Ok ? i() : c.determinismState == Js.AssetsFailed ? (C.get(this, vc, "m", Xc).call(this),
