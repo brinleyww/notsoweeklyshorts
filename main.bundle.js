@@ -51590,24 +51590,6 @@ window.__nswsTrackQuery = function(trackId) {
             }
         }
         ;
-        try {
-            if (void 0 !== window.BroadcastChannel) {
-                const e = new window.BroadcastChannel("polytrack-single-instance");
-                e.addEventListener("message", (t => {
-                    "new-instance" == t.data && il && e.postMessage("conflict"),
-                    "conflict" == t.data && (il = !1)
-                }
-                )),
-                e.postMessage("new-instance"),
-                window.addEventListener("beforeunload", ( () => {
-                    e.close()
-                }
-                ))
-            }
-        } catch (e) {
-            console.error(e)
-        }
-        let il = !0;
         var rl = i(6979)
           , al = {};
         al.styleTagTransform = u(),
@@ -54079,7 +54061,7 @@ window.__nswsTrackQuery = function(trackId) {
                             )), "f")) : showMenu()
                         }
                         ;
-                        Ro() && !_o() || (il ? c.determinismState == Js.Ok ? i() : c.determinismState == Js.AssetsFailed ? (C.get(this, vc, "m", Xc).call(this),
+                        Ro() && !_o() || (c.determinismState == Js.Ok ? i() : c.determinismState == Js.AssetsFailed ? (C.get(this, vc, "m", Xc).call(this),
                         u.show(e.get("Non-deterministic game assets found.") + " " + e.get("Some leaderboard features are disabled.") + "\n\n" + e.get("Please try clearing your browser cache."), e.get("Ok"), ( () => {
                             i()
                         }
@@ -54087,7 +54069,7 @@ window.__nswsTrackQuery = function(trackId) {
                         u.show(e.get("Computer determinism check failed.") + " " + e.get("Some leaderboard features are disabled.") + "\n\n" + e.get("Please try another browser or device."), e.get("Ok"), ( () => {
                             i()
                         }
-                        ))) : u.showNoButtons(e.get("You already have another instance of PolyTrack open.") + "\n\n" + e.get("Please switch to that tab or window to continue.")));
+                        ))));
                         for (let e = 0; e < C.get(this, Dc, "f").length; e++) {
                             const t = C.get(this, Dc, "f")[e];
                             t.classList.add("button-spawn"),
