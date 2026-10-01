@@ -221,8 +221,12 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   fancy Unicode, leetspeak (`n1gg@`), repeated letters, invisible characters, and letters split
   by spaces or symbols (`n i g g e r`, `f.a.g`). Short words (`coon`, `spic`) only match as
   a word of their own, so `raccoon` and `spice` are left alone. Add words to `STRICT` or `WHOLE`.
-- **Limits:** 200 characters, 4 messages at once then one every 1.5 s, no repeats within 20 s,
-  6 chat connections per IP address (only a hash of the address is kept, on the socket).
+- **Limits:** 200 characters, one message a second per player (slow mode; the page holds a
+  quick second message and sends it when allowed), no repeats within 20 s, 6 chat connections
+  per IP address (only a hash of the address is kept, on the socket).
+- **Spam timeouts:** more than 10 messages in 20 s times a player out for 5 s. Each timeout
+  after that doubles (10 s, 20 s, ... up to an hour) until they go 10 minutes without one. The
+  owner is exempt from slow mode and timeouts.
 - **Who is who:** each player is a hash of their random `nsws_visitor` id, never the account
   token. Anyone can type any nickname, but only the owner's key earns the `OWNER` badge. The
   owner clicks a message to delete it, mute its sender (10 minutes, an hour or a day), or

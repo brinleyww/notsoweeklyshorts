@@ -11,9 +11,17 @@ const MAX_TEXT = 200;
 const MAX_NICK = 32;
 const MAX_FRAME = 1024;
 const SOCKETS_PER_IP = 6;
-// Token bucket per socket: BURST messages at once, then one every REFILL_MS.
-const BURST = 4;
-const REFILL_MS = 1500;
+// Slow mode: one message a second per player. The page waits the full second; the server
+// allows a little less so network jitter between two sends doesn't reject the second one.
+const SLOW_MS = 1000;
+const SLOW_SLACK_MS = 150;
+// More than SPAM_MAX messages within SPAM_WINDOW_MS earns a timeout of TIMEOUT_S, doubling
+// with each repeat, until the player has gone STRIKE_RESET_MS since their last timeout ended.
+const SPAM_WINDOW_MS = 20_000;
+const SPAM_MAX = 10;
+const TIMEOUT_S = 5;
+const TIMEOUT_MAX_S = 3600;
+const STRIKE_RESET_MS = 10 * 60_000;
 const REPEAT_MS = 20_000;
 const MUTE_MINUTES = [10, 60, 1440];
 
@@ -34,6 +42,13 @@ function ownerHashes(value) {
     return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => HEX64.test(h)));
 }
 
+function duration(ms) {
+    const seconds = Math.ceil(ms / 1000);
+    if (seconds < 60) return seconds + (seconds === 1 ? " second" : " seconds");
+    const minutes = Math.ceil(seconds / 60);
+    return minutes + (minutes === 1 ? " minute" : " minutes");
+}
+
 async function sha256Hex(text) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -47,6 +62,10 @@ export class ChatRoom extends DurableObject {
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS mutes (uid TEXT PRIMARY KEY, until INTEGER NOT NULL)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS timeouts (uid TEXT PRIMARY KEY, until INTEGER NOT NULL, level INTEGER NOT NULL)");
+        // Per player (uid), not per socket, so several tabs share one limit. Lost if the room
+        // hibernates, which only happens once nobody is sending anything.
+        this.spam = new Map();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -93,6 +112,37 @@ export class ChatRoom extends DurableObject {
         return row && row.until > Date.now() ? row.until : 0;
     }
 
+    // Returns the reply that refuses this message, or null to let it through.
+    checkSpam(uid, text, now) {
+        const timeout = this.sql.exec("SELECT until, level FROM timeouts WHERE uid = ?", uid).toArray()[0];
+        if (timeout && timeout.until > now) {
+            return { t: "timeout", ms: timeout.until - now, text: "You're timed out for " + duration(timeout.until - now) + "." };
+        }
+        let s = this.spam.get(uid);
+        if (!s) {
+            if (this.spam.size > 1000) {
+                for (const [key, old] of this.spam) if (now - old.last > SPAM_WINDOW_MS) this.spam.delete(key);
+            }
+            this.spam.set(uid, s = { last: 0, recent: [], text: "", textAt: 0 });
+        }
+        if (now - s.last < SLOW_MS - SLOW_SLACK_MS) return { t: "slow", ms: SLOW_MS - (now - s.last) };
+        if (text === s.text && now - s.textAt < REPEAT_MS) return { t: "err", text: "You just sent that." };
+        s.recent = s.recent.filter((at) => now - at < SPAM_WINDOW_MS);
+        if (s.recent.length >= SPAM_MAX) {
+            const level = timeout && now - timeout.until < STRIKE_RESET_MS ? timeout.level + 1 : 0;
+            const ms = Math.min(TIMEOUT_S * 2 ** level, TIMEOUT_MAX_S) * 1000;
+            this.sql.exec("INSERT OR REPLACE INTO timeouts (uid, until, level) VALUES (?, ?, ?)", uid, now + ms, level);
+            this.sql.exec("DELETE FROM timeouts WHERE until < ?", now - STRIKE_RESET_MS);
+            s.recent = [];
+            return { t: "timeout", ms, text: "Too many messages. You're timed out for " + duration(ms) + "." };
+        }
+        s.last = now;
+        s.recent.push(now);
+        s.text = text;
+        s.textAt = now;
+        return null;
+    }
+
     async webSocketMessage(ws, raw) {
         if (typeof raw !== "string" || raw.length > MAX_FRAME) return ws.close(1009, "Too large");
         let msg;
@@ -112,10 +162,6 @@ export class ChatRoom extends DurableObject {
                 joined: true,
                 uid: (await sha256Hex("nsws-chat:" + msg.v)).slice(0, 16),
                 owner: !!owner,
-                tokens: BURST,
-                refilled: Date.now(),
-                last: "",
-                lastAt: 0,
             });
             ws.serializeAttachment(me);
             this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() });
@@ -128,16 +174,10 @@ export class ChatRoom extends DurableObject {
             const text = cleanText(msg.text, MAX_TEXT);
             if (!text) return;
             const until = this.mutedUntil(me.uid);
-            if (until) return this.send(ws, { t: "err", text: "You're muted for " + Math.ceil((until - Date.now()) / 60000) + " more minutes." });
+            if (until) return this.send(ws, { t: "err", text: "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
-            me.tokens = Math.min(BURST, me.tokens + (now - me.refilled) / REFILL_MS);
-            me.refilled = now;
-            if (me.tokens < 1 && !me.owner) return this.send(ws, { t: "err", text: "Slow down a little." });
-            if (text === me.last && now - me.lastAt < REPEAT_MS && !me.owner) return this.send(ws, { t: "err", text: "You just sent that." });
-            me.tokens -= 1;
-            me.last = text;
-            me.lastAt = now;
-            ws.serializeAttachment(me);
+            const refused = me.owner ? null : this.checkSpam(me.uid, text, now);
+            if (refused) return this.send(ws, refused);
 
             const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
             const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text) };

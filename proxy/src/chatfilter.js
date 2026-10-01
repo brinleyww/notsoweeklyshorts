@@ -7,18 +7,17 @@
 // enough to sit inside innocent words (raccoon, spice, Pakistan), so they are only caught
 // as a word of their own, optionally plural.
 const STRICT = [
-    "nigger", "nigga", "niggah", "niggaz", "nigguh", "niggur", "nigglet", "niggress", "negroid",
+    "snigger", "nigger", "nigga", "niggah", "niggaz", "nigguh", "niggur", "nigglet", "niggress", "negroid",
     "faggot", "faggit", "fagget", "faggy", "tranny", "trannie", "shemale", "chingchong", "chinkie",
     "wetback", "raghead", "towelhead", "sandnigger", "zipperhead", "jigaboo", "jiggaboo", "jigabo",
     "porchmonkey", "junglebunny", "golliwog", "heilhitler", "siegheil", "gasthejews", "whitepower", "retarded",
 ];
 const WHOLE = [
-    "nig", "nigg", "niga", "nigah", "nigar", "niger", "negro", "fag", "fagg", "dyke", "chink", "gook",
+    "nig", "nigg", "niga", "nigah", "nigar", "negro", "fag", "fagg", "dyke", "chink", "gook",
     "spic", "kike", "kyke", "coon", "paki", "wog", "gyppo", "troon", "retard", "redskin", "injun", "sambo",
     "beaner", "darkie", "darky",
 ];
-// Real words a strict word would otherwise catch (snigger, niggardly), as skeleton text around the match.
-const ALLOW_BEFORE = { nigger: /s$/ };
+// Real words a strict word would otherwise catch (niggardly), as skeleton text after the match.
 const ALLOW_AFTER = { nigga: /^rd/ };
 
 // What each skeleton character can stand for. Letters always stand for themselves.
@@ -113,19 +112,14 @@ function skeletonWords(text) {
     return words;
 }
 
-function allowed(word, skeleton, start, end) {
-    const before = ALLOW_BEFORE[word];
-    const after = ALLOW_AFTER[word];
-    return (before && before.test(skeleton.slice(0, start))) || (after && after.test(skeleton.slice(end)));
-}
-
 function strictMatches(skeleton) {
     const found = [];
     STRICT_RE.lastIndex = 0;
     let m;
     while ((m = STRICT_RE.exec(skeleton))) {
         const word = STRICT_SORTED[m.slice(1).findIndex((g) => g !== undefined)];
-        if (!allowed(word, skeleton, m.index, m.index + m[0].length)) found.push([m.index, m.index + m[0].length]);
+        const end = m.index + m[0].length;
+        if (!ALLOW_AFTER[word]?.test(skeleton.slice(end))) found.push([m.index, end]);
         if (m[0].length === 0) STRICT_RE.lastIndex++;
     }
     return found;

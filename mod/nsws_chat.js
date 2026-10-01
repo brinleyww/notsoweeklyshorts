@@ -12,6 +12,7 @@
     const MAX_TEXT = 200;
     const MAX_LINES = 200;
     const PING_MS = 30000;
+    const SLOW_MS = 1000;
     const MIN_W = 260;
     const MIN_H = 180;
     const MARGIN = 8;
@@ -104,6 +105,12 @@
     let retryDelay = 2000;
     let me = null;
     let unread = 0;
+    // Sending waits until readyAt: one second after each message (slow mode), or the end of a timeout.
+    let readyAt = 0;
+    let timedOut = false;
+    let lastText = "";
+    let sendTimer = null;
+    let waitTimer = null;
     let layout = loadLayout();
     let shown = null;
 
@@ -302,7 +309,39 @@
             for (const line of log.querySelectorAll(".m")) if (line.dataset.uid === data.uid) line.remove();
         } else if (data.t === "err") {
             addSystem(data.text);
+        } else if (data.t === "slow" || data.t === "timeout") {
+            // The server refused the last message, so it goes back in the box.
+            if (!input.value) input.value = lastText;
+            readyAt = Math.max(readyAt, Date.now() + Number(data.ms || SLOW_MS));
+            if (data.t === "timeout") {
+                timedOut = true;
+                addSystem(data.text);
+            } else {
+                sendTimer = setTimeout(trySend, readyAt - Date.now());
+            }
+            showWait();
         }
+    }
+
+    function waitLabel(ms) {
+        const seconds = Math.ceil(ms / 1000);
+        return seconds < 60 ? seconds + "s" : Math.floor(seconds / 60) + "m " + (seconds % 60) + "s";
+    }
+
+    function showWait() {
+        clearInterval(waitTimer);
+        const tick = () => {
+            const left = readyAt - Date.now();
+            if (left <= 0 || !root) {
+                clearInterval(waitTimer);
+                timedOut = false;
+                if (socket?.readyState === WebSocket.OPEN) setStatus("");
+                return;
+            }
+            setStatus(timedOut ? "Timed out for spamming: " + waitLabel(left) : "Slow mode: one message a second");
+        };
+        tick();
+        waitTimer = setInterval(tick, 250);
     }
 
     async function connect() {
@@ -348,6 +387,8 @@
 
     function disconnect() {
         clearTimeout(retryTimer);
+        clearTimeout(sendTimer);
+        clearInterval(waitTimer);
         clearInterval(pingTimer);
         const ws = socket;
         socket = null;
@@ -357,16 +398,33 @@
         } catch {}
     }
 
-    function submit(e) {
-        e.preventDefault();
+    function trySend() {
+        clearTimeout(sendTimer);
+        if (!input) return;
         const text = input.value.replace(/\s+/g, " ").trim();
         if (!text) return;
         if (socket?.readyState !== WebSocket.OPEN || !me) {
             addSystem("Not connected yet.");
             return;
         }
-        send({ t: "msg", text: text.slice(0, MAX_TEXT), nick: readNickname() });
+        const wait = me.owner ? 0 : readyAt - Date.now();
+        if (wait > 0) {
+            // Slow mode sends it the moment it may; after a timeout the player presses Enter again.
+            if (!timedOut) sendTimer = setTimeout(trySend, wait);
+            showWait();
+            return;
+        }
+        lastText = text.slice(0, MAX_TEXT);
+        send({ t: "msg", text: lastText, nick: readNickname() });
         input.value = "";
+        readyAt = Date.now() + SLOW_MS;
+        clearInterval(waitTimer);
+        setStatus("");
+    }
+
+    function submit(e) {
+        e.preventDefault();
+        trySend();
     }
 
     // Pointer drags for moving (the title bar) and resizing (the corner grip).
