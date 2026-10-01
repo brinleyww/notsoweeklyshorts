@@ -83,3 +83,4 @@ class_name = "ChatRoom"
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["ChatRoom"]
+
