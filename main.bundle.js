@@ -50414,6 +50414,60 @@ window.__nswsTrackQuery = function(trackId) {
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Pause"), KeyBind.Pause),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle FPS counter"), KeyBind.ToggleFpsCounter),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle spectator camera"), KeyBind.ToggleSpectatorCamera),
+            C.get(this, ms, "m", Ds).call(this, "Chat"),
+            ( () => {
+                const _key = "_nswsChatEnabled";
+                const _isOn = () => window.__nswsChat ? window.__nswsChat.isEnabled() : (() => {
+                    try {
+                        return localStorage.getItem(_key) === "true";
+                    } catch (e) {
+                        return false;
+                    }
+                })();
+                const _setOn = on => {
+                    if (window.__nswsChat) return window.__nswsChat.setEnabled(on);
+                    try {
+                        localStorage.setItem(_key, on ? "true" : "false");
+                    } catch (e) {}
+                };
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Universal chat";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _offBtn = document.createElement("button");
+                _offBtn.className = "button";
+                _offBtn.textContent = "Off";
+                const _onBtn = document.createElement("button");
+                _onBtn.className = "button";
+                _onBtn.textContent = "On";
+                const _refresh = () => {
+                    const _enabled = _isOn();
+                    _offBtn.classList.toggle("selected", !_enabled);
+                    _onBtn.classList.toggle("selected", _enabled);
+                };
+                _offBtn.addEventListener("click", ( () => {
+                    C.get(this, vs, "f").playUIClick();
+                    _setOn(false);
+                    _refresh();
+                }
+                ));
+                _onBtn.addEventListener("click", ( () => {
+                    C.get(this, vs, "f").playUIClick();
+                    _setOn(true);
+                    _refresh();
+                }
+                ));
+                _refresh();
+                _wrap.appendChild(_offBtn);
+                _wrap.appendChild(_onBtn);
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
+            )(),
             C.get(this, ms, "m", Ds).call(this, "Clips"),
             ( () => {
                 const _container = C.get(this, ks, "f");

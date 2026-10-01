@@ -74,3 +74,12 @@ class_name = "RunChecker"
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["AntiCheat", "RunChecker"]
+
+# The universal chat (src/chat.js): every player's WebSocket and the last messages.
+[[durable_objects.bindings]]
+name = "CHAT"
+class_name = "ChatRoom"
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["ChatRoom"]

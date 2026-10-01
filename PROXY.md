@@ -207,6 +207,27 @@ Referer header. Privacy tools strip that, so real players would be blocked. Noth
 outside a browser has to tell the truth about any header, which is why the checks
 above are done on the run itself.
 
+## Chat
+
+`mod/nsws_chat.js` is the universal chat window. It is off until a player turns on
+Settings → Chat → "Universal chat" (`_nswsChatEnabled` in `localStorage`). It opens a
+WebSocket to `/nsws/chat`, which only the allowed sites can open, and every player shares one
+`ChatRoom` Durable Object (`proxy/src/chat.js`, binding `CHAT`, migration `v3`). The room
+uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 60 messages.
+
+- **Censoring happens in the Worker** (`proxy/src/chatfilter.js`), on every message and
+  nickname, before anything is stored or sent. Swearing is allowed; slurs are replaced with
+  `#`. The filter folds text before matching: accents, look-alike letters from other scripts,
+  fancy Unicode, leetspeak (`n1gg@`), repeated letters, invisible characters, and letters split
+  by spaces or symbols (`n i g g e r`, `f.a.g`). Short words (`coon`, `spic`) only match as
+  a word of their own, so `raccoon` and `spice` are left alone. Add words to `STRICT` or `WHOLE`.
+- **Limits:** 200 characters, 4 messages at once then one every 1.5 s, no repeats within 20 s,
+  6 chat connections per IP address (only a hash of the address is kept, on the socket).
+- **Who is who:** each player is a hash of their random `nsws_visitor` id, never the account
+  token. Anyone can type any nickname, but only the owner's key earns the `OWNER` badge. The
+  owner clicks a message to delete it, mute its sender (10 minutes, an hour or a day), or
+  delete everything they sent.
+
 ## Privacy note
 
 Leaderboard reads for Not So Weekly Shorts tracks, submissions and profile

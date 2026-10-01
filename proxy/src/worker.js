@@ -3,8 +3,9 @@
 
 import { TrafficStats, readBeat, describeClient } from "./traffic.js";
 import { AntiCheat, RunChecker } from "./anticheat.js";
+import { ChatRoom } from "./chat.js";
 
-export { TrafficStats, AntiCheat, RunChecker };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -769,6 +770,15 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     return plain(404, "Not found", origin);
 }
 
+// Browsers send the page's Origin on a WebSocket upgrade too, so only the site can open the chat.
+async function handleChat(request, env, fromSite, origin) {
+    if (!fromSite || (request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
+    if (!env.CHAT) return plain(503, "Chat is off", origin);
+    const headers = new Headers(request.headers);
+    headers.set("X-Chat-Ip", (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16));
+    return env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request(request, { headers }));
+}
+
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -779,6 +789,7 @@ export default {
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
             const requestOrigin = request.headers.get("Origin");
             const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
+            if (url.pathname === TRAFFIC_PREFIX + "chat") return handleChat(request, env, fromSite, requestOrigin);
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
             if (!fromSite && url.pathname === TRAFFIC_PREFIX + "beat") return forbidden();
             const origin = requestOrigin || "*";
