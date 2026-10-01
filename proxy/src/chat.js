@@ -1,5 +1,6 @@
 // The universal chat: one Durable Object ("global") holding every player's WebSocket, using
-// the hibernation API so idle sockets cost nothing. Messages are censored (chatfilter.js)
+// the hibernation API so idle sockets cost nothing. Networks whose firewall blocks WebSockets
+// get the same chat over plain HTTPS long-polling instead (see poll and sendHttp). Messages are censored (chatfilter.js)
 // before they are stored or sent. IP addresses are never stored; only a hash is kept on
 // each socket to cap connections per address.
 
@@ -10,7 +11,10 @@ const HISTORY = 60;
 const MAX_TEXT = 200;
 const MAX_NICK = 32;
 const MAX_FRAME = 1024;
-const SOCKETS_PER_IP = 6;
+// A whole school shares one IP address, so the per-address cap is only there to stop one
+// machine opening thousands of sockets. The real per-player cap (one per tab) is on the uid.
+const SOCKETS_PER_IP = 100;
+const SOCKETS_PER_UID = 6;
 // Slow mode: one message a second per player. The page waits the full second; the server
 // allows a little less so network jitter between two sends doesn't reject the second one.
 const SLOW_MS = 1000;
@@ -35,6 +39,15 @@ const PING_SAME_MS = 15_000;
 const REACT_BUDGET = 12;
 const REACT_WINDOW_MS = 15_000;
 const MAX_REACTION_KINDS = 20;
+// Long-polling, for players whose firewall blocks WebSockets. A poll waits up to POLL_WAIT_MS
+// for something to happen; a polling player counts as online until POLL_GONE_MS after their last
+// request. The room keeps the last EVENTS_KEPT events for pollers to catch up on, and a player
+// can have at most POLLS_PER_UID polls waiting (one per tab), the same caps as for sockets.
+const POLL_WAIT_MS = 20_000;
+const POLL_GONE_MS = 45_000;
+const EVENTS_KEPT = 200;
+const POLLS_PER_UID = SOCKETS_PER_UID;
+const POLLS_PER_IP = SOCKETS_PER_IP;
 // One emoji, as Unicode lists it (a flag, a skin tone or a family count as one).
 const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 
@@ -74,6 +87,13 @@ function duration(ms) {
     return minutes + (minutes === 1 ? " minute" : " minutes");
 }
 
+function jsonReply(data, status = 200) {
+    return new Response(JSON.stringify(data), {
+        status,
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    });
+}
+
 async function sha256Hex(text) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -97,12 +117,20 @@ export class ChatRoom extends DurableObject {
             nick TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (msg, emoji, uid))`);
         // Per player (uid), not per socket, so several tabs share one limit. See recentActivity.
         this.spam = new Map();
+        // Long-polling state. It lives in memory only: the room can't hibernate while a poll is
+        // waiting, and when it does restart the new epoch tells every poller to reload.
+        this.epoch = crypto.randomUUID();
+        this.seq = 0;
+        this.events = [];
+        this.waiters = new Set();
+        this.pollers = new Map();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
     // Called by the Worker with the socket's upgrade request, after it has checked the origin.
     async fetch(request) {
         const ipHash = request.headers.get("X-Chat-Ip") || "";
+        if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return this.http(request, ipHash);
         const open = this.ctx.getWebSockets().filter((ws) => ws.deserializeAttachment()?.ip === ipHash);
         if (ipHash && open.length >= SOCKETS_PER_IP) return new Response("Too many chat windows", { status: 429 });
         const pair = new WebSocketPair();
@@ -118,6 +146,7 @@ export class ChatRoom extends DurableObject {
     }
 
     broadcast(data) {
+        this.pushEvent(data);
         const text = JSON.stringify(data);
         for (const ws of this.ctx.getWebSockets()) {
             if (!ws.deserializeAttachment()?.joined) continue;
@@ -130,7 +159,111 @@ export class ChatRoom extends DurableObject {
     online() {
         let n = 0;
         for (const ws of this.ctx.getWebSockets()) if (ws.deserializeAttachment()?.joined) n++;
-        return n;
+        return n + this.livePollers().length;
+    }
+
+    // Players on the long-polling fallback who have been heard from recently.
+    livePollers() {
+        const now = Date.now();
+        const live = [];
+        for (const [uid, p] of this.pollers) {
+            if (now - p.seen > POLL_GONE_MS) this.pollers.delete(uid);
+            else live.push({ uid, nick: p.nick });
+        }
+        return live;
+    }
+
+    // Who a hello (WebSocket) or an HTTP request says it is. Null if the visitor id is malformed.
+    async identify(body) {
+        if (!HEX32.test(body?.v ?? "")) return null;
+        const owner = HEX64.test(body.key ?? "") && ownerHashes(this.env.OWNER_KEY_HASHES).has(await sha256Hex("nsws-owner:" + body.key));
+        return {
+            uid: (await sha256Hex("nsws-chat:" + body.v)).slice(0, 16),
+            owner: !!owner,
+            nick: censor(cleanText(body.nick, MAX_NICK)) || "Guest",
+        };
+    }
+
+    // Every broadcast is also kept, numbered, for pollers, and wakes the polls that are waiting.
+    pushEvent(data) {
+        this.events.push({ seq: ++this.seq, data });
+        if (this.events.length > EVENTS_KEPT) this.events.splice(0, this.events.length - EVENTS_KEPT);
+        for (const waiter of [...this.waiters]) waiter.wake();
+    }
+
+    // What a poller at `after` hasn't seen yet, or null if they have fallen too far behind (or are
+    // from before a restart) and must reload everything.
+    eventsAfter(epoch, after) {
+        if (epoch !== this.epoch || !Number.isSafeInteger(after) || after < 0 || after > this.seq) return null;
+        if (after === this.seq) return [];
+        if (!this.events.length || after < this.events[0].seq - 1) return null;
+        return this.events.filter((e) => e.seq > after).map((e) => e.data);
+    }
+
+    // The long-polling fallback: POST /poll waits for news, POST /send carries what the page would
+    // send over the socket. Both carry the player's id (and the owner's key) in every request,
+    // since there is no socket to remember them on.
+    async http(request, ipHash) {
+        if (request.method !== "POST") return jsonReply({ error: "Method not allowed" }, 405);
+        const text = await request.text();
+        if (text.length > MAX_FRAME * 2) return jsonReply({ error: "Too large" }, 413);
+        let body;
+        try {
+            body = JSON.parse(text);
+        } catch {
+            return jsonReply({ error: "Bad request" }, 400);
+        }
+        const me = await this.identify(body);
+        if (!me) return jsonReply({ error: "Bad request" }, 400);
+        const path = new URL(request.url).pathname;
+        if (path.endsWith("/poll")) return this.poll(me, body, ipHash);
+        if (path.endsWith("/send")) return this.sendHttp(me, body);
+        return jsonReply({ error: "Not found" }, 404);
+    }
+
+    touch(me) {
+        this.pollers.set(me.uid, { nick: me.nick, seen: Date.now() });
+    }
+
+    async poll(me, body, ipHash) {
+        let mine = 0;
+        let sameIp = 0;
+        for (const w of this.waiters) {
+            if (w.uid === me.uid) mine++;
+            if (ipHash && w.ip === ipHash) sameIp++;
+        }
+        if (mine >= POLLS_PER_UID || sameIp >= POLLS_PER_IP) return jsonReply({ error: "Too many chat windows" }, 429);
+        this.touch(me);
+        const ready = this.eventsAfter(body.epoch, body.after);
+        if (ready === null) {
+            return jsonReply({ epoch: this.epoch, seq: this.seq, init: { you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() } });
+        }
+        if (ready.length) return jsonReply({ epoch: this.epoch, seq: this.seq, events: ready });
+        const after = body.after;
+        return new Promise((resolve) => {
+            const waiter = {
+                uid: me.uid,
+                ip: ipHash,
+                wake: () => {
+                    clearTimeout(waiter.timer);
+                    this.waiters.delete(waiter);
+                    resolve(jsonReply({ epoch: this.epoch, seq: this.seq, events: this.eventsAfter(this.epoch, after) ?? [] }));
+                },
+            };
+            waiter.timer = setTimeout(waiter.wake, POLL_WAIT_MS);
+            this.waiters.add(waiter);
+        });
+    }
+
+    async sendHttp(me, body) {
+        const msg = body?.msg;
+        if (!msg || typeof msg !== "object" || msg.t === "hello" || JSON.stringify(msg).length > MAX_FRAME) {
+            return jsonReply({ error: "Bad request" }, 400);
+        }
+        this.touch(me);
+        const replies = [];
+        await this.handle(me, msg, (data) => replies.push(data), () => this.touch(me));
+        return jsonReply({ replies });
     }
 
     history() {
@@ -158,13 +291,13 @@ export class ChatRoom extends DurableObject {
         return ONE_EMOJI.test(bare + "\uFE0F") ? bare + "\uFE0F" : null;
     }
 
-    react(ws, me, msg) {
+    react(reply, me, msg) {
         const now = Date.now();
         const e = this.reactionEmoji(msg.e);
         if (!e || !Number.isSafeInteger(msg.id)) return;
         if (!this.sql.exec("SELECT 1 FROM messages WHERE id = ?", msg.id).toArray().length) return;
         const until = this.mutedUntil(me.uid);
-        if (until) return this.send(ws, { t: "err", text: "You're muted for " + duration(until - now) + "." });
+        if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
         if (this.sql.exec("SELECT 1 FROM reactions WHERE msg = ? AND emoji = ? AND uid = ?", msg.id, e, me.uid).toArray().length) {
             this.sql.exec("DELETE FROM reactions WHERE msg = ? AND emoji = ? AND uid = ?", msg.id, e, me.uid);
             this.broadcast({ t: "react", id: msg.id, e, uid: me.uid, nick: me.nick, on: false });
@@ -172,15 +305,15 @@ export class ChatRoom extends DurableObject {
         }
         if (!me.owner) {
             const timeout = this.sql.exec("SELECT until FROM timeouts WHERE uid = ?", me.uid).toArray()[0];
-            if (timeout && timeout.until > now) return this.send(ws, { t: "err", text: "You're timed out for " + duration(timeout.until - now) + "." });
+            if (timeout && timeout.until > now) return reply({ t: "err", text: "You're timed out for " + duration(timeout.until - now) + "." });
             const s = this.activity(me.uid, now);
             s.reacts = s.reacts.filter((at) => now - at < REACT_WINDOW_MS);
-            if (s.reacts.length >= REACT_BUDGET) return this.send(ws, { t: "err", text: "Slow down on the reactions." });
+            if (s.reacts.length >= REACT_BUDGET) return reply({ t: "err", text: "Slow down on the reactions." });
             s.reacts.push(now);
         }
         const kinds = this.sql.exec("SELECT DISTINCT emoji FROM reactions WHERE msg = ?", msg.id).toArray();
         if (kinds.length >= MAX_REACTION_KINDS && !kinds.some((k) => k.emoji === e)) {
-            return this.send(ws, { t: "err", text: "That message can't take any more different reactions." });
+            return reply({ t: "err", text: "That message can't take any more different reactions." });
         }
         this.sql.exec("INSERT INTO reactions (msg, emoji, uid, nick, at) VALUES (?, ?, ?, ?, ?)", msg.id, e, me.uid, me.nick, now);
         this.broadcast({ t: "react", id: msg.id, e, uid: me.uid, nick: me.nick, on: true });
@@ -193,6 +326,7 @@ export class ChatRoom extends DurableObject {
             const a = ws.deserializeAttachment();
             if (a?.joined && a.nick) seen.set(a.uid, a.nick);
         }
+        for (const p of this.livePollers()) if (!seen.has(p.uid)) seen.set(p.uid, p.nick);
         return [...seen].map(([uid, nick]) => ({ uid, nick }));
     }
 
@@ -308,41 +442,43 @@ export class ChatRoom extends DurableObject {
         if (msg?.t === "hello") {
             if (me.joined) return;
             // A random id the page keeps in localStorage; only its hash is ever shown.
-            if (!HEX32.test(msg.v ?? "")) return ws.close(1008, "Bad hello");
-            const owner = HEX64.test(msg.key ?? "") && ownerHashes(this.env.OWNER_KEY_HASHES).has(await sha256Hex("nsws-owner:" + msg.key));
-            Object.assign(me, {
-                joined: true,
-                uid: (await sha256Hex("nsws-chat:" + msg.v)).slice(0, 16),
-                owner: !!owner,
-                nick: censor(cleanText(msg.nick, MAX_NICK)) || "Guest",
-            });
+            const who = await this.identify(msg);
+            if (!who) return ws.close(1008, "Bad hello");
+            const mine = this.ctx.getWebSockets().filter((other) => other !== ws && other.deserializeAttachment()?.uid === who.uid).length;
+            if (mine >= SOCKETS_PER_UID) return ws.close(1008, "Too many chat windows");
+            Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
             this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() });
             return;
         }
         if (!me.joined) return;
+        return this.handle(me, msg, (data) => this.send(ws, data), () => ws.serializeAttachment(me));
+    }
 
-        if (msg?.t === "who") return this.send(ws, { t: "who", users: this.users() });
-        if (msg?.t === "react") return this.react(ws, me, msg);
+    // One message from a player, over either transport. `reply` answers only them; `save`
+    // stores a changed nickname wherever that transport keeps it.
+    async handle(me, msg, reply, save) {
+        if (msg?.t === "who") return reply({ t: "who", users: this.users() });
+        if (msg?.t === "react") return this.react(reply, me, msg);
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
             if (!text) return;
             const until = this.mutedUntil(me.uid);
-            if (until) return this.send(ws, { t: "err", text: "You're muted for " + duration(until - Date.now()) + "." });
+            if (until) return reply({ t: "err", text: "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
             const refused = me.owner ? null : this.checkSpam(me.uid, text, now);
-            if (refused) return this.send(ws, refused);
+            if (refused) return reply(refused);
 
             const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
             if (nick !== me.nick) {
                 me.nick = nick;
-                ws.serializeAttachment(me);
+                save();
             }
             const wanted = this.findPings(text, me);
             const pings = me.owner ? wanted : this.limitPings(me.uid, wanted, now);
             if (pings.length < wanted.length) {
-                this.send(ws, { t: "err", text: "Too many pings - " + (wanted.length - pings.length) + " of them didn't notify anyone." });
+                reply({ t: "err", text: "Too many pings - " + (wanted.length - pings.length) + " of them didn't notify anyone." });
             }
             const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text), pings, reactions: [] };
             message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
@@ -361,7 +497,7 @@ export class ChatRoom extends DurableObject {
         } else if (msg?.t === "mute" && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && MUTE_MINUTES.includes(msg.minutes)) {
             this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + msg.minutes * 60000);
             this.sql.exec("DELETE FROM mutes WHERE until < ?", Date.now());
-            this.send(ws, { t: "err", text: "Muted for " + msg.minutes + " minutes." });
+            reply({ t: "err", text: "Muted for " + msg.minutes + " minutes." });
         } else if (msg?.t === "clear") {
             this.sql.exec("DELETE FROM messages WHERE uid = ?", String(msg.uid ?? ""));
             this.sql.exec("DELETE FROM reactions WHERE uid = ? OR msg NOT IN (SELECT id FROM messages)", String(msg.uid ?? ""));

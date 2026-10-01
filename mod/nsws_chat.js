@@ -11,6 +11,15 @@
     const PING_SOUND_KEY = "_nswsChatPingSound";
     const RECENT_EMOJI_KEY = "_nswsChatRecentEmoji";
     const WS_URL = API.replace(/^http/, "ws") + "nsws/chat";
+    // The same chat over plain HTTPS long-polling, for networks (often school or work) whose
+    // firewall blocks WebSockets but lets ordinary requests like the leaderboard's through.
+    const HTTP_URL = API + "nsws/chat/";
+    const TRANSPORT_KEY = "_nswsChatHttpAt";
+    const WS_OPEN_TIMEOUT_MS = 8000;
+    const WS_FAILS_BEFORE_HTTP = 2;
+    const HTTP_REMEMBER_MS = 12 * 3600000;
+    const POLL_ABORT_MS = 35000;
+    const SEND_ABORT_MS = 15000;
     const EMOJI_URL = "mod/nsws_emoji.json";
     const MAX_TEXT = 200;
     const MAX_ITEMS = 200;
@@ -269,6 +278,9 @@
     let suggestBox = null;
     let panel = null;
     let socket = null;
+    // The long-polling connection, when WebSockets are blocked: { epoch, seq, key, controllers }.
+    let http = null;
+    let wsFails = 0;
     let keepAliveTimer = null;
     let retryTimer = null;
     let retryDelay = 2000;
@@ -1036,17 +1048,17 @@
         addItem({ kind: "sys", text });
     }
 
-    function send(data) {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+    function connected() {
+        return !!me && (socket?.readyState === WebSocket.OPEN || !!http);
     }
 
-    function onServer(event) {
-        let data;
-        try {
-            data = JSON.parse(event.data);
-        } catch {
-            return;
-        }
+    function send(data) {
+        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+        else if (http && me) httpSend(data);
+    }
+
+    function onServer(data) {
+        if (!data || typeof data !== "object") return;
         if (data.t === "init") {
             me = data.you;
             items = data.messages.map((m) => ({ kind: "msg", m }));
@@ -1104,7 +1116,7 @@
             if (left <= 0 || !root) {
                 clearInterval(waitTimer);
                 timedOut = false;
-                if (socket?.readyState === WebSocket.OPEN) setStatus("");
+                if (connected()) setStatus("");
                 return;
             }
             setStatus(timedOut ? "Timed out for spamming: " + waitLabel(left) : "Slow mode: one message a second");
@@ -1115,20 +1127,32 @@
 
     async function connect() {
         clearTimeout(retryTimer);
-        if (!root || socket) return;
+        if (!root || socket || http) return;
+        // This network blocked WebSockets recently: go straight to HTTPS, and check quietly
+        // whether sockets work again so the next visit can use them.
+        if (httpRecently()) {
+            probeWebSocket();
+            return connectHttp();
+        }
         setStatus("Connecting...");
         let ws;
         try {
             ws = new WebSocket(WS_URL);
         } catch {
-            return retry();
+            return wsFailed();
         }
         socket = ws;
+        let ready = false;
+        // Some filters hold a blocked socket open forever instead of refusing it.
+        const openTimer = setTimeout(() => {
+            if (socket === ws && ws.readyState === WebSocket.CONNECTING) ws.close();
+        }, WS_OPEN_TIMEOUT_MS);
         ws.addEventListener("open", async () => {
+            clearTimeout(openTimer);
             retryDelay = 2000;
             setStatus("");
             const hello = { t: "hello", v: visitorId(), nick: readNickname() };
-            const key = await window.__nswsOwner?.token?.().catch(() => null);
+            const key = await ownerKey();
             if (key) hello.key = key;
             if (socket === ws) ws.send(JSON.stringify(hello));
             keepAliveTimer = setInterval(() => {
@@ -1136,14 +1160,44 @@
             }, KEEPALIVE_MS);
         });
         ws.addEventListener("message", (e) => {
-            if (socket === ws && e.data !== "pong") onServer(e);
+            if (socket !== ws || e.data === "pong") return;
+            let data;
+            try {
+                data = JSON.parse(e.data);
+            } catch {
+                return;
+            }
+            onServer(data);
+            if (data?.t === "init") {
+                ready = true;
+                wsFails = 0;
+                storageSet(TRANSPORT_KEY, "");
+            }
         });
         ws.addEventListener("close", () => {
+            clearTimeout(openTimer);
             if (socket !== ws) return;
             socket = null;
             clearInterval(keepAliveTimer);
-            retry();
+            // A socket that worked and then dropped just reconnects; one that never got going
+            // counts towards falling back to HTTPS.
+            if (ready) retry();
+            else wsFailed();
         });
+    }
+
+    async function ownerKey() {
+        try {
+            return (await window.__nswsOwner?.token?.()) || null;
+        } catch {
+            return null;
+        }
+    }
+
+    function wsFailed() {
+        socket = null;
+        if (++wsFails >= WS_FAILS_BEFORE_HTTP) return connectHttp();
+        retry();
     }
 
     function retry() {
@@ -1153,6 +1207,104 @@
         retryDelay = Math.min(retryDelay * 2, 30000);
     }
 
+    function httpRecently() {
+        const at = Number(storageGet(TRANSPORT_KEY));
+        return at > 0 && Date.now() - at < HTTP_REMEMBER_MS;
+    }
+
+    // Opens a socket and closes it straight away. If it opens, this network allows WebSockets
+    // again and the next visit tries them first. It never says hello, so it never joins.
+    function probeWebSocket() {
+        let ws;
+        try {
+            ws = new WebSocket(WS_URL);
+        } catch {
+            return;
+        }
+        const timer = setTimeout(() => ws.close(), WS_OPEN_TIMEOUT_MS);
+        ws.addEventListener("open", () => {
+            clearTimeout(timer);
+            storageSet(TRANSPORT_KEY, "");
+            ws.close();
+        });
+        ws.addEventListener("close", () => clearTimeout(timer));
+    }
+
+    async function connectHttp() {
+        clearTimeout(retryTimer);
+        if (!root || http) return;
+        const session = { epoch: null, seq: 0, key: null, controllers: new Set(), offline: false };
+        http = session;
+        setStatus("Connecting...");
+        session.key = await ownerKey();
+        pollLoop(session);
+    }
+
+    // Plain POSTs with a text/plain body, so the browser sends them as-is with no CORS preflight.
+    async function httpPost(session, path, extra, timeout) {
+        const controller = new AbortController();
+        session.controllers.add(controller);
+        const timer = setTimeout(() => controller.abort(), timeout);
+        try {
+            const body = { v: visitorId(), nick: readNickname(), ...extra };
+            if (session.key) body.key = session.key;
+            const res = await fetch(HTTP_URL + path, {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify(body),
+                cache: "no-store",
+                signal: controller.signal,
+            });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            return await res.json();
+        } finally {
+            clearTimeout(timer);
+            session.controllers.delete(controller);
+        }
+    }
+
+    // Each poll waits on the server until something happens (or about 20 s pass), then the next
+    // one goes out at once. The server answers a stale or missing position with a full reload.
+    async function pollLoop(session) {
+        let delay = 2000;
+        while (http === session) {
+            try {
+                const data = await httpPost(session, "poll", { epoch: session.epoch, after: session.seq }, POLL_ABORT_MS);
+                if (http !== session) return;
+                delay = 2000;
+                session.epoch = data.epoch;
+                session.seq = data.seq;
+                if (data.init) {
+                    onServer({ t: "init", ...data.init });
+                    storageSet(TRANSPORT_KEY, String(Date.now()));
+                }
+                if (data.init || session.offline) {
+                    session.offline = false;
+                    setStatus("");
+                }
+                for (const event of data.events || []) onServer(event);
+            } catch {
+                if (http !== session) return;
+                session.offline = true;
+                setStatus("Chat is offline. Reconnecting...");
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                delay = Math.min(delay * 2, 30000);
+            }
+        }
+    }
+
+    async function httpSend(data) {
+        const session = http;
+        try {
+            const reply = await httpPost(session, "send", { msg: data }, SEND_ABORT_MS);
+            if (http === session) for (const r of reply.replies || []) onServer(r);
+        } catch {
+            if (http !== session || data.t !== "msg") return;
+            if (input && !input.value) input.value = data.text;
+            addSystem("Couldn't send that. Try again.");
+        }
+    }
+
     function disconnect() {
         clearTimeout(retryTimer);
         clearTimeout(sendTimer);
@@ -1160,10 +1312,15 @@
         clearInterval(keepAliveTimer);
         const ws = socket;
         socket = null;
+        const session = http;
+        http = null;
         me = null;
+        wsFails = 0;
+        retryDelay = 2000;
         try {
             ws?.close();
         } catch {}
+        for (const c of session?.controllers || []) c.abort();
     }
 
     function trySend() {
@@ -1171,7 +1328,7 @@
         if (!input) return;
         const text = replaceShortcodes(input.value).replace(/\s+/g, " ").trim();
         if (!text) return;
-        if (socket?.readyState !== WebSocket.OPEN || !me) {
+        if (!connected()) {
             addSystem("Not connected yet.");
             return;
         }

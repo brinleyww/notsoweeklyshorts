@@ -37,6 +37,7 @@ const MIN_SALT_LENGTH = 16;
 const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
+const MAX_CHAT_BODY = 4096;
 const MAX_TRACK_SYNC_BODY = 400_000;
 // How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
 // seen yet is always classified at once.
@@ -777,12 +778,33 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
 }
 
 // Browsers send the page's Origin on a WebSocket upgrade too, so only the site can open the chat.
-async function handleChat(request, env, fromSite, origin) {
-    if (!fromSite || (request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
+// /chat is the WebSocket. /chat/poll and /chat/send are the same chat over plain HTTPS, for
+// networks whose firewall blocks WebSockets; the page sends them as text/plain so no preflight
+// is needed.
+async function handleChat(request, url, env, fromSite, origin) {
+    if (!fromSite) return forbidden();
+    const isSocket = url.pathname === TRAFFIC_PREFIX + "chat";
+    if (isSocket && (request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
+    if (!isSocket && url.pathname !== TRAFFIC_PREFIX + "chat/poll" && url.pathname !== TRAFFIC_PREFIX + "chat/send") {
+        return plain(404, "Not found", origin);
+    }
+    if (!isSocket && request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (!env.CHAT) return plain(503, "Chat is off", origin);
-    const headers = new Headers(request.headers);
-    headers.set("X-Chat-Ip", (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16));
-    return env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request(request, { headers }));
+    const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+    const room = env.CHAT.get(env.CHAT.idFromName("global"));
+    if (isSocket) {
+        const headers = new Headers(request.headers);
+        headers.set("X-Chat-Ip", ip);
+        return room.fetch(new Request(request, { headers }));
+    }
+    if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+    const text = await readSmallBody(request, MAX_CHAT_BODY);
+    if (text == null) return plain(413, "Too large", origin);
+    const reply = await room.fetch(new Request(url.toString(), { method: "POST", headers: { "X-Chat-Ip": ip }, body: text }));
+    return new Response(reply.body, {
+        status: reply.status,
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(origin) },
+    });
 }
 
 export default {
@@ -795,7 +817,9 @@ export default {
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
             const requestOrigin = request.headers.get("Origin");
             const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
-            if (url.pathname === TRAFFIC_PREFIX + "chat") return handleChat(request, env, fromSite, requestOrigin);
+            if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
+                return handleChat(request, url, env, fromSite, requestOrigin);
+            }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
             if (!fromSite && url.pathname === TRAFFIC_PREFIX + "beat") return forbidden();
             const origin = requestOrigin || "*";

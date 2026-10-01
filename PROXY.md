@@ -217,6 +217,19 @@ WebSocket to `/nsws/chat`, which only the allowed sites can open, and every play
 `ChatRoom` Durable Object (`proxy/src/chat.js`, binding `CHAT`, migration `v3`). The room
 uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 60 messages.
 
+- **Firewalls that block WebSockets** (common on school and work networks) still allow plain
+  HTTPS requests like the leaderboard's, so the chat falls back to long-polling over HTTPS.
+  If two sockets in a row never get going (refused, or not open within 8 s), the page switches
+  to `POST /nsws/chat/poll`, which waits up to 20 s for news, and `POST /nsws/chat/send`, which
+  carries anything the page would send on the socket. Both go to the same `ChatRoom`, so the two
+  kinds of player see and ping each other, and every limit is the same. Bodies are `text/plain`
+  so there is no CORS preflight. Each request carries the `nsws_visitor` id (and the owner key)
+  because there is no socket to remember them on. The page remembers the fallback for 12 hours
+  (`_nswsChatHttpAt`) and starts on HTTPS next time, while quietly opening a test socket; if that
+  opens, the next visit tries WebSockets first again. Polls have the same caps as sockets. Pollers keep the room awake (it can't
+  hibernate while a poll is waiting), which costs Durable Object duration and two Worker
+  requests per poll, about every 20 s per idle polling player.
+
 - **Censoring happens in the Worker** (`proxy/src/chatfilter.js`), on every message and
   nickname, before anything is stored or sent. Swearing is allowed; slurs are replaced with
   `#`. The filter folds text before matching: accents, look-alike letters from other scripts,
@@ -225,7 +238,8 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   a word of their own, so `raccoon` and `spice` are left alone. Add words to `STRICT` or `WHOLE`.
 - **Limits:** 200 characters, one message a second per player (slow mode; the page holds a
   quick second message and sends it when allowed), no repeats within 20 s, 6 chat connections
-  per IP address (only a hash of the address is kept, on the socket).
+  per player (one per tab) and 100 per IP address, since a whole school shares one address (only
+  a hash of the address is kept, on the socket).
 - **Spam timeouts:** more than 10 messages in 20 s times a player out for 5 s. Each timeout
   after that doubles (10 s, 20 s, ... up to an hour) until they go 10 minutes without one. The
   owner is exempt from slow mode and timeouts.
