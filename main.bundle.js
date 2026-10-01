@@ -50468,6 +50468,39 @@ window.__nswsTrackQuery = function(trackId) {
                 _container.appendChild(_row);
             }
             )(),
+            ( () => {
+                const _chat = window.__nswsChat;
+                if (!_chat || !_chat.fonts) return;
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Chat font";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _buttons = [];
+                for (const _font of _chat.fonts) {
+                    const _btn = document.createElement("button");
+                    _btn.className = _font.id === _chat.getFont() ? "button selected" : "button";
+                    _btn.textContent = _font.title;
+                    // Each choice is shown in its own font.
+                    _btn.style.fontFamily = _font.preview;
+                    _btn.style.fontStyle = _font.style;
+                    _btn.addEventListener("click", ( () => {
+                        C.get(this, vs, "f").playUIClick();
+                        for (const _b of _buttons) _b.className = "button";
+                        _btn.className = "button selected";
+                        _chat.setFont(_font.id);
+                    }
+                    ));
+                    _wrap.appendChild(_btn);
+                    _buttons.push(_btn);
+                }
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
+            )(),
             C.get(this, ms, "m", Ds).call(this, "Clips"),
             ( () => {
                 const _container = C.get(this, ks, "f");

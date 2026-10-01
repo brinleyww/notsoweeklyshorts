@@ -248,10 +248,22 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   opens a searchable panel by category. The list is `mod/nsws_emoji.json`, built by
   `proxy/tools/build-emoji.js` from emojibase-data and capped at Emoji 15.0 so phones and PCs
   can draw everything. Windows has no flag emoji, so flags use the bundled
-  `mod/TwemojiCountryFlags.woff2` (Twemoji, CC-BY 4.0). The Worker keeps the invisible joiners
-  inside emoji like 👨‍💻 but strips them anywhere else.
-- **Layout:** messages from one player within 5 minutes share one header (avatar, name, time),
-  like Discord; messages of only emoji show large.
+  `mod/fonts/TwemojiCountryFlags.woff2`. The Worker keeps the invisible joiners inside emoji
+  like 👨‍💻 but strips them anywhere else.
+- **Fonts:** Settings → Chat → "Chat font" changes only the chat: PolyTrack (the game's font,
+  the default), Discord (Figtree, upright like Discord's gg sans, with Twemoji emoji as on
+  Discord), Rounded (Nunito) or System (the device's own UI font). The game's stylesheet puts
+  ForcedSquare italic on every element, so the chat's elements inherit from the window instead.
+  Bundled fonts are in `mod/fonts/` (credits and licenses in `LICENSES.txt`) and only download
+  when used.
+- **Layout:** messages from one player within 5 minutes share one header (name, tag, time),
+  like Discord, with a thin bar in the player's colour down the group's left edge; messages of
+  only emoji show large.
+- **Reactions:** hovering a message (tapping, on a phone) shows its time, three quick reactions
+  (recently used, else 👍 😂 🔥), the reaction picker and, for the owner, the moderation tools.
+  Clicking a reaction under a message adds or removes yours. The Worker accepts only a single
+  emoji (`\p{RGI_Emoji}`), stores one spelling of each, allows 12 new reactions per player per
+  15 s and 20 different emoji per message, and drops a message's reactions with it.
 
 ## Privacy note
 
