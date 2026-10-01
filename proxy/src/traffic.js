@@ -109,6 +109,13 @@ export class TrafficStats extends DurableObject {
         return n;
     }
 
+    // People on the site right now: several tabs from one browser count once.
+    playersOnline(now) {
+        const visitors = new Set();
+        for (const s of this.online.values()) if (!s.ended && s.expires > now) visitors.add(s.visitor);
+        return visitors.size;
+    }
+
     noteMinute(now, online) {
         const minute = Math.floor(now / 60_000);
         const last = this.ring[this.ring.length - 1];
@@ -224,6 +231,7 @@ export class TrafficStats extends DurableObject {
         for (const [id, other] of this.online) {
             if (other.ended || other.expires < now - 10 * 60_000) this.online.delete(id);
         }
+        return this.playersOnline(now);
     }
 
     // Unflushed seconds of everyone online, so the dashboard's running total is exact.

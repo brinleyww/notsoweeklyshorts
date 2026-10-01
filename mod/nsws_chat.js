@@ -8,38 +8,71 @@
     const ENABLED_KEY = "_nswsChatEnabled";
     const LAYOUT_KEY = "_nswsChatLayout";
     const VISITOR_KEY = "nsws_visitor";
+    const PING_SOUND_KEY = "_nswsChatPingSound";
+    const RECENT_EMOJI_KEY = "_nswsChatRecentEmoji";
     const WS_URL = API.replace(/^http/, "ws") + "nsws/chat";
+    const EMOJI_URL = "mod/nsws_emoji.json";
     const MAX_TEXT = 200;
-    const MAX_LINES = 200;
-    const PING_MS = 30000;
+    const MAX_ITEMS = 200;
+    const KEEPALIVE_MS = 30000;
     const SLOW_MS = 1000;
+    const PING_SOUND_GAP_MS = 4000;
+    const WHO_MS = 5000;
+    // Messages from one player closer together than this share one name header.
+    const GROUP_MS = 5 * 60000;
+    const RECENT_EMOJI = 27;
+    const MAX_SUGGEST = 12;
+    // Messages of only emoji, up to this many, are shown large.
+    const JUMBO_MAX = 27;
+    const TITLE_MARK = "(@) ";
     const MIN_W = 260;
     const MIN_H = 180;
     const MARGIN = 8;
+    const LOG_BG = [0x21, 0x2b, 0x58];
+    const EMOJI_FONT = "'Twemoji Country Flags','Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji'";
+    const icon = (...codes) => String.fromCodePoint(...codes);
+    const TAB_ICONS = [0x1f600, 0x1f44b, 0x1f43b, 0x1f354, 0x1f697, 0x26bd, 0x1f4a1, 0x1f523, 0x1f3c1];
 
     const CSS = `
-#nsws-chat{position:fixed;z-index:90;display:flex;flex-direction:column;min-width:${MIN_W}px;min-height:${MIN_H}px;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:ForcedSquare,Arial,sans-serif;font-size:17px;box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:auto;touch-action:none;}
+/* Country flags for Windows, which has none: Twemoji (CC-BY 4.0, Twitter and contributors) from
+   country-flag-emoji-polyfill (MIT, TalkJS). Only downloaded when a flag is on screen. */
+@font-face{font-family:'Twemoji Country Flags';src:url(mod/TwemojiCountryFlags.woff2) format('woff2');unicode-range:U+1F1E6-1F1FF,U+1F3F4,U+E0061-E007F;font-display:swap;}
+#nsws-chat{position:fixed;z-index:90;display:flex;flex-direction:column;min-width:${MIN_W}px;min-height:${MIN_H}px;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:ForcedSquare,Arial,${EMOJI_FONT},sans-serif;font-size:16px;box-shadow:0 8px 28px rgba(0,0,0,.45);pointer-events:auto;touch-action:none;}
 #nsws-chat.min{min-height:0;height:auto!important;width:230px!important;min-width:0;}
-#nsws-chat.min>.log,#nsws-chat.min>.status,#nsws-chat.min>form,#nsws-chat.min>.grip{display:none;}
-#nsws-chat.full{left:0!important;top:0!important;width:100%!important;height:100%!important;z-index:10002;font-size:20px;}
+#nsws-chat.min>:not(.bar){display:none!important;}
+#nsws-chat.full{left:0!important;top:0!important;width:100%!important;height:100%!important;z-index:10002;font-size:19px;}
 #nsws-chat.full>.grip{display:none;}
 #nsws-chat>.bar{display:flex;align-items:center;gap:6px;height:36px;flex-shrink:0;padding:0 4px 0 10px;background:var(--button-color,#112052);cursor:move;user-select:none;}
 #nsws-chat.full>.bar{cursor:default;}
 #nsws-chat>.bar>.title{flex-shrink:0;}
-#nsws-chat>.bar>.online{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:14px;opacity:.7;}
+#nsws-chat>.bar>.online{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px;opacity:.75;}
+#nsws-chat>.bar>.online::before{content:"";display:inline-block;width:8px;height:8px;margin-right:5px;border-radius:50%;background:#3ba55d;vertical-align:1px;}
+#nsws-chat>.bar>.online:empty::before{display:none;}
 #nsws-chat>.bar>.unread{display:none;min-width:20px;padding:0 6px;border-radius:10px;background:#e0464b;font-size:14px;line-height:20px;text-align:center;}
 #nsws-chat.min>.bar>.unread.on{display:block;}
+#nsws-chat>.bar>.unread.ping{background:#f0b232;color:#1a1a1a;}
 #nsws-chat>.bar>button{width:30px;height:28px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:18px;line-height:28px;cursor:pointer;}
 #nsws-chat>.bar>button:hover{background:var(--button-hover-color,#334b77);}
-#nsws-chat>.log{flex:1;min-height:0;overflow-y:auto;padding:6px 10px;background:var(--surface-secondary-color,#212b58);user-select:text;touch-action:pan-y;overflow-wrap:anywhere;}
-#nsws-chat>.log>.m{padding:2px 0;line-height:1.3;}
-#nsws-chat>.log>.m>.time{margin-right:6px;font-size:.75em;opacity:.45;}
-#nsws-chat>.log>.m>.nick{font-weight:bold;}
-#nsws-chat>.log>.m>.badge{margin-left:5px;padding:0 5px;background:#e6a23c;color:#1a1a1a;font-size:.7em;vertical-align:middle;}
-#nsws-chat>.log>.m.mine>.nick{text-decoration:underline;}
-#nsws-chat>.log>.sys{padding:2px 0;font-style:italic;opacity:.6;}
-#nsws-chat>.log>.m.mod{cursor:pointer;}
-#nsws-chat>.log>.tools{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 6px;}
+#nsws-chat.ping-flash{animation:nsws-chat-ping 1.8s ease-out;}
+@keyframes nsws-chat-ping{0%,35%{box-shadow:0 0 0 3px #f0b232,0 8px 28px rgba(0,0,0,.45);}100%{box-shadow:0 0 0 0 rgba(240,178,50,0),0 8px 28px rgba(0,0,0,.45);}}
+#nsws-chat>.log{flex:1;min-height:0;overflow-y:auto;padding:4px 0 8px;background:var(--surface-secondary-color,#212b58);user-select:text;touch-action:pan-y;overflow-wrap:anywhere;}
+#nsws-chat .m{position:relative;padding:1px 10px 1px 52px;line-height:1.35;}
+#nsws-chat .m:hover{background:rgba(0,0,0,.14);}
+#nsws-chat .m.head{margin-top:10px;padding-top:3px;}
+#nsws-chat .m>.avatar{position:absolute;left:10px;top:5px;width:32px;height:32px;border-radius:50%;color:#161b33;font-weight:bold;font-size:16px;line-height:32px;text-align:center;user-select:none;overflow:hidden;}
+#nsws-chat .m>.meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 7px;}
+#nsws-chat .m>.meta>.nick{font-weight:bold;}
+#nsws-chat .m>.meta>.badge{align-self:center;padding:0 5px;background:#e6a23c;color:#1a1a1a;font-size:.65em;line-height:1.5;}
+#nsws-chat .m>.meta>.time{font-size:.7em;opacity:.5;}
+#nsws-chat .m>.stamp{position:absolute;left:0;top:3px;width:46px;font-size:.62em;line-height:1.9;text-align:center;opacity:0;user-select:none;}
+#nsws-chat .m:hover>.stamp{opacity:.45;}
+#nsws-chat .m>.text.jumbo{font-family:${EMOJI_FONT},sans-serif;font-size:2.3em;line-height:1.2;}
+#nsws-chat .m.pinged{background:rgba(240,178,50,.12);box-shadow:inset 3px 0 0 #f0b232;}
+#nsws-chat .m.pinged:hover{background:rgba(240,178,50,.18);}
+#nsws-chat .m.mod{cursor:pointer;}
+#nsws-chat .mention{padding:0 2px;background:rgba(88,101,242,.35);color:#d4d8ff;}
+#nsws-chat>.log>.sys{padding:6px 14px 2px;font-size:.8em;font-style:italic;text-align:center;opacity:.6;}
+#nsws-chat>.log>.tools{display:flex;flex-wrap:wrap;gap:4px;padding:3px 10px 6px 52px;}
 #nsws-chat>.log>.tools>button,#nsws-chat>form>button{border:0;background:var(--button-color,#112052);color:inherit;font:inherit;font-size:14px;padding:3px 8px;cursor:pointer;}
 #nsws-chat>.log>.tools>button:hover,#nsws-chat>form>button:hover{background:var(--button-hover-color,#334b77);}
 #nsws-chat>.status{flex-shrink:0;padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color,#192042);opacity:.8;}
@@ -48,6 +81,32 @@
 #nsws-chat>form>input{flex:1;min-width:0;padding:6px 8px;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;user-select:text;}
 #nsws-chat>form>input:focus{box-shadow:inset 0 0 0 2px var(--button-hover-color,#334b77);}
 #nsws-chat>form>button{font-size:16px;padding:0 14px;}
+#nsws-chat>form>button.emoji-button{padding:0 6px;background:transparent;font-family:${EMOJI_FONT},sans-serif;font-size:20px;filter:grayscale(1);opacity:.75;}
+#nsws-chat>form>button.emoji-button:hover,#nsws-chat>form>button.emoji-button.on{background:transparent;filter:none;opacity:1;transform:scale(1.12);}
+#nsws-chat>.suggest{position:absolute;left:6px;right:6px;bottom:48px;z-index:2;display:none;flex-direction:column;max-height:min(300px,calc(100% - 90px));background:var(--surface-tertiary-color,#192042);box-shadow:0 -4px 16px rgba(0,0,0,.4);}
+#nsws-chat>.suggest.on{display:flex;}
+#nsws-chat>.suggest>.head{flex-shrink:0;padding:7px 10px 5px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;opacity:.65;}
+#nsws-chat>.suggest>.list{overflow-y:auto;padding-bottom:4px;}
+#nsws-chat>.suggest>.list>div{display:flex;align-items:center;gap:9px;padding:5px 10px;cursor:pointer;}
+#nsws-chat>.suggest>.list>div.sel{background:var(--button-hover-color,#334b77);}
+#nsws-chat>.suggest>.list>div>.e{width:24px;font-family:${EMOJI_FONT},sans-serif;font-size:20px;text-align:center;}
+#nsws-chat>.suggest>.list>div>.dot{width:12px;height:12px;margin:0 6px;border-radius:50%;}
+#nsws-chat>.emoji-panel{position:absolute;right:6px;bottom:48px;z-index:3;display:none;flex-direction:column;width:min(352px,calc(100% - 12px));height:min(340px,calc(100% - 90px));background:var(--surface-tertiary-color,#192042);box-shadow:0 -4px 20px rgba(0,0,0,.5);}
+#nsws-chat>.emoji-panel.on{display:flex;}
+#nsws-chat>.emoji-panel>input{flex-shrink:0;margin:8px 8px 6px;padding:6px 8px;border:0;outline:0;background:var(--surface-secondary-color,#212b58);color:inherit;font:inherit;font-size:15px;user-select:text;}
+#nsws-chat>.emoji-panel>.tabs{display:flex;flex-shrink:0;gap:2px;padding:0 6px 6px;overflow-x:auto;}
+#nsws-chat>.emoji-panel>.tabs>button{flex:1 0 auto;min-width:28px;height:28px;padding:0;border:0;background:transparent;font-family:${EMOJI_FONT},sans-serif;font-size:17px;cursor:pointer;filter:grayscale(1);opacity:.6;}
+#nsws-chat>.emoji-panel>.tabs>button:hover,#nsws-chat>.emoji-panel>.tabs>button.on{background:var(--button-hover-color,#334b77);filter:none;opacity:1;}
+#nsws-chat>.emoji-panel>.grid{position:relative;flex:1;min-height:0;overflow-y:auto;padding:0 6px 6px;touch-action:pan-y;}
+#nsws-chat>.emoji-panel>.grid>section>h4{position:sticky;top:0;z-index:1;margin:0;padding:6px 4px 4px;background:var(--surface-tertiary-color,#192042);color:rgba(255,255,255,.7);font-size:12px;font-weight:normal;letter-spacing:.04em;text-transform:uppercase;}
+#nsws-chat>.emoji-panel>.grid>section>.set{display:grid;grid-template-columns:repeat(auto-fill,minmax(34px,1fr));}
+#nsws-chat>.emoji-panel>.grid>section>.set>span{display:flex;align-items:center;justify-content:center;height:34px;font-family:${EMOJI_FONT},sans-serif;font-size:22px;cursor:pointer;}
+#nsws-chat>.emoji-panel>.grid>section>.set>span:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat>.emoji-panel>.grid>.none{padding:20px;text-align:center;opacity:.6;}
+#nsws-chat>.emoji-panel>.preview{display:flex;flex-shrink:0;align-items:center;gap:8px;height:40px;padding:0 10px;background:var(--surface-secondary-color,#212b58);font-size:14px;overflow:hidden;white-space:nowrap;}
+#nsws-chat>.emoji-panel>.preview>.big{font-family:${EMOJI_FONT},sans-serif;font-size:24px;}
+#nsws-chat-toast{position:fixed;z-index:91;max-width:320px;padding:8px 12px 8px 10px;border-left:3px solid #f0b232;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:ForcedSquare,Arial,${EMOJI_FONT},sans-serif;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;overflow-wrap:anywhere;transition:opacity .6s;}
+#nsws-chat-toast.out{opacity:0;}
 #nsws-chat>.grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.35) 50%);}
 `;
 
@@ -84,13 +143,76 @@
         return id;
     }
 
-    function nickColor(uid) {
-        return "hsl(" + (parseInt(uid.slice(0, 4), 16) % 360) + ",75%,72%)";
+    function luminance(rgb) {
+        const [r, g, b] = rgb.map((v) => {
+            v /= 255;
+            return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     }
 
-    function clock(at) {
-        const d = new Date(at);
-        return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+    function hslToRgb(h, s, l) {
+        const k = (n) => (n + h / 30) % 12;
+        const a = s * Math.min(l, 1 - l);
+        return [0, 8, 4].map((n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))));
+    }
+
+    // Each player's own colour, from the random hex of their id, so everyone sees the same one.
+    // Greys get some colour, and dark colours are lightened (keeping their hue) until they reach
+    // 4.5:1 contrast on the chat's dark blue.
+    const colors = new Map();
+    function nickColor(uid) {
+        if (colors.has(uid)) return colors.get(uid);
+        const [r, g, b] = [0, 2, 4].map((i) => (parseInt(uid.slice(i, i + 2), 16) || 0) / 255);
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        let l = (max + min) / 2;
+        const d = max - min;
+        let s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+        let h = d === 0 ? (parseInt(uid.slice(6, 8), 16) || 0) * 360 / 256
+            : max === r ? 60 * (((g - b) / d) % 6) : max === g ? 60 * ((b - r) / d + 2) : 60 * ((r - g) / d + 4);
+        h = (h + 360) % 360;
+        s = Math.max(s, 0.5);
+        const target = 4.5 * (luminance(LOG_BG) + 0.05) - 0.05;
+        let rgb = hslToRgb(h, s, l);
+        while (luminance(rgb) < target && l < 0.97) rgb = hslToRgb(h, s, l = Math.min(0.97, l + 0.02));
+        const hex = "#" + rgb.map((v) => v.toString(16).padStart(2, "0")).join("");
+        colors.set(uid, hex);
+        return hex;
+    }
+
+    function firstGrapheme(text) {
+        if (window.Intl?.Segmenter) {
+            for (const { segment } of new Intl.Segmenter().segment(text)) return segment;
+        }
+        return [...text][0] || "?";
+    }
+
+    function sameDay(a, b) {
+        return new Date(a).toDateString() === new Date(b).toDateString();
+    }
+
+    function shortTime(at) {
+        return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
+
+    function headerTime(at) {
+        const now = Date.now();
+        if (sameDay(at, now)) return "Today at " + shortTime(at);
+        if (sameDay(at, now - 86400000)) return "Yesterday at " + shortTime(at);
+        return new Date(at).toLocaleDateString() + " " + shortTime(at);
+    }
+
+    let jumboTest = null;
+    let emojiCount = null;
+    try {
+        jumboTest = new RegExp("^(?:\\p{RGI_Emoji}|\\s)+$", "v");
+        emojiCount = new RegExp("\\p{RGI_Emoji}", "gv");
+    } catch {}
+
+    function isJumbo(text) {
+        if (!jumboTest || !jumboTest.test(text)) return false;
+        return (text.match(emojiCount) || []).length <= JUMBO_MAX;
     }
 
     let root = null;
@@ -99,12 +221,28 @@
     let statusLine = null;
     let onlineLabel = null;
     let unreadBadge = null;
+    let minButton = null;
+    let fullButton = null;
+    let bellButton = null;
+    let emojiButton = null;
+    let suggestBox = null;
+    let panel = null;
     let socket = null;
-    let pingTimer = null;
+    let keepAliveTimer = null;
     let retryTimer = null;
     let retryDelay = 2000;
     let me = null;
+    let items = [];
     let unread = 0;
+    let mentions = 0;
+    let suggest = { kind: null, items: [], index: 0 };
+    let users = [];
+    let usersAt = 0;
+    let toast = null;
+    let audio = null;
+    let lastChime = 0;
+    // The page title from before a ping marked it, or null while it isn't marked.
+    let titleBefore = null;
     // Sending waits until readyAt: one second after each message (slow mode), or the end of a timeout.
     let readyAt = 0;
     let timedOut = false;
@@ -114,13 +252,77 @@
     let layout = loadLayout();
     let shown = null;
 
+    // { groups: [{ name, emojis: [{ e, names, words }] }], byName: Map }, loaded on first use.
+    let emoji = null;
+    let emojiLoading = null;
+
+    function loadEmoji() {
+        if (emoji || emojiLoading) return emojiLoading;
+        emojiLoading = fetch(EMOJI_URL).then((r) => r.json()).then((groups) => {
+            const byName = new Map();
+            const all = [];
+            for (const g of groups) {
+                g.emojis = g.emojis.map(([e, names, words], i) => {
+                    const entry = { e, names: names.split(" "), words, order: all.length + i };
+                    for (const name of entry.names) if (!byName.has(name)) byName.set(name, e);
+                    return entry;
+                });
+                all.push(...g.emojis);
+            }
+            emoji = { groups, all, byName };
+            return emoji;
+        }).catch(() => {
+            emojiLoading = null;
+            return null;
+        });
+        return emojiLoading;
+    }
+
+    function recentEmoji() {
+        try {
+            const list = JSON.parse(storageGet(RECENT_EMOJI_KEY));
+            return Array.isArray(list) ? list.filter((e) => typeof e === "string").slice(0, RECENT_EMOJI) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    function useEmoji(e) {
+        storageSet(RECENT_EMOJI_KEY, JSON.stringify([e, ...recentEmoji().filter((x) => x !== e)].slice(0, RECENT_EMOJI)));
+    }
+
+    function emojiName(e) {
+        return emoji?.all.find((x) => x.e === e)?.names[0] ?? "";
+    }
+
+    // ":sob:" becomes the emoji itself, wherever it is in the text.
+    function replaceShortcodes(text) {
+        if (!emoji) return text;
+        return text.replace(/:([a-z0-9_+-]+):/gi, (whole, name) => {
+            const e = emoji.byName.get(name.toLowerCase());
+            if (!e) return whole;
+            useEmoji(e);
+            return e;
+        });
+    }
+
+    function insertAtCaret(text, from, to) {
+        const start = from ?? input.selectionStart ?? input.value.length;
+        const end = to ?? input.selectionEnd ?? start;
+        const value = input.value.slice(0, start) + text + input.value.slice(end);
+        if ([...value].length > MAX_TEXT) return;
+        input.value = value;
+        const pos = start + text.length;
+        input.setSelectionRange(pos, pos);
+    }
+
     function loadLayout() {
         let saved = null;
         try {
             saved = JSON.parse(storageGet(LAYOUT_KEY));
         } catch {}
-        const w = Math.max(MIN_W, Number(saved?.w) || 360);
-        const h = Math.max(MIN_H, Number(saved?.h) || 320);
+        const w = Math.max(MIN_W, Number(saved?.w) || 380);
+        const h = Math.max(MIN_H, Number(saved?.h) || 340);
         return {
             w,
             h,
@@ -158,19 +360,19 @@
         root.style.height = shown.h + "px";
         root.classList.toggle("min", layout.min);
         root.classList.toggle("full", layout.full && !layout.min);
-        minButton.textContent = layout.min ? "\u25a1" : "\u2013";
+        minButton.textContent = layout.min ? icon(0x25a1) : icon(0x2013);
         minButton.title = layout.min ? "Restore" : "Minimize";
-        fullButton.textContent = layout.full ? "\u2750" : "\u26f6";
+        fullButton.textContent = layout.full ? icon(0x2750) : icon(0x26f6);
         fullButton.title = layout.full ? "Exit fullscreen" : "Fullscreen";
     }
 
-    let minButton = null;
-    let fullButton = null;
-
     function setMinimized(min) {
         layout.min = min;
-        if (!min) {
-            unread = 0;
+        if (min) {
+            hideSuggest();
+            closePanel();
+        } else {
+            unread = mentions = 0;
             updateUnread();
         }
         applyLayout();
@@ -180,7 +382,11 @@
 
     function setFullscreen(full) {
         layout.full = full;
-        if (full) layout.min = false;
+        if (full) {
+            layout.min = false;
+            unread = mentions = 0;
+            updateUnread();
+        }
         applyLayout();
         saveLayout();
         scrollToEnd(true);
@@ -188,8 +394,385 @@
 
     function updateUnread() {
         if (!unreadBadge) return;
-        unreadBadge.textContent = unread > 99 ? "99+" : String(unread);
-        unreadBadge.classList.toggle("on", unread > 0);
+        const count = mentions || unread;
+        unreadBadge.textContent = (mentions ? "@" : "") + (count > 99 ? "99+" : String(count));
+        unreadBadge.classList.toggle("on", count > 0);
+        unreadBadge.classList.toggle("ping", mentions > 0);
+    }
+
+    function updateOnline() {
+        if (!onlineLabel) return;
+        const n = window.__nswsPlayersOnline;
+        onlineLabel.textContent = Number.isSafeInteger(n) ? n + " online" : "";
+    }
+
+    function pingSoundOn() {
+        return storageGet(PING_SOUND_KEY) !== "false";
+    }
+
+    function updateBell() {
+        const on = pingSoundOn();
+        bellButton.textContent = icon(on ? 0x1f514 : 0x1f515);
+        bellButton.title = on ? "Ping sound: on" : "Ping sound: off";
+    }
+
+    // A soft two-note chime through its own AudioContext; nothing touches the game's audio.
+    function playPing() {
+        try {
+            audio = audio || new AudioContext();
+            if (audio.state === "suspended") audio.resume();
+            const t = audio.currentTime;
+            const gain = audio.createGain();
+            gain.connect(audio.destination);
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(0.1, t + 0.015);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+            for (const [freq, delay] of [[880, 0], [1320, 0.09]]) {
+                const osc = audio.createOscillator();
+                osc.type = "sine";
+                osc.frequency.value = freq;
+                osc.connect(gain);
+                osc.start(t + delay);
+                osc.stop(t + 0.42);
+            }
+        } catch {}
+    }
+
+    // Never takes focus, opens the window or catches clicks, so driving carries on untouched.
+    function notifyPing(m) {
+        if (layout.min) {
+            mentions++;
+            updateUnread();
+            showToast(m);
+        }
+        root.classList.remove("ping-flash");
+        void root.offsetWidth;
+        root.classList.add("ping-flash");
+        if (pingSoundOn() && Date.now() - lastChime > PING_SOUND_GAP_MS) {
+            lastChime = Date.now();
+            playPing();
+        }
+        if (document.visibilityState === "hidden" && titleBefore == null) {
+            titleBefore = document.title;
+            document.title = TITLE_MARK + (titleBefore || "PolyTrack");
+        }
+    }
+
+    function showToast(m) {
+        toast?.remove();
+        toast = document.createElement("div");
+        toast.id = "nsws-chat-toast";
+        const who = document.createElement("b");
+        who.textContent = m.nick;
+        who.style.color = nickColor(m.uid);
+        toast.append(who, " pinged you: ", m.text.length > 90 ? m.text.slice(0, 90) + "..." : m.text);
+        document.body.appendChild(toast);
+        const bar = root.getBoundingClientRect();
+        const below = bar.bottom + 6 + toast.offsetHeight <= window.innerHeight;
+        toast.style.left = Math.max(0, Math.min(bar.left, window.innerWidth - toast.offsetWidth)) + "px";
+        toast.style.top = (below ? bar.bottom + 6 : Math.max(0, bar.top - 6 - toast.offsetHeight)) + "px";
+        const shownToast = toast;
+        setTimeout(() => shownToast.classList.add("out"), 5000);
+        setTimeout(() => shownToast.remove(), 5600);
+    }
+
+    function pingsMe(m) {
+        return !!me && m.uid !== me.uid && (m.pings || []).some((p) => p.uid === me.uid || p.uid === "*");
+    }
+
+    function appendText(el, text, pings) {
+        const nicks = (pings || []).map((p) => p.nick).filter(Boolean).sort((a, b) => b.length - a.length);
+        if (!nicks.length) return el.append(text);
+        const re = new RegExp("@(?:" + nicks.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "giu");
+        let at = 0;
+        for (const match of text.matchAll(re)) {
+            el.append(text.slice(at, match.index));
+            const mention = document.createElement("span");
+            mention.className = "mention";
+            mention.textContent = match[0];
+            el.appendChild(mention);
+            at = match.index + match[0].length;
+        }
+        el.append(text.slice(at));
+    }
+
+    // What the text before the caret is asking to complete: ":so" (emoji) or "@na" (a player).
+    function completionQuery() {
+        const before = input.value.slice(0, input.selectionStart ?? input.value.length);
+        const colon = /(^|[\s([{"'])(:([a-z0-9_+-]{2,32}))$/i.exec(before);
+        if (colon) return { kind: "emoji", at: before.length - colon[2].length, query: colon[3].toLowerCase() };
+        const at = before.lastIndexOf("@");
+        if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]))) return null;
+        const query = before.slice(at + 1);
+        return query.length > 32 || /^\s/.test(query) ? null : { kind: "mention", at, query: query.toLowerCase() };
+    }
+
+    // Discord's order: names that start with the query, then names with a word that does, then
+    // names that contain it, then emoji whose description does; shorter names first within each.
+    function emojiMatches(query, limit) {
+        const scored = [];
+        for (const entry of emoji.all) {
+            let score = 9;
+            for (const name of entry.names) {
+                const s = name === query ? 0 : name.startsWith(query) ? 1 : name.includes("_" + query) ? 2 : name.includes(query) ? 3 : 9;
+                score = Math.min(score, s);
+            }
+            if (score === 9 && entry.words.split(" ").some((w) => w.startsWith(query))) score = 4;
+            if (score < 9) scored.push([score, entry]);
+        }
+        const best = (entry) => entry.names.find((n) => n.includes(query)) ?? entry.names[0];
+        scored.sort((a, b) => a[0] - b[0] || best(a[1]).length - best(b[1]).length || a[1].order - b[1].order);
+        return scored.slice(0, limit).map(([, entry]) => entry);
+    }
+
+    function hideSuggest() {
+        suggest = { kind: null, items: [], index: 0 };
+        suggestBox?.classList.remove("on");
+    }
+
+    function updateSuggest() {
+        if (!input || panel?.classList.contains("on")) return hideSuggest();
+        const q = me && completionQuery();
+        if (!q) return hideSuggest();
+        const index = suggest.kind === q.kind ? suggest.index : 0;
+        let list;
+        if (q.kind === "emoji") {
+            if (!emoji) {
+                loadEmoji().then(() => emoji && updateSuggest());
+                return hideSuggest();
+            }
+            list = emojiMatches(q.query, MAX_SUGGEST).map((entry) => ({ label: ":" + entry.names[0] + ":", e: entry.e, insert: entry.e }));
+        } else {
+            if (Date.now() - usersAt > WHO_MS) {
+                usersAt = Date.now();
+                send({ t: "who" });
+            }
+            const seen = new Set();
+            list = users.filter((u) => {
+                const key = u.nick.toLowerCase();
+                if (u.uid === me.uid || seen.has(key) || !key.startsWith(q.query)) return false;
+                seen.add(key);
+                return true;
+            }).slice(0, 6).map((u) => ({ label: "@" + u.nick, uid: u.uid, insert: "@" + u.nick }));
+            if (me.owner && "everyone".startsWith(q.query)) list.push({ label: "@everyone", insert: "@everyone" });
+        }
+        if (!list.length) return hideSuggest();
+        suggest = { kind: q.kind, items: list, index: Math.min(index, list.length - 1) };
+
+        suggestBox.textContent = "";
+        const head = document.createElement("div");
+        head.className = "head";
+        head.textContent = q.kind === "emoji" ? "Emoji matching :" + q.query : "Players online";
+        const box = document.createElement("div");
+        box.className = "list";
+        list.forEach((item, i) => {
+            const row = document.createElement("div");
+            if (i === suggest.index) row.className = "sel";
+            const lead = document.createElement("span");
+            if (item.e) {
+                lead.className = "e";
+                lead.textContent = item.e;
+            } else {
+                lead.className = "dot";
+                lead.style.background = item.uid ? nickColor(item.uid) : "#f0b232";
+            }
+            row.append(lead, item.label);
+            row.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                pickSuggest(i);
+            });
+            box.appendChild(row);
+        });
+        suggestBox.append(head, box);
+        suggestBox.classList.add("on");
+        box.children[suggest.index]?.scrollIntoView({ block: "nearest" });
+    }
+
+    function pickSuggest(i) {
+        const q = completionQuery();
+        const item = suggest.items[i];
+        if (!q || !item) return;
+        insertAtCaret(item.insert + " ", q.at, input.selectionStart ?? input.value.length);
+        if (item.e) useEmoji(item.e);
+        hideSuggest();
+    }
+
+    function suggestKeys(e) {
+        if (!suggest.items.length) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            suggest.index = (suggest.index + (e.key === "ArrowDown" ? 1 : -1) + suggest.items.length) % suggest.items.length;
+            updateSuggest();
+        } else if (e.key === "Tab" || e.key === "Enter") {
+            e.preventDefault();
+            pickSuggest(suggest.index);
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            hideSuggest();
+        }
+    }
+
+    // Typing the closing colon of a known ":name:" turns it into the emoji straight away.
+    function onInput() {
+        const caret = input.selectionStart ?? input.value.length;
+        const done = /:([a-z0-9_+-]+):$/i.exec(input.value.slice(0, caret));
+        const e = done && emoji?.byName.get(done[1].toLowerCase());
+        if (e) {
+            insertAtCaret(e, caret - done[0].length, caret);
+            useEmoji(e);
+        }
+        updateSuggest();
+    }
+
+    function closePanel() {
+        if (!panel?.classList.contains("on")) return;
+        panel.classList.remove("on");
+        emojiButton.classList.remove("on");
+        document.removeEventListener("pointerdown", outsidePanel, true);
+    }
+
+    function outsidePanel(e) {
+        if (!panel.contains(e.target) && e.target !== emojiButton) closePanel();
+    }
+
+    function renderPanelGrid() {
+        const grid = panel.querySelector(".grid");
+        const tabs = panel.querySelector(".tabs");
+        const query = panel.querySelector("input").value.trim().toLowerCase();
+        grid.textContent = "";
+        // Each header sits in its own section, so it only sticks while that section is in view.
+        const section = (title, list) => {
+            const box = document.createElement("section");
+            const h = document.createElement("h4");
+            h.textContent = title;
+            const set = document.createElement("div");
+            set.className = "set";
+            for (const e of list) {
+                const cell = document.createElement("span");
+                cell.textContent = e;
+                set.appendChild(cell);
+            }
+            box.append(h, set);
+            grid.appendChild(box);
+            return box;
+        };
+        tabs.style.display = query ? "none" : "";
+        if (query) {
+            const words = query.split(/\s+/);
+            const found = emojiMatches(words[0], 400).filter((entry) => words.slice(1).every((w) => (entry.names.join(" ") + " " + entry.words).includes(w)));
+            if (found.length) section("Search results", found.map((entry) => entry.e));
+            else {
+                const none = document.createElement("div");
+                none.className = "none";
+                none.textContent = "No emoji found";
+                grid.appendChild(none);
+            }
+            grid.scrollTop = 0;
+            return;
+        }
+        const sets = [];
+        const recent = recentEmoji();
+        if (recent.length) sets.push(section("Frequently used", recent));
+        for (const g of emoji.groups) sets.push(section(g.name, g.emojis.map((entry) => entry.e)));
+        tabs.textContent = "";
+        const tabFor = [];
+        if (recent.length) tabFor.push([icon(0x1f552), "Frequently used", sets[0]]);
+        emoji.groups.forEach((g, i) => tabFor.push([icon(TAB_ICONS[i] || 0x2753), g.name, sets[i + (recent.length ? 1 : 0)]]));
+        for (const [glyph, title, box] of tabFor) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = glyph;
+            b.title = title;
+            b.addEventListener("click", () => {
+                grid.scrollTop = box.offsetTop;
+            });
+            tabs.appendChild(b);
+        }
+        markTab();
+    }
+
+    function markTab() {
+        const grid = panel.querySelector(".grid");
+        let current = 0;
+        [...grid.querySelectorAll("section")].forEach((box, i) => {
+            if (box.offsetTop <= grid.scrollTop + 8) current = i;
+        });
+        [...panel.querySelectorAll(".tabs>button")].forEach((b, i) => b.classList.toggle("on", i === current));
+    }
+
+    function buildPanel() {
+        panel = document.createElement("div");
+        panel.className = "emoji-panel";
+        const search = document.createElement("input");
+        search.type = "text";
+        search.placeholder = "Find the perfect emoji";
+        search.autocomplete = "off";
+        search.spellcheck = false;
+        const tabs = document.createElement("div");
+        tabs.className = "tabs";
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        const preview = document.createElement("div");
+        preview.className = "preview";
+        preview.textContent = "Shift-click to pick several";
+        panel.append(search, tabs, grid, preview);
+
+        search.addEventListener("input", renderPanelGrid);
+        search.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closePanel();
+                input.focus();
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                const first = grid.querySelector(".set>span");
+                if (first) pickPanelEmoji(first.textContent, false);
+            }
+        });
+        grid.addEventListener("scroll", markTab, { passive: true });
+        grid.addEventListener("click", (e) => {
+            const cell = e.target.closest(".set>span");
+            if (cell) pickPanelEmoji(cell.textContent, e.shiftKey);
+        });
+        grid.addEventListener("mouseover", (e) => {
+            const cell = e.target.closest(".set>span");
+            if (!cell) return;
+            preview.textContent = "";
+            const big = document.createElement("span");
+            big.className = "big";
+            big.textContent = cell.textContent;
+            preview.append(big, ":" + emojiName(cell.textContent) + ":");
+        });
+        root.appendChild(panel);
+    }
+
+    // Like Discord, shift-click adds several without closing the panel.
+    function pickPanelEmoji(e, keepOpen) {
+        input.focus();
+        insertAtCaret(e);
+        useEmoji(e);
+        if (!keepOpen) closePanel();
+    }
+
+    async function togglePanel() {
+        if (panel?.classList.contains("on")) {
+            closePanel();
+            return;
+        }
+        if (!(await loadEmoji())) {
+            addSystem("Couldn't load the emoji list.");
+            return;
+        }
+        if (!panel) buildPanel();
+        hideSuggest();
+        panel.querySelector("input").value = "";
+        renderPanelGrid();
+        panel.classList.add("on");
+        emojiButton.classList.add("on");
+        panel.querySelector(".grid").scrollTop = 0;
+        panel.querySelector("input").focus();
+        document.addEventListener("pointerdown", outsidePanel, true);
     }
 
     function setStatus(text) {
@@ -204,27 +787,12 @@
         if (log && (force || nearBottom())) log.scrollTop = log.scrollHeight;
     }
 
-    function trimLog() {
-        while (log.childElementCount > MAX_LINES) log.firstElementChild.remove();
-    }
-
-    function addSystem(text) {
-        if (!log) return;
-        const stick = nearBottom();
-        const line = document.createElement("div");
-        line.className = "sys";
-        line.textContent = text;
-        log.appendChild(line);
-        trimLog();
-        scrollToEnd(stick);
-    }
-
     function closeTools() {
         log?.querySelector(".tools")?.remove();
     }
 
-    function ownerTools(line, m) {
-        const open = line.nextElementSibling?.classList.contains("tools");
+    function ownerTools(el, m) {
+        const open = el.nextElementSibling?.classList.contains("tools");
         closeTools();
         if (open) return;
         const tools = document.createElement("div");
@@ -243,38 +811,95 @@
         add("Mute 1h", { t: "mute", uid: m.uid, minutes: 60 });
         add("Mute 1d", { t: "mute", uid: m.uid, minutes: 1440 });
         add("Delete all theirs", { t: "clear", uid: m.uid });
-        line.after(tools);
+        el.after(tools);
     }
 
-    function addMessage(m) {
-        const stick = nearBottom();
-        const line = document.createElement("div");
-        line.className = "m";
-        line.dataset.id = m.id;
-        line.dataset.uid = m.uid;
-        if (me && m.uid === me.uid) line.classList.add("mine");
-        const time = document.createElement("span");
-        time.className = "time";
-        time.textContent = clock(m.at);
-        const nick = document.createElement("span");
-        nick.className = "nick";
-        nick.style.color = nickColor(m.uid);
-        nick.textContent = m.nick;
-        line.append(time, nick);
-        if (m.owner) {
-            const badge = document.createElement("span");
-            badge.className = "badge";
-            badge.textContent = "OWNER";
-            line.appendChild(badge);
+    // Starts a new name header unless the last item is a message by the same player, under the
+    // same name and badge, sent within GROUP_MS on the same day.
+    function startsGroup(prev, m) {
+        if (prev?.kind !== "msg") return true;
+        const p = prev.m;
+        return p.uid !== m.uid || p.nick !== m.nick || p.owner !== m.owner || m.at - p.at > GROUP_MS || !sameDay(p.at, m.at);
+    }
+
+    function messageElement(m, head) {
+        const el = document.createElement("div");
+        el.className = head ? "m head" : "m";
+        el.dataset.id = m.id;
+        if (head) {
+            const color = nickColor(m.uid);
+            const avatar = document.createElement("div");
+            avatar.className = "avatar";
+            avatar.style.background = color;
+            avatar.textContent = firstGrapheme(m.nick).toUpperCase();
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            const nick = document.createElement("span");
+            nick.className = "nick";
+            nick.style.color = color;
+            nick.textContent = m.nick;
+            meta.appendChild(nick);
+            if (m.owner) {
+                const badge = document.createElement("span");
+                badge.className = "badge";
+                badge.textContent = "OWNER";
+                meta.appendChild(badge);
+            }
+            const time = document.createElement("span");
+            time.className = "time";
+            time.textContent = headerTime(m.at);
+            meta.appendChild(time);
+            el.append(avatar, meta);
+        } else {
+            const stamp = document.createElement("span");
+            stamp.className = "stamp";
+            stamp.textContent = shortTime(m.at).replace(/\s?[AP]M$/i, "");
+            stamp.title = headerTime(m.at);
+            el.appendChild(stamp);
         }
-        line.append(": ", m.text);
+        const text = document.createElement("div");
+        text.className = isJumbo(m.text) ? "text jumbo" : "text";
+        appendText(text, m.text, m.pings);
+        el.appendChild(text);
+        if (pingsMe(m)) el.classList.add("pinged");
         if (me?.owner) {
-            line.classList.add("mod");
-            line.addEventListener("click", () => ownerTools(line, m));
+            el.classList.add("mod");
+            el.addEventListener("click", () => ownerTools(el, m));
         }
-        log.appendChild(line);
-        trimLog();
+        return el;
+    }
+
+    function itemElement(item, prev) {
+        if (item.kind === "msg") return messageElement(item.m, startsGroup(prev, item.m));
+        const el = document.createElement("div");
+        el.className = "sys";
+        el.textContent = item.text;
+        return el;
+    }
+
+    function renderLog() {
+        if (!log) return;
+        const stick = nearBottom();
+        log.textContent = "";
+        items.forEach((item, i) => log.appendChild(itemElement(item, items[i - 1])));
         scrollToEnd(stick);
+    }
+
+    function addItem(item) {
+        items.push(item);
+        if (items.length > MAX_ITEMS + 20) {
+            items = items.slice(-MAX_ITEMS);
+            renderLog();
+            return;
+        }
+        if (!log) return;
+        const stick = nearBottom();
+        log.appendChild(itemElement(item, items[items.length - 2]));
+        scrollToEnd(stick);
+    }
+
+    function addSystem(text) {
+        addItem({ kind: "sys", text });
     }
 
     function send(data) {
@@ -290,23 +915,26 @@
         }
         if (data.t === "init") {
             me = data.you;
-            log.textContent = "";
-            for (const m of data.messages) addMessage(m);
-            addSystem("Connected. Be nice - slurs are filtered.");
-            onlineLabel.textContent = data.online + " online";
+            items = data.messages.map((m) => ({ kind: "msg", m }));
+            items.push({ kind: "sys", text: "Connected. Be nice - slurs are filtered." });
+            renderLog();
             scrollToEnd(true);
         } else if (data.t === "msg") {
-            addMessage(data.m);
+            addItem({ kind: "msg", m: data.m });
             if (layout.min && data.m.uid !== me?.uid) {
                 unread++;
                 updateUnread();
             }
-        } else if (data.t === "online") {
-            onlineLabel.textContent = data.n + " online";
+            if (pingsMe(data.m)) notifyPing(data.m);
+        } else if (data.t === "who") {
+            users = Array.isArray(data.users) ? data.users : [];
+            if (suggest.kind === "mention" || document.activeElement === input) updateSuggest();
         } else if (data.t === "del") {
-            log.querySelector('.m[data-id="' + Number(data.id) + '"]')?.remove();
+            items = items.filter((item) => item.kind !== "msg" || item.m.id !== data.id);
+            renderLog();
         } else if (data.t === "clear") {
-            for (const line of log.querySelectorAll(".m")) if (line.dataset.uid === data.uid) line.remove();
+            items = items.filter((item) => item.kind !== "msg" || item.m.uid !== data.uid);
+            renderLog();
         } else if (data.t === "err") {
             addSystem(data.text);
         } else if (data.t === "slow" || data.t === "timeout") {
@@ -358,13 +986,13 @@
         ws.addEventListener("open", async () => {
             retryDelay = 2000;
             setStatus("");
-            const hello = { t: "hello", v: visitorId() };
+            const hello = { t: "hello", v: visitorId(), nick: readNickname() };
             const key = await window.__nswsOwner?.token?.().catch(() => null);
             if (key) hello.key = key;
             if (socket === ws) ws.send(JSON.stringify(hello));
-            pingTimer = setInterval(() => {
+            keepAliveTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) ws.send("ping");
-            }, PING_MS);
+            }, KEEPALIVE_MS);
         });
         ws.addEventListener("message", (e) => {
             if (socket === ws && e.data !== "pong") onServer(e);
@@ -372,8 +1000,7 @@
         ws.addEventListener("close", () => {
             if (socket !== ws) return;
             socket = null;
-            clearInterval(pingTimer);
-            onlineLabel.textContent = "";
+            clearInterval(keepAliveTimer);
             retry();
         });
     }
@@ -389,7 +1016,7 @@
         clearTimeout(retryTimer);
         clearTimeout(sendTimer);
         clearInterval(waitTimer);
-        clearInterval(pingTimer);
+        clearInterval(keepAliveTimer);
         const ws = socket;
         socket = null;
         me = null;
@@ -401,7 +1028,7 @@
     function trySend() {
         clearTimeout(sendTimer);
         if (!input) return;
-        const text = input.value.replace(/\s+/g, " ").trim();
+        const text = replaceShortcodes(input.value).replace(/\s+/g, " ").trim();
         if (!text) return;
         if (socket?.readyState !== WebSocket.OPEN || !me) {
             addSystem("Not connected yet.");
@@ -414,9 +1041,10 @@
             showWait();
             return;
         }
-        lastText = text.slice(0, MAX_TEXT);
+        lastText = [...text].slice(0, MAX_TEXT).join("");
         send({ t: "msg", text: lastText, nick: readNickname() });
         input.value = "";
+        hideSuggest();
         readyAt = Date.now() + SLOW_MS;
         clearInterval(waitTimer);
         setStatus("");
@@ -477,13 +1105,20 @@
         title.textContent = "Chat";
         onlineLabel = document.createElement("span");
         onlineLabel.className = "online";
+        onlineLabel.title = "People playing on the site right now";
         unreadBadge = document.createElement("span");
         unreadBadge.className = "unread";
         minButton = document.createElement("button");
         minButton.addEventListener("click", () => setMinimized(!layout.min));
         fullButton = document.createElement("button");
         fullButton.addEventListener("click", () => setFullscreen(!layout.full));
-        bar.append(title, onlineLabel, unreadBadge, fullButton, minButton);
+        bellButton = document.createElement("button");
+        bellButton.addEventListener("click", () => {
+            storageSet(PING_SOUND_KEY, pingSoundOn() ? "false" : "true");
+            updateBell();
+        });
+        updateBell();
+        bar.append(title, onlineLabel, unreadBadge, bellButton, fullButton, minButton);
 
         log = document.createElement("div");
         log.className = "log";
@@ -493,25 +1128,40 @@
         const form = document.createElement("form");
         input = document.createElement("input");
         input.type = "text";
-        input.maxLength = MAX_TEXT;
+        input.maxLength = MAX_TEXT * 2;
         input.placeholder = "Say something...";
         input.autocomplete = "off";
         input.spellcheck = false;
+        emojiButton = document.createElement("button");
+        emojiButton.type = "button";
+        emojiButton.className = "emoji-button";
+        emojiButton.title = "Emoji";
+        emojiButton.textContent = icon(0x1f600);
+        emojiButton.addEventListener("click", togglePanel);
         const sendButton = document.createElement("button");
         sendButton.type = "submit";
         sendButton.textContent = "Send";
-        form.append(input, sendButton);
+        form.append(input, emojiButton, sendButton);
         form.addEventListener("submit", submit);
 
         const grip = document.createElement("div");
         grip.className = "grip";
-        root.append(bar, log, statusLine, form, grip);
+        suggestBox = document.createElement("div");
+        suggestBox.className = "suggest";
+        root.append(bar, log, statusLine, suggestBox, form, grip);
 
         // The game listens for keys and clicks on window; none of the chat's should reach it.
-        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, stop);
+        for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
+        input.addEventListener("keydown", suggestKeys);
         input.addEventListener("keydown", (e) => {
-            if (e.key === "Escape") input.blur();
+            if (e.key !== "Escape") return;
+            if (panel?.classList.contains("on")) closePanel();
+            else input.blur();
         });
+        input.addEventListener("input", onInput);
+        input.addEventListener("click", updateSuggest);
+        input.addEventListener("blur", hideSuggest);
+        root.addEventListener("animationend", () => root?.classList.remove("ping-flash"));
         for (const type of ["pointerdown", "mousedown", "mouseup", "click", "touchstart", "touchend", "wheel", "contextmenu"]) {
             root.addEventListener(type, stop);
         }
@@ -530,11 +1180,13 @@
 
         document.body.appendChild(root);
         applyLayout();
+        updateOnline();
+        renderLog();
         scrollToEnd(true);
     }
 
     function onKey(e) {
-        if (e.code !== "Escape" || !root || !layout.full || document.activeElement === input) return;
+        if (e.code !== "Escape" || !root || !layout.full || root.contains(document.activeElement)) return;
         e.preventDefault();
         e.stopImmediatePropagation();
         setFullscreen(false);
@@ -546,15 +1198,30 @@
         window.addEventListener("keydown", onKey, true);
         window.addEventListener("resize", applyLayout);
         connect();
+        setTimeout(loadEmoji, 2000);
     }
 
     function disable() {
         disconnect();
+        closePanel();
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("resize", applyLayout);
         root?.remove();
+        toast?.remove();
         root = log = input = statusLine = onlineLabel = unreadBadge = null;
+        minButton = fullButton = bellButton = emojiButton = suggestBox = panel = toast = null;
+        items = [];
+        suggest = { kind: null, items: [], index: 0 };
+        unread = mentions = 0;
     }
+
+    window.addEventListener("nsws-players-online", updateOnline);
+
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible" || titleBefore == null) return;
+        if (document.title.startsWith(TITLE_MARK)) document.title = titleBefore;
+        titleBefore = null;
+    });
 
     function isEnabled() {
         return storageGet(ENABLED_KEY) === "true";

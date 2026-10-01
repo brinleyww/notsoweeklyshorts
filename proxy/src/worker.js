@@ -739,8 +739,14 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (!beat) return plain(400, "Bad request", origin);
         const client = describeClient(request);
         const meta = { ...client, site: new URL(origin).host, ip: request.headers.get("CF-Connecting-IP") };
-        ctx.waitUntil(stub.beat(beat, meta).catch((err) => console.error("traffic beat failed:", err && err.message)));
-        return new Response(null, { status: 204, headers: { "Cache-Control": "no-store", ...corsHeaders(origin) } });
+        // The reply carries how many people are on the site, which the chat shows.
+        let online = null;
+        try {
+            online = (await stub.beat(beat, meta)) ?? null;
+        } catch (err) {
+            console.error("traffic beat failed:", err && err.message);
+        }
+        return json({ online }, origin);
     }
 
     let body;

@@ -24,15 +24,33 @@ const TIMEOUT_MAX_S = 3600;
 const STRIKE_RESET_MS = 10 * 60_000;
 const REPEAT_MS = 20_000;
 const MUTE_MINUTES = [10, 60, 1440];
+// Pings: at most MAX_PINGS people per message and PING_BUDGET per PING_WINDOW_MS, and the same
+// person no more than once per PING_SAME_MS. Extra @names still show, they just don't notify.
+const MAX_PINGS = 3;
+const PING_BUDGET = 6;
+const PING_WINDOW_MS = 60_000;
+const PING_SAME_MS = 15_000;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX32 = /^[0-9a-f]{32}$/;
 // Invisible characters, bidi overrides and other controls, which could hide or reorder text.
 const STRIP = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u034f\u115f\u1160\u3164\uffa0\u2028\u2029]/gu;
+// Joins the pieces of emoji like a coder or a family; anywhere else it is just invisible.
+const EMOJI_ZWJ = /(?<=\p{Extended_Pictographic}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]?)\u200d(?=\p{Extended_Pictographic})/uy;
+// The tag characters that spell out the England, Scotland and Wales flags; elsewhere they hide text.
+const FLAG_TAGS = /(\u{1f3f4}[\u{e0061}-\u{e007a}]{4,6}\u{e007f})/u;
+
+function stripInvisible(text) {
+    return text.split(FLAG_TAGS).map((part, i) => i % 2 ? part : part.replace(STRIP, (ch, at, all) => {
+        if (ch !== "\u200d") return "";
+        EMOJI_ZWJ.lastIndex = at;
+        return EMOJI_ZWJ.test(all) ? ch : "";
+    })).join("");
+}
 
 function cleanText(value, max) {
     if (typeof value !== "string") return "";
-    const text = value.normalize("NFC").replace(STRIP, "").replace(/\s+/g, " ").trim();
+    const text = stripInvisible(value.normalize("NFC")).replace(/\s+/g, " ").trim();
     // Zalgo text: at most two combining marks on any character.
     return [...text.replace(/(\p{M}{2})\p{M}+/gu, "$1")].slice(0, max).join("");
 }
@@ -61,10 +79,14 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
+        try {
+            this.sql.exec("ALTER TABLE messages ADD COLUMN pings TEXT");
+        } catch {
+            // Already there.
+        }
         this.sql.exec("CREATE TABLE IF NOT EXISTS mutes (uid TEXT PRIMARY KEY, until INTEGER NOT NULL)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS timeouts (uid TEXT PRIMARY KEY, until INTEGER NOT NULL, level INTEGER NOT NULL)");
-        // Per player (uid), not per socket, so several tabs share one limit. Lost if the room
-        // hibernates, which only happens once nobody is sending anything.
+        // Per player (uid), not per socket, so several tabs share one limit. See recentActivity.
         this.spam = new Map();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
@@ -103,13 +125,80 @@ export class ChatRoom extends DurableObject {
     }
 
     history() {
-        return this.sql.exec("SELECT id, at, uid, nick, owner, text FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
-            .toArray().reverse().map((m) => ({ ...m, owner: !!m.owner }));
+        return this.sql.exec("SELECT id, at, uid, nick, owner, text, pings FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
+            .toArray().reverse().map((m) => ({ ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [] }));
+    }
+
+    // Everyone online, once per player, for pings and the page's @ suggestions.
+    users() {
+        const seen = new Map();
+        for (const ws of this.ctx.getWebSockets()) {
+            const a = ws.deserializeAttachment();
+            if (a?.joined && a.nick) seen.set(a.uid, a.nick);
+        }
+        return [...seen].map(([uid, nick]) => ({ uid, nick }));
+    }
+
+    // "@Name" pings whoever is online under that nickname. Nicknames can hold spaces, so the
+    // longest one that fits wins ("@Bob Smith" over "@Bob"). Only the owner can ping @everyone.
+    findPings(text, me) {
+        const users = this.users().filter((u) => u.uid !== me.uid).sort((a, b) => b.nick.length - a.nick.length);
+        const lower = text.toLowerCase();
+        const found = new Map();
+        for (let i = lower.indexOf("@"); i >= 0; i = lower.indexOf("@", i + 1)) {
+            // "bob@site.com" isn't a ping.
+            if (i > 0 && /[\p{L}\p{N}_]/u.test(lower[i - 1])) continue;
+            const rest = lower.slice(i + 1);
+            if (me.owner && /^everyone(?![\p{L}\p{N}_])/u.test(rest)) {
+                found.set("*", "everyone");
+                continue;
+            }
+            let length = 0;
+            for (const u of users) {
+                const nick = u.nick.toLowerCase();
+                if (nick.length < length) break;
+                if (rest.startsWith(nick) && !/^[\p{L}\p{N}_]/u.test(rest.slice(nick.length))) {
+                    length = nick.length;
+                    found.set(u.uid, u.nick);
+                }
+            }
+        }
+        return [...found].map(([uid, nick]) => ({ uid, nick }));
+    }
+
+    limitPings(uid, pings, now) {
+        const s = this.spam.get(uid);
+        if (!s) return pings.slice(0, MAX_PINGS);
+        s.pings = (s.pings || []).filter((p) => now - p.at < PING_WINDOW_MS);
+        const kept = [];
+        for (const p of pings) {
+            if (kept.length >= MAX_PINGS || s.pings.length >= PING_BUDGET) break;
+            if (s.pings.some((q) => q.uid === p.uid && now - q.at < PING_SAME_MS)) continue;
+            s.pings.push({ uid: p.uid, at: now });
+            kept.push(p);
+        }
+        return kept;
     }
 
     mutedUntil(uid) {
         const row = this.sql.exec("SELECT until FROM mutes WHERE uid = ?", uid).toArray()[0];
         return row && row.until > Date.now() ? row.until : 0;
+    }
+
+    // A player's spam and ping counters, rebuilt from the stored messages. The in-memory copy is
+    // lost whenever the room hibernates, which a quiet few seconds is enough for.
+    recentActivity(uid, now) {
+        const s = { last: 0, recent: [], text: "", textAt: 0, pings: [] };
+        const rows = this.sql.exec("SELECT at, text, pings FROM messages WHERE uid = ? AND at > ? ORDER BY id",
+            uid, now - Math.max(SPAM_WINDOW_MS, PING_WINDOW_MS, REPEAT_MS)).toArray();
+        for (const row of rows) {
+            s.last = row.at;
+            if (now - row.at < SPAM_WINDOW_MS) s.recent.push(row.at);
+            s.text = row.text;
+            s.textAt = row.at;
+            for (const p of row.pings ? JSON.parse(row.pings) : []) s.pings.push({ uid: p.uid, at: row.at });
+        }
+        return s;
     }
 
     // Returns the reply that refuses this message, or null to let it through.
@@ -123,7 +212,7 @@ export class ChatRoom extends DurableObject {
             if (this.spam.size > 1000) {
                 for (const [key, old] of this.spam) if (now - old.last > SPAM_WINDOW_MS) this.spam.delete(key);
             }
-            this.spam.set(uid, s = { last: 0, recent: [], text: "", textAt: 0 });
+            this.spam.set(uid, s = this.recentActivity(uid, now));
         }
         if (now - s.last < SLOW_MS - SLOW_SLACK_MS) return { t: "slow", ms: SLOW_MS - (now - s.last) };
         if (text === s.text && now - s.textAt < REPEAT_MS) return { t: "err", text: "You just sent that." };
@@ -162,13 +251,15 @@ export class ChatRoom extends DurableObject {
                 joined: true,
                 uid: (await sha256Hex("nsws-chat:" + msg.v)).slice(0, 16),
                 owner: !!owner,
+                nick: censor(cleanText(msg.nick, MAX_NICK)) || "Guest",
             });
             ws.serializeAttachment(me);
             this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() });
-            this.broadcast({ t: "online", n: this.online() });
             return;
         }
         if (!me.joined) return;
+
+        if (msg?.t === "who") return this.send(ws, { t: "who", users: this.users() });
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
@@ -180,9 +271,18 @@ export class ChatRoom extends DurableObject {
             if (refused) return this.send(ws, refused);
 
             const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
-            const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text) };
-            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text) VALUES (?, ?, ?, ?, ?) RETURNING id",
-                message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text).one().id;
+            if (nick !== me.nick) {
+                me.nick = nick;
+                ws.serializeAttachment(me);
+            }
+            const wanted = this.findPings(text, me);
+            const pings = me.owner ? wanted : this.limitPings(me.uid, wanted, now);
+            if (pings.length < wanted.length) {
+                this.send(ws, { t: "err", text: "Too many pings - " + (wanted.length - pings.length) + " of them didn't notify anyone." });
+            }
+            const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text), pings };
+            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+                message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null).one().id;
             this.sql.exec("DELETE FROM messages WHERE id <= ?", message.id - HISTORY);
             this.broadcast({ t: "msg", m: message });
             return;
@@ -203,12 +303,10 @@ export class ChatRoom extends DurableObject {
     }
 
     async webSocketClose(ws) {
-        const was = ws.deserializeAttachment()?.joined;
         ws.serializeAttachment({ joined: false });
         try {
             ws.close();
         } catch {}
-        if (was) this.broadcast({ t: "online", n: this.online() });
     }
 
     async webSocketError(ws) {

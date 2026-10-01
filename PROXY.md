@@ -135,7 +135,9 @@ nickname, what the player is doing, and counts of races, finishes, uploads and
 so on. It never carries the account token. The Worker adds a coarse country,
 device, system and browser, and stores everything in one SQLite Durable Object,
 `TrafficStats` (`proxy/src/traffic.js`). IP addresses are only held in memory to
-cap new sessions at 120 per address per hour; they are never stored.
+cap new sessions at 120 per address per hour; they are never stored. The reply to a
+beat is `{"online": n}`: how many different visitors have the site open, which the
+chat window shows.
 
 `/nsws/stats`, `/nsws/live` and `/nsws/anticheat*` answer only the owner: the request
 body must hold the owner key (see "Owner access"). The page checks the same hash
@@ -227,10 +229,29 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
 - **Spam timeouts:** more than 10 messages in 20 s times a player out for 5 s. Each timeout
   after that doubles (10 s, 20 s, ... up to an hour) until they go 10 minutes without one. The
   owner is exempt from slow mode and timeouts.
+- **Pings:** `@Name` (after a space or at the start) pings whoever is online under that
+  nickname; typing `@` suggests online players. One message pings at most 3 people, a player
+  sends at most 6 pings a minute and pings the same person at most once every 15 s. Extra
+  `@names` still show but notify nobody, and the sender is told. Only the owner can use
+  `@everyone`. A ping never takes focus, opens the window or blocks clicks: the line is
+  highlighted, the minimized bar shows a yellow `@` count and glows, a toast that clicks pass
+  through appears by the bar, a quiet chime plays (the bell in the title bar turns it off),
+  and a background tab's title gets `(@)`. The limits are rebuilt from stored messages when the
+  room wakes from hibernation, so waiting doesn't reset them.
 - **Who is who:** each player is a hash of their random `nsws_visitor` id, never the account
   token. Anyone can type any nickname, but only the owner's key earns the `OWNER` badge. The
   owner clicks a message to delete it, mute its sender (10 minutes, an hour or a day), or
-  delete everything they sent.
+  delete everything they sent. Name colours come from that hash too (the same for everyone),
+  lightened where needed to keep 4.5:1 contrast on the chat background.
+- **Emoji:** `:name:` codes (Discord's names, e.g. `:sob:`) are suggested after `:` and two
+  letters, and turn into the emoji as you type the closing colon or send. The emoji button
+  opens a searchable panel by category. The list is `mod/nsws_emoji.json`, built by
+  `proxy/tools/build-emoji.js` from emojibase-data and capped at Emoji 15.0 so phones and PCs
+  can draw everything. Windows has no flag emoji, so flags use the bundled
+  `mod/TwemojiCountryFlags.woff2` (Twemoji, CC-BY 4.0). The Worker keeps the invisible joiners
+  inside emoji like 👨‍💻 but strips them anywhere else.
+- **Layout:** messages from one player within 5 minutes share one header (avatar, name, time),
+  like Discord; messages of only emoji show large.
 
 ## Privacy note
 

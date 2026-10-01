@@ -110,7 +110,15 @@
             keepalive: true,
             credentials: "omit",
         }).then((response) => {
-            if (response.ok && body.nick) sentNick = body.nick;
+            if (!response.ok) return;
+            if (body.nick) sentNick = body.nick;
+            if (response.status === 200) {
+                response.json().then((data) => {
+                    if (!Number.isSafeInteger(data?.online)) return;
+                    window.__nswsPlayersOnline = data.online;
+                    window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
+                }, () => {});
+            }
         }).catch(() => {
             // Try again with the next beat, unless the page is going away.
             if (end) return;
