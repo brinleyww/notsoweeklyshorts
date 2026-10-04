@@ -43838,7 +43838,7 @@ window.__nswsTrackQuery = function(trackId) {
                         C.set(this, ua, null, "f"),
                         C.get(this, ea, "f").isVisible = !0) : C.get(this, _r, "m", Va).call(this),
                         e.preventDefault())),
-                        d.checkKeyBinding(e, KeyBind.ToggleSpectatorCamera) && !C.get(this, _r, "m", Ha).call(this)) {
+                        d.checkKeyBinding(e, KeyBind.ToggleSpectatorCamera) && !C.get(this, _r, "m", Ha).call(this) && !window.__nswsFreecamBlocked(C.get(this, Yr, "f").getId())) {
                             if (null == C.get(this, ca, "f") && !C.get(this, Pa, "f")) {
                                 C.get(this, Ba, "f").camera.position.copy(C.get(this, zr, "f").camera.position);
                                 const e = new THREE.Euler(0,0,0,"YXZ").setFromQuaternion(C.get(this, zr, "f").camera.quaternion);
@@ -54130,7 +54130,8 @@ window.__nswsTrackQuery = function(trackId) {
                         n.dispose();
                         const showMenu = () => {
                             hasChosenDevicePreset() ? (C.get(this, vc, "m", Yc).call(this),
-                            C.get(this, vc, "m", Qc).call(this)) : (C.get(this, vc, "m", qc).call(this),
+                            C.get(this, vc, "m", Qc).call(this),
+                            window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }
@@ -54775,6 +54776,13 @@ window.__nswsTrackQuery = function(trackId) {
             masks: ["3824643da6d72d95", "b1e838650beb8f99", "275db3bcac1fba8e", "77a167d9c2d78c9e"],
             file: "tracks/community/week8.track",
             tracks: [{ id: "0054dcbae3e68b23b882b69ba4b970523d05db1f84ba87d21a6c9ecc381ca021", name: "1 - Slider", short: "Sldr", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week8_1.png" }, { id: "d9608a264a944700fa6e5b74b1577755e583de788b3000043c929f5e2b1e0362", name: "2 - techbyapringle", short: "Tech", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week8_2.png" }, { id: "00b4b1e3f416f10b7f923395dfe57ecd77fee2faf751393c71d5b8a68f861e43", name: "3 - my attempt at decor", short: "Decor", author: "Not So Weekly Short Community", env: "Winter", thumb: "tracks/community/thumbnails/week8_3.png" }, { id: "23cc14e2a8cd3437df6fc8171c2217c057089c88386f0a1418e93907af6b9199", name: "4 - Bloodbourne", short: "Blood", author: "Not So Weekly Short Community", env: "Desert", thumb: "tracks/community/thumbnails/week8_4.png" }, { id: "bb81fb0275439356f51b460d9e24fb6541f26552d37143aa84466bfe3d8114a2", name: "5 - eliteballknowledge", short: "EBK", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week8_5.png" }]
+        },
+        {
+            week: 9,
+            chunks: ["49cd8cd3cf9664e0", "7752bdb1b52218c6", "5c535e58f7133faa", "f403136ad3e883bf"],
+            masks: ["26d75a8f9ea520fd", "3b9131a566afe78b", "cb716d86c08fadf4", "033a60409cf58f11"],
+            file: "tracks/community/week9.track",
+            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "824c11914feb15aee2bc3a6414abee973d043f250c999f390a1ed9cd97ee3423", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "d2e0b53047767ddf43db0acfecc2c3dd79055a9ba15b56e55ce03ccd1fe649de", name: "5 - Liminal", short: "Limin", author: "imracer & Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -54829,6 +54837,33 @@ window.__nswsTrackQuery = function(trackId) {
         window.__nswsIsCurrentWeek = function(trackId) {
             const wk = window.__nswsTrackWeekMap[trackId];
             return wk === window.__nswsCurrentWeek;
+        };
+        let __nswsFreecamNotice = null, __nswsFreecamNoticeTimer = 0;
+        window.__nswsFreecamBlocked = function(trackId) {
+            const blocked = __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noFreecam)));
+            if (!blocked) return false;
+            if (!document.getElementById("nsws-freecam-notice-style")) {
+                const style = document.createElement("style");
+                style.id = "nsws-freecam-notice-style";
+                style.textContent = `
+.nsws-freecam-notice { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); z-index: 3; width: 500px; max-width: calc(100% - 20px); box-sizing: border-box; padding: 10px; background-color: var(--surface-color); text-align: center; pointer-events: none; transition: opacity 0.3s; }
+.nsws-freecam-notice > h2 { margin: 0 0 10px 0; font-size: 38px; font-weight: normal; color: var(--text-color); }
+.nsws-freecam-notice > p { margin: 0; padding: 10px; background-color: var(--surface-secondary-color); line-height: 0.9; font-size: 28px; color: var(--text-color); }
+.nsws-freecam-notice.hidden { opacity: 0; }
+`;
+                document.head.appendChild(style);
+            }
+            if (!__nswsFreecamNotice || !__nswsFreecamNotice.isConnected) {
+                __nswsFreecamNotice = document.createElement("div");
+                __nswsFreecamNotice.className = "nsws-freecam-notice hidden";
+                __nswsFreecamNotice.innerHTML = '<h2>Freecam disabled</h2><p>Freecam is turned off on this map.</p>';
+                (document.getElementById("ui") || document.body).appendChild(__nswsFreecamNotice);
+                void __nswsFreecamNotice.offsetWidth;
+            }
+            __nswsFreecamNotice.classList.remove("hidden");
+            clearTimeout(__nswsFreecamNoticeTimer);
+            __nswsFreecamNoticeTimer = setTimeout(() => __nswsFreecamNotice?.classList.add("hidden"), 2500);
+            return true;
         };
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
@@ -58464,7 +58499,7 @@ window.__nswsTrackQuery = function(trackId) {
                     e.preventDefault()),
                     h.checkKeyBinding(e, KeyBind.ToggleUI) && (C.get(this, Af, "f").isVisible = !C.get(this, Af, "f").isVisible,
                     e.preventDefault()),
-                    h.checkKeyBinding(e, KeyBind.ToggleSpectatorCamera)) {
+                    h.checkKeyBinding(e, KeyBind.ToggleSpectatorCamera) && !window.__nswsFreecamBlocked(C.get(this, tf, "f").getId())) {
                         C.get(this, mf, "f").camera.position.copy(C.get(this, sf, "f").camera.position);
                         const t = new THREE.Euler(0,0,0,"YXZ").setFromQuaternion(C.get(this, sf, "f").camera.quaternion);
                         t.z = 0,
@@ -58709,6 +58744,10 @@ window.__nswsTrackQuery = function(trackId) {
                     [Symbol.toStringTag]: "Math"
                 }
             }();
+            let __nswsFirstLaunch = !1;
+            try {
+                __nswsFirstLaunch = !Object.keys(localStorage).some(k => k.startsWith("polytrack_")) && null == localStorage.getItem("_nswsAutoStarted");
+            } catch (e) {}
             const e = new cu;
             await e.initialize(),
             e.migrate();
@@ -58998,6 +59037,15 @@ window.__nswsTrackQuery = function(trackId) {
             ;
             let Q = new gh(p,v,A,m,y,b,E,w,S,h,l,e,n,r,x,t,!1,null,_,C,W,j,K,q)
               , J = 0;
+            window.__nswsFirstLaunchStart = __nswsFirstLaunch ? () => {
+                window.__nswsFirstLaunchStart = null;
+                const first = window.__nswsTracksForWeek?.(window.__nswsCurrentWeek)?.[0];
+                if (!first || !window.__bw_selectTrackById?.(first.id)) return;
+                try {
+                    localStorage.setItem("_nswsAutoStarted", "1");
+                } catch (e) {}
+                document.querySelector(".track-info-ui .button.play")?.click();
+            } : null;
             h.setAnimationLoop((function(e) {
                 const t = Math.max(e - J, 0) / 1e3;
                 J = e,
