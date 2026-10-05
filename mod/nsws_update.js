@@ -23,7 +23,7 @@
 .nsws-update>.buttons{display:flex;justify-content:space-between;gap:10px;padding:10px 24px 10px 10px;}
 .nsws-update>.buttons>.button{min-width:170px;}
 @keyframes nsws-update-in{0%{opacity:0;transform:translateY(12px);}100%{opacity:1;transform:none;}}
-#nsws-update-toast{position:absolute;top:12px;right:calc(var(--safe-area-horizontal,0px) + 12px);z-index:100;display:flex;flex-direction:column;width:380px;max-width:calc(100% - 24px);background-color:var(--surface-color);clip-path:polygon(14px 0,100% 0,100% 100%,0 100%);pointer-events:auto;animation:nsws-update-toast 14s ease-in forwards;}
+#nsws-update-toast{position:absolute;top:12px;right:calc(var(--safe-area-horizontal,0px) + 20px);z-index:100;display:flex;flex-direction:column;width:380px;max-width:calc(100% - 24px);background-color:var(--surface-color);clip-path:polygon(14px 0,100% 0,100% 100%,0 100%);pointer-events:auto;animation:nsws-update-toast 14s ease-in forwards;}
 #nsws-update-toast:hover{opacity:1!important;animation-play-state:paused;}
 #nsws-update-toast>.checker{height:6px;background:repeating-conic-gradient(#fff 0 25%,#112052 0 50%) 0 0/6px 6px;opacity:.85;}
 #nsws-update-toast>.row{display:flex;align-items:center;gap:10px;padding:8px 10px 10px 22px;}
@@ -147,6 +147,8 @@
         row.append(text, viewButton);
         toast.appendChild(row);
         toast.addEventListener("animationend", closeToast);
+        const cps = document.getElementById("_nsws-cps");
+        if (cps && cps.offsetHeight) toast.style.top = cps.offsetTop + cps.offsetHeight + 8 + "px";
         (document.getElementById("ui") || document.body).appendChild(toast);
     }
 
