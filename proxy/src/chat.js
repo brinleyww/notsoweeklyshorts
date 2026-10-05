@@ -160,6 +160,11 @@ export class ChatRoom extends DurableObject {
         }
     }
 
+    // Called by the Worker with the owner's announcements.
+    announce(data) {
+        this.broadcast(data);
+    }
+
     online() {
         let n = 0;
         for (const ws of this.ctx.getWebSockets()) if (ws.deserializeAttachment()?.joined) n++;

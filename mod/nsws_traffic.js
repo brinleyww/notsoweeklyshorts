@@ -47,6 +47,7 @@
     let seq = 0;
     let sentNick = null;
     let currentTrack = null;
+    let seenAnn = null;
     let lastSample = performance.now();
     let lastBeat = -Infinity;
 
@@ -89,6 +90,7 @@
             tr: tracks,
         };
         if (end) body.end = 1;
+        if (seenAnn) body.an = seenAnn;
         if (body.n === 0 && document.referrer) {
             try {
                 const host = new URL(document.referrer).host;
@@ -98,8 +100,10 @@
         const nick = readProfile()?.nickname;
         if (typeof nick === "string" && nick !== sentNick) body.nick = nick;
 
-        const sent = { runtime, focus, driving, events, tracks };
+        const sent = { runtime, focus, driving, events, tracks, seenAnn };
+        const asked = performance.now();
         runtime = focus = driving = 0;
+        seenAnn = null;
         events = {};
         tracks = {};
         lastBeat = performance.now();
@@ -114,6 +118,7 @@
             if (body.nick) sentNick = body.nick;
             if (response.status === 200) {
                 response.json().then((data) => {
+                    if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
@@ -125,6 +130,7 @@
             runtime += sent.runtime;
             focus += sent.focus;
             driving += sent.driving;
+            seenAnn = seenAnn || sent.seenAnn;
             for (const [k, v] of Object.entries(sent.events)) events[k] = (events[k] || 0) + v;
             for (const [k, v] of Object.entries(sent.tracks)) {
                 const t = tracks[k] || (tracks[k] = [0, 0, 0]);
@@ -157,6 +163,9 @@
             const t = tracks[track] || (tracks[track] = [0, 0, 0]);
             t[TRACK_EVENTS[name]]++;
             if (name === "attempts") currentTrack = track;
+        },
+        seen(id) {
+            seenAnn = id;
         },
     };
 

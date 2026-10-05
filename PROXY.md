@@ -285,6 +285,24 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   first 100 characters (`reply_to`), so the quote outlives the original, which then reads
   "Original message was deleted". A reply ping goes through the same limits as an `@name`.
 
+## Announcements
+
+The owner writes one on Race Control's Announce tab. It shows at the top middle of every
+player's screen like a chat message from the owner (their chat name colour, in each player's
+chat font), stays for 6–30 s and fades out. `mod/nsws_announce.js` draws it.
+
+- **Storage:** the `announcements` table in `TrafficStats` (created in `migrate()`). One is
+  live at a time; sending a new one ends the old one. Owner endpoints (owner key in the body):
+  `POST /nsws/announce`, `/nsws/announce/stop` and `/nsws/announce/list`.
+- **Delivery:** every beat reply carries the live announcement (`ann`, or null), so every
+  player gets it within a minute. Players with the chat open get it at once: the Worker also
+  broadcasts `{t:"ann"}` / `{t:"ann-stop"}` through the `ChatRoom`. "Who gets it" sets how long
+  it stays live for people who open the site later (5 minutes, an hour or a day).
+- **Once per browser:** the page remembers ids it has shown (`nsws_ann_seen`) and holds one back
+  while the tab is hidden. The next beat reports it as seen (`an`), which the "Seen by" count
+  sums once per session. A null in a beat reply ends the one on screen, which is how Stop
+  reaches players without the chat.
+
 ## Accounts (names and clips)
 
 `src/accounts.js`, the `Accounts` Durable Object (one instance, `"global"`). An

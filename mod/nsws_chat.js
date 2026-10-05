@@ -1202,6 +1202,10 @@
                 item.m.reactions = item.m.reactions.filter((kind) => kind.users.length);
             }
             renderLog();
+        } else if (data.t === "ann") {
+            window.__nswsAnnounce?.receive(data.a);
+        } else if (data.t === "ann-stop") {
+            window.__nswsAnnounce?.stop(data.id);
         } else if (data.t === "err") {
             addSystem(data.text);
         } else if (data.t === "slow" || data.t === "timeout") {
@@ -1685,6 +1689,13 @@
 
     window.__nswsChat = {
         isEnabled,
+        // The colour the chat gives this browser's player; the Worker derives the same uid.
+        async ownColor() {
+            const visitor = storageGet(VISITOR_KEY);
+            if (!/^[0-9a-f]{32}$/.test(visitor || "") || !crypto.subtle) return null;
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nsws-chat:" + visitor));
+            return nickColor(Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 16));
+        },
         fonts: FONTS.map(({ id, title, text, style }) => ({ id, title, preview: text, style })),
         getFont: () => currentFont().id,
         setFont(id) {

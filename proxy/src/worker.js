@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, describeClient } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, describeClient } from "./traffic.js";
 import { AntiCheat, RunChecker } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
@@ -850,14 +850,15 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (!beat) return plain(400, "Bad request", origin);
         const client = describeClient(request);
         const meta = { ...client, site: new URL(origin).host, ip: request.headers.get("CF-Connecting-IP") };
-        // The reply carries how many people are on the site, which the chat shows.
-        let online = null;
+        // The reply carries how many people are on the site, which the chat shows, and the
+        // owner's live announcement.
+        let reply = null;
         try {
-            online = (await stub.beat(beat, meta)) ?? null;
+            reply = await stub.beat(beat, meta);
         } catch (err) {
             console.error("traffic beat failed:", err && err.message);
         }
-        return json({ online }, origin);
+        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null }, origin);
     }
 
     let body;
@@ -880,11 +881,34 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (tracks.some((t) => !t)) return plain(400, "Bad request", origin);
         return json(await anti.putTracks(tracks), origin);
     }
+    if (url.pathname === TRAFFIC_PREFIX + "announce/list") return json(await stub.announcements(), origin);
+    if (url.pathname === TRAFFIC_PREFIX + "announce") {
+        const announcement = readAnnouncement(body);
+        if (!announcement) return plain(400, "Bad request", origin);
+        const result = await stub.announce(announcement);
+        await chatBroadcast(env, { t: "ann", a: result.current });
+        return json(result, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "announce/stop") {
+        const result = await stub.stopAnnouncement();
+        if (result.stopped != null) await chatBroadcast(env, { t: "ann-stop", id: result.stopped });
+        return json(result, origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.approve(body.id), origin);
     }
     return plain(404, "Not found", origin);
+}
+
+// Players with the chat open hear about announcements straight away; everyone else on their next beat.
+async function chatBroadcast(env, data) {
+    if (!env.CHAT) return;
+    try {
+        await env.CHAT.get(env.CHAT.idFromName("global")).announce(data);
+    } catch (err) {
+        console.error("chat announce failed:", err && err.message);
+    }
 }
 
 // Browsers send the page's Origin on a WebSocket upgrade too, so only the site can open the chat.

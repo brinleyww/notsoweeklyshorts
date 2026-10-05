@@ -28,6 +28,14 @@ const RANGES = {
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
+// Announcements: one is live at a time, and a newer one replaces it. Players get it with their
+// next beat, so even "online now" has to stay up a few minutes for everyone's beat to come in.
+const ANNOUNCE_SHOW_S = new Set([6, 10, 15, 30]);
+const ANNOUNCE_REACH_MIN = new Set([5, 60, 1440]);
+const ANNOUNCE_NAME = 32;
+const ANNOUNCE_TEXT = 160;
+const ANNOUNCE_HISTORY = 20;
+
 function clampNumber(value, max) {
     const n = Number(value);
     return Number.isFinite(n) && n > 0 ? Math.min(n, max) : 0;
@@ -55,9 +63,12 @@ export class TrafficStats extends DurableObject {
         this.statsCache = new Map();
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
+        this.ann = null;
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
             this.restoreLive();
+            this.ann = this.sql.exec("SELECT * FROM announcements WHERE stopped IS NULL AND until > ? ORDER BY id DESC LIMIT 1",
+                Date.now()).toArray()[0] ?? null;
         });
     }
 
@@ -83,6 +94,10 @@ export class TrafficStats extends DurableObject {
             day INTEGER NOT NULL, track TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
             finishes INTEGER NOT NULL DEFAULT 0, uploads INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (day, track)) WITHOUT ROWID`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, until INTEGER NOT NULL,
+            name TEXT NOT NULL, color TEXT NOT NULL, text TEXT NOT NULL, show_s INTEGER NOT NULL,
+            online INTEGER NOT NULL DEFAULT 0, seen INTEGER NOT NULL DEFAULT 0, stopped INTEGER)`);
     }
 
     // The in-memory list of who is online is lost when the object is evicted.
@@ -162,6 +177,11 @@ export class TrafficStats extends DurableObject {
     }
 
     async beat(b, meta) {
+        const online = this.record(b, meta) ?? null;
+        return { online, ann: this.liveAnnouncement() };
+    }
+
+    record(b, meta) {
         const now = Date.now();
         let s = this.online.get(b.s);
         let opened = false;
@@ -228,10 +248,49 @@ export class TrafficStats extends DurableObject {
                 day, track, attempts, finishes, uploads);
         }
 
+        // Once per session; a restart of this object forgets seenAnn, so a session can rarely count twice.
+        if (b.an && s.seenAnn !== b.an) {
+            s.seenAnn = b.an;
+            this.sql.exec("UPDATE announcements SET seen = seen + 1 WHERE id = ?", b.an);
+        }
+
         for (const [id, other] of this.online) {
             if (other.ended || other.expires < now - 10 * 60_000) this.online.delete(id);
         }
         return this.playersOnline(now);
+    }
+
+    liveAnnouncement() {
+        const a = this.ann;
+        if (!a || a.until <= Date.now()) return null;
+        return { id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s };
+    }
+
+    announce(a) {
+        const now = Date.now();
+        this.sql.exec("UPDATE announcements SET stopped = ? WHERE stopped IS NULL AND until > ?", now, now);
+        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.playersOnline(now)).one();
+        return this.announcements();
+    }
+
+    stopAnnouncement() {
+        const stopped = this.ann?.id ?? null;
+        if (stopped != null) this.sql.exec("UPDATE announcements SET stopped = ? WHERE id = ?", Date.now(), stopped);
+        this.ann = null;
+        return { stopped, ...this.announcements() };
+    }
+
+    announcements() {
+        const now = Date.now();
+        const current = this.liveAnnouncement();
+        const list = this.sql.exec("SELECT * FROM announcements ORDER BY id DESC LIMIT ?", ANNOUNCE_HISTORY).toArray()
+            .map((r) => ({
+                id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
+                online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id,
+            }));
+        return { current, list, online: this.playersOnline(now), now };
     }
 
     // Unflushed seconds of everyone online, so the dashboard's running total is exact.
@@ -438,8 +497,29 @@ export function readBeat(text) {
         ref: ref && /^[a-z0-9.-]+$/i.test(ref) ? ref.toLowerCase() : null,
         st: STATES.has(raw.st) ? raw.st : null,
         tk: typeof raw.tk === "string" && /^[0-9a-f]{64}$/.test(raw.tk) ? raw.tk : null,
+        an: Number.isSafeInteger(raw.an) && raw.an > 0 ? raw.an : null,
         ev,
         tr,
+    };
+}
+
+function announceText(value, max) {
+    if (typeof value !== "string") return "";
+    // Controls, bidi overrides and other invisible characters, which could hide or reorder text.
+    const text = value.normalize("NFC").replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u2028\u2029]/gu, "").replace(/\s+/g, " ").trim();
+    return [...text].slice(0, max).join("");
+}
+
+// Validates an announcement from the owner's panel. Null if it has no message.
+export function readAnnouncement(body) {
+    const text = announceText(body?.text, ANNOUNCE_TEXT);
+    if (!text) return null;
+    return {
+        name: announceText(body.name, ANNOUNCE_NAME) || "Owner",
+        text,
+        color: /^#[0-9a-f]{6}$/i.test(body.color ?? "") ? body.color.toLowerCase() : "#b3c1ff",
+        show: ANNOUNCE_SHOW_S.has(body.show) ? body.show : 10,
+        reach: ANNOUNCE_REACH_MIN.has(body.reach) ? body.reach : 5,
     };
 }
 

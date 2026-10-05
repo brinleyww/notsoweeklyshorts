@@ -9,7 +9,10 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"]];
+    const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
+    const ANN_REACH = [[5, "Online now"], [60, "+ next hour"], [1440, "+ next day"]];
+    const ANN_MAX = 160;
     const LIVE_REFRESH_MS = 10000;
     const STATS_REFRESH_MS = 60000;
     const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -106,6 +109,19 @@
 .nrc-pill{display:inline-block;font-size:12px;padding:3px 9px;color:#fff;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
 .nrc-empty{padding:26px 0;text-align:center;color:rgba(255,255,255,.45);font-size:15px;}
 .nrc-foot{font-size:12px;color:rgba(255,255,255,.4);margin-top:16px;line-height:1.5;}
+.nrc-compose{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-bottom:14px;align-items:start;}
+.nrc-field{margin-bottom:14px;}
+.nrc-field>label{display:flex;justify-content:space-between;font-size:13px;color:rgba(255,255,255,.6);margin-bottom:7px;}
+.nrc-field textarea{display:block;width:100%;height:96px;resize:none;margin:0;padding:10px 16px;border:none;outline:none;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);background:var(--surface-tertiary-color);color:var(--text-color);font-size:20px;line-height:1.25;}
+.nrc-field textarea::placeholder{color:var(--text-color);opacity:.25;}
+.nrc-send{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
+.nrc-send .button{font-size:20px;padding:8px 20px;}
+.nrc-send .button.go{background:#3987e5;}
+.nrc-send .button.armed{color:${GOLD};box-shadow:inset 0 -3px 0 ${GOLD};}
+.nrc-annline{position:relative;font-size:20px;line-height:1.35;padding:10px 16px 10px 28px;background:var(--surface-tertiary-color);overflow-wrap:anywhere;font-family:var(--nsws-chat-text,ForcedSquare,Arial),sans-serif;font-style:var(--nsws-chat-font-style,italic);}
+.nrc-annline::before{content:"";position:absolute;left:13px;top:10px;bottom:10px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
+.nrc-annline b{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
+@media (max-width:720px){.nrc-compose{grid-template-columns:1fr;}}
 @media (max-width:720px){.nrc-hero{grid-template-columns:1fr;}.nrc-close.button{position:absolute;right:18px;top:20px;}.nrc-title{margin-right:64px;}.nrc-bar{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;}.nrc-bar .track{grid-column:1/-1;order:3;}.nrc-head{padding:10px 14px;}.nrc-tabs{padding:8px 14px 0;}.nrc-body{padding:14px;}.nrc-title h1{font-size:26px;}.nrc-chip.button{font-size:15px;padding:6px 11px;}}
 `;
 
@@ -449,6 +465,15 @@
         anti: null,
         antiError: null,
         antiBusy: "",
+        ann: null,
+        annError: null,
+        annRoot: null,
+        annLive: null,
+        annList: null,
+        annStatus: null,
+        annArmed: false,
+        annArmTimer: 0,
+        annDraft: { text: "", show: 10, reach: 5 },
     };
 
     async function post(path, extra) {
@@ -1046,15 +1071,213 @@
         body.appendChild(el("div", "nrc-foot", "Owner only. Refreshes every minute while this tab is open."));
     }
 
+    function annName() {
+        try {
+            const slot = parseInt(localStorage.getItem("polytrack_v5_prod_user_slot") ?? "0", 10);
+            const nick = JSON.parse(localStorage.getItem("polytrack_v5_prod_user_" + (slot >= 0 ? slot : 0)))?.nickname;
+            return typeof nick === "string" && nick.trim() ? nick.trim() : "Owner";
+        } catch {
+            return "Owner";
+        }
+    }
+
+    async function loadAnnouncements() {
+        try {
+            ui.ann = await post("announce/list", {});
+            ui.annError = null;
+        } catch (err) {
+            ui.annError = err;
+        }
+        if (ui.overlay && ui.tab === "announce") renderAnnLists();
+    }
+
+    function annStatus(text) {
+        if (ui.annStatus) ui.annStatus.textContent = text;
+    }
+
+    function disarm(button) {
+        clearTimeout(ui.annArmTimer);
+        ui.annArmed = false;
+        button.classList.remove("armed");
+        button.textContent = "Send to everyone";
+    }
+
+    async function sendAnnouncement(button, textarea, count) {
+        const d = ui.annDraft;
+        const text = d.text.trim();
+        if (!text) {
+            annStatus("Write a message first.");
+            return;
+        }
+        if (!ui.annArmed) {
+            ui.annArmed = true;
+            button.classList.add("armed");
+            button.textContent = "Click again to send";
+            ui.annArmTimer = setTimeout(() => disarm(button), 4000);
+            return;
+        }
+        disarm(button);
+        button.disabled = true;
+        annStatus("Sending…");
+        try {
+            const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach });
+            ui.ann = data;
+            d.text = textarea.value = "";
+            count();
+            annStatus("Sent. " + (data.online === 1 ? "1 player is" : num(data.online) + " players are") + " online; they get it within a minute, instantly with the chat open.");
+            window.__nswsAnnounce?.receive(data.current);
+        } catch (err) {
+            annStatus(err.status === 404 ? "The Worker hasn't been deployed with announcements yet." : "Couldn't send it. Try again in a moment.");
+        }
+        button.disabled = false;
+        renderAnnLists();
+    }
+
+    async function stopAnnouncement(button) {
+        button.disabled = true;
+        try {
+            const data = await post("announce/stop", {});
+            ui.ann = data;
+            if (data.stopped != null) window.__nswsAnnounce?.stop(data.stopped);
+            annStatus("Stopped. Nobody new will get it, and it leaves screens with their next beat.");
+        } catch {
+            annStatus("Couldn't stop it. Try again in a moment.");
+        }
+        renderAnnLists();
+    }
+
+    // The owner's name colour in the chat, so an announcement looks like their chat messages.
+    async function annColor() {
+        return (await window.__nswsChat?.ownColor?.().catch(() => null)) || ACCENT;
+    }
+
+    function annLine(a) {
+        const line = el("div", "nrc-annline");
+        line.style.setProperty("--c", a.color || ACCENT);
+        line.append(el("b", null, a.name), ": " + a.text);
+        return line;
+    }
+
+    function buildAnnounce() {
+        const d = ui.annDraft;
+        const root = el("div");
+        const grid = el("div", "nrc-compose");
+
+        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once.");
+        const field = el("div", "nrc-field");
+        const label = el("label");
+        const counter = el("span");
+        label.append(el("span", null, "Message"), counter);
+        const textarea = el("textarea");
+        textarea.maxLength = ANN_MAX;
+        textarea.placeholder = "Week 10 is live! Go set some times.";
+        textarea.value = d.text;
+        const count = () => {
+            counter.textContent = [...textarea.value].length + " / " + ANN_MAX;
+        };
+        count();
+        textarea.addEventListener("input", () => {
+            d.text = textarea.value;
+            count();
+        });
+        for (const type of ["keydown", "keyup", "keypress"]) textarea.addEventListener(type, (e) => e.stopPropagation());
+        field.append(label, textarea);
+        form.appendChild(field);
+
+        const option = (title, picker) => {
+            const f = el("div", "nrc-field");
+            f.append(el("label", null, title), picker);
+            form.appendChild(f);
+        };
+        option("On screen for", toggle(ANN_SHOW, d.show, (k) => (d.show = k)));
+        option("Who gets it", toggle(ANN_REACH, d.reach, (k) => (d.reach = k)));
+
+        const buttons = el("div", "nrc-send");
+        const preview = el("button", "button", "Preview");
+        preview.addEventListener("click", async () => {
+            const text = d.text.trim();
+            if (!text) return annStatus("Write a message first.");
+            window.__nswsAnnounce?.preview({ name: annName(), color: await annColor(), text, show: d.show });
+            annStatus("Only you can see a preview.");
+        });
+        const send = el("button", "button go", "Send to everyone");
+        send.addEventListener("click", () => sendAnnouncement(send, textarea, count));
+        buttons.append(preview, send);
+        form.appendChild(buttons);
+        ui.annStatus = el("p", "nrc-sub");
+        ui.annStatus.style.margin = "12px 0 0";
+        form.appendChild(ui.annStatus);
+
+        ui.annLive = card("On screen now", "graph");
+        grid.append(form, ui.annLive);
+        root.appendChild(grid);
+        ui.annList = card("Recent announcements", "list");
+        root.appendChild(ui.annList);
+        root.appendChild(el("div", "nrc-foot", "Owner only. Players with the chat open get it instantly; everyone else with their next beat, within a minute. A newer announcement replaces the live one."));
+        return root;
+    }
+
+    function renderAnnLists() {
+        if (!ui.annLive) return;
+        for (const box of [ui.annLive, ui.annList]) {
+            while (box.children.length > 1) box.lastChild.remove();
+        }
+        if (!ui.ann) {
+            ui.annLive.appendChild(el("div", "nrc-empty", ui.annError ? "Couldn't load announcements." : "Loading…"));
+            return;
+        }
+        const a = ui.ann;
+        const live = a.list.find((r) => r.live);
+        if (!live) {
+            ui.annLive.appendChild(el("div", "nrc-empty", "Nothing live right now."));
+        } else {
+            ui.annLive.appendChild(annLine(live));
+            const tiles = el("div", "nrc-tiles");
+            tiles.style.cssText = "margin:12px 0;grid-template-columns:repeat(2,minmax(0,1fr));";
+            tiles.appendChild(tile("Seen by", num(live.seen), num(live.online) + " online when sent"));
+            tiles.appendChild(tile("Reaches new players", "until " + fmt.time(live.until), fmt.date(live.until)));
+            ui.annLive.appendChild(tiles);
+            const stop = el("button", "button", "Stop it");
+            stop.style.fontSize = "18px";
+            stop.addEventListener("click", () => stopAnnouncement(stop));
+            ui.annLive.appendChild(stop);
+        }
+        if (!a.list.length) {
+            ui.annList.appendChild(el("div", "nrc-empty", "No announcements yet."));
+            return;
+        }
+        ui.annList.appendChild(table(
+            [["Sent", "num"], ["Message", "name"], ["Shown", "num"], ["Seen by", "num"], ["Status"]],
+            a.list.map((r) => {
+                const msg = el("span", null, r.text);
+                msg.title = r.text;
+                const status = r.live ? "Live" : r.stopped != null && r.stopped < r.until ? "Stopped" : "Ended";
+                return [fmt.dateTime(r.at), msg, r.show + "s", num(r.seen) + " / " + num(r.online), status];
+            })));
+    }
+
+    function renderAnnounce(body) {
+        if (!ui.annRoot) ui.annRoot = buildAnnounce();
+        if (ui.annRoot.parentNode !== body) {
+            body.textContent = "";
+            body.appendChild(ui.annRoot);
+        }
+        renderAnnLists();
+    }
+
     function render() {
         if (!ui.overlay) return;
         const body = ui.body;
         const scroll = body.scrollTop;
-        body.textContent = "";
         hideTip();
         ui.charts = [];
         for (const b of ui.overlay.querySelectorAll("[data-range]")) b.classList.toggle("on", b.dataset.range === ui.range);
         for (const b of ui.overlay.querySelectorAll("[data-tab]")) b.classList.toggle("on", b.dataset.tab === ui.tab);
+        if (ui.tab === "announce") {
+            renderAnnounce(body);
+            return;
+        }
+        body.textContent = "";
 
         if (ui.error && !ui.stats) {
             const box = el("div", "nrc-status", ui.error.status === 403
@@ -1116,6 +1339,9 @@
         ui.overlay = null;
         ui.stats = null;
         ui.charts = [];
+        ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
+        ui.annArmed = false;
+        clearTimeout(ui.annArmTimer);
         for (const t of ui.timers) clearInterval(t);
         ui.timers = [];
         cancelAnimationFrame(ui.raf);
@@ -1176,6 +1402,7 @@
                 ui.body.scrollTop = 0;
                 render();
                 if (key === "anticheat") loadAnti();
+                if (key === "announce") loadAnnouncements();
             });
             tabs.appendChild(b);
         }
@@ -1196,6 +1423,7 @@
         ui.timers.push(setInterval(loadLive, LIVE_REFRESH_MS));
         ui.timers.push(setInterval(loadStats, STATS_REFRESH_MS));
         ui.timers.push(setInterval(() => ui.tab === "anticheat" && loadAnti(), STATS_REFRESH_MS));
+        ui.timers.push(setInterval(() => ui.tab === "announce" && loadAnnouncements(), LIVE_REFRESH_MS));
         ui.raf = requestAnimationFrame(tick);
         render();
         loadStats();
