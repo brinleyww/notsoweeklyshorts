@@ -53713,10 +53713,9 @@ window.__nswsTrackQuery = function(trackId) {
             (() => {
                 const stBtn = document.createElement("button");
                 stBtn.className = "button button-image";
-                stBtn.style.cssText = "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;";
+                stBtn.innerHTML = '<img src="images/standings.svg">';
                 const stLabel = document.createElement("p");
                 stLabel.textContent = "Standings";
-                stLabel.style.cssText = "font-size:22px;margin:0;padding:0;";
                 stBtn.appendChild(stLabel);
                 stBtn.addEventListener("click", () => {
                     n.playUIClick();
