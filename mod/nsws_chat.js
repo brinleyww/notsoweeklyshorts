@@ -438,7 +438,8 @@
             w,
             h,
             x: Number.isFinite(saved?.x) ? saved.x : 12,
-            y: Number.isFinite(saved?.y) ? saved.y : window.innerHeight - h - 12,
+            // Clears the home menu's bottom bar, which holds the Chat on/off button.
+            y: Number.isFinite(saved?.y) ? saved.y : window.innerHeight - h - 64,
             min: !!saved?.min,
             full: !!saved?.full,
         };

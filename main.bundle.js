@@ -54134,6 +54134,26 @@ window.__nswsTrackQuery = function(trackId) {
             C.get(this, Bc, "f").appendChild(R),
             C.get(this, Gc, "f").push(R),
             _();
+            if (window.__nswsChat) {
+                const chat = window.__nswsChat;
+                const chatBtn = document.createElement("button");
+                chatBtn.className = "button";
+                const refreshChatBtn = () => {
+                    const on = chat.isEnabled();
+                    chatBtn.classList.toggle("disabled", !on);
+                    chatBtn.innerHTML = on ? '<img src="images/chat_on.svg">' : '<img src="images/chat_off.svg">';
+                    chatBtn.appendChild(document.createTextNode(on ? " Chat: On" : " Chat: Off"));
+                };
+                chatBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    chat.setEnabled(!chat.isEnabled());
+                    refreshChatBtn();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(chatBtn);
+                C.get(this, Gc, "f").push(chatBtn);
+                refreshChatBtn();
+            }
             const P = o.getCurrentUserProfile();
 
             if (P.isVerifier) {
