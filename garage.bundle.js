@@ -346,6 +346,24 @@
                     i.get(this, j, "f").value = t
                 }
                 ));
+                let __nswsChecking = !1;
+                const __nswsSubmit = () => {
+                    if (__nswsChecking)
+                        return;
+                    const t = i.get(this, Q, "m", $).call(this);
+                    if (t.nickname == e || !window.__nswsAccounts)
+                        return void r(t);
+                    __nswsChecking = !0,
+                    window.__nswsAccounts.nameAvailable(o.token, t.nickname, !1).then((n => {
+                        __nswsChecking = !1,
+                        this.__nswsDisposed || (!1 === n ? window.__nswsAccounts.showNameTaken(( () => {
+                            i.get(this, j, "f").focus()
+                        }
+                        )) : r(t))
+                    }
+                    ))
+                }
+                ;
                 const __nswsNicknameBanned = typeof window.__nswsIsNicknameBanned === "function" && window.__nswsIsNicknameBanned(o?.nickname ?? e);
                 __nswsNicknameBanned && (i.get(this, j, "f").disabled = !0);
                 const v = document.createElement("div");
@@ -466,7 +484,7 @@
                     e.prepend(document.createTextNode(t.get("Save"))),
                     e.addEventListener("click", ( () => {
                         n.playUIClick(),
-                        r(i.get(this, Q, "m", $).call(this))
+                        __nswsSubmit()
                     }
                     )),
                     D.appendChild(e)
@@ -477,19 +495,20 @@
                     e.prepend(document.createTextNode(t.get("Confirm"))),
                     e.addEventListener("click", ( () => {
                         n.playUIClick(),
-                        r(i.get(this, Q, "m", $).call(this))
+                        __nswsSubmit()
                     }
                     )),
                     D.appendChild(e)
                 }
                 window.addEventListener("keydown", i.set(this, Z, (t => {
-                    null == i.get(this, K, "f") && ("Escape" == t.code ? (r(null),
-                    t.preventDefault()) : "Enter" == t.code && (r(i.get(this, Q, "m", $).call(this)),
+                    null != i.get(this, K, "f") || window.__nswsMessageBox?.isOpen || ("Escape" == t.code ? (r(null),
+                    t.preventDefault()) : "Enter" == t.code && (__nswsSubmit(),
                     t.preventDefault()))
                 }
                 ), "f"))
             }
             dispose() {
+                this.__nswsDisposed = !0,
                 i.get(this, Y, "f").removeChild(i.get(this, _, "f")),
                 i.get(this, K, "f")?.dispose(),
                 i.set(this, K, null, "f"),
@@ -1914,8 +1933,11 @@
             dispose() {
                 if (i.get(this, oe, "f")) {
                     const {token: t, nickname: n, countryCode: e, carStyle: s} = i.get(this, Hn, "f").getCurrentUserProfile();
-                    i.get(this, Un, "f").submitUserProfile(t, n, e, s).catch((t => {
-                        console.warn(t)
+                    const __nswsProfiles = i.get(this, Hn, "f")
+                      , __nswsApi = i.get(this, Un, "f");
+                    __nswsApi.submitUserProfile(t, n, e, s).catch((t => {
+                        t?.nicknameTaken ? (window.__nswsAccounts?.showNameTaken(),
+                        __nswsProfiles.syncUserProfile(__nswsApi)) : console.warn(t)
                     }
                     ))
                 }

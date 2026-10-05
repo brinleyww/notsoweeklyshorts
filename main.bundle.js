@@ -777,6 +777,10 @@ window.__nswsTrackQuery = function(trackId) {
         if (Array.isArray(clip.recordingBytes)) return new Uint8Array(clip.recordingBytes);
         return new Uint8Array(0);
     }
+    // Clips belong to the profile's account and are kept by the proxy. This device's own
+    // list (CLIPS_STORAGE_KEY) only holds clips that haven't reached the account yet: every
+    // new clip goes there first, and a clip leaves it only once the account has it. Clips
+    // saved before accounts existed are merged into the account the same way.
     function getAllClips() {
         try {
             const raw = localStorage.getItem(CLIPS_STORAGE_KEY);
@@ -804,6 +808,7 @@ window.__nswsTrackQuery = function(trackId) {
         const ids = new Set(clips.map(c => c.id));
         while (ids.has(id)) id = id + "_1";
         clip.id = id;
+        if (clipOwner && clipOwner.token === _clipToken()) clip.owner = clipOwner.id;
         clips.push(clip);
         return saveAllClips(clips);
     }
@@ -817,21 +822,147 @@ window.__nswsTrackQuery = function(trackId) {
         clip.name = newName;
         return saveAllClips(clips);
     }
-    function _findDuplicateClip(candidate) {
+    // The account's clips (without their recordings) as last listed, for the profile whose
+    // token is `token`. `owner` is that account's userId.
+    const cloudClips = {
+        token: null,
+        clips: [],
+        loaded: false,
+        codes: new Map()
+    };
+    let clipOwner = null;
+    let clipSync = null;
+    function _clipToken() {
+        return window.__nswsAccounts?.profileToken() ?? null;
+    }
+    async function _sha256Hex(text) {
+        const digest = await crypto.subtle.digest("SHA-256", (new TextEncoder).encode(text));
+        return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+    }
+    function _clipKey(clip) {
+        return _sha256Hex((clip.trackId || "") + "|" + clip.frames + "|" + _bytesToBase64(_clipRecordingBytes(clip)));
+    }
+    function _clipCreatedAt(clip) {
+        if (Number.isSafeInteger(clip.createdAt)) return clip.createdAt;
+        const fromId = Number(/^clip_(\d+)/.exec(clip.id || "")?.[1]);
+        return Number.isSafeInteger(fromId) ? fromId : null;
+    }
+    function syncClips() {
+        if (!clipSync) clipSync = _syncClips().finally(() => {
+            clipSync = null;
+        });
+        return clipSync;
+    }
+    async function _syncClips() {
+        const accounts = window.__nswsAccounts;
+        const token = _clipToken();
+        if (!accounts || !token) throw new Error("No profile");
+        if (clipOwner?.token !== token) clipOwner = {
+            token: token,
+            id: await _sha256Hex(token)
+        };
+        if (cloudClips.token !== token) {
+            cloudClips.token = token;
+            cloudClips.clips = [];
+            cloudClips.loaded = false;
+            cloudClips.codes.clear();
+        }
+        for (const clip of getAllClips()) {
+            if (clip.owner && clip.owner !== clipOwner.id) continue;
+            let upload;
+            try {
+                const code = toClipExport(clip);
+                // Only a code that reads back as the same run may replace the copy on this device.
+                const check = fromClipExport(code);
+                if (!check || check.frames !== clip.frames || (check.trackId || "") !== (clip.trackId || "") || check.recordingBytes !== _bytesToBase64(_clipRecordingBytes(clip))) continue;
+                upload = {
+                    key: await _clipKey(clip),
+                    code: code,
+                    name: clip.name,
+                    playerName: clip.playerName,
+                    trackId: clip.trackId,
+                    frames: clip.frames,
+                    createdAt: _clipCreatedAt(clip)
+                };
+            } catch (e) {
+                continue;
+            }
+            try {
+                await accounts.call("clips/add", {
+                    userToken: token,
+                    clip: upload
+                });
+            } catch (e) {
+                // A clip the proxy refuses stays on this device; anything else is retried later.
+                if (e.status === 400 || e.status === 413) continue;
+                if (e.status === 507) break;
+                throw e;
+            }
+            localDeleteClip(clip.id);
+            if (_clipToken() !== token) return;
+        }
+        const list = await accounts.call("clips/list", {
+            userToken: token
+        });
+        if (_clipToken() !== token) return;
+        cloudClips.clips = (Array.isArray(list?.clips) ? list.clips : []).filter(c => c && typeof c.id === "string" && Number.isFinite(c.frames));
+        cloudClips.loaded = true;
+    }
+    // The account's clips, then any still waiting on this device, oldest first.
+    function _menuClips() {
+        const token = _clipToken();
+        const owner = clipOwner?.token === token ? clipOwner.id : null;
+        const cloud = cloudClips.token === token ? cloudClips.clips : [];
+        const local = getAllClips().filter(c => !c.owner || c.owner === owner).map(c => Object.assign({}, c, {
+            local: true
+        }));
+        return cloud.concat(local).sort((a, b) => (_clipCreatedAt(a) ?? 0) - (_clipCreatedAt(b) ?? 0));
+    }
+    // A listed clip with its recording.
+    async function _fullClip(clip) {
+        if (clip.local) return clip;
+        let code = cloudClips.codes.get(clip.id);
+        if (!code) {
+            code = (await window.__nswsAccounts.call("clips/get", {
+                userToken: cloudClips.token,
+                id: clip.id
+            }))?.code;
+            if (typeof code !== "string") throw new Error("Clip not found");
+            cloudClips.codes.set(clip.id, code);
+        }
+        const decoded = fromClipExport(code);
+        if (!decoded) throw new Error("Clip is damaged");
+        return Object.assign(decoded, {
+            id: clip.id,
+            name: clip.name,
+            createdAt: clip.createdAt
+        });
+    }
+    async function _findDuplicateClip(candidate) {
         const candidateBytes = _bytesToBase64(_clipRecordingBytes(candidate));
-        const existing = getAllClips();
-        for (const c of existing) {
+        for (const c of getAllClips()) {
             if ((c.trackId || "") !== (candidate.trackId || "")) continue;
             if (c.frames !== candidate.frames) continue;
             if (_bytesToBase64(_clipRecordingBytes(c)) !== candidateBytes) continue;
             return c;
         }
-        return null;
+        if (cloudClips.token !== _clipToken()) return null;
+        const key = await _clipKey(candidate);
+        return cloudClips.clips.find(c => c.key === key) ?? null;
+    }
+    // The clip format stores each text in at most 255 bytes.
+    function _clipTextBytes(text) {
+        let bytes = (new TextEncoder).encode(text ?? "");
+        while (bytes.length > 255) {
+            text = Array.from(text).slice(0, -1).join("");
+            bytes = (new TextEncoder).encode(text);
+        }
+        return bytes;
     }
     function toClipExport(clip) {
         const pako = window.__clipPako?.Ay ?? window.__clipPako;
-        const nameBytes = (new TextEncoder).encode(clip.name ?? "");
-        const playerNameBytes = (new TextEncoder).encode(clip.playerName ?? clip.name ?? "");
+        const nameBytes = _clipTextBytes(clip.name ?? "");
+        const playerNameBytes = _clipTextBytes(clip.playerName ?? clip.name ?? "");
         const trackIdBytes = (new TextEncoder).encode(clip.trackId ?? "");
         const carStyleBytes = (new TextEncoder).encode(clip.carStyle ?? "");
         const recBytes = _clipRecordingBytes(clip);
@@ -969,6 +1100,7 @@ window.__nswsTrackQuery = function(trackId) {
             runHasClip = true;
             window.__nswsTraffic?.event("clips");
             showClipSavedNotification();
+            syncClips().catch(() => {});
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
         }
@@ -976,7 +1108,7 @@ window.__nswsTrackQuery = function(trackId) {
     // Clips the run of the car the Watch view is focused on. That run is already
     // complete, so the clip always covers it from start to finish, wherever
     // playback currently is.
-    function clipWatchedRun() {
+    async function clipWatchedRun() {
         const run = watchSession?.getFocusedRun();
         if (!run) return;
         const frames = run.time?.numberOfFrames ?? 0;
@@ -1003,22 +1135,23 @@ window.__nswsTrackQuery = function(trackId) {
             createdAt: now
         };
         // Watching a clip, or a run clipped earlier, would otherwise save a copy.
-        if (_findDuplicateClip(clip)) {
+        if (await _findDuplicateClip(clip)) {
             showRunAlreadyClippedNotification();
             return;
         }
         if (localAddClip(clip)) {
             window.__nswsTraffic?.event("clips");
             showClipSavedNotification();
+            syncClips().catch(() => {});
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
         }
     }
-    function showClipSavedNotification() {
+    function showClipSavedNotification(text) {
         injectClipCSS();
         const el = document.createElement("div");
         el.className = "clip-saved-notification";
-        el.textContent = "📹 Clip saved!";
+        el.textContent = text || "📹 Clip saved!";
         document.body.appendChild(el);
         requestAnimationFrame(() => requestAnimationFrame(() => {
             el.classList.add("show");
@@ -1174,7 +1307,7 @@ window.__nswsTrackQuery = function(trackId) {
         if (document.getElementById("_bw-clip-css")) return;
         var style = document.createElement("style");
         style.id = "_bw-clip-css";
-        style.textContent = [ ".clip-menu-bg{display:flex;flex-direction:column;position:absolute;left:calc(50% - 750px / 2);top:150px;z-index:2;margin:0;padding:0;width:750px;height:calc(100% - 150px * 2);box-sizing:border-box;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-bg>h2{margin:0;padding:10px 20px;font-weight:normal;font-size:38px;text-align:center;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-container{margin:0;padding:10px;flex-grow:1;min-height:0;box-sizing:border-box;background-color:var(--surface-secondary-color);overflow-x:hidden;overflow-y:scroll;pointer-events:auto;}", "button.clip-menu-entry{position:relative;margin:0 0 10px 0;padding:10px 20px;display:block;width:100%;box-sizing:border-box;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);text-align:left;white-space:nowrap;}", "button.clip-menu-entry:last-of-type{margin-bottom:0;}", "button.clip-menu-entry.selected{background-color:var(--button-hover-color);}", "button.clip-menu-entry>h2{margin:0;padding:0 0 6px 0;font-weight:normal;font-size:24px;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>p{margin:0;font-size:18px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>.checkmark{display:none;position:absolute;right:0;top:0;margin:6px;width:14px;}", "button.clip-menu-entry.selected>.checkmark{display:block;animation:clip-menu-checkmark-spawn 0.15s ease-out;}", "@keyframes clip-menu-checkmark-spawn{0%{transform:scale(0);}90%{transform:scale(1.2);}100%{transform:scale(1);}}", ".clip-menu-wrapper{display:flex;align-items:flex-start;flex-wrap:nowrap;padding:10px;}", ".clip-menu-wrapper>.button.back{margin:0;flex-shrink:0;}", ".clip-menu-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:10px;margin-left:auto;}", ".clip-menu-actions>.button{margin:0;}", ".clip-box-bg{position:fixed;inset:0;background-color:rgba(20,20,30,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;}", ".clip-box{background-color:var(--surface-color);color:var(--text-color);width:500px;max-width:90vw;box-sizing:border-box;display:flex;flex-direction:column;}", ".clip-box>textarea{margin:10px;box-sizing:border-box;width:calc(100% - 20px);height:120px;background-color:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-family:inherit;font-size:16px;padding:10px;resize:none;}", ".clip-box>.clip-box-buttons{display:flex;justify-content:space-between;padding:0 10px 10px 10px;}", ".clip-confirm-message{margin:10px;padding:10px;font-size:18px;line-height:1.4;}", ".clip-saved-notification{position:fixed;left:50%;bottom:150px;margin:0;padding:0;text-align:center;font-size:32px;color:#fff;text-shadow:2px 2px 0 #112052,0 0 2px #000;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px);transition:opacity 0.25s ease-in-out, transform 0.25s ease-in-out;z-index:9999;}", ".clip-saved-notification.show{opacity:1;transform:translateX(-50%) translateY(0);}" ].join("");
+        style.textContent = [ ".clip-menu-bg{display:flex;flex-direction:column;position:absolute;left:calc(50% - 750px / 2);top:150px;z-index:2;margin:0;padding:0;width:750px;height:calc(100% - 150px * 2);box-sizing:border-box;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-bg>h2{margin:0;padding:10px 20px;font-weight:normal;font-size:38px;text-align:center;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-status{margin:0;padding:0 20px 10px 20px;text-align:center;font-size:18px;opacity:0.75;}", ".clip-menu-status:empty{display:none;}", ".clip-menu-container{margin:0;padding:10px;flex-grow:1;min-height:0;box-sizing:border-box;background-color:var(--surface-secondary-color);overflow-x:hidden;overflow-y:scroll;pointer-events:auto;}", "button.clip-menu-entry{position:relative;margin:0 0 10px 0;padding:10px 20px;display:block;width:100%;box-sizing:border-box;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);text-align:left;white-space:nowrap;}", "button.clip-menu-entry:last-of-type{margin-bottom:0;}", "button.clip-menu-entry.selected{background-color:var(--button-hover-color);}", "button.clip-menu-entry>h2{margin:0;padding:0 0 6px 0;font-weight:normal;font-size:24px;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>p{margin:0;font-size:18px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>.checkmark{display:none;position:absolute;right:0;top:0;margin:6px;width:14px;}", "button.clip-menu-entry.selected>.checkmark{display:block;animation:clip-menu-checkmark-spawn 0.15s ease-out;}", "@keyframes clip-menu-checkmark-spawn{0%{transform:scale(0);}90%{transform:scale(1.2);}100%{transform:scale(1);}}", ".clip-menu-wrapper{display:flex;align-items:flex-start;flex-wrap:nowrap;padding:10px;}", ".clip-menu-wrapper>.button.back{margin:0;flex-shrink:0;}", ".clip-menu-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:10px;margin-left:auto;}", ".clip-menu-actions>.button{margin:0;}", ".clip-box-bg{position:fixed;inset:0;background-color:rgba(20,20,30,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;}", ".clip-box{background-color:var(--surface-color);color:var(--text-color);width:500px;max-width:90vw;box-sizing:border-box;display:flex;flex-direction:column;}", ".clip-box>textarea{margin:10px;box-sizing:border-box;width:calc(100% - 20px);height:120px;background-color:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-family:inherit;font-size:16px;padding:10px;resize:none;}", ".clip-box>.clip-box-buttons{display:flex;justify-content:space-between;padding:0 10px 10px 10px;}", ".clip-confirm-message{margin:10px;padding:10px;font-size:18px;line-height:1.4;}", ".clip-saved-notification{position:fixed;left:50%;bottom:150px;margin:0;padding:0;text-align:center;font-size:32px;color:#fff;text-shadow:2px 2px 0 #112052,0 0 2px #000;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px);transition:opacity 0.25s ease-in-out, transform 0.25s ease-in-out;z-index:9999;}", ".clip-saved-notification.show{opacity:1;transform:translateX(-50%) translateY(0);}", ".clips-menu-open .clip-saved-notification{bottom:auto;top:70px;}" ].join("");
         document.head.appendChild(style);
     }
     function ensureClipSkyOverlay() {
@@ -1342,6 +1475,11 @@ window.__nswsTrackQuery = function(trackId) {
         boxBg.appendChild(box);
         document.body.appendChild(boxBg);
     }
+    // The clip to select when the menu next opens: { id, key }.
+    let clipMenuSelect = null;
+    function _clipLink(shareId) {
+        return location.origin + location.pathname + "?clip=" + shareId;
+    }
     function createClipsMenu(onClose) {
         openClipsMenu = () => createClipsMenu(onClose);
         injectClipCSS();
@@ -1350,15 +1488,53 @@ window.__nswsTrackQuery = function(trackId) {
         background.className = "clip-menu-bg";
         var headText = document.createElement("h2");
         headText.textContent = "Your Clips:";
+        var status = document.createElement("p");
+        status.className = "clip-menu-status";
         var container = document.createElement("div");
         container.className = "clip-menu-container";
-        var clipData = getAllClips();
+        var clipData = [];
+        var selection = clipMenuSelect;
+        clipMenuSelect = null;
+        var syncFailed = false;
         function closeClipsMenu() {
             popClipEscape(closeClipsMenu);
             background.remove();
             if (onClose) onClose();
         }
         pushClipEscape(closeClipsMenu);
+        function selectedClip() {
+            var selected = container.querySelector(".clip-menu-entry.selected");
+            if (!selected) return null;
+            return clipData.find(function(c) {
+                return c.id === selected.dataset.clipId;
+            }) || null;
+        }
+        function showStatus() {
+            var listed = cloudClips.loaded && cloudClips.token === _clipToken();
+            if (syncFailed) status.textContent = "Couldn't reach your account's clips. Clips on this device are shown, and they'll be added to your account later.";
+            else if (!listed) status.textContent = "Loading your clips…";
+            else status.textContent = clipData.length ? "" : "No clips yet.";
+        }
+        function render() {
+            clipData = _menuClips();
+            container.textContent = "";
+            clipData.forEach(createEntry);
+            showStatus();
+        }
+        function refresh() {
+            syncFailed = false;
+            render();
+            syncClips().then(function() {
+                syncFailed = false;
+            }, function() {
+                syncFailed = true;
+            }).then(function() {
+                if (background.isConnected) render();
+            });
+        }
+        function showLoadFailed() {
+            showClipAlert("Couldn't load this clip. Check your connection and try again.");
+        }
         var backButton = document.createElement("button");
         backButton.className = "button back";
         backButton.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
@@ -1371,14 +1547,40 @@ window.__nswsTrackQuery = function(trackId) {
         exportButton.innerHTML = '<img class="button-icon" src="images/share.svg"> ';
         exportButton.append("Export");
         exportButton.addEventListener("click", function() {
-            var selected = container.querySelector(".clip-menu-entry.selected");
-            if (!selected) {
+            var clip = selectedClip();
+            if (!clip) {
                 alert("Please select a clip first!");
                 return;
             }
-            var idx = Array.from(container.children).indexOf(selected);
-            var clip = clipData[idx];
-            createBoxDisplay(toClipExport(clip));
+            _fullClip(clip).then(function(full) {
+                createBoxDisplay(toClipExport(full));
+            }, showLoadFailed);
+        });
+        var linkButton = document.createElement("button");
+        linkButton.className = "button";
+        linkButton.innerHTML = '<img class="button-icon" src="images/copy.svg"> ';
+        linkButton.append("Link");
+        var linkBusy = false;
+        linkButton.addEventListener("click", function() {
+            var clip = selectedClip();
+            if (!clip) {
+                alert("Please select a clip first!");
+                return;
+            }
+            if (linkBusy) return;
+            linkBusy = true;
+            _fullClip(clip).then(function(full) {
+                return window.__nswsAccounts.call("clips/share", {
+                    userToken: _clipToken(),
+                    code: toClipExport(full)
+                });
+            }).then(function(result) {
+                createBoxDisplay(_clipLink(result.id));
+            }, function(e) {
+                showClipAlert(e && e.status === 429 ? "You've made a lot of clip links recently. Please try again later." : "Couldn't make a link for this clip. Check your connection and try again.");
+            }).then(function() {
+                linkBusy = false;
+            });
         });
         var importButton = document.createElement("button");
         importButton.className = "button";
@@ -1392,82 +1594,118 @@ window.__nswsTrackQuery = function(trackId) {
                     alert("Invalid clip code.");
                     return;
                 }
-                function finishImport() {
+                _findDuplicateClip(decoded).then(function(duplicate) {
+                    if (duplicate) {
+                        showClipAlert('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '").');
+                        return;
+                    }
                     decoded.id = "clip_" + Date.now();
+                    decoded.createdAt = Date.now();
                     decoded.name = decoded.name || "Imported clip";
                     if (!localAddClip(decoded)) {
                         alert("Failed to save imported clip: storage is full.");
                         return;
                     }
-                    clipData.push(decoded);
-                    createEntry(decoded);
-                }
-                var duplicate = _findDuplicateClip(decoded);
-                if (duplicate) {
-                    showClipAlert('You already have this clip ("' + (duplicate.name || duplicate.playerName || "Unnamed clip") + '").');
-                    return;
-                } else {
-                    finishImport();
-                }
+                    if (background.isConnected) refresh();
+                });
             });
         });
         var watchButton = document.createElement("button");
         watchButton.className = "button";
         watchButton.innerHTML = '<img class="button-icon" src="images/play.svg"> ';
         watchButton.append("Watch");
+        var watchBusy = false;
         watchButton.addEventListener("click", function() {
-            var selected = container.querySelector(".clip-menu-entry.selected");
-            if (!selected) return;
-            var idx = Array.from(container.children).indexOf(selected);
-            var clip = clipData[idx];
-            popClipEscape(closeClipsMenu);
-            background.remove();
-            showClipSkyOverlay();
-            watchClip(clip);
+            var clip = selectedClip();
+            if (!clip || watchBusy) return;
+            watchBusy = true;
+            _fullClip(clip).then(function(full) {
+                watchBusy = false;
+                if (!background.isConnected) return;
+                popClipEscape(closeClipsMenu);
+                background.remove();
+                showClipSkyOverlay();
+                watchClip(full);
+            }, function() {
+                watchBusy = false;
+                showLoadFailed();
+            });
         });
         var deleteButton = document.createElement("button");
         deleteButton.className = "button";
         deleteButton.innerHTML = '<img class="button-icon" src="images/cancel.svg"> ';
         deleteButton.append("Delete");
         deleteButton.addEventListener("click", function() {
-            var selected = container.querySelector(".clip-menu-entry.selected");
-            if (!selected) return;
-            var idx = Array.from(container.children).indexOf(selected);
-            var clip = clipData[idx];
-            if (!localDeleteClip(clip.id)) {
-                alert("Failed to delete clip.");
+            var clip = selectedClip();
+            if (!clip) return;
+            if (clip.local) {
+                if (!localDeleteClip(clip.id)) {
+                    alert("Failed to delete clip.");
+                    return;
+                }
+                render();
                 return;
             }
-            clipData.splice(idx, 1);
-            selected.remove();
+            var token = cloudClips.token;
+            window.__nswsAccounts.call("clips/delete", {
+                userToken: token,
+                id: clip.id
+            }).then(function() {
+                if (cloudClips.token === token) cloudClips.clips = cloudClips.clips.filter(function(c) {
+                    return c.id !== clip.id;
+                });
+                cloudClips.codes.delete(clip.id);
+                if (background.isConnected) render();
+            }, function() {
+                showClipAlert("Couldn't delete this clip. Check your connection and try again.");
+            });
         });
         var renameButton = document.createElement("button");
         renameButton.className = "button";
         renameButton.innerHTML = '<img class="button-icon" src="images/reset.svg"> ';
         renameButton.append("Rename");
         renameButton.addEventListener("click", function() {
+            var clip = selectedClip();
+            if (!clip) return;
             createBoxDisplay("", function(newName) {
                 if (!newName) return;
-                var selected = container.querySelector(".clip-menu-entry.selected");
-                if (!selected) return;
-                var idx = Array.from(container.children).indexOf(selected);
-                var clip = clipData[idx];
-                if (!localRenameClip(clip.id, newName)) {
-                    alert("Failed to rename clip.");
+                if (clip.local) {
+                    if (!localRenameClip(clip.id, newName)) {
+                        alert("Failed to rename clip.");
+                        return;
+                    }
+                    selection = { id: clip.id };
+                    render();
                     return;
                 }
-                clip.name = newName;
-                selected.querySelector("h2").textContent = newName;
+                var token = cloudClips.token;
+                window.__nswsAccounts.call("clips/rename", {
+                    userToken: token,
+                    id: clip.id,
+                    name: newName
+                }).then(function() {
+                    var listed = cloudClips.token === token && cloudClips.clips.find(function(c) {
+                        return c.id === clip.id;
+                    });
+                    if (listed) listed.name = newName.slice(0, 100);
+                    if (background.isConnected) {
+                        selection = { id: clip.id, key: clip.key };
+                        render();
+                    }
+                }, function() {
+                    showClipAlert("Couldn't rename this clip. Check your connection and try again.");
+                });
             });
         });
         function createEntry(clip) {
             var btn = document.createElement("button");
             btn.className = "clip-menu-entry button";
+            btn.dataset.clipId = clip.id;
             var h2 = document.createElement("h2");
             h2.textContent = clip.name;
             var p = document.createElement("p");
             var trackLabel = getTrackNameById(clip.trackId) || clip.trackId || "Unknown track";
-            p.textContent = trackLabel + " · " + framesToTime(clip.frames);
+            p.textContent = trackLabel + " · " + framesToTime(clip.frames) + (clip.local ? " · on this device" : "");
             var checkmark = document.createElement("img");
             checkmark.className = "checkmark";
             checkmark.src = "images/checkmark.svg";
@@ -1477,20 +1715,25 @@ window.__nswsTrackQuery = function(trackId) {
                     c.classList.remove("selected");
                 });
                 if (!wasSelected) btn.classList.add("selected");
+                selection = wasSelected ? null : { id: clip.id, key: clip.key };
             });
+            if (selection && (selection.id === clip.id || selection.key && selection.key === clip.key)) {
+                btn.classList.add("selected");
+                requestAnimationFrame(function() {
+                    btn.scrollIntoView({ block: "nearest" });
+                });
+            }
             btn.appendChild(h2);
             btn.appendChild(p);
             btn.appendChild(checkmark);
             container.appendChild(btn);
         }
-        clipData.forEach(function(clip) {
-            createEntry(clip);
-        });
         var wrapper = document.createElement("div");
         wrapper.className = "clip-menu-wrapper";
         var actions = document.createElement("div");
         actions.className = "clip-menu-actions";
         actions.appendChild(exportButton);
+        actions.appendChild(linkButton);
         actions.appendChild(importButton);
         actions.appendChild(watchButton);
         actions.appendChild(deleteButton);
@@ -1498,10 +1741,73 @@ window.__nswsTrackQuery = function(trackId) {
         wrapper.appendChild(backButton);
         wrapper.appendChild(actions);
         background.appendChild(headText);
+        background.appendChild(status);
         background.appendChild(container);
         background.appendChild(wrapper);
         ui.appendChild(background);
+        refresh();
     }
+    // A clip link is ?clip=<id>. Opening one adds that clip to the visitor's clips and shows it.
+    let clipLinkId = null;
+    try {
+        const id = new URLSearchParams(location.search).get("clip");
+        if (/^[A-Za-z0-9]{10}$/.test(id || "")) clipLinkId = id;
+    } catch (e) {}
+    function _showClipMessage(text) {
+        const box = window.__nswsMessageBox;
+        if (box && !box.isOpen) box.show(text, "Ok", null);
+        else alert(text);
+    }
+    async function _receiveClipLink(id) {
+        let clip = null;
+        let missing = false;
+        try {
+            const share = await window.__nswsAccounts.call("share/get", { id: id });
+            clip = fromClipExport(share?.code ?? "");
+        } catch (e) {
+            missing = e.status === 404;
+        }
+        if (!clip) {
+            _showClipMessage(missing ? "This clip link doesn't exist. Please check that it was copied fully." : "Couldn't load the clip from this link. Check your connection and open the link again.");
+            return;
+        }
+        await syncClips().catch(() => {});
+        const duplicate = await _findDuplicateClip(clip);
+        if (duplicate) {
+            clipMenuSelect = { id: duplicate.id, key: duplicate.key };
+        } else {
+            const now = Date.now();
+            clip.id = "clip_" + now;
+            clip.createdAt = now;
+            clip.name = clip.name || "Shared clip";
+            if (!localAddClip(clip)) {
+                alert("Failed to save the clip: storage is full. Try deleting some old clips, then open the link again.");
+                return;
+            }
+            clipMenuSelect = { id: clip.id, key: await _clipKey(clip) };
+        }
+        const menuButtons = document.querySelector(".menu-ui > .main-buttons-container");
+        if (menuButtons && !menuButtons.classList.contains("hidden") && !document.querySelector(".clip-menu-bg")) window.__nswsOpenClipsMenu?.();
+        else clipMenuSelect = null;
+        showClipSavedNotification(duplicate ? "📹 You already have this clip" : "📹 Clip added to your clips!");
+    }
+    // Called once the main menu first appears. True when it opened a clip link, so the
+    // first-visit auto-start is skipped.
+    window.__nswsClipsOnLoad = function() {
+        if (!clipLinkId) {
+            syncClips().catch(() => {});
+            return false;
+        }
+        const id = clipLinkId;
+        clipLinkId = null;
+        try {
+            const url = new URL(location.href);
+            url.searchParams.delete("clip");
+            history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+        } catch (e) {}
+        _receiveClipLink(id);
+        return true;
+    };
     window.addEventListener("keydown", function(e) {
         var focused = document.activeElement;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
@@ -5798,7 +6104,8 @@ window.__nswsTrackQuery = function(trackId) {
                 const t = r.createToken()
                   , n = (window.__nswsGenerateName ? window.__nswsGenerateName() : r.defaultNickname)
                   , i = u.A.default();
-                h.get(this, a, "f").saveUserProfile(e, new p.A(t,n,null,i,!1))
+                h.get(this, a, "f").saveUserProfile(e, new p.A(t,n,null,i,!1)),
+                window.__nswsAccounts?.claimGeneratedName(this, e)
             }
             ,
             c = function(e) {
@@ -53270,6 +53577,7 @@ window.__nswsTrackQuery = function(trackId) {
                 ))
             }
             ));
+            window.__nswsOpenClipsMenu = () => clipsBtn.click();
             const clipsText = document.createElement("p");
             clipsText.textContent = "Clips",
             clipsBtn.appendChild(clipsText),
@@ -54131,7 +54439,7 @@ window.__nswsTrackQuery = function(trackId) {
                         const showMenu = () => {
                             hasChosenDevicePreset() ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
-                            window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
+                            window.__nswsClipsOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }
@@ -57208,7 +57516,9 @@ window.__nswsTrackQuery = function(trackId) {
                     l.timeout = C.get(this, wu, "f"),
                     l.overrideMimeType("text/plain"),
                     l.onreadystatechange = () => {
-                        4 == l.readyState && (200 == l.status ? r() : a(new Error("Failed to connect to server")))
+                        4 == l.readyState && (200 == l.status ? r() : a(Object.assign(new Error(409 == l.status ? "Nickname is already taken" : "Failed to connect to server"), {
+                            nicknameTaken: 409 == l.status
+                        })))
                     }
                     ,
                     l.open("POST", s, !0),
@@ -58802,7 +59112,8 @@ window.__nswsTrackQuery = function(trackId) {
               , b = new gs(r.getSetting(R.A.Language))
               , w = new su.A(e)
               , x = new Tu;
-            w.syncUserProfile(x);
+            w.syncUserProfile(x),
+            window.__nswsAccounts?.retryGeneratedName(w);
             const S = new qh(e,y,x,w)
               , k = new te
               , E = new Ph(l)

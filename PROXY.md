@@ -279,6 +279,33 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   emoji (`\p{RGI_Emoji}`), stores one spelling of each, allows 12 new reactions per player per
   15 s and 20 different emoji per message, and drops a message's reactions with it.
 
+## Accounts (names and clips)
+
+`src/accounts.js`, the `Accounts` Durable Object (one instance, `"global"`). An
+account is a profile's userId, the SHA-256 of its private token; the token is
+never stored.
+
+- **Names.** Each nickname belongs to one account. Names compare without case,
+  width variants or spaces, and `Anonymous` (the game's empty-name fallback) is
+  shared. A profile save (`POST /v6/user`) that takes someone else's name gets
+  409, unless Kodub already had that player under the name (they keep it). Names
+  read off NSWS boards, profile reads and uploads are registered to whoever was
+  seen with them first, so existing players keep theirs. Renaming through the
+  site gives up the account's other names. The page checks a name before the
+  profile screen accepts it, and a new profile's random name is claimed (rolled
+  again while taken) by `mod/nsws_accounts.js`.
+- **Clips.** `/nsws/clips/*` keep each account's clips (up to 1000, 300 KB of
+  clip code each). The page saves a new clip to the device first and moves it to
+  the account once the proxy has it, which is also how clips saved on a device
+  before v9.5 reached the account.
+- **Clip links.** `/nsws/clips/share` stores a copy of a clip under a 10-character
+  id (30 new links per account per hour); `?clip=<id>` on the site adds it to
+  the visitor's clips. A link keeps working after its clip is renamed or deleted.
+
+Only the site may call these (the same Origin check as the chat). The Worker
+must be deployed before a site push that uses them; until then the page shows
+the device's clips and keeps them.
+
 ## Privacy note
 
 Leaderboard reads for Not So Weekly Shorts tracks, submissions and profile

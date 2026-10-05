@@ -4,8 +4,9 @@
 import { TrafficStats, readBeat, describeClient } from "./traffic.js";
 import { AntiCheat, RunChecker } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
+import { Accounts, nameKey } from "./accounts.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -39,6 +40,7 @@ const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
 const MAX_CHAT_BODY = 4096;
 const MAX_TRACK_SYNC_BODY = 400_000;
+const MAX_ACCOUNT_BODY = 400_000;
 // How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
 // seen yet is always classified at once.
 const ANTICHEAT_TTL_MS = 15_000;
@@ -163,8 +165,9 @@ function plain(status, text, origin) {
     });
 }
 
-function json(data, origin) {
+function json(data, origin, status = 200) {
     return new Response(JSON.stringify(data), {
+        status,
         headers: {
             "Content-Type": "application/json; charset=utf-8",
             // These replies can hold the caller's own entry; no cache may hand
@@ -462,6 +465,28 @@ function runChecker(env) {
     return env.RUN_CHECKER.get(env.RUN_CHECKER.idFromName("main"));
 }
 
+function accounts(env) {
+    return env.ACCOUNTS ? env.ACCOUNTS.get(env.ACCOUNTS.idFromName("global")) : null;
+}
+
+// "userId|name" pairs this instance has already passed on, so a busy board isn't re-sent.
+const seenNames = new Set();
+
+function observeNames(env, ctx, entries) {
+    const stub = accounts(env);
+    if (!stub) return;
+    const fresh = [];
+    for (const e of entries) {
+        if (!HEX64.test(e?.userId ?? "") || typeof e.nickname !== "string") continue;
+        const pair = e.userId + "|" + e.nickname;
+        if (seenNames.has(pair)) continue;
+        seenNames.add(pair);
+        fresh.push({ userId: e.userId, nickname: e.nickname });
+    }
+    if (seenNames.size > 50_000) seenNames.clear();
+    if (fresh.length) ctx.waitUntil(stub.observeNames(fresh).catch(() => {}));
+}
+
 // track id -> { at, known: Set of classified ids, blocked: Set }
 const verdicts = new Map();
 
@@ -478,7 +503,7 @@ async function blockedRuns(env, cfg, track, view) {
     return blocked;
 }
 
-async function handleLeaderboard(request, url, env, cfg, origin) {
+async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     const params = url.searchParams;
     const track = await trackContext(cfg, params.get("trackId"), params.get("nswsWeek"));
     const skip = intParam(params.get("skip"), 0, Number.MAX_SAFE_INTEGER);
@@ -488,6 +513,7 @@ async function handleLeaderboard(request, url, env, cfg, origin) {
     const owner = cfg.owner || await isOwner(params.get("userToken"), cfg);
 
     const view = await loadView(cfg, request, track, read);
+    if (track.week != null) observeNames(env, ctx, view.entries);
     // If the anti-cheat is unreachable the board still loads, unfiltered, rather than failing.
     cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
         console.error("anti-cheat unavailable:", err && err.message);
@@ -562,7 +588,7 @@ function antiCheatRejected(origin) {
     return plain(422, "Run failed the anti-cheat check", origin);
 }
 
-async function handleSubmit(request, url, env, cfg, origin) {
+async function handleSubmit(request, url, env, cfg, origin, ctx) {
     const raw = await request.text();
     const form = new URLSearchParams(raw);
     const trackId = form.get("trackId") ?? "";
@@ -575,6 +601,7 @@ async function handleSubmit(request, url, env, cfg, origin) {
 
     const track = await trackContext(cfg, trackId, url.searchParams.get("nswsWeek"));
     const hash = await sha256Hex(token);
+    observeNames(env, ctx, [{ userId: hash, nickname: form.get("nickname") }]);
     const ownerUpload = cfg.owner || await isOwner(token, cfg);
     const read = readOptions(form);
     const body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
@@ -709,6 +736,88 @@ async function passThrough(request, url, cfg, origin, ctx) {
     return withCors(response, origin);
 }
 
+// The game syncs the profile from here at startup, so this is where most players' names are seen.
+async function handleUserRead(request, url, env, cfg, origin, ctx) {
+    const response = await passThrough(request, url, cfg, origin, ctx);
+    const token = url.searchParams.get("userToken") ?? "";
+    if (response.ok && HEX64.test(token)) {
+        const [user, userId] = await Promise.all([response.clone().json().catch(() => null), sha256Hex(token)]);
+        observeNames(env, ctx, [{ userId, nickname: user?.nickname }]);
+    }
+    return response;
+}
+
+// A profile save may only take a name nobody else holds. A player who already had the
+// name upstream before it was registered to someone else keeps it.
+async function handleUserUpdate(request, url, env, cfg, origin) {
+    const raw = await request.text();
+    const form = new URLSearchParams(raw);
+    const token = form.get("userToken") ?? "";
+    const nickname = form.get("nickname");
+    const stub = accounts(env);
+    if (stub && HEX64.test(token) && nickname != null) {
+        let taken = false;
+        try {
+            taken = !(await stub.claimName(await sha256Hex(token), nickname)).available;
+        } catch (err) {
+            console.error("accounts unavailable:", err && err.message);
+        }
+        if (taken) {
+            const current = await fetchUpstreamJson(cfg, request, "/v6/user", {
+                version: form.get("version") || DEFAULT_VERSION,
+                userToken: token,
+            }).catch(() => null);
+            if (nameKey(current?.nickname) !== nameKey(nickname)) return json({ nicknameTaken: true }, origin, 409);
+        }
+    }
+    return withCors(await postUpstream(request, cfg, url.pathname, raw), origin);
+}
+
+const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add",
+    "clips/rename", "clips/delete", "clips/share", "share/get"]);
+
+// Sent as text/plain JSON, like the chat, so no preflight is needed. Everything but opening
+// a shared link needs the player's token; the account is its hash.
+async function handleAccounts(request, url, env, fromSite, origin) {
+    if (!fromSite) return forbidden();
+    const path = url.pathname.slice(TRAFFIC_PREFIX.length);
+    if (!ACCOUNT_PATHS.has(path)) return plain(404, "Not found", origin);
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+    const stub = accounts(env);
+    if (!stub) return plain(503, "Accounts are off", origin);
+    const text = await readSmallBody(request, MAX_ACCOUNT_BODY);
+    if (text == null) return plain(413, "Too large", origin);
+    let body;
+    try {
+        body = JSON.parse(text);
+    } catch {
+        return plain(400, "Bad request", origin);
+    }
+    if (path === "share/get") {
+        const share = await stub.getShare(body?.id);
+        return share ? json(share, origin) : plain(404, "Not found", origin);
+    }
+    if (!HEX64.test(body?.userToken ?? "")) return plain(400, "Bad request", origin);
+    const userId = await sha256Hex(body.userToken);
+    let result;
+    switch (path) {
+        case "names/check": result = await stub.checkName(userId, body.nickname); break;
+        case "names/claim": result = await stub.claimName(userId, body.nickname); break;
+        case "clips/list": result = { clips: await stub.listClips(userId) }; break;
+        case "clips/get": result = await stub.getClip(userId, body.id); break;
+        case "clips/add": result = await stub.addClip(userId, body.clip); break;
+        case "clips/rename": result = await stub.renameClip(userId, body.id, body.name); break;
+        case "clips/delete": result = await stub.deleteClip(userId, body.id); break;
+        case "clips/share": result = await stub.shareClip(userId, body.code); break;
+    }
+    if (result == null) return plain(404, "Not found", origin);
+    if (result.error === "bad") return plain(400, "Bad request", origin);
+    if (result.error === "full") return plain(507, "Too many clips", origin);
+    if (result.error === "busy") return plain(429, "Too many links", origin);
+    return json(result, origin);
+}
+
 async function readSmallBody(request, limit) {
     const length = Number(request.headers.get("Content-Length"));
     if (length > limit) return null;
@@ -820,6 +929,14 @@ export default {
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
             }
+            if (/^\/nsws\/(names|clips|share)\//.test(url.pathname)) {
+                try {
+                    return await handleAccounts(request, url, env, fromSite, requestOrigin);
+                } catch (err) {
+                    console.error("accounts error:", err && err.message);
+                    return plain(500, "Accounts failed", requestOrigin);
+                }
+            }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
             if (!fromSite && url.pathname === TRAFFIC_PREFIX + "beat") return forbidden();
             const origin = requestOrigin || "*";
@@ -856,10 +973,13 @@ export default {
 
         try {
             if (url.pathname === "/v6/leaderboard") {
-                if (request.method === "GET") return await handleLeaderboard(request, url, env, cfg, origin);
-                if (request.method === "POST") return await handleSubmit(request, url, env, cfg, origin);
+                if (request.method === "GET") return await handleLeaderboard(request, url, env, cfg, origin, ctx);
+                if (request.method === "POST") return await handleSubmit(request, url, env, cfg, origin, ctx);
             } else if (url.pathname === "/v6/leaderboardUserEntry" && request.method === "GET") {
                 return await handleUserEntry(request, url, cfg, origin);
+            } else if (url.pathname === "/v6/user") {
+                if (request.method === "GET") return await handleUserRead(request, url, env, cfg, origin, ctx);
+                if (request.method === "POST") return await handleUserUpdate(request, url, env, cfg, origin);
             }
         } catch (err) {
             return errorResponse(err, origin);
