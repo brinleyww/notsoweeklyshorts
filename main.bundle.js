@@ -1544,9 +1544,10 @@ window.__nswsTrackQuery = function(trackId) {
         });
         var exportButton = document.createElement("button");
         exportButton.className = "button";
-        exportButton.innerHTML = '<img class="button-icon" src="images/share.svg"> ';
+        exportButton.innerHTML = '<img class="button-icon" src="images/export.svg"> ';
         exportButton.append("Export");
         exportButton.addEventListener("click", function() {
+            closeLegacyPanel();
             var clip = selectedClip();
             if (!clip) {
                 alert("Please select a clip first!");
@@ -1558,8 +1559,8 @@ window.__nswsTrackQuery = function(trackId) {
         });
         var linkButton = document.createElement("button");
         linkButton.className = "button";
-        linkButton.innerHTML = '<img class="button-icon" src="images/copy.svg"> ';
-        linkButton.append("Link");
+        linkButton.innerHTML = '<img class="button-icon" src="images/share.svg"> ';
+        linkButton.append("Export as Link");
         var linkBusy = false;
         linkButton.addEventListener("click", function() {
             var clip = selectedClip();
@@ -1587,6 +1588,7 @@ window.__nswsTrackQuery = function(trackId) {
         importButton.innerHTML = '<img class="button-icon" src="images/import.svg"> ';
         importButton.append("Import");
         importButton.addEventListener("click", function() {
+            closeLegacyPanel();
             createBoxDisplay("", function(code) {
                 if (!code) return;
                 var decoded = fromClipExport(code);
@@ -1609,6 +1611,43 @@ window.__nswsTrackQuery = function(trackId) {
                     if (background.isConnected) refresh();
                 });
             });
+        });
+        // Clip codes, the way clips were shared before links.
+        var legacyPanel = null;
+        function closeLegacyPanel() {
+            if (!legacyPanel) return;
+            popClipEscape(closeLegacyPanel);
+            legacyPanel.remove();
+            legacyPanel = null;
+        }
+        var legacyButton = document.createElement("button");
+        legacyButton.className = "button";
+        legacyButton.innerHTML = '<img class="button-icon" src="images/list.svg"> ';
+        legacyButton.append("Legacy");
+        legacyButton.addEventListener("click", function() {
+            if (legacyPanel) return;
+            legacyPanel = document.createElement("div");
+            legacyPanel.className = "clip-box-bg";
+            var box = document.createElement("div");
+            box.className = "clip-box";
+            var msg = document.createElement("p");
+            msg.className = "clip-confirm-message";
+            msg.textContent = "Legacy: share a clip as a code. Export copies the selected clip's code, and Import adds a clip from a code.";
+            box.appendChild(msg);
+            var btnRow = document.createElement("div");
+            btnRow.className = "clip-box-buttons";
+            var back = document.createElement("button");
+            back.className = "button";
+            back.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
+            back.append("Back");
+            back.addEventListener("click", closeLegacyPanel);
+            btnRow.appendChild(back);
+            btnRow.appendChild(exportButton);
+            btnRow.appendChild(importButton);
+            box.appendChild(btnRow);
+            legacyPanel.appendChild(box);
+            document.body.appendChild(legacyPanel);
+            pushClipEscape(closeLegacyPanel);
         });
         var watchButton = document.createElement("button");
         watchButton.className = "button";
@@ -1732,12 +1771,11 @@ window.__nswsTrackQuery = function(trackId) {
         wrapper.className = "clip-menu-wrapper";
         var actions = document.createElement("div");
         actions.className = "clip-menu-actions";
-        actions.appendChild(exportButton);
         actions.appendChild(linkButton);
-        actions.appendChild(importButton);
         actions.appendChild(watchButton);
         actions.appendChild(deleteButton);
         actions.appendChild(renameButton);
+        actions.appendChild(legacyButton);
         wrapper.appendChild(backButton);
         wrapper.appendChild(actions);
         background.appendChild(headText);
@@ -55090,7 +55128,7 @@ window.__nswsTrackQuery = function(trackId) {
             chunks: ["49cd8cd3cf9664e0", "7752bdb1b52218c6", "5c535e58f7133faa", "f403136ad3e883bf"],
             masks: ["26d75a8f9ea520fd", "3b9131a566afe78b", "cb716d86c08fadf4", "033a60409cf58f11"],
             file: "tracks/community/week9.track",
-            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "d2e0b53047767ddf43db0acfecc2c3dd79055a9ba15b56e55ce03ccd1fe649de", name: "5 - Liminal", short: "Limin", author: "imracer & Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_5.png" }]
+            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
