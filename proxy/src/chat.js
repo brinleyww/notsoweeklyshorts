@@ -9,6 +9,8 @@ import { censor } from "./chatfilter.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
+// Characters of the answered message that a reply keeps to show above itself.
+const REPLY_QUOTE = 100;
 const MAX_NICK = 32;
 const MAX_FRAME = 1024;
 // A whole school shares one IP address, so the per-address cap is only there to stop one
@@ -106,10 +108,12 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
-        try {
-            this.sql.exec("ALTER TABLE messages ADD COLUMN pings TEXT");
-        } catch {
-            // Already there.
+        for (const column of ["pings", "reply_to"]) {
+            try {
+                this.sql.exec("ALTER TABLE messages ADD COLUMN " + column + " TEXT");
+            } catch {
+                // Already there.
+            }
         }
         this.sql.exec("CREATE TABLE IF NOT EXISTS mutes (uid TEXT PRIMARY KEY, until INTEGER NOT NULL)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS timeouts (uid TEXT PRIMARY KEY, until INTEGER NOT NULL, level INTEGER NOT NULL)");
@@ -267,8 +271,10 @@ export class ChatRoom extends DurableObject {
     }
 
     history() {
-        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
-            .toArray().reverse().map((m) => ({ ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [], reactions: [] }));
+        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
+            .toArray().reverse().map(({ reply_to, ...m }) => ({
+                ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [], reply: reply_to ? JSON.parse(reply_to) : null, reactions: [],
+            }));
         if (!messages.length) return messages;
         const byId = new Map(messages.map((m) => [m.id, m]));
         for (const r of this.sql.exec("SELECT msg, emoji, uid, nick FROM reactions WHERE msg >= ? ORDER BY at", messages[0].id)) {
@@ -279,6 +285,14 @@ export class ChatRoom extends DurableObject {
             kind.users.push({ uid: r.uid, nick: r.nick });
         }
         return messages;
+    }
+
+    // What a reply shows of the message it answers. A copy, so the quote still reads right once
+    // the original is deleted or has scrolled out of the history.
+    quote(replyTo) {
+        if (!Number.isSafeInteger(replyTo?.id)) return null;
+        const row = this.sql.exec("SELECT id, uid, nick, text FROM messages WHERE id = ?", replyTo.id).toArray()[0];
+        return row ? { id: row.id, uid: row.uid, nick: row.nick, text: [...row.text].slice(0, REPLY_QUOTE).join("") } : null;
     }
 
     // The same emoji can arrive with or without the invisible "show as emoji" selector (U+FE0F);
@@ -475,14 +489,21 @@ export class ChatRoom extends DurableObject {
                 me.nick = nick;
                 save();
             }
+            const quoted = this.quote(msg.reply);
             const wanted = this.findPings(text, me);
+            // Like Discord, a reply pings the person answered unless the sender turned that off.
+            if (quoted && msg.reply.ping === true && quoted.uid !== me.uid && !wanted.some((p) => p.uid === quoted.uid)) {
+                wanted.unshift({ uid: quoted.uid, nick: quoted.nick });
+            }
             const pings = me.owner ? wanted : this.limitPings(me.uid, wanted, now);
             if (pings.length < wanted.length) {
                 reply({ t: "err", text: "Too many pings - " + (wanted.length - pings.length) + " of them didn't notify anyone." });
             }
-            const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text), pings, reactions: [] };
-            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-                message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null).one().id;
+            if (quoted) quoted.ping = pings.some((p) => p.uid === quoted.uid);
+            const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text), pings, reply: quoted, reactions: [] };
+            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null,
+                quoted ? JSON.stringify(quoted) : null).one().id;
             this.sql.exec("DELETE FROM messages WHERE id <= ?", message.id - HISTORY);
             this.sql.exec("DELETE FROM reactions WHERE msg <= ?", message.id - HISTORY);
             this.broadcast({ t: "msg", m: message });

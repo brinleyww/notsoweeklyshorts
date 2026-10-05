@@ -49,6 +49,7 @@
     ];
     const icon = (...codes) => String.fromCodePoint(...codes);
     const QUICK_REACTIONS = [0x1f44d, 0x1f602, 0x1f525].map((c) => String.fromCodePoint(c));
+    const REPLY_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 7 5 12l5 5"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/></svg>';
     const ADD_REACTION_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.6 13.4A9 9 0 1 1 13 3.1"/><path d="M8.5 14.5s1.2 1.6 3.5 1.6 3.5-1.6 3.5-1.6"/><path d="M9 9.5h.01M15 9.5h.01"/><path d="M19 2.5v6M16 5.5h6"/></svg>';
     const TAB_ICONS = [0x1f600, 0x1f44b, 0x1f43b, 0x1f354, 0x1f697, 0x26bd, 0x1f4a1, 0x1f523, 0x1f3c1];
 
@@ -120,6 +121,25 @@
 #nsws-chat>.log>.tools>button:hover,#nsws-chat>form>button:hover{background:var(--button-hover-color,#334b77);}
 #nsws-chat>.status{flex-shrink:0;padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color,#192042);opacity:.8;}
 #nsws-chat>.status:empty{display:none;}
+#nsws-chat .m.reply::before{top:22px;}
+#nsws-chat .m>.ref{position:relative;display:flex;align-items:center;gap:5px;min-width:0;height:18px;margin-bottom:2px;font-size:.8em;cursor:pointer;}
+#nsws-chat .m>.ref::before{content:"";position:absolute;left:-12px;top:9px;width:9px;height:11px;border:2px solid rgba(255,255,255,.3);border-right:0;border-bottom:0;border-top-left-radius:6px;}
+#nsws-chat .m>.ref>.who{flex-shrink:0;white-space:nowrap;font-weight:var(--nsws-chat-name-weight);opacity:.9;}
+#nsws-chat .m>.ref>.quote{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:.7;}
+#nsws-chat .m>.ref>.quote.gone{font-style:italic;}
+#nsws-chat .m>.ref:hover>.quote,#nsws-chat .m>.ref:hover>.who{opacity:1;}
+#nsws-chat .m.target,#nsws-chat .m.target:hover{background:rgba(88,101,242,.14);box-shadow:inset 3px 0 0 #5865f2;}
+#nsws-chat .m.flash{animation:nsws-chat-flash 1.8s ease-out;}
+@keyframes nsws-chat-flash{0%,30%{background:rgba(88,101,242,.4);}100%{background:transparent;}}
+#nsws-chat>.replying{display:none;flex-shrink:0;align-items:center;gap:6px;padding:5px 6px 5px 12px;background:var(--surface-tertiary-color,#192042);font-size:14px;}
+#nsws-chat>.replying.on{display:flex;}
+#nsws-chat>.replying>.what{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;opacity:.85;}
+#nsws-chat>.replying>.what>b{font-weight:var(--nsws-chat-name-weight);}
+#nsws-chat>.replying>button{flex-shrink:0;padding:3px 7px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;cursor:pointer;}
+#nsws-chat>.replying>button:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat>.replying>.ping{font-weight:bold;color:#949cf7;}
+#nsws-chat>.replying>.ping.off{color:rgba(255,255,255,.45);}
+#nsws-chat.has-reply>.suggest,#nsws-chat.has-reply>.emoji-panel{bottom:80px;}
 #nsws-chat>form{display:flex;flex-shrink:0;gap:6px;padding:6px;}
 #nsws-chat>form>input{flex:1;min-width:0;padding:6px 8px;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;user-select:text;}
 #nsws-chat>form>input:focus{box-shadow:inset 0 0 0 2px var(--button-hover-color,#334b77);}
@@ -300,6 +320,15 @@
     let readyAt = 0;
     let timedOut = false;
     let lastText = "";
+    // The message being answered: { id, uid, nick, ping }. lastReply is what the last send
+    // answered, put back if the server refuses that message.
+    let replyTo = null;
+    let lastReply = null;
+    let replyBar = null;
+    // Deleted message ids, and the oldest id the history went back to, so a reply can tell a
+    // deleted original from one that is only too old to be shown.
+    let deletedIds = new Set();
+    let oldestId = null;
     let sendTimer = null;
     let waitTimer = null;
     let layout = loadLayout();
@@ -521,7 +550,7 @@
         const who = document.createElement("b");
         who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
-        toast.append(who, " pinged you: ", m.text.length > 90 ? m.text.slice(0, 90) + "..." : m.text);
+        toast.append(who, m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ", m.text.length > 90 ? m.text.slice(0, 90) + "..." : m.text);
         document.body.appendChild(toast);
         const bar = root.getBoundingClientRect();
         const below = bar.bottom + 6 + toast.offsetHeight <= window.innerHeight;
@@ -881,7 +910,7 @@
     // Starts a new name header unless the last item is a message by the same player, under the
     // same name and badge, sent within GROUP_MS on the same day.
     function startsGroup(prev, m) {
-        if (prev?.kind !== "msg") return true;
+        if (prev?.kind !== "msg" || m.reply) return true;
         const p = prev.m;
         return p.uid !== m.uid || p.nick !== m.nick || p.owner !== m.owner || m.at - p.at > GROUP_MS || !sameDay(p.at, m.at);
     }
@@ -930,6 +959,7 @@
         }
         for (const e of quickReactions()) bar.appendChild(actionButton(e, "React with " + e, () => send({ t: "react", id: m.id, e })));
         bar.appendChild(actionButton(ADD_REACTION_ICON, "Add reaction", () => togglePanel(m.id), true));
+        bar.appendChild(actionButton(REPLY_ICON, "Reply", () => startReply(m), true));
         if (me?.owner) {
             const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
             more.classList.add("more");
@@ -938,12 +968,90 @@
         return bar;
     }
 
+    function isDeleted(id) {
+        return deletedIds.has(id) || (oldestId != null && id >= oldestId && !items.some((item) => item.kind === "msg" && item.m.id === id));
+    }
+
+    // Above a reply: who it answers ("@Name" only when it pinged them) and the start of what
+    // they said. Clicking it goes to the original.
+    function replyRef(r) {
+        const ref = document.createElement("div");
+        ref.className = "ref";
+        const who = document.createElement("span");
+        who.className = "who";
+        who.style.color = nickColor(r.uid);
+        who.textContent = (r.ping ? "@" : "") + r.nick;
+        const quote = document.createElement("span");
+        quote.className = "quote";
+        if (isDeleted(r.id)) {
+            quote.classList.add("gone");
+            quote.textContent = "Original message was deleted";
+        } else {
+            quote.textContent = r.text;
+        }
+        ref.append(who, quote);
+        ref.addEventListener("click", () => jumpTo(r.id));
+        return ref;
+    }
+
+    function jumpTo(id) {
+        const el = log?.querySelector('.m[data-id="' + id + '"]');
+        if (!el) {
+            setStatus("That message is too old to show.");
+            setTimeout(() => {
+                if (statusLine?.textContent === "That message is too old to show." && connected()) setStatus("");
+            }, 2500);
+            return;
+        }
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        el.classList.remove("flash");
+        void el.offsetWidth;
+        el.classList.add("flash");
+    }
+
+    function startReply(m) {
+        replyTo = { id: m.id, uid: m.uid, nick: m.nick, ping: true };
+        updateReplyBar();
+        for (const other of log.querySelectorAll(".m.open")) other.classList.remove("open");
+        input.focus();
+    }
+
+    function cancelReply() {
+        replyTo = null;
+        updateReplyBar();
+    }
+
+    function updateReplyBar() {
+        if (!replyBar) return;
+        root.classList.toggle("has-reply", !!replyTo);
+        replyBar.classList.toggle("on", !!replyTo);
+        for (const el of log.querySelectorAll(".m.target")) el.classList.remove("target");
+        if (!replyTo) return;
+        log.querySelector('.m[data-id="' + replyTo.id + '"]')?.classList.add("target");
+        const what = replyBar.querySelector(".what");
+        what.textContent = "Replying to ";
+        const who = document.createElement("b");
+        who.style.color = nickColor(replyTo.uid);
+        who.textContent = replyTo.nick;
+        what.appendChild(who);
+        const ping = replyBar.querySelector(".ping");
+        ping.style.display = replyTo.uid === me?.uid ? "none" : "";
+        ping.textContent = "@ " + (replyTo.ping ? "ON" : "OFF");
+        ping.classList.toggle("off", !replyTo.ping);
+        ping.title = replyTo.ping ? "Click to not ping " + replyTo.nick : "Click to ping " + replyTo.nick;
+    }
+
     function messageElement(m, head) {
         const el = document.createElement("div");
         el.className = head ? "m head" : "m";
         el.dataset.id = m.id;
         const color = nickColor(m.uid);
         el.style.setProperty("--c", color);
+        if (m.reply) {
+            el.classList.add("reply");
+            el.appendChild(replyRef(m.reply));
+        }
+        if (replyTo?.id === m.id) el.classList.add("target");
         if (head) {
             const meta = document.createElement("div");
             meta.className = "meta";
@@ -1062,6 +1170,8 @@
         if (data.t === "init") {
             me = data.you;
             items = data.messages.map((m) => ({ kind: "msg", m }));
+            oldestId = data.messages[0]?.id ?? null;
+            deletedIds = new Set();
             items.push({ kind: "sys", text: "Connected. Be nice - slurs are filtered." });
             renderLog();
             scrollToEnd(true);
@@ -1076,11 +1186,15 @@
             users = Array.isArray(data.users) ? data.users : [];
             if (suggest.kind === "mention" || document.activeElement === input) updateSuggest();
         } else if (data.t === "del") {
+            deletedIds.add(data.id);
+            if (replyTo?.id === data.id) cancelReply();
             items = items.filter((item) => item.kind !== "msg" || item.m.id !== data.id);
             renderLog();
         } else if (data.t === "react") {
             applyReaction(data);
         } else if (data.t === "clear") {
+            for (const item of items) if (item.kind === "msg" && item.m.uid === data.uid) deletedIds.add(item.m.id);
+            if (replyTo?.uid === data.uid) cancelReply();
             items = items.filter((item) => item.kind !== "msg" || item.m.uid !== data.uid);
             for (const item of items) {
                 if (item.kind !== "msg" || !item.m.reactions) continue;
@@ -1092,7 +1206,13 @@
             addSystem(data.text);
         } else if (data.t === "slow" || data.t === "timeout") {
             // The server refused the last message, so it goes back in the box.
-            if (!input.value) input.value = lastText;
+            if (!input.value) {
+                input.value = lastText;
+                if (!replyTo && lastReply && !isDeleted(lastReply.id)) {
+                    replyTo = lastReply;
+                    updateReplyBar();
+                }
+            }
             readyAt = Math.max(readyAt, Date.now() + Number(data.ms || SLOW_MS));
             if (data.t === "timeout") {
                 timedOut = true;
@@ -1340,8 +1460,12 @@
             return;
         }
         lastText = [...text].slice(0, MAX_TEXT).join("");
-        send({ t: "msg", text: lastText, nick: readNickname() });
+        lastReply = replyTo;
+        const data = { t: "msg", text: lastText, nick: readNickname() };
+        if (replyTo) data.reply = { id: replyTo.id, ping: replyTo.ping && replyTo.uid !== me.uid };
+        send(data);
         input.value = "";
+        cancelReply();
         hideSuggest();
         readyAt = Date.now() + SLOW_MS;
         clearInterval(waitTimer);
@@ -1445,11 +1569,34 @@
         form.append(input, emojiButton, sendButton);
         form.addEventListener("submit", submit);
 
+        replyBar = document.createElement("div");
+        replyBar.className = "replying";
+        const replyWhat = document.createElement("span");
+        replyWhat.className = "what";
+        const replyPing = document.createElement("button");
+        replyPing.type = "button";
+        replyPing.className = "ping";
+        replyPing.addEventListener("click", () => {
+            if (!replyTo) return;
+            replyTo.ping = !replyTo.ping;
+            updateReplyBar();
+            input.focus();
+        });
+        const replyClose = document.createElement("button");
+        replyClose.type = "button";
+        replyClose.title = "Cancel reply";
+        replyClose.textContent = icon(0x2715);
+        replyClose.addEventListener("click", () => {
+            cancelReply();
+            input.focus();
+        });
+        replyBar.append(replyWhat, replyPing, replyClose);
+
         const grip = document.createElement("div");
         grip.className = "grip";
         suggestBox = document.createElement("div");
         suggestBox.className = "suggest";
-        root.append(bar, log, statusLine, suggestBox, form, grip);
+        root.append(bar, log, statusLine, suggestBox, replyBar, form, grip);
 
         // The game listens for keys and clicks on window; none of the chat's should reach it.
         for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
@@ -1457,6 +1604,7 @@
         input.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
             if (panel?.classList.contains("on")) closePanel();
+            else if (replyTo) cancelReply();
             else input.blur();
         });
         input.addEventListener("input", onInput);
@@ -1509,7 +1657,8 @@
         window.removeEventListener("resize", applyLayout);
         root?.remove();
         toast?.remove();
-        root = log = input = statusLine = onlineLabel = unreadBadge = null;
+        root = log = input = statusLine = onlineLabel = unreadBadge = replyBar = null;
+        replyTo = lastReply = null;
         minButton = fullButton = bellButton = emojiButton = suggestBox = panel = toast = null;
         items = [];
         suggest = { kind: null, items: [], index: 0 };

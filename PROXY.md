@@ -278,6 +278,12 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   Clicking a reaction under a message adds or removes yours. The Worker accepts only a single
   emoji (`\p{RGI_Emoji}`), stores one spelling of each, allows 12 new reactions per player per
   15 s and 20 different emoji per message, and drops a message's reactions with it.
+- **Replies:** work like Discord's. The hover bar's Reply button shows "Replying to Name" above
+  the box with an "@ ON / OFF" toggle (ping them or not) and a cancel button (or Escape). A reply
+  starts its own header and shows a quote line above it: "@Name" if it pinged them, then the
+  start of their message; clicking it scrolls to the original. The Worker stores a copy of the
+  first 100 characters (`reply_to`), so the quote outlives the original, which then reads
+  "Original message was deleted". A reply ping goes through the same limits as an `@name`.
 
 ## Accounts (names and clips)
 
