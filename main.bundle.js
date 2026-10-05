@@ -43805,6 +43805,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, Ua, b, "f"),
                 C.set(this, Xr, m, "f"),
                 C.set(this, Yr, A, "f"),
+                window.__nswsTrackNotice?.(A.getId()),
                 C.set(this, Zr, v, "f"),
                 null != w ? C.set(this, Sa, {
                     multiplayerConnection: w.multiplayerConnection,
@@ -55128,7 +55129,7 @@ window.__nswsTrackQuery = function(trackId) {
             chunks: ["49cd8cd3cf9664e0", "7752bdb1b52218c6", "5c535e58f7133faa", "f403136ad3e883bf"],
             masks: ["26d75a8f9ea520fd", "3b9131a566afe78b", "cb716d86c08fadf4", "033a60409cf58f11"],
             file: "tracks/community/week9.track",
-            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }]
+            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c", name: "5 - Royale", short: "Royal", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week9_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -55189,6 +55190,12 @@ window.__nswsTrackQuery = function(trackId) {
             if (blocked && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
                 window.__nswsMessageBox.show("Freecam is disabled on this map.", "Ok", null);
             return blocked;
+        };
+        window.__nswsTrackNotice = function(trackId) {
+            let notice = null;
+            __nswsWeeks.forEach(w => __nswsPartsOf(w).forEach(p => (p.tracks || []).forEach(t => { if (t.id === trackId && t.notice) notice = t.notice; })));
+            if (notice && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
+                window.__nswsMessageBox.show(notice, "Ok", null);
         };
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);

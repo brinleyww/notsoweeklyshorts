@@ -13308,7 +13308,87 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 )),
                 t.ccall("createCarModel", "void", ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number"], [e, a, i.length, r.x, r.y, r.z, l, o, n.position.x, n.position.y, n.position.z, n.quaternion.x, n.quaternion.y, n.quaternion.z, n.quaternion.w]),
                 t.ccall("free", "void", ["number"], [a]),
-                t.ccall("free", "void", ["number"], [l])
+                t.ccall("free", "void", ["number"], [l]),
+                __royaleInit(e, s)
+            }
+            // Royale tracks: each checkpoint order has two gates. Crossing one moves the respawn
+            // point to the other, which starts the next segment facing its rotation's travel direction.
+            const __royaleTrackIds = new Set(["7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c"]);
+            const __royaleCars = new Map();
+            // Spawn rotation n (yaw n*90°) as quaternion and the physics' respawn offset (0, 0.35, -1.35) turned by it.
+            const __royaleSpawn = [
+                { q: [0, 0, 0, 1], dx: 0, dz: -1.35 },
+                { q: [0, Math.SQRT1_2, 0, Math.SQRT1_2], dx: -1.35, dz: 0 },
+                { q: [0, 1, 0, 0], dx: 0, dz: 1.35 },
+                { q: [0, Math.SQRT1_2, 0, -Math.SQRT1_2], dx: 1.35, dz: 0 }
+            ];
+            // The physics keeps cars in a std::unordered_map<int, Car*>: bucket array at 18848, bucket count at 18852.
+            function __royaleCarPointer(id) {
+                const U = new Uint32Array(t.HEAPU8.buffer)
+                  , count = U[18852 >> 2];
+                if (0 == count)
+                    return 0;
+                const pow2 = 0 == (count & count - 1)
+                  , bucketOf = h => pow2 ? h & count - 1 : h % count
+                  , bucket = bucketOf(id >>> 0)
+                  , before = U[(U[18848 >> 2] >> 2) + bucket];
+                for (let node = before ? U[before >> 2] : 0; node; node = U[node >> 2]) {
+                    if (U[(node >> 2) + 2] == id >>> 0)
+                        return U[(node >> 2) + 3];
+                    if (bucketOf(U[(node >> 2) + 1]) != bucket)
+                        return 0
+                }
+                return 0
+            }
+            function __royaleInit(id, track) {
+                if (__royaleCars.delete(id),
+                !__royaleTrackIds.has(track.getId()))
+                    return;
+                const gates = new Map;
+                track.forEachPart(( (x, y, z, part, rotation, axis, color, order) => {
+                    null != order && (gates.has(order) || gates.set(order, []),
+                    gates.get(order).push({ x, y, z, rotation, axis }))
+                }
+                ));
+                const car = __royaleCarPointer(id);
+                0 != car && __royaleCars.set(id, { car, gates, passed: 0 })
+            }
+            // Car struct (byte offsets): 176 checkpoints passed, 180 respawn record. Record: position xyz, pad,
+            // quaternion xyzw (floats), then the checkpoint count restored on respawn (int).
+            function __royaleStep(id) {
+                const royale = __royaleCars.get(id);
+                if (null == royale)
+                    return;
+                const passed = new Int32Array(t.HEAPU8.buffer)[royale.car + 176 >> 2];
+                if (passed <= royale.passed)
+                    return void (royale.passed = passed);
+                royale.passed = passed;
+                const pair = royale.gates.get(passed - 1);
+                if (null == pair || 2 != pair.length)
+                    return;
+                // Car state buffer: position follows car id(4), frames(3), speed(4), flags(1), finish frames(3, if finished), checkpoint(2).
+                const state = new DataView(t.HEAPU8.buffer,n,s)
+                  , p = 14 + (2 & state.getUint8(11) ? 3 : 0)
+                  , d = g => (5 * g.x - state.getFloat32(p, !0)) ** 2 + (5 * g.y - state.getFloat32(p + 4, !0)) ** 2 + (5 * g.z - state.getFloat32(p + 8, !0)) ** 2
+                  , target = d(pair[0]) <= d(pair[1]) ? pair[1] : pair[0];
+                if (0 != target.axis)
+                    return;
+                const spawn = __royaleSpawn[(target.rotation + 2) % 4];
+                let record = new Uint32Array(t.HEAPU8.buffer)[royale.car + 180 >> 2];
+                if (0 == record || new Int32Array(t.HEAPU8.buffer)[(record >> 2) + 8] != passed) {
+                    if (record = t.ccall("malloc", "number", ["number"], [36]),
+                    "number" != typeof record || 0 == record)
+                        throw new Error("Failed to allocate memory for respawn point");
+                    new Uint32Array(t.HEAPU8.buffer)[royale.car + 180 >> 2] = record
+                }
+                const F = t.HEAPF32
+                  , o = record >> 2;
+                F[o] = 5 * target.x + spawn.dx,
+                F[o + 1] = 5 * target.y + .35,
+                F[o + 2] = 5 * target.z + spawn.dz,
+                F[o + 3] = 0,
+                F.set(spawn.q, o + 4),
+                new Int32Array(t.HEAPU8.buffer)[o + 8] = passed
             }
             jo.length = 0,
             onmessage = i,
@@ -13322,7 +13402,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
             }
             )();
             function a(e, i) {
-                t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]);
+                t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
+                __royaleStep(e.id);
                 return new Uint8Array(t.HEAPU8.buffer,n,s).slice().buffer
             }
             let o = performance.now()
