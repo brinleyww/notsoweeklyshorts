@@ -284,6 +284,13 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   start of their message; clicking it scrolls to the original. The Worker stores a copy of the
   first 100 characters (`reply_to`), so the quote outlives the original, which then reads
   "Original message was deleted". A reply ping goes through the same limits as an `@name`.
+- **Editing and deleting:** your own messages get Edit and Delete in the hover bar (Up in an empty
+  box edits your last one). Editing happens in place ("escape to cancel • enter to save") and
+  adds "(edited)"; saving it empty asks to delete instead. Delete asks first, like Discord, unless
+  Shift is held. The Worker lets players edit and delete only their own messages (the owner can
+  delete anyone's), censors edits like new messages, keeps the original pings so an edit can't
+  notify anyone, and allows 8 edits per player per 20 s. Reply quotes show the original's
+  current text while it is still in the chat.
 
 ## Announcements
 

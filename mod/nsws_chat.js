@@ -49,6 +49,8 @@
     ];
     const icon = (...codes) => String.fromCodePoint(...codes);
     const QUICK_REACTIONS = [0x1f44d, 0x1f602, 0x1f525].map((c) => String.fromCodePoint(c));
+    const EDIT_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M13.5 8.5l3 3"/></svg>';
+    const DELETE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>';
     const REPLY_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 7 5 12l5 5"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/></svg>';
     const ADD_REACTION_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.6 13.4A9 9 0 1 1 13 3.1"/><path d="M8.5 14.5s1.2 1.6 3.5 1.6 3.5-1.6 3.5-1.6"/><path d="M9 9.5h.01M15 9.5h.01"/><path d="M19 2.5v6M16 5.5h6"/></svg>';
     const TAB_ICONS = [0x1f600, 0x1f44b, 0x1f43b, 0x1f354, 0x1f697, 0x26bd, 0x1f4a1, 0x1f523, 0x1f3c1];
@@ -122,6 +124,27 @@
 #nsws-chat>.status{flex-shrink:0;padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color,#192042);opacity:.8;}
 #nsws-chat>.status:empty{display:none;}
 #nsws-chat .m.reply::before{top:22px;}
+#nsws-chat .m>.text>.edited{margin-left:5px;font-size:.62em;opacity:.5;white-space:nowrap;}
+#nsws-chat .m.editing,#nsws-chat .m.editing:hover{background:rgba(0,0,0,.14);}
+#nsws-chat .m>.editor{margin:2px 0 4px;}
+#nsws-chat .m>.editor>textarea{display:block;width:100%;box-sizing:border-box;min-height:32px;padding:6px 9px;border:0;border-radius:6px;outline:0;resize:none;overflow:hidden;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;line-height:1.35;user-select:text;}
+#nsws-chat .m>.editor>.hint{margin-top:4px;font-size:.7em;opacity:.8;}
+#nsws-chat .m>.editor>.hint>a{color:#00a8fc;cursor:pointer;}
+#nsws-chat .m>.editor>.hint>a:hover{text-decoration:underline;}
+#nsws-chat .m>.actions>button.danger:hover{background:#da373c;color:#fff;}
+#nsws-chat>.confirm{position:absolute;inset:36px 0 0 0;z-index:6;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.55);}
+#nsws-chat>.confirm>.box{width:min(380px,calc(100% - 24px));overflow:hidden;border-radius:8px;background:var(--surface-color,#28346a);box-shadow:0 8px 28px rgba(0,0,0,.5);}
+#nsws-chat>.confirm>.box>h3{margin:0;padding:16px 16px 6px;font-size:1.15em;}
+#nsws-chat>.confirm>.box>p{margin:0;padding:0 16px 12px;font-size:.9em;line-height:1.35;opacity:.85;}
+#nsws-chat>.confirm>.box>.preview{max-height:120px;margin:0 16px 12px;padding:8px 10px;overflow:hidden;border-radius:6px;background:var(--surface-secondary-color,#212b58);box-shadow:0 2px 8px rgba(0,0,0,.3);line-height:1.35;overflow-wrap:anywhere;}
+#nsws-chat>.confirm>.box>.preview>.nick{margin-right:6px;font-weight:var(--nsws-chat-name-weight);}
+#nsws-chat>.confirm>.box>.tip{padding:0 16px 12px;font-size:.7em;line-height:1.3;opacity:.65;}
+#nsws-chat>.confirm>.box>.tip>b{color:#3ba55d;}
+#nsws-chat>.confirm>.box>.buttons{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;background:var(--surface-tertiary-color,#192042);}
+#nsws-chat>.confirm>.box>.buttons>button{padding:7px 16px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;font-size:.9em;cursor:pointer;}
+#nsws-chat>.confirm>.box>.buttons>button:hover{text-decoration:underline;}
+#nsws-chat>.confirm>.box>.buttons>button.delete{background:#da373c;}
+#nsws-chat>.confirm>.box>.buttons>button.delete:hover{background:#a12d2f;text-decoration:none;}
 #nsws-chat .m>.ref{position:relative;display:flex;align-items:center;gap:5px;min-width:0;height:18px;margin-bottom:2px;font-size:.8em;cursor:pointer;}
 #nsws-chat .m>.ref::before{content:"";position:absolute;left:-12px;top:9px;width:9px;height:11px;border:2px solid rgba(255,255,255,.3);border-right:0;border-bottom:0;border-top-left-radius:6px;}
 #nsws-chat .m>.ref>.who{flex-shrink:0;white-space:nowrap;font-weight:var(--nsws-chat-name-weight);opacity:.9;}
@@ -325,6 +348,9 @@
     let replyTo = null;
     let lastReply = null;
     let replyBar = null;
+    // The message being edited in place: { id, draft }. It survives re-renders of the log.
+    let editing = null;
+    let confirmBox = null;
     // Deleted message ids, and the oldest id the history went back to, so a reply can tell a
     // deleted original from one that is only too old to be shown.
     let deletedIds = new Set();
@@ -959,7 +985,14 @@
         }
         for (const e of quickReactions()) bar.appendChild(actionButton(e, "React with " + e, () => send({ t: "react", id: m.id, e })));
         bar.appendChild(actionButton(ADD_REACTION_ICON, "Add reaction", () => togglePanel(m.id), true));
+        const own = !!me && m.uid === me.uid;
+        if (own) bar.appendChild(actionButton(EDIT_ICON, "Edit", () => startEdit(m), true));
         bar.appendChild(actionButton(REPLY_ICON, "Reply", () => startReply(m), true));
+        if (own) {
+            const del = actionButton(DELETE_ICON, "Delete (hold Shift to skip the question)", (e) => confirmDelete(m, e.shiftKey), true);
+            del.classList.add("danger");
+            bar.appendChild(del);
+        }
         if (me?.owner) {
             const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
             more.classList.add("more");
@@ -987,7 +1020,8 @@
             quote.classList.add("gone");
             quote.textContent = "Original message was deleted";
         } else {
-            quote.textContent = r.text;
+            // The original's current text when it is still here, so edits show in the quote.
+            quote.textContent = items.find((item) => item.kind === "msg" && item.m.id === r.id)?.m.text ?? r.text;
         }
         ref.append(who, quote);
         ref.addEventListener("click", () => jumpTo(r.id));
@@ -1072,10 +1106,22 @@
             meta.appendChild(time);
             el.appendChild(meta);
         }
-        const text = document.createElement("div");
-        text.className = isJumbo(m.text) ? "text jumbo" : "text";
-        appendText(text, m.text, m.pings);
-        el.appendChild(text);
+        if (editing?.id === m.id) {
+            el.classList.add("editing");
+            el.appendChild(editorElement());
+        } else {
+            const text = document.createElement("div");
+            text.className = isJumbo(m.text) ? "text jumbo" : "text";
+            appendText(text, m.text, m.pings);
+            if (m.edited) {
+                const edited = document.createElement("span");
+                edited.className = "edited";
+                edited.textContent = "(edited)";
+                edited.title = headerTime(m.edited);
+                text.appendChild(edited);
+            }
+            el.appendChild(text);
+        }
         if (m.reactions?.length) {
             const row = document.createElement("div");
             row.className = "reactions";
@@ -1102,10 +1148,160 @@
         const old = log?.querySelector('.m[data-id="' + id + '"]');
         if (index < 0 || !old) return;
         const stick = nearBottom();
+        const typing = old.contains(document.activeElement);
         const el = itemElement(items[index], items[index - 1]);
         if (old.classList.contains("open")) el.classList.add("open");
         old.replaceWith(el);
+        if (typing) focusEditor();
         scrollToEnd(stick);
+    }
+
+    function editorElement() {
+        const box = document.createElement("div");
+        box.className = "editor";
+        const field = document.createElement("textarea");
+        field.rows = 1;
+        field.maxLength = MAX_TEXT * 2;
+        field.spellcheck = false;
+        field.value = editing.draft;
+        const fit = () => {
+            field.style.height = "auto";
+            field.style.height = field.scrollHeight + "px";
+        };
+        field.addEventListener("input", () => {
+            editing.draft = field.value;
+            fit();
+        });
+        field.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                stopEdit();
+            } else if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                saveEdit();
+            }
+        });
+        requestAnimationFrame(fit);
+        const hint = document.createElement("div");
+        hint.className = "hint";
+        const cancel = document.createElement("a");
+        cancel.textContent = "cancel";
+        cancel.addEventListener("click", stopEdit);
+        const save = document.createElement("a");
+        save.textContent = "save";
+        save.addEventListener("click", saveEdit);
+        hint.append("escape to ", cancel, " " + icon(0x2022) + " enter to ", save);
+        box.append(field, hint);
+        return box;
+    }
+
+    function focusEditor() {
+        const field = log?.querySelector(".m.editing textarea");
+        if (!field) return;
+        field.focus();
+        field.setSelectionRange(field.value.length, field.value.length);
+    }
+
+    function startEdit(m) {
+        if (editing) stopEdit(true);
+        editing = { id: m.id, draft: m.text };
+        rerenderMessage(m.id);
+        for (const other of log.querySelectorAll(".m.open")) other.classList.remove("open");
+        log.querySelector('.m[data-id="' + m.id + '"]')?.scrollIntoView({ block: "nearest" });
+        focusEditor();
+    }
+
+    function stopEdit(keepFocus) {
+        const id = editing?.id;
+        editing = null;
+        if (id != null) rerenderMessage(id);
+        if (!keepFocus) input?.focus();
+    }
+
+    // Like Discord, saving an empty message asks to delete it instead.
+    function saveEdit() {
+        if (!editing) return;
+        const m = items.find((item) => item.kind === "msg" && item.m.id === editing.id)?.m;
+        const text = [...replaceShortcodes(editing.draft).replace(/\s+/g, " ").trim()].slice(0, MAX_TEXT).join("");
+        stopEdit();
+        if (!m) return;
+        if (!text) return confirmDelete(m, false);
+        if (text !== m.text) send({ t: "edit", id: m.id, text });
+    }
+
+    function closeConfirm() {
+        confirmBox?.remove();
+        confirmBox = null;
+    }
+
+    function confirmDelete(m, skip) {
+        if (skip) return send({ t: "del", id: m.id });
+        closeConfirm();
+        confirmBox = document.createElement("div");
+        confirmBox.className = "confirm";
+        const box = document.createElement("div");
+        box.className = "box";
+        const title = document.createElement("h3");
+        title.textContent = "Delete Message";
+        const question = document.createElement("p");
+        question.textContent = "Are you sure you want to delete this message?";
+        const preview = document.createElement("div");
+        preview.className = "preview";
+        const nick = document.createElement("span");
+        nick.className = "nick";
+        nick.style.color = nickColor(m.uid);
+        nick.textContent = m.nick;
+        preview.appendChild(nick);
+        appendText(preview, m.text, m.pings);
+        const tip = document.createElement("div");
+        tip.className = "tip";
+        const pro = document.createElement("b");
+        pro.textContent = "PROTIP: ";
+        tip.append(pro, "Hold Shift when you click delete to skip this question.");
+        const buttons = document.createElement("div");
+        buttons.className = "buttons";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.addEventListener("click", () => {
+            closeConfirm();
+            input?.focus();
+        });
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "delete";
+        del.textContent = "Delete";
+        del.addEventListener("click", () => {
+            send({ t: "del", id: m.id });
+            closeConfirm();
+            input?.focus();
+        });
+        buttons.append(cancel, del);
+        box.append(title, question, preview, tip, buttons);
+        confirmBox.appendChild(box);
+        confirmBox.addEventListener("click", (e) => {
+            if (e.target === confirmBox) cancel.click();
+        });
+        confirmBox.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                cancel.click();
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                del.click();
+            }
+        });
+        root.appendChild(confirmBox);
+        del.focus();
+    }
+
+    function applyEdit(data) {
+        const m = items.find((item) => item.kind === "msg" && item.m.id === data.id)?.m;
+        if (!m) return;
+        m.text = data.text;
+        m.edited = data.edited;
+        rerenderMessage(m.id);
+        for (const item of items) if (item.kind === "msg" && item.m.reply?.id === m.id) rerenderMessage(item.m.id);
     }
 
     function applyReaction(data) {
@@ -1185,9 +1381,12 @@
         } else if (data.t === "who") {
             users = Array.isArray(data.users) ? data.users : [];
             if (suggest.kind === "mention" || document.activeElement === input) updateSuggest();
+        } else if (data.t === "edit") {
+            applyEdit(data);
         } else if (data.t === "del") {
             deletedIds.add(data.id);
             if (replyTo?.id === data.id) cancelReply();
+            if (editing?.id === data.id) editing = null;
             items = items.filter((item) => item.kind !== "msg" || item.m.id !== data.id);
             renderLog();
         } else if (data.t === "react") {
@@ -1605,6 +1804,14 @@
         // The game listens for keys and clicks on window; none of the chat's should reach it.
         for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
         input.addEventListener("keydown", suggestKeys);
+        // Up in an empty box edits your last message, as in Discord.
+        input.addEventListener("keydown", (e) => {
+            if (e.key !== "ArrowUp" || e.defaultPrevented || input.value || !me) return;
+            const last = items.findLast?.((item) => item.kind === "msg" && item.m.uid === me.uid);
+            if (!last) return;
+            e.preventDefault();
+            startEdit(last.m);
+        });
         input.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
             if (panel?.classList.contains("on")) closePanel();
@@ -1663,6 +1870,7 @@
         toast?.remove();
         root = log = input = statusLine = onlineLabel = unreadBadge = replyBar = null;
         replyTo = lastReply = null;
+        editing = confirmBox = null;
         minButton = fullButton = bellButton = emojiButton = suggestBox = panel = toast = null;
         items = [];
         suggest = { kind: null, items: [], index: 0 };

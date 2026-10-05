@@ -39,6 +39,9 @@ const PING_SAME_MS = 15_000;
 // Reactions: at most REACT_BUDGET added per REACT_WINDOW_MS, and MAX_REACTION_KINDS different
 // emoji on one message.
 const REACT_BUDGET = 12;
+// Edits: at most EDIT_BUDGET per EDIT_WINDOW_MS for each player.
+const EDIT_BUDGET = 8;
+const EDIT_WINDOW_MS = 20_000;
 const REACT_WINDOW_MS = 15_000;
 const MAX_REACTION_KINDS = 20;
 // Long-polling, for players whose firewall blocks WebSockets. A poll waits up to POLL_WAIT_MS
@@ -108,9 +111,9 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
-        for (const column of ["pings", "reply_to"]) {
+        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER"]) {
             try {
-                this.sql.exec("ALTER TABLE messages ADD COLUMN " + column + " TEXT");
+                this.sql.exec("ALTER TABLE messages ADD COLUMN " + column);
             } catch {
                 // Already there.
             }
@@ -276,7 +279,7 @@ export class ChatRoom extends DurableObject {
     }
 
     history() {
-        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
+        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
             .toArray().reverse().map(({ reply_to, ...m }) => ({
                 ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [], reply: reply_to ? JSON.parse(reply_to) : null, reactions: [],
             }));
@@ -398,7 +401,7 @@ export class ChatRoom extends DurableObject {
     // A player's spam and ping counters, rebuilt from the stored messages. The in-memory copy is
     // lost whenever the room hibernates, which a quiet few seconds is enough for.
     recentActivity(uid, now) {
-        const s = { last: 0, recent: [], text: "", textAt: 0, pings: [], reacts: [] };
+        const s = { last: 0, recent: [], text: "", textAt: 0, pings: [], reacts: [], edits: [] };
         const rows = this.sql.exec("SELECT at, text, pings FROM messages WHERE uid = ? AND at > ? ORDER BY id",
             uid, now - Math.max(SPAM_WINDOW_MS, PING_WINDOW_MS, REPEAT_MS)).toArray();
         for (const row of rows) {
@@ -409,6 +412,7 @@ export class ChatRoom extends DurableObject {
             for (const p of row.pings ? JSON.parse(row.pings) : []) s.pings.push({ uid: p.uid, at: row.at });
         }
         for (const row of this.sql.exec("SELECT at FROM reactions WHERE uid = ? AND at > ?", uid, now - REACT_WINDOW_MS)) s.reacts.push(row.at);
+        for (const row of this.sql.exec("SELECT edited FROM messages WHERE uid = ? AND edited > ?", uid, now - EDIT_WINDOW_MS)) s.edits.push(row.edited);
         return s;
     }
 
@@ -474,11 +478,43 @@ export class ChatRoom extends DurableObject {
         return this.handle(me, msg, (data) => this.send(ws, data), () => ws.serializeAttachment(me));
     }
 
+    // Players edit only their own messages; the owner too. The new text is censored like any
+    // message. Pings stay as they were sent, so an edit can't notify anyone.
+    edit(reply, me, msg) {
+        const text = cleanText(msg.text, MAX_TEXT);
+        if (!text || !Number.isSafeInteger(msg.id)) return;
+        const row = this.sql.exec("SELECT uid, text FROM messages WHERE id = ?", msg.id).toArray()[0];
+        if (!row || row.uid !== me.uid) return;
+        const now = Date.now();
+        const until = this.mutedUntil(me.uid);
+        if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
+        if (!me.owner) {
+            const s = this.activity(me.uid, now);
+            s.edits = s.edits.filter((at) => now - at < EDIT_WINDOW_MS);
+            if (s.edits.length >= EDIT_BUDGET) return reply({ t: "err", text: "Slow down on the edits." });
+            s.edits.push(now);
+        }
+        const clean = censor(text);
+        if (clean === row.text) return;
+        this.sql.exec("UPDATE messages SET text = ?, edited = ? WHERE id = ?", clean, now, msg.id);
+        this.broadcast({ t: "edit", id: msg.id, text: clean, edited: now });
+    }
+
     // One message from a player, over either transport. `reply` answers only them; `save`
     // stores a changed nickname wherever that transport keeps it.
     async handle(me, msg, reply, save) {
         if (msg?.t === "who") return reply({ t: "who", users: this.users() });
         if (msg?.t === "react") return this.react(reply, me, msg);
+        if (msg?.t === "edit") return this.edit(reply, me, msg);
+        // Anyone can delete their own message; the owner can delete anyone's.
+        if (msg?.t === "del" && Number.isSafeInteger(msg.id)) {
+            const row = this.sql.exec("SELECT uid FROM messages WHERE id = ?", msg.id).toArray()[0];
+            if (!row || (row.uid !== me.uid && !me.owner)) return;
+            this.sql.exec("DELETE FROM messages WHERE id = ?", msg.id);
+            this.sql.exec("DELETE FROM reactions WHERE msg = ?", msg.id);
+            this.broadcast({ t: "del", id: msg.id });
+            return;
+        }
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
@@ -516,11 +552,7 @@ export class ChatRoom extends DurableObject {
         }
 
         if (!me.owner) return;
-        if (msg?.t === "del" && Number.isSafeInteger(msg.id)) {
-            this.sql.exec("DELETE FROM messages WHERE id = ?", msg.id);
-            this.sql.exec("DELETE FROM reactions WHERE msg = ?", msg.id);
-            this.broadcast({ t: "del", id: msg.id });
-        } else if (msg?.t === "mute" && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && MUTE_MINUTES.includes(msg.minutes)) {
+        if (msg?.t === "mute" && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && MUTE_MINUTES.includes(msg.minutes)) {
             this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + msg.minutes * 60000);
             this.sql.exec("DELETE FROM mutes WHERE until < ?", Date.now());
             reply({ t: "err", text: "Muted for " + msg.minutes + " minutes." });
