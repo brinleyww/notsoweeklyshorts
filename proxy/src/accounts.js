@@ -9,6 +9,8 @@ const MAX_CLIP_NAME = 100;
 const MAX_CLIP_CODE = 300_000;
 const MAX_CLIPS = 1000;
 const SHARES_PER_HOUR = 30;
+// Watching the same clip again within this long doesn't count as another view.
+const VIEW_GAP_MS = 30_000;
 const SHARE_ID = /^[A-Za-z0-9]{10}$/;
 const CLIP_ID = /^[0-9a-f]{16}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -51,6 +53,10 @@ export class Accounts extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS shares (
             id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, at INTEGER NOT NULL, code TEXT NOT NULL)`);
         this.sql.exec("CREATE INDEX IF NOT EXISTS shares_user ON shares(user_id, at)");
+        // Views belong to the run (the clip's key), so every copy of a shared clip adds to the same count.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS views (
+            key TEXT NOT NULL, user_id TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL,
+            PRIMARY KEY (key, user_id))`);
     }
 
     holder(key) {
@@ -97,12 +103,26 @@ export class Accounts extends DurableObject {
         }
     }
 
+    // Views count everyone but the account asking, so a player's own replays don't add up.
     listClips(userId) {
         return this.sql.exec(
-            "SELECT id, key, name, player, track, frames, created FROM clips WHERE user_id = ? ORDER BY created, id", userId,
+            `SELECT c.id, c.key, c.name, c.player, c.track, c.frames, c.created,
+                (SELECT COUNT(*) FROM views v WHERE v.key = c.key AND v.user_id != c.user_id) AS people,
+                (SELECT COALESCE(SUM(v.count), 0) FROM views v WHERE v.key = c.key AND v.user_id != c.user_id) AS views
+            FROM clips c WHERE c.user_id = ? ORDER BY c.created, c.id`, userId,
         ).toArray().map((r) => ({
             id: r.id, key: r.key, name: r.name, playerName: r.player, trackId: r.track, frames: r.frames, createdAt: r.created,
+            people: r.people, views: r.views,
         }));
+    }
+
+    recordView(userId, key) {
+        if (!HEX64.test(String(key))) return { error: "bad" };
+        const now = Date.now();
+        const row = this.sql.exec("SELECT last FROM views WHERE key = ? AND user_id = ?", key, userId).toArray()[0];
+        if (!row) this.sql.exec("INSERT INTO views (key, user_id, count, last) VALUES (?, ?, 1, ?)", key, userId, now);
+        else if (now - row.last >= VIEW_GAP_MS) this.sql.exec("UPDATE views SET count = count + 1, last = ? WHERE key = ? AND user_id = ?", now, key, userId);
+        return { ok: true };
     }
 
     getClip(userId, id) {

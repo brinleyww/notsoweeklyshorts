@@ -331,7 +331,12 @@ never stored.
   before v9.5 reached the account.
 - **Clip links.** `/nsws/clips/share` stores a copy of a clip under a 10-character
   id (30 new links per account per hour); `?clip=<id>` on the site adds it to
-  the visitor's clips. A link keeps working after its clip is renamed or deleted.
+  the visitor's clips and starts playing it. A link keeps working after its clip
+  is renamed or deleted.
+- **Views.** `/nsws/clips/view` counts a watch against the run itself (the clip's
+  key), so every copy of a shared clip adds to one count; a repeat within 30 s
+  from the same account doesn't count. The clip list reports views and distinct
+  viewers, leaving out the account's own watches.
 
 Only the site may call these (the same Origin check as the chat). The Worker
 must be deployed before a site push that uses them; until then the page shows

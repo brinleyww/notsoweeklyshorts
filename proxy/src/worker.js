@@ -774,7 +774,7 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
     return withCors(await postUpstream(request, cfg, url.pathname, raw), origin);
 }
 
-const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add",
+const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
     "clips/rename", "clips/delete", "clips/share", "share/get"]);
 
 // Sent as text/plain JSON, like the chat, so no preflight is needed. Everything but opening
@@ -811,6 +811,7 @@ async function handleAccounts(request, url, env, fromSite, origin) {
         case "clips/rename": result = await stub.renameClip(userId, body.id, body.name); break;
         case "clips/delete": result = await stub.deleteClip(userId, body.id); break;
         case "clips/share": result = await stub.shareClip(userId, body.code); break;
+        case "clips/view": result = await stub.recordView(userId, body.key); break;
     }
     if (result == null) return plain(404, "Not found", origin);
     if (result.error === "bad") return plain(400, "Bad request", origin);
