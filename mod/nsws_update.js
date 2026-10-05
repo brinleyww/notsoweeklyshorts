@@ -23,6 +23,15 @@
 .nsws-update>.buttons{display:flex;justify-content:space-between;gap:10px;padding:10px 24px 10px 10px;}
 .nsws-update>.buttons>.button{min-width:170px;}
 @keyframes nsws-update-in{0%{opacity:0;transform:translateY(12px);}100%{opacity:1;transform:none;}}
+#nsws-update-toast{position:absolute;top:12px;right:calc(var(--safe-area-horizontal,0px) + 12px);z-index:100;display:flex;flex-direction:column;width:380px;max-width:calc(100% - 24px);background-color:var(--surface-color);clip-path:polygon(14px 0,100% 0,100% 100%,0 100%);pointer-events:auto;animation:nsws-update-toast 14s ease-in forwards;}
+#nsws-update-toast:hover{opacity:1!important;animation-play-state:paused;}
+#nsws-update-toast>.checker{height:6px;background:repeating-conic-gradient(#fff 0 25%,#112052 0 50%) 0 0/6px 6px;opacity:.85;}
+#nsws-update-toast>.row{display:flex;align-items:center;gap:10px;padding:8px 10px 10px 22px;}
+#nsws-update-toast>.row>.text{flex:1;min-width:0;color:var(--text-color);}
+#nsws-update-toast>.row>.text>div{font-size:22px;white-space:nowrap;}
+#nsws-update-toast>.row>.text>span{display:block;font-size:16px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+#nsws-update-toast>.row>.button{flex-shrink:0;padding:6px 16px;font-size:22px;}
+@keyframes nsws-update-toast{0%{opacity:0;transform:translateX(40px);}3%{opacity:1;transform:none;}45%{opacity:1;}100%{opacity:0;}}
 `;
 
     // document.lastModified is "MM/DD/YYYY hh:mm:ss" in local time, which Date.parse can't be trusted with.
@@ -72,6 +81,8 @@
     let dismissedAt = loadedDeployTime();
     let pending = null;
     let popup = null;
+    let toast = null;
+    let toastedAt = -Infinity;
     let checking = false;
 
     function onKey(e) {
@@ -101,13 +112,47 @@
         return b;
     }
 
+    function addStyle() {
+        if (document.getElementById("nsws-update-style")) return;
+        const style = document.createElement("style");
+        style.id = "nsws-update-style";
+        style.textContent = CSS;
+        document.head.appendChild(style);
+    }
+
+    function closeToast() {
+        toast?.remove();
+        toast = null;
+    }
+
+    function showToast() {
+        addStyle();
+        toastedAt = pending.deployedAt;
+        toast = document.createElement("div");
+        toast.id = "nsws-update-toast";
+        toast.innerHTML = '<div class="checker"></div>';
+        const row = document.createElement("div");
+        row.className = "row";
+        const text = document.createElement("div");
+        text.className = "text";
+        text.innerHTML = "<div>New update available</div>";
+        const version = document.createElement("span");
+        version.textContent = pending.name || "New version";
+        text.appendChild(version);
+        const viewButton = makeButton("arrow_right", "View");
+        viewButton.addEventListener("click", () => {
+            closeToast();
+            if (pending && !popup) show();
+        });
+        row.append(text, viewButton);
+        toast.appendChild(row);
+        toast.addEventListener("animationend", closeToast);
+        (document.getElementById("ui") || document.body).appendChild(toast);
+    }
+
     function show() {
-        if (!document.getElementById("nsws-update-style")) {
-            const style = document.createElement("style");
-            style.id = "nsws-update-style";
-            style.textContent = CSS;
-            document.head.appendChild(style);
-        }
+        closeToast();
+        addStyle();
         popup = document.createElement("div");
         popup.id = "nsws-update-bg";
         const box = document.createElement("div");
@@ -138,7 +183,9 @@
     }
 
     function tryShow() {
-        if (pending && !popup && !document.querySelector(BUSY)) show();
+        if (!pending || popup) return;
+        if (!document.querySelector(BUSY)) show();
+        else if (!toast && toastedAt < pending.deployedAt && document.visibilityState === "visible") showToast();
     }
 
     async function check() {
