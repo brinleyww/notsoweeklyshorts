@@ -39,7 +39,8 @@ const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
 const MAX_CHAT_BODY = 4096;
-const MAX_TRACK_SYNC_BODY = 400_000;
+// Big tracks reach ~470 KB; the stored payload must stay under Durable Object SQLite's 2 MB value limit.
+const MAX_TRACK_SYNC_BODY = 1_500_000;
 const MAX_ACCOUNT_BODY = 400_000;
 // How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
 // seen yet is always classified at once.
