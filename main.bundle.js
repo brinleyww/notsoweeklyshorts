@@ -59457,10 +59457,14 @@ window.__nswsTrackQuery = function(trackId) {
     // The Author Time (AT) is the benchmark player's own leaderboard time, fetched live.
     // Beating it earns the Author tier; Gold/Silver/Bronze are time windows off the AT.
     var BENCHMARK_NICKNAME = "Cookedbyapringle";
-    // Weeks whose Author Time is set by someone else. Keep in step with PUBLIC_NICKNAMES
-    // in proxy/wrangler.toml.
+    // Weeks and tracks whose Author Time is set by someone else. Keep in step with
+    // PUBLIC_NICKNAMES in proxy/wrangler.toml.
     var BENCHMARK_NICKNAME_WEEK_OVERRIDES = { 6: "CookedbyBenjamin's 5th cousin" };
+    var BENCHMARK_NICKNAME_TRACK_OVERRIDES = { fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb: "JonnieJeans" };
     function benchmarkNicknameForTrack(trackId) {
+        if (Object.prototype.hasOwnProperty.call(BENCHMARK_NICKNAME_TRACK_OVERRIDES, trackId)) {
+            return BENCHMARK_NICKNAME_TRACK_OVERRIDES[trackId];
+        }
         var wk = (window.__nswsTrackWeekMap || {})[trackId];
         if (wk != null && Object.prototype.hasOwnProperty.call(BENCHMARK_NICKNAME_WEEK_OVERRIDES, wk)) {
             return BENCHMARK_NICKNAME_WEEK_OVERRIDES[wk];

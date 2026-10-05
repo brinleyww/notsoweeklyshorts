@@ -27,8 +27,8 @@ BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
 CURRENT_WEEK = 9
 
 # Author Time players, whose times stay visible during the week. Keep in step
-# with BENCHMARK_NICKNAME and BENCHMARK_NICKNAME_WEEK_OVERRIDES in main.bundle.js.
-PUBLIC_NICKNAMES = ["Cookedbyapringle", "CookedbyBenjamin's 5th cousin"]
+# with BENCHMARK_NICKNAME and the BENCHMARK_NICKNAME_*_OVERRIDES in main.bundle.js.
+PUBLIC_NICKNAMES = ["Cookedbyapringle", "CookedbyBenjamin's 5th cousin", "JonnieJeans"]
 
 # First week stored on Kodub under a secret track id (needs the TRACK_SALT
 # secret). Never raise it, change TRACK_SALT or renumber weeks once runs exist:
