@@ -54782,7 +54782,7 @@ window.__nswsTrackQuery = function(trackId) {
             chunks: ["49cd8cd3cf9664e0", "7752bdb1b52218c6", "5c535e58f7133faa", "f403136ad3e883bf"],
             masks: ["26d75a8f9ea520fd", "3b9131a566afe78b", "cb716d86c08fadf4", "033a60409cf58f11"],
             file: "tracks/community/week9.track",
-            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "824c11914feb15aee2bc3a6414abee973d043f250c999f390a1ed9cd97ee3423", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "d2e0b53047767ddf43db0acfecc2c3dd79055a9ba15b56e55ce03ccd1fe649de", name: "5 - Liminal", short: "Limin", author: "imracer & Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_5.png" }]
+            tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "d2e0b53047767ddf43db0acfecc2c3dd79055a9ba15b56e55ce03ccd1fe649de", name: "5 - Liminal", short: "Limin", author: "imracer & Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -54838,32 +54838,11 @@ window.__nswsTrackQuery = function(trackId) {
             const wk = window.__nswsTrackWeekMap[trackId];
             return wk === window.__nswsCurrentWeek;
         };
-        let __nswsFreecamNotice = null, __nswsFreecamNoticeTimer = 0;
         window.__nswsFreecamBlocked = function(trackId) {
             const blocked = __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noFreecam)));
-            if (!blocked) return false;
-            if (!document.getElementById("nsws-freecam-notice-style")) {
-                const style = document.createElement("style");
-                style.id = "nsws-freecam-notice-style";
-                style.textContent = `
-.nsws-freecam-notice { position: absolute; left: 50%; top: 30%; transform: translateX(-50%); z-index: 3; width: 500px; max-width: calc(100% - 20px); box-sizing: border-box; padding: 10px; background-color: var(--surface-color); text-align: center; pointer-events: none; transition: opacity 0.3s; }
-.nsws-freecam-notice > h2 { margin: 0 0 10px 0; font-size: 38px; font-weight: normal; color: var(--text-color); }
-.nsws-freecam-notice > p { margin: 0; padding: 10px; background-color: var(--surface-secondary-color); line-height: 0.9; font-size: 28px; color: var(--text-color); }
-.nsws-freecam-notice.hidden { opacity: 0; }
-`;
-                document.head.appendChild(style);
-            }
-            if (!__nswsFreecamNotice || !__nswsFreecamNotice.isConnected) {
-                __nswsFreecamNotice = document.createElement("div");
-                __nswsFreecamNotice.className = "nsws-freecam-notice hidden";
-                __nswsFreecamNotice.innerHTML = '<h2>Freecam disabled</h2><p>Freecam is turned off on this map.</p>';
-                (document.getElementById("ui") || document.body).appendChild(__nswsFreecamNotice);
-                void __nswsFreecamNotice.offsetWidth;
-            }
-            __nswsFreecamNotice.classList.remove("hidden");
-            clearTimeout(__nswsFreecamNoticeTimer);
-            __nswsFreecamNoticeTimer = setTimeout(() => __nswsFreecamNotice?.classList.add("hidden"), 2500);
-            return true;
+            if (blocked && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
+                window.__nswsMessageBox.show("Freecam is disabled on this map.", "Ok", null);
+            return blocked;
         };
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
@@ -58494,7 +58473,7 @@ window.__nswsTrackQuery = function(trackId) {
                             }
                             e.preventDefault()
                         }
-                    if ("Escape" == e.code && (null != C.get(this, kf, "f") ? (C.get(this, kf, "f").dispose(),
+                    if ("Escape" == e.code && !window.__nswsMessageBox?.isOpen && (null != C.get(this, kf, "f") ? (C.get(this, kf, "f").dispose(),
                     C.set(this, kf, null, "f")) : C.get(this, mf, "f").isEnabled ? C.get(this, mf, "f").isEnabled = !1 : u(n, i, r, C.get(this, uf, "f").map((e => e.settings))),
                     e.preventDefault()),
                     h.checkKeyBinding(e, KeyBind.ToggleUI) && (C.get(this, Af, "f").isVisible = !C.get(this, Af, "f").isVisible,
@@ -58840,6 +58819,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
             ;
             window.__bw_returnToMenu = () => M(!1, null);
+            window.__nswsMessageBox = E;
             const _ = () => {
                 o.trigger((async () => {
                     P.bQ(),
