@@ -22,6 +22,12 @@ const IGNORED_IN_NAMES = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
 const SHARED_NAMES = new Set(["", "anonymous"]);
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
+// Each account's code changes every REF_CODE_MS. A code still works for REF_GRACE_MS after the
+// page's countdown reaches zero, for a friend who was halfway through typing it.
+const REF_CODE_MS = 10 * 60_000;
+const REF_GRACE_MS = 30_000;
+// Expired codes are remembered this long, so a late friend hears "expired", not "no such code".
+const REF_EXPIRED_KEEP_MS = 86_400_000;
 const CHAT_UID = /^[0-9a-f]{16}$/;
 // A whole school shares one address, so these only stop one person farming referrals.
 const REDEEMS_PER_IP_DAY = 10;
@@ -99,6 +105,7 @@ export class Accounts extends DurableObject {
             PRIMARY KEY (key, user_id))`);
         this.sql.exec(`CREATE TABLE IF NOT EXISTS ref_codes (
             user_id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, at INTEGER NOT NULL)`);
+        this.sql.exec("CREATE TABLE IF NOT EXISTS ref_expired (code TEXT PRIMARY KEY, at INTEGER NOT NULL)");
         // A referral only earns its referrer a point once the new player uploads a run on an NSWS
         // track (confirmed), so a stack of empty profiles is worth nothing. ip is a hash.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS referrals (
@@ -122,14 +129,21 @@ export class Accounts extends DurableObject {
         return this.sql.exec("SELECT nickname FROM names WHERE user_id = ? ORDER BY at DESC LIMIT 1", userId).toArray()[0]?.nickname ?? null;
     }
 
+    // The account's current code and when it expires; an expired one is replaced here.
     refCode(userId) {
-        const row = this.sql.exec("SELECT code FROM ref_codes WHERE user_id = ?", userId).toArray()[0];
-        if (row) return row.code;
+        const now = Date.now();
+        const row = this.sql.exec("SELECT code, at FROM ref_codes WHERE user_id = ?", userId).toArray()[0];
+        if (row && now - row.at < REF_CODE_MS) return { code: row.code, expires: row.at + REF_CODE_MS };
+        if (row) {
+            this.sql.exec("INSERT OR REPLACE INTO ref_expired (code, at) VALUES (?, ?)", row.code, now);
+            this.sql.exec("DELETE FROM ref_expired WHERE at < ?", now - REF_EXPIRED_KEEP_MS);
+        }
         let code;
         do code = randomId(8, REF_ALPHABET);
-        while (this.sql.exec("SELECT 1 FROM ref_codes WHERE code = ?", code).toArray().length);
-        this.sql.exec("INSERT INTO ref_codes (user_id, code, at) VALUES (?, ?, ?)", userId, code, Date.now());
-        return code;
+        while (this.sql.exec("SELECT 1 FROM ref_codes WHERE code = ? UNION ALL SELECT 1 FROM ref_expired WHERE code = ?", code, code)
+            .toArray().length);
+        this.sql.exec("INSERT OR REPLACE INTO ref_codes (user_id, code, at) VALUES (?, ?, ?)", userId, code, now);
+        return { code, expires: now + REF_CODE_MS };
     }
 
     referralCounts(userId) {
@@ -171,8 +185,12 @@ export class Accounts extends DurableObject {
         const spent = this.sql.exec("SELECT COALESCE(SUM(cost), 0) AS n FROM tag_bought WHERE user_id = ?", userId).one().n;
         const owned = this.ownedTags(userId, counts);
         const by = this.sql.exec("SELECT referrer FROM referrals WHERE referred = ?", userId).toArray()[0]?.referrer;
+        const ref = this.refCode(userId);
         return {
-            code: this.refCode(userId),
+            code: ref.code,
+            codeExpires: ref.expires,
+            now: Date.now(),
+            codeMs: REF_CODE_MS,
             referrals: counts.confirmed,
             pending: counts.pending,
             bonus: profile.bonus,
@@ -206,8 +224,12 @@ export class Accounts extends DurableObject {
     redeem(userId, code, ipHash) {
         code = String(code ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
         if (!REF_CODE.test(code)) return { error: "code" };
-        const referrer = this.sql.exec("SELECT user_id FROM ref_codes WHERE code = ?", code).toArray()[0]?.user_id;
-        if (!referrer) return { error: "code" };
+        const row = this.sql.exec("SELECT user_id, at FROM ref_codes WHERE code = ?", code).toArray()[0];
+        if (!row) {
+            return this.sql.exec("SELECT 1 FROM ref_expired WHERE code = ?", code).toArray().length ? { error: "expired" } : { error: "code" };
+        }
+        if (Date.now() - row.at >= REF_CODE_MS + REF_GRACE_MS) return { error: "expired" };
+        const referrer = row.user_id;
         if (referrer === userId) return { error: "self" };
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) return { error: "already" };
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ? AND referrer = ?", referrer, userId).toArray().length) {

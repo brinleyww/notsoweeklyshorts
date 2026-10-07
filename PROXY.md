@@ -349,9 +349,13 @@ same `Accounts` Durable Object (new tables, created in its constructor), so they
 belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
 `src/accounts.js` and in that file must list the same ids, costs and counts.
 
-- **Referral codes.** Every account gets one 8-character code (no `I`, `O`, `0`
-  or `1`). Main menu → Referrals shows it with a link (`?ref=CODE`, used on the
-  visitor's profile as soon as it exists) and a box to type a friend's code.
+- **Referral codes.** Every account has an 8-character code (no `I`, `O`, `0`
+  or `1`) that changes every 10 minutes (`REF_CODE_MS`). Main menu → Referrals
+  shows it with a countdown and a link (`?ref=CODE`, used on the visitor's
+  profile as soon as it exists), and fetches the new code when the timer runs
+  out. A code still works for 30 s after that (`REF_GRACE_MS`), and old codes are
+  remembered for a day (`ref_expired`) so a late friend is told it expired. There
+  is also a box to type a friend's code.
   Each profile can use one code, never its own, and not the code of someone who
   joined with theirs. One address can use 10 codes a day, 3 of them for the same
   player (a whole school shares one address); only a hash of it is stored.

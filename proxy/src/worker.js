@@ -854,7 +854,7 @@ async function handleAccounts(request, url, env, fromSite, origin) {
         }
     }
     if (result == null) return plain(404, "Not found", origin);
-    if (result.error === "code" || result.error === "self" || result.error === "already" || result.error === "mutual"
+    if (result.error === "code" || result.error === "expired" || result.error === "self" || result.error === "already" || result.error === "mutual"
         || result.error === "points" || result.error === "locked") {
         return json({ error: result.error }, origin, 409);
     }

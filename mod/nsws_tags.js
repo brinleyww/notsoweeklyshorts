@@ -120,6 +120,14 @@
 #nsws-ref .card>h2{margin:0 0 6px;font-size:20px;font-weight:normal;}
 #nsws-ref .card>.sub{margin:0 0 10px;font-size:13px;line-height:1.35;color:rgba(255,255,255,.55);}
 #nsws-ref .code{margin:4px 0 10px;font-size:44px;letter-spacing:.12em;color:#ffc94a;text-shadow:0 3px 0 #112052;user-select:all;font-variant-numeric:tabular-nums;}
+#nsws-ref .code.old{opacity:.35;}
+#nsws-ref .timer{margin:-2px 0 12px;}
+#nsws-ref .timer>.label{margin-bottom:5px;font-size:14px;color:rgba(255,255,255,.7);}
+#nsws-ref .timer>.label>b{font-weight:normal;color:#fff;font-variant-numeric:tabular-nums;}
+#nsws-ref .timer>.track{height:6px;background:var(--surface-tertiary-color);}
+#nsws-ref .timer>.track>.fill{height:100%;background:#ffc94a;transition:width .25s linear;}
+#nsws-ref .timer.low>.track>.fill{background:#ff7a59;}
+#nsws-ref .timer.low>.label>b{color:#ff9a7f;}
 #nsws-ref .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 #nsws-ref .row>.button{margin:0;font-size:18px;padding:7px 14px;}
 #nsws-ref .row>input{flex:1;min-width:0;margin:0;padding:8px 14px;border:0;outline:0;background:var(--surface-tertiary-color);color:var(--text-color);font-size:24px;letter-spacing:.1em;text-transform:uppercase;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);user-select:text;}
@@ -146,6 +154,8 @@
 
     let state = null;
     let loading = null;
+    // Server time minus this browser's, so the code's countdown matches the Worker's clock.
+    let clockOffset = 0;
     let garage = null;
     let ref = null;
 
@@ -240,6 +250,8 @@
 
     function setState(next) {
         if (!next || typeof next !== "object" || !Array.isArray(next.owned)) return;
+        if (Number.isFinite(next.now)) clockOffset = next.now - Date.now();
+        if (ref && state?.code !== next.code) ref.copied = "";
         state = next;
         renderGarage();
         renderRef();
@@ -276,6 +288,7 @@
 
     const REDEEM_ERRORS = {
         code: "There's no referral code like that. Check it and try again.",
+        expired: "That code has expired. Codes change every 10 minutes, so ask your friend for their new one.",
         self: "That's your own code. Send it to a friend instead!",
         already: "This profile has already used a referral code.",
         mutual: "That player joined with your code, so you can't use theirs.",
@@ -566,8 +579,42 @@
         closeReferrals();
     }
 
+    function codeLeft() {
+        return state?.codeExpires ? state.codeExpires - (Date.now() + clockOffset) : null;
+    }
+
+    function clock(ms) {
+        const s = Math.max(0, Math.ceil(ms / 1000));
+        return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+    }
+
+    // Runs four times a second while the window is open. At zero it fetches the new code.
+    function tickRef() {
+        const view = ref;
+        const left = codeLeft();
+        if (!view?.timer || left == null) return;
+        const total = state.codeMs || 600_000;
+        view.timer.classList.toggle("low", left < 60_000);
+        view.timerFill.style.width = Math.max(0, Math.min(100, (left / total) * 100)) + "%";
+        view.codeEl.classList.toggle("old", left <= 0);
+        for (const b of view.copyButtons) b.disabled = left <= 0;
+        if (left > 0) {
+            view.timerLabel.textContent = "New code in ";
+            view.timerLabel.appendChild(el("b", null, clock(left)));
+            return;
+        }
+        view.timerLabel.textContent = "Getting your new code…";
+        if (view.renewing || Date.now() - view.renewedAt < 3000) return;
+        view.renewing = true;
+        view.renewedAt = Date.now();
+        loadState().catch(() => {}).finally(() => {
+            view.renewing = false;
+        });
+    }
+
     function closeReferrals() {
         if (!ref) return;
+        clearInterval(ref.ticker);
         ref.overlay.remove();
         window.removeEventListener("keydown", onRefKey, true);
         ref = null;
@@ -591,7 +638,9 @@
         for (const type of ["keydown", "keyup", "keypress"]) overlay.addEventListener(type, stopKeys);
         document.body.appendChild(overlay);
         window.addEventListener("keydown", onRefKey, true);
-        ref = { overlay, body, draft: storageGet(PENDING_KEY) || "", note: "", noteKind: "", busy: false, copied: "", failed: null };
+        ref = { overlay, body, draft: storageGet(PENDING_KEY) || "", note: "", noteKind: "", busy: false, copied: "", failed: null,
+            renewing: false, renewedAt: 0 };
+        ref.ticker = setInterval(tickRef, 250);
         renderRef();
         loadState().catch((err) => {
             if (!ref) return;
@@ -616,8 +665,19 @@
         const grid = el("div", "grid");
 
         const mine = el("div", "card");
-        mine.append(el("h2", null, "Your code"), el("p", "sub", "Send it to friends. They type it in here (Referrals on the main menu), or just open your link."));
-        mine.appendChild(el("div", "code", state?.code ?? (view.failed ? "—" : "…")));
+        mine.append(el("h2", null, "Your code"), el("p", "sub", "It changes every 10 minutes, so send it to a friend who's ready to join. They type it in here (Referrals on the main menu), or just open your link."));
+        view.codeEl = el("div", "code", state?.code ?? (view.failed ? "—" : "…"));
+        mine.appendChild(view.codeEl);
+        view.timer = view.timerLabel = view.timerFill = null;
+        if (state?.codeExpires) {
+            view.timer = el("div", "timer");
+            view.timerLabel = el("div", "label");
+            const track = el("div", "track");
+            view.timerFill = el("div", "fill");
+            track.appendChild(view.timerFill);
+            view.timer.append(view.timerLabel, track);
+            mine.appendChild(view.timer);
+        }
         const copyRow = el("div", "row");
         const copy = (what, text) => copyText(text).then(() => {
             if (!ref) return;
@@ -627,6 +687,7 @@
         const copyCode = button(view.copied === "code" ? "Copied!" : "Copy code", () => state && copy("code", state.code));
         const copyLink = button(view.copied === "link" ? "Copied!" : "Copy link", () => state && copy("link", refLink(state.code)));
         copyCode.disabled = copyLink.disabled = !state;
+        view.copyButtons = [copyCode, copyLink];
         copyRow.append(copyCode, copyLink);
         mine.appendChild(copyRow);
         if (view.failed && !state) mine.appendChild(el("p", "note bad", view.failed));
@@ -698,7 +759,7 @@
         how.appendChild(el("h2", null, "How it works"));
         const steps = el("ol");
         for (const step of [
-            "Send a friend your code or link.",
+            "Send a friend your code or link. It changes every 10 minutes, so they need to use it before the timer runs out.",
             "They enter it on their profile (one code per profile).",
             "You get a point once they finish a run on any NSWS track.",
             "Spend points on tags in Garage → Tags. Your tag shows next to your name in the chat.",
@@ -723,6 +784,7 @@
         }
         lower.appendChild(top);
         view.body.appendChild(lower);
+        tickRef();
     }
 
     if (!document.getElementById("nsws-tags-style")) {
