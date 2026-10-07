@@ -946,9 +946,10 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         const sub = url.pathname.slice((TRAFFIC_PREFIX + "tagadmin").length);
         if (sub === "") return json(await accountsStub.tagOverview(), origin);
         if (sub === "/lookup") {
-            const found = await accountsStub.lookupTags(body.nickname);
+            const found = await accountsStub.lookupTags(body.nickname, body.userId);
             return found.error ? plain(404, "Not found", origin) : json(found, origin);
         }
+        if (sub === "/search") return json(await accountsStub.searchPlayers(body.query), origin);
         if (sub === "/grant" || sub === "/bonus") {
             const changed = sub === "/grant"
                 ? await accountsStub.grantTag(body.userId, body.tag, body.on === true)

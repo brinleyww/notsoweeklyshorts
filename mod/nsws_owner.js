@@ -134,6 +134,16 @@
 .nrc-grant.button{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;padding:6px 10px;background:var(--surface-tertiary-color);opacity:.6;}
 .nrc-grant.button.on{opacity:1;background:var(--button-hover-color);box-shadow:inset 0 -3px 0 ${GOOD};}
 .nrc-grant.button .nsws-tag{font-size:15px;}
+.nrc-hits{margin:6px 0 0;max-height:360px;overflow-y:auto;background:var(--surface-tertiary-color);}
+.nrc-hits:empty{display:none;}
+.nrc-hit{display:flex;align-items:center;gap:10px;width:100%;margin:0;padding:8px 12px;border:0;background:transparent;color:var(--text-color);font:inherit;font-size:18px;text-align:left;cursor:pointer;}
+.nrc-hit:hover,.nrc-hit.sel{background:var(--button-hover-color);}
+.nrc-hit .who{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nrc-hit mark{background:none;color:${GOLD};}
+.nrc-hit .alt{flex-shrink:0;font-size:13px;color:rgba(255,255,255,.5);}
+.nrc-hit .chips{display:flex;gap:4px;margin-left:auto;flex-shrink:0;}
+.nrc-hit .nsws-tag{font-size:13px;}
+.nrc-hits .none{padding:10px 12px;font-size:14px;color:rgba(255,255,255,.5);}
 @media (max-width:720px){.nrc-hero{grid-template-columns:1fr;}.nrc-close.button{position:absolute;right:18px;top:20px;}.nrc-title{margin-right:64px;}.nrc-bar{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;}.nrc-bar .track{grid-column:1/-1;order:3;}.nrc-head{padding:10px 14px;}.nrc-tabs{padding:8px 14px 0;}.nrc-body{padding:14px;}.nrc-title h1{font-size:26px;}.nrc-chip.button{font-size:15px;padding:6px 11px;}}
 `;
 
@@ -495,6 +505,11 @@
         tagsFound: null,
         tagsNote: "",
         tagsBusy: false,
+        tagsHits: null,
+        tagsHitsNote: "",
+        tagsHit: 0,
+        tagsHitsBox: null,
+        tagsInput: null,
     };
 
     async function post(path, extra) {
@@ -1300,14 +1315,14 @@
         if (ui.overlay && ui.tab === "tags") renderTagLists();
     }
 
-    async function findPlayer() {
-        const nickname = ui.tagsQuery.trim();
-        if (!nickname || ui.tagsBusy) return;
+    // Opens one player, by account (a search result) or by their exact nickname.
+    async function findPlayer(by) {
+        if (!by || ui.tagsBusy) return;
         ui.tagsBusy = true;
         ui.tagsNote = "Looking…";
         renderTagLists();
         try {
-            ui.tagsFound = await post("tagadmin/lookup", { nickname });
+            ui.tagsFound = await post("tagadmin/lookup", by);
             ui.tagsNote = "";
         } catch (err) {
             ui.tagsFound = null;
@@ -1315,6 +1330,136 @@
         }
         ui.tagsBusy = false;
         renderTagLists();
+    }
+
+    // Compared the way the Worker compares names: no case, width variants or spaces.
+    const NAME_IGNORED = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
+    function nameChars(text) {
+        return [...String(text).normalize("NFKC").toLowerCase().replace(NAME_IGNORED, "")];
+    }
+
+    // The nickname with the letters that matched the search in gold: the typed text as one
+    // run if it's in there, otherwise its letters in order.
+    function highlighted(name, query) {
+        const q = nameChars(query);
+        const keys = [];
+        [...name].forEach((ch, i) => {
+            for (const c of nameChars(ch)) keys.push({ c, i });
+        });
+        const marked = new Set();
+        let at = -1;
+        for (let start = 0; start + q.length <= keys.length && at < 0; start++) {
+            if (q.every((c, j) => keys[start + j].c === c)) at = start;
+        }
+        if (at >= 0) {
+            for (let j = 0; j < q.length; j++) marked.add(keys[at + j].i);
+        } else {
+            let j = 0;
+            for (const k of keys) {
+                if (j < q.length && k.c === q[j]) {
+                    marked.add(k.i);
+                    j++;
+                }
+            }
+            if (j < q.length) marked.clear();
+        }
+        const out = el("span", "who");
+        let run = "";
+        let runMarked = false;
+        const flush = () => {
+            if (run) out.appendChild(runMarked ? el("mark", null, run) : document.createTextNode(run));
+            run = "";
+        };
+        [...name].forEach((ch, i) => {
+            if (marked.has(i) !== runMarked) {
+                flush();
+                runMarked = marked.has(i);
+            }
+            run += ch;
+        });
+        flush();
+        return out;
+    }
+
+    let searchTimer = 0;
+    let searchSeq = 0;
+    function searchPlayers() {
+        clearTimeout(searchTimer);
+        const query = ui.tagsQuery.trim();
+        if (!query) {
+            searchSeq++;
+            ui.tagsHits = null;
+            ui.tagsHitsNote = "";
+            renderHits();
+            return;
+        }
+        searchTimer = setTimeout(async () => {
+            const seq = ++searchSeq;
+            try {
+                const data = await post("tagadmin/search", { query });
+                if (seq !== searchSeq || !ui.overlay) return;
+                ui.tagsHits = data.results;
+                ui.tagsHitsNote = data.results.length ? "" : "Nobody's name has those letters.";
+            } catch (err) {
+                if (seq !== searchSeq || !ui.overlay) return;
+                ui.tagsHits = [];
+                ui.tagsHitsNote = err.status === 404 ? "The Worker hasn't been deployed with search yet." : "Couldn't search. Try again in a moment.";
+            }
+            ui.tagsHit = 0;
+            renderHits();
+        }, 150);
+    }
+
+    function pickHit(hit) {
+        searchSeq++;
+        clearTimeout(searchTimer);
+        ui.tagsQuery = hit.nickname;
+        if (ui.tagsInput) ui.tagsInput.value = hit.nickname;
+        ui.tagsHits = null;
+        ui.tagsHitsNote = "";
+        renderHits();
+        findPlayer({ userId: hit.userId });
+    }
+
+    function renderHits() {
+        const box = ui.tagsHitsBox;
+        if (!box) return;
+        box.textContent = "";
+        if (ui.tagsHitsNote) box.appendChild(el("div", "none", ui.tagsHitsNote));
+        (ui.tagsHits || []).forEach((hit, i) => {
+            const b = el("button", "nrc-hit" + (i === ui.tagsHit ? " sel" : ""));
+            const shown = hit.matched && hit.matched !== hit.nickname;
+            b.appendChild(highlighted(hit.nickname, shown ? "" : ui.tagsQuery));
+            if (shown) {
+                const alt = el("span", "alt", "seen as ");
+                alt.appendChild(highlighted(hit.matched, ui.tagsQuery));
+                b.appendChild(alt);
+            }
+            const chips = el("span", "chips");
+            for (const id of new Set([hit.equipped, ...hit.granted].filter(Boolean))) chips.appendChild(tagChip(id));
+            b.appendChild(chips);
+            b.addEventListener("mouseenter", () => {
+                ui.tagsHit = i;
+                for (const other of box.querySelectorAll(".nrc-hit")) other.classList.toggle("sel", other === b);
+            });
+            b.addEventListener("click", () => pickHit(hit));
+            box.appendChild(b);
+        });
+    }
+
+    function searchKeys(e) {
+        const hits = ui.tagsHits || [];
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            if (!hits.length) return;
+            e.preventDefault();
+            ui.tagsHit = (ui.tagsHit + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length;
+            renderHits();
+            ui.tagsHitsBox.querySelector(".nrc-hit.sel")?.scrollIntoView({ block: "nearest" });
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (hits.length) pickHit(hits[Math.min(ui.tagsHit, hits.length - 1)]);
+            else if (ui.tagsQuery.trim()) findPlayer({ nickname: ui.tagsQuery.trim() });
+        }
     }
 
     async function changeTags(path, extra) {
@@ -1336,20 +1481,31 @@
 
     function buildTags() {
         const root = el("div");
-        const find = card("Find a player", "list", "Look a player up by their nickname to give or take Discord tags, or to add bonus points.");
+        const find = card("Find a player", "list", "Type any part of a player's name (or a name they used before) to give or take Discord tags, or to add bonus points.");
         const row = el("div", "nrc-find");
         const input = el("input");
-        input.placeholder = "Nickname";
+        input.placeholder = "A few letters of their name";
+        input.autocomplete = "off";
+        input.spellcheck = false;
         input.value = ui.tagsQuery;
-        input.addEventListener("input", () => (ui.tagsQuery = input.value));
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") findPlayer();
+        input.addEventListener("input", () => {
+            ui.tagsQuery = input.value;
+            searchPlayers();
         });
+        input.addEventListener("keydown", searchKeys);
         for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+        ui.tagsInput = input;
         const go = el("button", "button", "Find");
-        go.addEventListener("click", findPlayer);
+        go.addEventListener("click", () => {
+            const hits = ui.tagsHits || [];
+            if (hits.length) pickHit(hits[Math.min(ui.tagsHit, hits.length - 1)]);
+            else if (ui.tagsQuery.trim()) findPlayer({ nickname: ui.tagsQuery.trim() });
+        });
         row.append(input, go);
         find.appendChild(row);
+        ui.tagsHitsBox = el("div", "nrc-hits");
+        find.appendChild(ui.tagsHitsBox);
+        renderHits();
         ui.tagsWho = el("div", "nrc-who");
         find.appendChild(ui.tagsWho);
         root.appendChild(find);
@@ -1540,7 +1696,7 @@
         ui.stats = null;
         ui.charts = [];
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
-        ui.tagsRoot = ui.tagsWho = ui.tagsLists = null;
+        ui.tagsRoot = ui.tagsWho = ui.tagsLists = ui.tagsHitsBox = ui.tagsInput = null;
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
         for (const t of ui.timers) clearInterval(t);

@@ -381,7 +381,9 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
 Player endpoints (`userToken` in a `text/plain` JSON body, site only):
 `/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`.
 Owner endpoints (owner key as `token`): `/nsws/tagadmin`,
-`/nsws/tagadmin/lookup`, `/nsws/tagadmin/grant`, `/nsws/tagadmin/bonus`. Deploy
+`/nsws/tagadmin/search` (any part of any name an account has been seen with;
+3+ letters also match letters in order), `/nsws/tagadmin/lookup` (by `userId`
+or exact `nickname`), `/nsws/tagadmin/grant`, `/nsws/tagadmin/bonus`. Deploy
 the Worker before pushing the site; until then the Tags tab and Referrals window
 say they aren't switched on yet.
 

@@ -34,6 +34,7 @@ const REDEEMS_PER_IP_DAY = 10;
 const REDEEMS_PER_IP_REFERRER_DAY = 3;
 const MAX_BONUS = 10_000;
 const TOP_RECRUITERS = 5;
+const SEARCH_RESULTS = 12;
 // Every visit shows the top recruiters, and counting them scans every referral.
 const TOP_TTL_MS = 60_000;
 
@@ -289,13 +290,50 @@ export class Accounts extends DurableObject {
         return equipped && this.ownedTags(userId).has(equipped) ? equipped : null;
     }
 
-    // Owner tools, found by nickname (names are unique to one account).
-    lookupTags(nickname) {
+    // Owner tools, found by account or by exact nickname (names are unique to one account).
+    lookupTags(nickname, userId) {
+        if (HEX64.test(userId ?? "")) {
+            const current = this.nicknameOf(userId);
+            if (!current) return { error: "missing" };
+            return { userId, nickname: current, granted: this.grantsOf(userId), state: this.tagState(userId) };
+        }
         const key = nameKey(text(nickname, MAX_NICK));
         if (SHARED_NAMES.has(key)) return { error: "missing" };
         const row = this.sql.exec("SELECT user_id, nickname FROM names WHERE name_key = ?", key).toArray()[0];
         if (!row) return { error: "missing" };
         return { userId: row.user_id, nickname: row.nickname, granted: this.grantsOf(row.user_id), state: this.tagState(row.user_id) };
+    }
+
+    // Owner search over every name an account has been seen with, compared like nameKey.
+    // Best first: the whole name, then names starting with the query, containing it, and
+    // finally holding its letters in order ("ckd" finds "Cookedbyapringle"). One or two letters
+    // in order match nearly everyone, so that last step waits for a third.
+    searchPlayers(query) {
+        const q = nameKey(text(query, MAX_NICK));
+        if (!q) return { results: [] };
+        const esc = (s) => s.replace(/[\\%_]/g, (c) => "\\" + c);
+        const loose = [...q].length >= 3 ? "%" + [...q].map(esc).join("%") + "%" : "%" + esc(q) + "%";
+        const rows = this.sql.exec(
+            `SELECT user_id, nickname, CASE WHEN name_key = ? THEN 0 WHEN name_key LIKE ? ESCAPE '\\' THEN 1
+                WHEN name_key LIKE ? ESCAPE '\\' THEN 2 ELSE 3 END AS rank
+            FROM names WHERE name_key LIKE ? ESCAPE '\\' ORDER BY rank, length(name_key), at DESC LIMIT 300`,
+            q, esc(q) + "%", "%" + esc(q) + "%", loose,
+        ).toArray();
+        const seen = new Map();
+        for (const r of rows) {
+            if (seen.size >= SEARCH_RESULTS) break;
+            if (!seen.has(r.user_id)) seen.set(r.user_id, r);
+        }
+        return {
+            results: [...seen.values()].map((r) => {
+                const nickname = this.nicknameOf(r.user_id) || r.nickname;
+                const equipped = this.tagProfile(r.user_id).equipped;
+                return {
+                    userId: r.user_id, nickname, matched: r.nickname,
+                    equipped: isTag(equipped) ? equipped : null, granted: this.grantsOf(r.user_id),
+                };
+            }),
+        };
     }
 
     grantsOf(userId) {
