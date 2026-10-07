@@ -28,6 +28,8 @@ const REDEEMS_PER_IP_DAY = 10;
 const REDEEMS_PER_IP_REFERRER_DAY = 3;
 const MAX_BONUS = 10_000;
 const TOP_RECRUITERS = 5;
+// Every visit shows the top recruiters, and counting them scans every referral.
+const TOP_TTL_MS = 60_000;
 
 // Keep in step with TAGS in mod/nsws_tags.js, which draws them. "referred" belongs to anyone
 // who redeemed a code, "milestone" to anyone with that many confirmed referrals, "shop" is
@@ -113,6 +115,7 @@ export class Accounts extends DurableObject {
         // links it to the account so the chat can show the account's tag without its token.
         this.sql.exec("CREATE TABLE IF NOT EXISTS chat_links (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
+        this.top = null;
     }
 
     nicknameOf(userId) {
@@ -153,10 +156,13 @@ export class Accounts extends DurableObject {
     }
 
     topRecruiters() {
-        return this.sql.exec(
+        if (this.top && Date.now() - this.top.at < TOP_TTL_MS) return this.top.list;
+        const list = this.sql.exec(
             `SELECT referrer, COUNT(*) AS n, MIN(confirmed) AS first FROM referrals WHERE confirmed IS NOT NULL
             GROUP BY referrer ORDER BY n DESC, first LIMIT ?`, TOP_RECRUITERS,
         ).toArray().map((r) => ({ nickname: this.nicknameOf(r.referrer) || "Unknown", referrals: r.n }));
+        this.top = { at: Date.now(), list };
+        return list;
     }
 
     tagState(userId) {
@@ -220,6 +226,7 @@ export class Accounts extends DurableObject {
     // Called by the Worker after an upload to an NSWS board.
     confirmReferral(userId) {
         this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
+        this.top = null;
     }
 
     setEquipped(userId, tag) {
@@ -326,6 +333,7 @@ export class Accounts extends DurableObject {
         if (!this.available(userId, nickname)) return { available: false };
         const key = nameKey(nickname);
         this.sql.exec("DELETE FROM names WHERE user_id = ? AND name_key != ?", userId, key);
+        this.top = null;
         if (!SHARED_NAMES.has(key)) {
             this.sql.exec("INSERT OR REPLACE INTO names (name_key, user_id, nickname, at) VALUES (?, ?, ?, ?)",
                 key, userId, nickname, Date.now());

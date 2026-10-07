@@ -1548,6 +1548,21 @@
         cancelAnimationFrame(ui.raf);
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("resize", onResize);
+        document.removeEventListener("visibilitychange", onVisibility);
+    }
+
+    // Every refresh costs the Worker reads on Cloudflare's free plan, so nothing refreshes while
+    // the tab is hidden, and coming back catches up at once.
+    function shown() {
+        return document.visibilityState !== "hidden";
+    }
+
+    function onVisibility() {
+        if (!shown() || !ui.overlay) return;
+        loadLive();
+        loadStats();
+        if (ui.tab === "anticheat") loadAnti();
+        if (ui.tab === "announce") loadAnnouncements();
     }
 
     function open() {
@@ -1622,10 +1637,11 @@
 
         window.addEventListener("keydown", onKey, true);
         window.addEventListener("resize", onResize);
-        ui.timers.push(setInterval(loadLive, LIVE_REFRESH_MS));
-        ui.timers.push(setInterval(loadStats, STATS_REFRESH_MS));
-        ui.timers.push(setInterval(() => ui.tab === "anticheat" && loadAnti(), STATS_REFRESH_MS));
-        ui.timers.push(setInterval(() => ui.tab === "announce" && loadAnnouncements(), LIVE_REFRESH_MS));
+        document.addEventListener("visibilitychange", onVisibility);
+        ui.timers.push(setInterval(() => shown() && loadLive(), LIVE_REFRESH_MS));
+        ui.timers.push(setInterval(() => shown() && loadStats(), STATS_REFRESH_MS));
+        ui.timers.push(setInterval(() => shown() && ui.tab === "anticheat" && loadAnti(), STATS_REFRESH_MS));
+        ui.timers.push(setInterval(() => shown() && ui.tab === "announce" && loadAnnouncements(), LIVE_REFRESH_MS));
         ui.raf = requestAnimationFrame(tick);
         render();
         loadStats();

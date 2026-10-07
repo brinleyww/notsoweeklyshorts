@@ -201,12 +201,6 @@ export class ChatRoom extends DurableObject {
         }
     }
 
-    online() {
-        let n = 0;
-        for (const ws of this.ctx.getWebSockets()) if (ws.deserializeAttachment()?.joined) n++;
-        return n + this.livePollers().length;
-    }
-
     // Players on the long-polling fallback who have been heard from recently.
     livePollers() {
         const now = Date.now();
@@ -284,7 +278,7 @@ export class ChatRoom extends DurableObject {
         this.touch(me);
         const ready = this.eventsAfter(body.epoch, body.after);
         if (ready === null) {
-            return jsonReply({ epoch: this.epoch, seq: this.seq, init: { you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() } });
+            return jsonReply({ epoch: this.epoch, seq: this.seq, init: { you: { uid: me.uid, owner: me.owner }, messages: this.history() } });
         }
         if (ready.length) return jsonReply({ epoch: this.epoch, seq: this.seq, events: ready });
         const after = body.after;
@@ -508,7 +502,7 @@ export class ChatRoom extends DurableObject {
             who.tag = await this.tagOf(who.uid);
             Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
-            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() });
+            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history() });
             return;
         }
         if (!me.joined) return;

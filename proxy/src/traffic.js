@@ -11,19 +11,20 @@ const MAX_BEAT_S = 400;
 // A session counts as online until its promised next beat is this late.
 const LIVE_GRACE_MS = 45_000;
 const MINUTE_RING = 180;
-const STATS_TTL_MS = 30_000;
 // New sessions allowed per IP address per hour. Schools share one address, so it is generous.
 const OPENS_PER_IP_HOUR = 120;
 
 const EVENT_NAMES = ["attempts", "finishes", "uploads", "replays", "clips", "editor", "garage", "standings"];
 const STATES = new Set(["menu", "race", "editor", "watch", "garage"]);
 
+// The free plan allows 5M SQLite rows read a day, and every stats query scans its whole range,
+// so a longer range is recomputed less often.
 const RANGES = {
-    day: { ms: DAY_MS, step: 600 },
-    "3d": { ms: 3 * DAY_MS, step: 1800 },
-    week: { ms: 7 * DAY_MS, step: 3600 },
-    month: { ms: 30 * DAY_MS, step: 6 * 3600 },
-    all: { ms: null, step: 86_400 },
+    day: { ms: DAY_MS, step: 600, ttl: 2 * 60_000 },
+    "3d": { ms: 3 * DAY_MS, step: 1800, ttl: 5 * 60_000 },
+    week: { ms: 7 * DAY_MS, step: 3600, ttl: 10 * 60_000 },
+    month: { ms: 30 * DAY_MS, step: 6 * 3600, ttl: 30 * 60_000 },
+    all: { ms: null, step: 86_400, ttl: 60 * 60_000 },
 };
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
@@ -64,6 +65,8 @@ export class TrafficStats extends DurableObject {
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
         this.ann = null;
+        // All-time totals, loaded the first time the dashboard asks and then kept up by record().
+        this.totals = null;
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
             this.restoreLive();
@@ -122,13 +125,6 @@ export class TrafficStats extends DurableObject {
         let n = 0;
         for (const s of this.online.values()) if (!s.ended && s.expires > now) n++;
         return n;
-    }
-
-    // People on the site right now: several tabs from one browser count once.
-    playersOnline(now) {
-        const visitors = new Set();
-        for (const s of this.online.values()) if (!s.ended && s.expires > now) visitors.add(s.visitor);
-        return visitors.size;
     }
 
     noteMinute(now, online) {
@@ -227,6 +223,12 @@ export class TrafficStats extends DurableObject {
         const online = this.onlineCount(now);
         this.noteMinute(now, online);
         const t = Math.floor(now / 1000 / BUCKET_S);
+        if (this.totals) {
+            this.totals.runtime += runtime;
+            if (opened) this.totals.opens++;
+            if (isNew) this.totals.visitors++;
+            if (!this.totals.peak || online > this.totals.peak.online) this.totals.peak = { online, t };
+        }
         this.sql.exec(`INSERT INTO buckets (t, runtime, focus, driving, opens, new_visitors, peak,
                 attempts, finishes, uploads, replays, clips, editor, garage, standings)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -257,7 +259,7 @@ export class TrafficStats extends DurableObject {
         for (const [id, other] of this.online) {
             if (other.ended || other.expires < now - 10 * 60_000) this.online.delete(id);
         }
-        return this.playersOnline(now);
+        return online;
     }
 
     liveAnnouncement() {
@@ -271,7 +273,7 @@ export class TrafficStats extends DurableObject {
         this.sql.exec("UPDATE announcements SET stopped = ? WHERE stopped IS NULL AND until > ?", now, now);
         this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online)
             VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.playersOnline(now)).one();
+            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now)).one();
         return this.announcements();
     }
 
@@ -290,7 +292,7 @@ export class TrafficStats extends DurableObject {
                 id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
                 online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id,
             }));
-        return { current, list, online: this.playersOnline(now), now };
+        return { current, list, online: this.onlineCount(now), now };
     }
 
     // Unflushed seconds of everyone online, so the dashboard's running total is exact.
@@ -311,11 +313,23 @@ export class TrafficStats extends DurableObject {
         return { online: sessions.length, pending, sessions, ring, now };
     }
 
-    async liveStats() {
-        const now = Date.now();
-        const view = this.liveView(now);
-        const totals = this.sql.exec(
+    loadTotals() {
+        if (this.totals) return this.totals;
+        const sums = this.sql.exec(
             "SELECT COALESCE(SUM(runtime), 0) AS runtime, COALESCE(SUM(opens), 0) AS opens FROM buckets").one();
+        const peak = this.sql.exec("SELECT t, peak FROM buckets ORDER BY peak DESC, t ASC LIMIT 1").toArray()[0];
+        this.totals = {
+            runtime: sums.runtime,
+            opens: sums.opens,
+            visitors: this.sql.exec("SELECT COUNT(*) AS n FROM visitors").one().n,
+            peak: peak ? { online: peak.peak, t: peak.t } : null,
+        };
+        return this.totals;
+    }
+
+    async liveStats() {
+        const view = this.liveView(Date.now());
+        const totals = this.loadTotals();
         return { ...view, totalRuntime: totals.runtime, totalOpens: totals.opens };
     }
 
@@ -325,7 +339,7 @@ export class TrafficStats extends DurableObject {
         const cacheKey = rangeKey + "|" + tz;
         const hit = this.statsCache.get(cacheKey);
         const now = Date.now();
-        if (hit && now - hit.at < STATS_TTL_MS) return { ...hit.data, live: await this.liveStats() };
+        if (hit && now - hit.at < range.ttl) return { ...hit.data, live: await this.liveStats() };
 
         const data = this.computeStats(range, tz, now);
         this.statsCache.set(cacheKey, { at: now, data });
@@ -358,10 +372,9 @@ export class TrafficStats extends DurableObject {
             FROM buckets WHERE t >= ? GROUP BY wd, h`, tz, tz, startT).toArray();
 
         const firstBucket = this.sql.exec("SELECT MIN(t) AS t FROM buckets").one().t;
-        const peakEver = this.sql.exec("SELECT t, peak FROM buckets ORDER BY peak DESC, t ASC LIMIT 1").toArray()[0] ?? null;
+        const { peak: peakEver, visitors: visitorsEver } = this.loadTotals();
         const busiestDay = this.sql.exec(`SELECT CAST((t * ${BUCKET_S} + ?) / 86400 AS INTEGER) AS d, SUM(runtime) AS runtime, SUM(opens) AS opens
             FROM buckets GROUP BY d ORDER BY runtime DESC LIMIT 1`, tz).toArray()[0] ?? null;
-        const visitorsEver = this.sql.exec("SELECT COUNT(*) AS n FROM visitors").one().n;
 
         const countries = new Map();
         const devices = new Map();
@@ -444,7 +457,7 @@ export class TrafficStats extends DurableObject {
             tracks,
             records: {
                 firstSeen: firstBucket == null ? null : firstBucket * BUCKET_S * 1000,
-                peak: peakEver ? { online: peakEver.peak, at: peakEver.t * BUCKET_S * 1000 } : null,
+                peak: peakEver ? { online: peakEver.online, at: peakEver.t * BUCKET_S * 1000 } : null,
                 busiestDay: busiestDay ? { day: busiestDay.d, runtime: busiestDay.runtime, opens: busiestDay.opens } : null,
                 longest,
                 visitorsEver,
