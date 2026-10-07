@@ -9,7 +9,7 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"]];
     const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
     const ANN_REACH = [[5, "Online now"], [60, "+ next hour"], [1440, "+ next day"]];
     const ANN_MAX = 160;
@@ -122,6 +122,18 @@
 .nrc-annline::before{content:"";position:absolute;left:13px;top:10px;bottom:10px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
 .nrc-annline b{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
 @media (max-width:720px){.nrc-compose{grid-template-columns:1fr;}}
+.nrc-find{display:flex;gap:8px;}
+.nrc-find input{flex:1;min-width:0;margin:0;padding:8px 14px;border:none;outline:none;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);background:var(--surface-tertiary-color);color:var(--text-color);font-size:20px;user-select:text;}
+.nrc-find input.small{flex:0 0 110px;}
+.nrc-find .button{margin:0;font-size:18px;padding:7px 16px;}
+.nrc-who{margin:14px 0 0;}
+.nrc-who h3{margin:0 0 4px;font-size:24px;font-weight:400;color:${ACCENT};}
+.nrc-who .line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0;font-size:15px;color:rgba(255,255,255,.75);}
+.nrc-who .nsws-tag{font-size:15px;}
+.nrc-grants{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 14px;}
+.nrc-grant.button{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;padding:6px 10px;background:var(--surface-tertiary-color);opacity:.6;}
+.nrc-grant.button.on{opacity:1;background:var(--button-hover-color);box-shadow:inset 0 -3px 0 ${GOOD};}
+.nrc-grant.button .nsws-tag{font-size:15px;}
 @media (max-width:720px){.nrc-hero{grid-template-columns:1fr;}.nrc-close.button{position:absolute;right:18px;top:20px;}.nrc-title{margin-right:64px;}.nrc-bar{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;}.nrc-bar .track{grid-column:1/-1;order:3;}.nrc-head{padding:10px 14px;}.nrc-tabs{padding:8px 14px 0;}.nrc-body{padding:14px;}.nrc-title h1{font-size:26px;}.nrc-chip.button{font-size:15px;padding:6px 11px;}}
 `;
 
@@ -474,6 +486,15 @@
         annArmed: false,
         annArmTimer: 0,
         annDraft: { text: "", show: 10, reach: 5 },
+        tagsRoot: null,
+        tagsWho: null,
+        tagsLists: null,
+        tags: null,
+        tagsError: null,
+        tagsQuery: "",
+        tagsFound: null,
+        tagsNote: "",
+        tagsBusy: false,
     };
 
     async function post(path, extra) {
@@ -1265,6 +1286,181 @@
         renderAnnLists();
     }
 
+    function tagChip(id) {
+        return window.__nswsTags?.chip(id) || el("span", null, id);
+    }
+
+    async function loadTags() {
+        try {
+            ui.tags = await post("tagadmin", {});
+            ui.tagsError = null;
+        } catch (err) {
+            ui.tagsError = err;
+        }
+        if (ui.overlay && ui.tab === "tags") renderTagLists();
+    }
+
+    async function findPlayer() {
+        const nickname = ui.tagsQuery.trim();
+        if (!nickname || ui.tagsBusy) return;
+        ui.tagsBusy = true;
+        ui.tagsNote = "Looking…";
+        renderTagLists();
+        try {
+            ui.tagsFound = await post("tagadmin/lookup", { nickname });
+            ui.tagsNote = "";
+        } catch (err) {
+            ui.tagsFound = null;
+            ui.tagsNote = err.status === 404 ? "Nobody on the site has that nickname." : "Couldn't look that up. Try again in a moment.";
+        }
+        ui.tagsBusy = false;
+        renderTagLists();
+    }
+
+    async function changeTags(path, extra) {
+        const found = ui.tagsFound;
+        if (!found || ui.tagsBusy) return;
+        ui.tagsBusy = true;
+        renderTagLists();
+        try {
+            const data = await post(path, { userId: found.userId, ...extra });
+            if (ui.tagsFound === found) Object.assign(found, data);
+            ui.tagsNote = "Saved. Their next chat message shows it.";
+        } catch {
+            ui.tagsNote = "Couldn't save that. Try again in a moment.";
+        }
+        ui.tagsBusy = false;
+        renderTagLists();
+        loadTags();
+    }
+
+    function buildTags() {
+        const root = el("div");
+        const find = card("Find a player", "list", "Look a player up by their nickname to give or take Discord tags, or to add bonus points.");
+        const row = el("div", "nrc-find");
+        const input = el("input");
+        input.placeholder = "Nickname";
+        input.value = ui.tagsQuery;
+        input.addEventListener("input", () => (ui.tagsQuery = input.value));
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") findPlayer();
+        });
+        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+        const go = el("button", "button", "Find");
+        go.addEventListener("click", findPlayer);
+        row.append(input, go);
+        find.appendChild(row);
+        ui.tagsWho = el("div", "nrc-who");
+        find.appendChild(ui.tagsWho);
+        root.appendChild(find);
+        ui.tagsLists = el("div");
+        root.appendChild(ui.tagsLists);
+        root.appendChild(el("div", "nrc-foot", "Owner only. Discord tags go with the Discord roles; giving one here doesn't change anything on Discord. A player earns a referral point once the friend who used their code uploads a run on an NSWS track."));
+        return root;
+    }
+
+    function renderWho() {
+        const box = ui.tagsWho;
+        box.textContent = "";
+        const f = ui.tagsFound;
+        if (f) {
+            const st = f.state;
+            box.appendChild(el("h3", null, f.nickname));
+            box.appendChild(el("div", "line", num(st.referrals) + " referrals · " + num(st.pending) + " waiting · " + num(st.points) + " points"
+                + (st.bonus ? " (" + (st.bonus > 0 ? "+" : "") + num(st.bonus) + " bonus)" : "")
+                + (st.referredBy ? " · joined with " + st.referredBy.nickname + "'s code" : "")));
+            const wearing = el("div", "line", "Wearing:");
+            wearing.appendChild(st.equipped ? tagChip(st.equipped) : el("span", null, "no tag"));
+            box.appendChild(wearing);
+            const owned = el("div", "line", "Has:");
+            if (!st.owned.length) owned.appendChild(el("span", null, "nothing yet"));
+            for (const id of st.owned) owned.appendChild(tagChip(id));
+            box.appendChild(owned);
+            const grants = el("div", "nrc-grants");
+            for (const t of (window.__nswsTags?.catalog ?? []).filter((t) => t.group === "discord")) {
+                const on = f.granted.includes(t.id);
+                const b = el("button", "button nrc-grant" + (on ? " on" : ""));
+                b.append(tagChip(t.id), on ? "Take away" : "Give");
+                b.title = t.need;
+                b.disabled = ui.tagsBusy;
+                b.addEventListener("click", () => changeTags("tagadmin/grant", { tag: t.id, on: !on }));
+                grants.appendChild(b);
+            }
+            box.appendChild(grants);
+            const bonus = el("div", "nrc-find");
+            const amount = el("input", "small");
+            amount.type = "number";
+            amount.step = "1";
+            amount.value = "1";
+            for (const type of ["keydown", "keyup", "keypress"]) amount.addEventListener(type, (e) => e.stopPropagation());
+            const add = el("button", "button", "Add bonus points");
+            add.title = "A negative number takes points away";
+            add.disabled = ui.tagsBusy;
+            add.addEventListener("click", () => {
+                const n = Math.trunc(Number(amount.value));
+                if (Number.isSafeInteger(n) && n !== 0) changeTags("tagadmin/bonus", { amount: n });
+            });
+            bonus.append(amount, add);
+            box.appendChild(bonus);
+        }
+        if (ui.tagsNote) box.appendChild(el("p", "nrc-sub", ui.tagsNote));
+    }
+
+    function renderTagLists() {
+        if (!ui.tagsLists) return;
+        renderWho();
+        const box = ui.tagsLists;
+        box.textContent = "";
+        if (!ui.tags) {
+            box.appendChild(el("div", "nrc-empty", ui.tagsError
+                ? (ui.tagsError.status === 404 ? "The Worker hasn't been deployed with tags yet." : "Couldn't load tags.")
+                : "Loading…"));
+            return;
+        }
+        const t = ui.tags;
+        const tiles = el("div", "nrc-tiles");
+        tiles.style.marginTop = "14px";
+        tiles.appendChild(tile("Codes used", num(t.referrals), num(t.referrals - t.confirmed) + " still waiting for a first run"));
+        tiles.appendChild(tile("Referral points earned", num(t.confirmed)));
+        const popular = t.bought[0] ? window.__nswsTags?.catalog.find((c) => c.id === t.bought[0].tag)?.label ?? t.bought[0].tag : null;
+        tiles.appendChild(tile("Tags bought", num(t.bought.reduce((n, b) => n + b.count, 0)), popular ? "Most popular: " + popular : "None yet"));
+        tiles.appendChild(tile("Discord tags given", num(t.grants.length)));
+        box.appendChild(tiles);
+        const grid = el("div", "nrc-grid2");
+        const given = card("Discord tags given", "trophy");
+        if (!t.grants.length) given.appendChild(el("div", "nrc-empty", "None yet."));
+        else {
+            given.appendChild(table([["Player", "name"], ["Tag"], ["Given", "num"], [""]], t.grants.map((g) => {
+                const take = el("button", "button", "Take away");
+                take.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
+                take.addEventListener("click", async () => {
+                    take.disabled = true;
+                    try {
+                        await post("tagadmin/grant", { userId: g.userId, tag: g.tag, on: false });
+                    } catch {}
+                    if (ui.tagsFound?.userId === g.userId) ui.tagsFound.granted = ui.tagsFound.granted.filter((id) => id !== g.tag);
+                    loadTags();
+                });
+                return [g.nickname, tagChip(g.tag), fmt.date(g.at), take];
+            })));
+        }
+        const top = card("Top recruiters", "invite");
+        if (!t.top.length) top.appendChild(el("div", "nrc-empty", "Nobody has used a code yet."));
+        else top.appendChild(table([["#", "rank"], ["Player", "name"], ["Referrals", "num"], ["Waiting", "num"]],
+            t.top.map((r, i) => [String(i + 1), r.nickname, num(r.referrals), num(r.pending)])));
+        grid.append(given, top);
+        box.appendChild(grid);
+    }
+
+    function renderTagsTab(body) {
+        if (!ui.tagsRoot) ui.tagsRoot = buildTags();
+        if (ui.tagsRoot.parentNode !== body) {
+            body.textContent = "";
+            body.appendChild(ui.tagsRoot);
+        }
+        renderTagLists();
+    }
+
     function render() {
         if (!ui.overlay) return;
         const body = ui.body;
@@ -1275,6 +1471,10 @@
         for (const b of ui.overlay.querySelectorAll("[data-tab]")) b.classList.toggle("on", b.dataset.tab === ui.tab);
         if (ui.tab === "announce") {
             renderAnnounce(body);
+            return;
+        }
+        if (ui.tab === "tags") {
+            renderTagsTab(body);
             return;
         }
         body.textContent = "";
@@ -1340,6 +1540,7 @@
         ui.stats = null;
         ui.charts = [];
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
+        ui.tagsRoot = ui.tagsWho = ui.tagsLists = null;
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
         for (const t of ui.timers) clearInterval(t);
@@ -1403,6 +1604,7 @@
                 render();
                 if (key === "anticheat") loadAnti();
                 if (key === "announce") loadAnnouncements();
+                if (key === "tags") loadTags();
             });
             tabs.appendChild(b);
         }

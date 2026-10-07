@@ -54153,6 +54153,20 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, Gc, "f").push(chatBtn);
                 refreshChatBtn();
             }
+            window.__nswsUIClick = () => n.playUIClick();
+            if (window.__nswsTags) {
+                const refBtn = document.createElement("button");
+                refBtn.className = "button";
+                refBtn.innerHTML = '<img src="images/invite.svg"> ';
+                refBtn.append("Referrals");
+                refBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsTags.openReferrals();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(refBtn);
+                C.get(this, Gc, "f").push(refBtn);
+            }
             const P = o.getCurrentUserProfile();
 
             if (P.isVerifier) {

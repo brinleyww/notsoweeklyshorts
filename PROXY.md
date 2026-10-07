@@ -342,6 +342,45 @@ Only the site may call these (the same Origin check as the chat). The Worker
 must be deployed before a site push that uses them; until then the page shows
 the device's clips and keeps them.
 
+## Referrals and tags
+
+Tags are name tags shown next to a player's name in the chat. They live in the
+same `Accounts` Durable Object (new tables, created in its constructor), so they
+belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
+`src/accounts.js` and in that file must list the same ids, costs and counts.
+
+- **Referral codes.** Every account gets one 8-character code (no `I`, `O`, `0`
+  or `1`). Main menu → Referrals shows it with a link (`?ref=CODE`, used on the
+  visitor's profile as soon as it exists) and a box to type a friend's code.
+  Each profile can use one code, never its own, and not the code of someone who
+  joined with theirs. One address can use 10 codes a day, 3 of them for the same
+  player (a whole school shares one address); only a hash of it is stored.
+- **Points.** A used code makes the new player `REFERRED` straight away, but the
+  referrer's point only counts once that player uploads a run on an NSWS board
+  (`confirmReferral`, called from `handleSubmit`), so empty profiles are worth
+  nothing. Points = confirmed referrals + the owner's bonus − points spent.
+- **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
+  tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
+  confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,
+  `MAPPO BUILDER`, `YOUTUBER`, `AUTHOR TIME`, `OG`) only the owner gives, on Race
+  Control's Tags tab, by nickname; that tab can also add or take bonus points.
+  Nothing syncs with Discord itself.
+- **Wearing one.** Garage → Tags lists every tag with what it needs and previews
+  it on a nameplate and a chat line. One tag at a time; buying puts it on.
+- **The chat.** The chat only knows a player by the hash of their visitor id.
+  `/nsws/refer/me` (sent on every visit with the visitor id) links that hash to
+  the account, so the `ChatRoom` asks `Accounts.chatTag(uid)` without ever seeing
+  a token. Each message stores the tag it was sent with (`tag` column); putting a
+  tag on or losing one tells the room at once (`ChatRoom.retag`), so the next
+  message shows it.
+
+Player endpoints (`userToken` in a `text/plain` JSON body, site only):
+`/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`.
+Owner endpoints (owner key as `token`): `/nsws/tagadmin`,
+`/nsws/tagadmin/lookup`, `/nsws/tagadmin/grant`, `/nsws/tagadmin/bonus`. Deploy
+the Worker before pushing the site; until then the Tags tab and Referrals window
+say they aren't switched on yet.
+
 ## Privacy note
 
 Leaderboard reads for Not So Weekly Shorts tracks, submissions and profile

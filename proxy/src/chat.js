@@ -30,6 +30,9 @@ const TIMEOUT_MAX_S = 3600;
 const STRIKE_RESET_MS = 10 * 60_000;
 const REPEAT_MS = 20_000;
 const MUTE_MINUTES = [10, 60, 1440];
+// How long the room trusts its copy of a player's tag; equipping a new one updates it at once.
+const TAG_CACHE_MS = 10 * 60_000;
+const TAG_ID = /^[a-z]{1,24}$/;
 // Pings: at most MAX_PINGS people per message and PING_BUDGET per PING_WINDOW_MS, and the same
 // person no more than once per PING_SAME_MS. Extra @names still show, they just don't notify.
 const MAX_PINGS = 3;
@@ -111,7 +114,7 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
-        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER"]) {
+        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT"]) {
             try {
                 this.sql.exec("ALTER TABLE messages ADD COLUMN " + column);
             } catch {
@@ -131,6 +134,7 @@ export class ChatRoom extends DurableObject {
         this.events = [];
         this.waiters = new Set();
         this.pollers = new Map();
+        this.tags = new Map();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -166,6 +170,35 @@ export class ChatRoom extends DurableObject {
     // Called by the Worker with the owner's announcements.
     announce(data) {
         this.broadcast(data);
+    }
+
+    // The tag a player's account wears (src/accounts.js), or null. Only new messages carry it.
+    async tagOf(uid) {
+        const hit = this.tags.get(uid);
+        if (hit && Date.now() - hit.at < TAG_CACHE_MS) return hit.tag;
+        let tag = null;
+        try {
+            tag = this.env.ACCOUNTS ? await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).chatTag(uid) : null;
+        } catch {
+            return hit?.tag ?? null;
+        }
+        if (this.tags.size > 5000) this.tags.clear();
+        this.tags.set(uid, { tag, at: Date.now() });
+        return tag;
+    }
+
+    // Called by the Worker when an account puts on, takes off or loses a tag.
+    retag(uids, tag) {
+        if (!Array.isArray(uids)) return;
+        tag = TAG_ID.test(tag ?? "") ? tag : null;
+        const set = new Set(uids.filter((u) => /^[0-9a-f]{16}$/.test(u)));
+        for (const uid of set) this.tags.set(uid, { tag, at: Date.now() });
+        for (const ws of this.ctx.getWebSockets()) {
+            const a = ws.deserializeAttachment();
+            if (!a?.joined || !set.has(a.uid)) continue;
+            a.tag = tag;
+            ws.serializeAttachment(a);
+        }
     }
 
     online() {
@@ -229,7 +262,10 @@ export class ChatRoom extends DurableObject {
         if (!me) return jsonReply({ error: "Bad request" }, 400);
         const path = new URL(request.url).pathname;
         if (path.endsWith("/poll")) return this.poll(me, body, ipHash);
-        if (path.endsWith("/send")) return this.sendHttp(me, body);
+        if (path.endsWith("/send")) {
+            if (body?.msg?.t === "msg") me.tag = await this.tagOf(me.uid);
+            return this.sendHttp(me, body);
+        }
         return jsonReply({ error: "Not found" }, 404);
     }
 
@@ -279,7 +315,7 @@ export class ChatRoom extends DurableObject {
     }
 
     history() {
-        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
+        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited, tag FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
             .toArray().reverse().map(({ reply_to, ...m }) => ({
                 ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [], reply: reply_to ? JSON.parse(reply_to) : null, reactions: [],
             }));
@@ -469,6 +505,7 @@ export class ChatRoom extends DurableObject {
             if (!who) return ws.close(1008, "Bad hello");
             const mine = this.ctx.getWebSockets().filter((other) => other !== ws && other.deserializeAttachment()?.uid === who.uid).length;
             if (mine >= SOCKETS_PER_UID) return ws.close(1008, "Too many chat windows");
+            who.tag = await this.tagOf(who.uid);
             Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
             this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), online: this.online() });
@@ -541,10 +578,11 @@ export class ChatRoom extends DurableObject {
                 reply({ t: "err", text: "Too many pings - " + (wanted.length - pings.length) + " of them didn't notify anyone." });
             }
             if (quoted) quoted.ping = pings.some((p) => p.uid === quoted.uid);
-            const message = { at: now, uid: me.uid, nick, owner: me.owner, text: censor(text), pings, reply: quoted, reactions: [] };
-            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            const tag = TAG_ID.test(me.tag ?? "") ? me.tag : null;
+            const message = { at: now, uid: me.uid, nick, owner: me.owner, tag, text: censor(text), pings, reply: quoted, reactions: [] };
+            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null,
-                quoted ? JSON.stringify(quoted) : null).one().id;
+                quoted ? JSON.stringify(quoted) : null, tag).one().id;
             this.sql.exec("DELETE FROM messages WHERE id <= ?", message.id - HISTORY);
             this.sql.exec("DELETE FROM reactions WHERE msg <= ?", message.id - HISTORY);
             this.broadcast({ t: "msg", m: message });

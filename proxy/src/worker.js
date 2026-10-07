@@ -645,6 +645,11 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     } catch {
         /* not JSON - handed back untouched below */
     }
+    // A referred player's first upload to an NSWS board is what earns their referrer the point.
+    if (response.ok && track.week != null) {
+        const stub = accounts(env);
+        if (stub) ctx.waitUntil(stub.confirmReferral(hash).catch(() => {}));
+    }
     if (check && response.ok) {
         const uploadId = typeof result === "number" ? result : result?.uploadId;
         await anti.confirm({
@@ -775,7 +780,18 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 }
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
-    "clips/rename", "clips/delete", "clips/share", "share/get"]);
+    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip"]);
+const HEX32 = /^[0-9a-f]{32}$/;
+
+// The chat only learns about a tag change here, so its players' next messages show the new tag.
+async function chatRetag(env, retag) {
+    if (!env.CHAT || !retag?.uids?.length) return;
+    try {
+        await env.CHAT.get(env.CHAT.idFromName("global")).retag(retag.uids, retag.tag);
+    } catch (err) {
+        console.error("chat retag failed:", err && err.message);
+    }
+}
 
 // Sent as text/plain JSON, like the chat, so no preflight is needed. Everything but opening
 // a shared link needs the player's token; the account is its hash.
@@ -812,8 +828,37 @@ async function handleAccounts(request, url, env, fromSite, origin) {
         case "clips/delete": result = await stub.deleteClip(userId, body.id); break;
         case "clips/share": result = await stub.shareClip(userId, body.code); break;
         case "clips/view": result = await stub.recordView(userId, body.key); break;
+        case "refer/me": {
+            // The chat's uid for this browser, derived the same way the ChatRoom does.
+            const uid = HEX32.test(body.v ?? "") ? (await sha256Hex("nsws-chat:" + body.v)).slice(0, 16) : null;
+            const { state, linked } = await stub.refState(userId, uid);
+            await chatRetag(env, linked);
+            result = state;
+            break;
+        }
+        case "refer/redeem": {
+            const ip = (await sha256Hex("nsws-refer-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+            result = await stub.redeem(userId, body.code, ip);
+            break;
+        }
+        case "tags/buy":
+        case "tags/equip": {
+            const changed = path === "tags/buy" ? await stub.buyTag(userId, body.tag) : await stub.equipTag(userId, body.tag ?? null);
+            if (changed.error) {
+                result = changed;
+                break;
+            }
+            await chatRetag(env, changed.retag);
+            result = changed.state;
+            break;
+        }
     }
     if (result == null) return plain(404, "Not found", origin);
+    if (result.error === "code" || result.error === "self" || result.error === "already" || result.error === "mutual"
+        || result.error === "points" || result.error === "locked") {
+        return json({ error: result.error }, origin, 409);
+    }
+    if (result.error === "busy" && path === "refer/redeem") return json({ error: "busy" }, origin, 429);
     if (result.error === "bad") return plain(400, "Bad request", origin);
     if (result.error === "full") return plain(507, "Too many clips", origin);
     if (result.error === "busy") return plain(429, "Too many links", origin);
@@ -895,6 +940,25 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (result.stopped != null) await chatBroadcast(env, { t: "ann-stop", id: result.stopped });
         return json(result, origin);
     }
+    if (url.pathname.startsWith(TRAFFIC_PREFIX + "tagadmin")) {
+        const accountsStub = accounts(env);
+        if (!accountsStub) return plain(503, "Accounts are off", origin);
+        const sub = url.pathname.slice((TRAFFIC_PREFIX + "tagadmin").length);
+        if (sub === "") return json(await accountsStub.tagOverview(), origin);
+        if (sub === "/lookup") {
+            const found = await accountsStub.lookupTags(body.nickname);
+            return found.error ? plain(404, "Not found", origin) : json(found, origin);
+        }
+        if (sub === "/grant" || sub === "/bonus") {
+            const changed = sub === "/grant"
+                ? await accountsStub.grantTag(body.userId, body.tag, body.on === true)
+                : await accountsStub.addBonus(body.userId, body.amount);
+            if (changed.error) return plain(400, "Bad request", origin);
+            await chatRetag(env, changed.retag);
+            return json({ state: changed.state, granted: changed.granted }, origin);
+        }
+        return plain(404, "Not found", origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.approve(body.id), origin);
@@ -955,7 +1019,7 @@ export default {
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
             }
-            if (/^\/nsws\/(names|clips|share)\//.test(url.pathname)) {
+            if (/^\/nsws\/(names|clips|share|refer|tags)\//.test(url.pathname)) {
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin);
                 } catch (err) {

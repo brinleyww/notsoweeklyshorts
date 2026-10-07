@@ -20,6 +20,44 @@ const SHARE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789
 const IGNORED_IN_NAMES = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
 // The game's own fallback for an empty nickname, which everyone may use.
 const SHARED_NAMES = new Set(["", "anonymous"]);
+const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
+const CHAT_UID = /^[0-9a-f]{16}$/;
+// A whole school shares one address, so these only stop one person farming referrals.
+const REDEEMS_PER_IP_DAY = 10;
+const REDEEMS_PER_IP_REFERRER_DAY = 3;
+const MAX_BONUS = 10_000;
+const TOP_RECRUITERS = 5;
+
+// Keep in step with TAGS in mod/nsws_tags.js, which draws them. "referred" belongs to anyone
+// who redeemed a code, "milestone" to anyone with that many confirmed referrals, "shop" is
+// bought with referral points, and "grant" only the owner hands out.
+export const TAGS = {
+    referred: { kind: "referred" },
+    recruiter: { kind: "milestone", referrals: 5 },
+    ambassador: { kind: "milestone", referrals: 15 },
+    hypetrain: { kind: "milestone", referrals: 30 },
+    rookie: { kind: "shop", cost: 1 },
+    pitcrew: { kind: "shop", cost: 2 },
+    drifter: { kind: "shop", cost: 3 },
+    nitro: { kind: "shop", cost: 4 },
+    ghost: { kind: "shop", cost: 5 },
+    apex: { kind: "shop", cost: 6 },
+    turbo: { kind: "shop", cost: 8 },
+    photofinish: { kind: "shop", cost: 10 },
+    legend: { kind: "shop", cost: 15 },
+    spectrum: { kind: "shop", cost: 20 },
+    winner: { kind: "grant" },
+    sweep: { kind: "grant" },
+    builder: { kind: "grant" },
+    youtuber: { kind: "grant" },
+    author: { kind: "grant" },
+    og: { kind: "grant" },
+};
+
+function isTag(id) {
+    return typeof id === "string" && Object.hasOwn(TAGS, id);
+}
 
 export function nameKey(nickname) {
     return String(nickname ?? "").normalize("NFKC").toLowerCase().replace(IGNORED_IN_NAMES, "");
@@ -57,6 +95,214 @@ export class Accounts extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS views (
             key TEXT NOT NULL, user_id TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL,
             PRIMARY KEY (key, user_id))`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS ref_codes (
+            user_id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, at INTEGER NOT NULL)`);
+        // A referral only earns its referrer a point once the new player uploads a run on an NSWS
+        // track (confirmed), so a stack of empty profiles is worth nothing. ip is a hash.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS referrals (
+            referred TEXT PRIMARY KEY, referrer TEXT NOT NULL, at INTEGER NOT NULL, ip TEXT NOT NULL, confirmed INTEGER)`);
+        this.sql.exec("CREATE INDEX IF NOT EXISTS referrals_referrer ON referrals(referrer)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS referrals_ip ON referrals(ip, at)");
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS tag_bought (
+            user_id TEXT NOT NULL, tag TEXT NOT NULL, cost INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (user_id, tag))`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS tag_grants (
+            user_id TEXT NOT NULL, tag TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (user_id, tag))`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS tag_profile (
+            user_id TEXT PRIMARY KEY, equipped TEXT, bonus INTEGER NOT NULL DEFAULT 0)`);
+        // The chat knows a player only by the hash of their random visitor id (uid); the page
+        // links it to the account so the chat can show the account's tag without its token.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS chat_links (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
+    }
+
+    nicknameOf(userId) {
+        return this.sql.exec("SELECT nickname FROM names WHERE user_id = ? ORDER BY at DESC LIMIT 1", userId).toArray()[0]?.nickname ?? null;
+    }
+
+    refCode(userId) {
+        const row = this.sql.exec("SELECT code FROM ref_codes WHERE user_id = ?", userId).toArray()[0];
+        if (row) return row.code;
+        let code;
+        do code = randomId(8, REF_ALPHABET);
+        while (this.sql.exec("SELECT 1 FROM ref_codes WHERE code = ?", code).toArray().length);
+        this.sql.exec("INSERT INTO ref_codes (user_id, code, at) VALUES (?, ?, ?)", userId, code, Date.now());
+        return code;
+    }
+
+    referralCounts(userId) {
+        const row = this.sql.exec(
+            "SELECT COUNT(confirmed) AS confirmed, COUNT(*) - COUNT(confirmed) AS pending FROM referrals WHERE referrer = ?", userId,
+        ).one();
+        return { confirmed: row.confirmed, pending: row.pending };
+    }
+
+    tagProfile(userId) {
+        return this.sql.exec("SELECT equipped, bonus FROM tag_profile WHERE user_id = ?", userId).toArray()[0] ?? { equipped: null, bonus: 0 };
+    }
+
+    // Every tag this account may wear right now.
+    ownedTags(userId, counts = this.referralCounts(userId)) {
+        const owned = new Set();
+        if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) owned.add("referred");
+        for (const [id, tag] of Object.entries(TAGS)) {
+            if (tag.kind === "milestone" && counts.confirmed >= tag.referrals) owned.add(id);
+        }
+        for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
+        for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
+        return owned;
+    }
+
+    topRecruiters() {
+        return this.sql.exec(
+            `SELECT referrer, COUNT(*) AS n, MIN(confirmed) AS first FROM referrals WHERE confirmed IS NOT NULL
+            GROUP BY referrer ORDER BY n DESC, first LIMIT ?`, TOP_RECRUITERS,
+        ).toArray().map((r) => ({ nickname: this.nicknameOf(r.referrer) || "Unknown", referrals: r.n }));
+    }
+
+    tagState(userId) {
+        const counts = this.referralCounts(userId);
+        const profile = this.tagProfile(userId);
+        const spent = this.sql.exec("SELECT COALESCE(SUM(cost), 0) AS n FROM tag_bought WHERE user_id = ?", userId).one().n;
+        const owned = this.ownedTags(userId, counts);
+        const by = this.sql.exec("SELECT referrer FROM referrals WHERE referred = ?", userId).toArray()[0]?.referrer;
+        return {
+            code: this.refCode(userId),
+            referrals: counts.confirmed,
+            pending: counts.pending,
+            bonus: profile.bonus,
+            spent,
+            points: counts.confirmed + profile.bonus - spent,
+            owned: [...owned],
+            equipped: profile.equipped && owned.has(profile.equipped) ? profile.equipped : null,
+            referredBy: by ? { nickname: this.nicknameOf(by) || "a player" } : null,
+            top: this.topRecruiters(),
+        };
+    }
+
+    chatUids(userId) {
+        return this.sql.exec("SELECT uid FROM chat_links WHERE user_id = ?", userId).toArray().map((r) => r.uid);
+    }
+
+    // The page calls this on every visit. linked tells the Worker the chat should re-read the tag.
+    refState(userId, uid) {
+        let linked = false;
+        if (CHAT_UID.test(uid ?? "")) {
+            const row = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0];
+            if (row?.user_id !== userId) {
+                this.sql.exec("INSERT OR REPLACE INTO chat_links (uid, user_id, at) VALUES (?, ?, ?)", uid, userId, Date.now());
+                linked = true;
+            }
+        }
+        const state = this.tagState(userId);
+        return { state, linked: linked ? { uids: [uid], tag: state.equipped } : null };
+    }
+
+    redeem(userId, code, ipHash) {
+        code = String(code ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (!REF_CODE.test(code)) return { error: "code" };
+        const referrer = this.sql.exec("SELECT user_id FROM ref_codes WHERE code = ?", code).toArray()[0]?.user_id;
+        if (!referrer) return { error: "code" };
+        if (referrer === userId) return { error: "self" };
+        if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) return { error: "already" };
+        if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ? AND referrer = ?", referrer, userId).toArray().length) {
+            return { error: "mutual" };
+        }
+        const dayAgo = Date.now() - 86_400_000;
+        const fromIp = this.sql.exec("SELECT COUNT(*) AS n FROM referrals WHERE ip = ? AND at > ?", ipHash, dayAgo).one().n;
+        const fromIpToReferrer = this.sql.exec("SELECT COUNT(*) AS n FROM referrals WHERE ip = ? AND at > ? AND referrer = ?",
+            ipHash, dayAgo, referrer).one().n;
+        if (fromIp >= REDEEMS_PER_IP_DAY || fromIpToReferrer >= REDEEMS_PER_IP_REFERRER_DAY) return { error: "busy" };
+        this.sql.exec("INSERT INTO referrals (referred, referrer, at, ip, confirmed) VALUES (?, ?, ?, ?, NULL)",
+            userId, referrer, Date.now(), ipHash);
+        return { ok: true, referrer: this.nicknameOf(referrer) || "a player", state: this.tagState(userId) };
+    }
+
+    // Called by the Worker after an upload to an NSWS board.
+    confirmReferral(userId) {
+        this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
+    }
+
+    setEquipped(userId, tag) {
+        this.sql.exec(`INSERT INTO tag_profile (user_id, equipped, bonus) VALUES (?, ?, 0)
+            ON CONFLICT(user_id) DO UPDATE SET equipped = excluded.equipped`, userId, tag);
+    }
+
+    changed(userId) {
+        const state = this.tagState(userId);
+        return { state, retag: { uids: this.chatUids(userId), tag: state.equipped } };
+    }
+
+    // Bought tags are kept for good and put on straight away.
+    buyTag(userId, tag) {
+        if (!isTag(tag) || TAGS[tag].kind !== "shop") return { error: "bad" };
+        const state = this.tagState(userId);
+        if (!state.owned.includes(tag)) {
+            if (state.points < TAGS[tag].cost) return { error: "points" };
+            this.sql.exec("INSERT INTO tag_bought (user_id, tag, cost, at) VALUES (?, ?, ?, ?)", userId, tag, TAGS[tag].cost, Date.now());
+        }
+        this.setEquipped(userId, tag);
+        return this.changed(userId);
+    }
+
+    equipTag(userId, tag) {
+        if (tag != null && !isTag(tag)) return { error: "bad" };
+        if (tag != null && !this.ownedTags(userId).has(tag)) return { error: "locked" };
+        this.setEquipped(userId, tag);
+        return this.changed(userId);
+    }
+
+    // The tag the chat shows next to this visitor's messages, or null.
+    chatTag(uid) {
+        if (!CHAT_UID.test(uid ?? "")) return null;
+        const userId = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id;
+        if (!userId) return null;
+        const equipped = this.tagProfile(userId).equipped;
+        return equipped && this.ownedTags(userId).has(equipped) ? equipped : null;
+    }
+
+    // Owner tools, found by nickname (names are unique to one account).
+    lookupTags(nickname) {
+        const key = nameKey(text(nickname, MAX_NICK));
+        if (SHARED_NAMES.has(key)) return { error: "missing" };
+        const row = this.sql.exec("SELECT user_id, nickname FROM names WHERE name_key = ?", key).toArray()[0];
+        if (!row) return { error: "missing" };
+        return { userId: row.user_id, nickname: row.nickname, granted: this.grantsOf(row.user_id), state: this.tagState(row.user_id) };
+    }
+
+    grantsOf(userId) {
+        return this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId).toArray().map((r) => r.tag).filter(isTag);
+    }
+
+    grantTag(userId, tag, on) {
+        if (!HEX64.test(userId ?? "") || !isTag(tag) || TAGS[tag].kind !== "grant") return { error: "bad" };
+        if (on) this.sql.exec("INSERT OR IGNORE INTO tag_grants (user_id, tag, at) VALUES (?, ?, ?)", userId, tag, Date.now());
+        else this.sql.exec("DELETE FROM tag_grants WHERE user_id = ? AND tag = ?", userId, tag);
+        return { ...this.changed(userId), granted: this.grantsOf(userId) };
+    }
+
+    addBonus(userId, amount) {
+        if (!HEX64.test(userId ?? "") || !Number.isSafeInteger(amount) || Math.abs(amount) > MAX_BONUS) return { error: "bad" };
+        this.sql.exec(`INSERT INTO tag_profile (user_id, equipped, bonus) VALUES (?, NULL, ?)
+            ON CONFLICT(user_id) DO UPDATE SET bonus = MAX(-${MAX_BONUS}, MIN(${MAX_BONUS}, bonus + excluded.bonus))`, userId, amount);
+        return { ...this.changed(userId), granted: this.grantsOf(userId) };
+    }
+
+    tagOverview() {
+        const grants = this.sql.exec("SELECT user_id, tag, at FROM tag_grants ORDER BY at DESC LIMIT 500").toArray()
+            .filter((r) => isTag(r.tag))
+            .map((r) => ({ userId: r.user_id, nickname: this.nicknameOf(r.user_id) || "Unknown", tag: r.tag, at: r.at }));
+        const totals = this.sql.exec("SELECT COUNT(*) AS all_, COUNT(confirmed) AS confirmed FROM referrals").one();
+        const bought = this.sql.exec("SELECT tag, COUNT(*) AS n FROM tag_bought GROUP BY tag ORDER BY n DESC").toArray();
+        return {
+            grants,
+            top: this.sql.exec(
+                `SELECT referrer, COUNT(confirmed) AS n, COUNT(*) AS total FROM referrals GROUP BY referrer
+                ORDER BY n DESC, total DESC LIMIT 20`,
+            ).toArray().map((r) => ({ nickname: this.nicknameOf(r.referrer) || "Unknown", referrals: r.n, pending: r.total - r.n })),
+            referrals: totals.all_,
+            confirmed: totals.confirmed,
+            bought: bought.filter((r) => isTag(r.tag)).map((r) => ({ tag: r.tag, count: r.n })),
+        };
     }
 
     holder(key) {

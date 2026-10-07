@@ -1144,6 +1144,9 @@
                     l.appendChild(r),
                     i.get(this, bodyButtons, "f").set(o, l)
                 }
+                const __nswsTagsPanel = document.createElement("div");
+                __nswsTagsPanel.className = "panel hidden",
+                i.get(this, Jt, "f").appendChild(__nswsTagsPanel);
                 const f = [{
                     title: n.get("Paint"),
                     icon: "images/paint.svg",
@@ -1164,7 +1167,11 @@
                     title: n.get("Car"),
                     icon: "images/car_body.svg",
                     panel: i.get(this, bodyPanel, "f")
-                }];
+                }, ...(window.__nswsTags ? [{
+                    title: "Tags",
+                    icon: "images/tag.svg",
+                    panel: __nswsTagsPanel
+                }] : [])];
                 let p = f[0];
                 const u = [];
                 for (const n of f) {
@@ -1180,6 +1187,7 @@
                         i.get(this, sn, "f").classList.add("hidden"),
                         i.get(this, an, "f").classList.add("hidden"),
                         i.get(this, bodyPanel, "f").classList.add("hidden"),
+                        __nswsTagsPanel.classList.add("hidden"),
                         e.classList.add("selected"),
                         n.panel.classList.remove("hidden"),
                         p != n && (n.panel == h ? c(new THREE.Vector3(0,2,6)) : n.panel == i.get(this, nn, "f") ? (i.get(this, Yt, "m", un).call(this),
@@ -1187,6 +1195,7 @@
                         c(new THREE.Vector3(-.5155052947032,.74948865866975,3.8370986018837385))) : n.panel == i.get(this, an, "f") ? (i.get(this, Yt, "m", vn).call(this),
                         c(new THREE.Vector3(2.874291197536667,.9837316369014955,-.7283975369068978))) : n.panel == i.get(this, bodyPanel, "f") && (i.get(this, Yt, "m", bodyScroll).call(this),
                         c(new THREE.Vector3(3.5,1.8,5.2)))),
+                        n.panel == __nswsTagsPanel && window.__nswsTags.mountGarage(__nswsTagsPanel),
                         p = n
                     }
                     )),

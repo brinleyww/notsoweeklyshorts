@@ -97,6 +97,7 @@
 #nsws-chat .m>.meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 7px;}
 #nsws-chat .m>.meta>.nick{font-weight:var(--nsws-chat-name-weight);}
 #nsws-chat .m>.meta>.badge{align-self:center;padding:0 5px;background:#e6a23c;color:#1a1a1a;font-family:ForcedSquare,Arial,sans-serif;font-style:italic;font-weight:normal;font-size:.7em;line-height:1;}
+#nsws-chat .m>.meta>.nsws-tag{align-self:center;font-size:.68em;}
 #nsws-chat .m>.meta>.time{font-size:.7em;opacity:.5;}
 #nsws-chat .m>.text.jumbo{font-family:var(--nsws-chat-emoji),sans-serif;font-size:2.3em;line-height:1.2;}
 #nsws-chat .m.pinged{background:rgba(240,178,50,.12);box-shadow:inset 3px 0 0 #f0b232;}
@@ -935,11 +936,11 @@
     }
 
     // Starts a new name header unless the last item is a message by the same player, under the
-    // same name and badge, sent within GROUP_MS on the same day.
+    // same name, badge and tag, sent within GROUP_MS on the same day.
     function startsGroup(prev, m) {
         if (prev?.kind !== "msg" || m.reply) return true;
         const p = prev.m;
-        return p.uid !== m.uid || p.nick !== m.nick || p.owner !== m.owner || m.at - p.at > GROUP_MS || !sameDay(p.at, m.at);
+        return p.uid !== m.uid || p.nick !== m.nick || p.owner !== m.owner || (p.tag ?? null) !== (m.tag ?? null) || m.at - p.at > GROUP_MS || !sameDay(p.at, m.at);
     }
 
     function quickReactions() {
@@ -1101,6 +1102,8 @@
                 badge.textContent = "OWNER";
                 meta.appendChild(badge);
             }
+            const tag = m.tag ? window.__nswsTags?.chip(m.tag) : null;
+            if (tag) meta.appendChild(tag);
             const time = document.createElement("span");
             time.className = "time";
             time.textContent = headerTime(m.at);
