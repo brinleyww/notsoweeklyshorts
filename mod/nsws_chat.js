@@ -1845,6 +1845,7 @@
         document.body.appendChild(root);
         applyLayout();
         updateOnline();
+        window.__nswsTraffic?.refreshOnline?.();
         renderLog();
         scrollToEnd(true);
     }

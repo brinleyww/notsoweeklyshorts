@@ -5716,6 +5716,14 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, k, "f").clear()
                 }
                 update(e) {
+                    try {
+                        this.renderFrame(e)
+                    } catch (err) {
+                        if (!window.__nswsGraphicsFailed?.(err))
+                            throw err
+                    }
+                }
+                renderFrame(e) {
                     i.get(this, I, "f").copy(e.getSunPosition());window.__PolyFX?.overrideSun?.(i.get(this, I, "f"));
                     let t = i.get(this, x, "f")?.getSettingInteger(W.A.ShadowQuality) ?? 0;
                     if (this.isShadowQualitySupported(t) || (t = 0),
@@ -9244,7 +9252,8 @@ window.__nswsTrackQuery = function(trackId) {
                 e[e.GhostCarSoundsEnabled = 21] = "GhostCarSoundsEnabled",
                 e[e.VibrationEnabled = 22] = "VibrationEnabled",
                 e[e.TouchSteeringSide = 23] = "TouchSteeringSide",
-                e[e.LowPerformanceMode = 24] = "LowPerformanceMode"
+                e[e.LowPerformanceMode = 24] = "LowPerformanceMode",
+                e[e.SolidMenuBackground = 25] = "SolidMenuBackground"
             }(i || (i = {}));
             const r = i
         }
@@ -10738,7 +10747,19 @@ window.__nswsTrackQuery = function(trackId) {
             let $ = null
               , ee = 0
               , te = 0
-              , ne = 0;
+              , ne = 0
+              , kodubScroll = 0
+              , trackMode = "nsws"
+              , applyTrackMode;
+            // Kodub's community tracks use their own tab, but play as "community" so leaderboards work as in the stock game.
+            // Opening a track also leaves the list in that track's mode for when the player comes back.
+            const playCategory = e => {
+                if ("official" == e || "kodub" == e)
+                    trackMode = "kodub";
+                else if ("community" == e)
+                    trackMode = "nsws";
+                return "kodub" == e ? "community" : e
+            };
             y = new WeakMap,
             b = new WeakMap,
             w = new WeakMap,
@@ -10782,7 +10803,11 @@ window.__nswsTrackQuery = function(trackId) {
                         break;
                     case "custom":
                         h = i.get(this, U, "f"),
-                        d = i.get(this, D, "f")
+                        d = i.get(this, D, "f");
+                        break;
+                    case "kodub":
+                        h = this.kodubContainer,
+                        d = this.kodubGroups
                     }
                     if (null == d.get(t)) {
                         const wrap = document.createElement("div");
@@ -10809,7 +10834,11 @@ window.__nswsTrackQuery = function(trackId) {
                     break;
                 case "custom":
                     h = i.get(this, U, "f"),
-                    d = i.get(this, D, "f")
+                    d = i.get(this, D, "f");
+                    break;
+                case "kodub":
+                    h = this.kodubContainer,
+                    d = this.kodubGroups
                 }
                 if (null == t)
                     h.appendChild(c);
@@ -10869,7 +10898,7 @@ window.__nswsTrackQuery = function(trackId) {
                 u.className = "button",
                 u.addEventListener("click", ( () => {
                     i.get(this, w, "f").playUIClick(),
-                    i.get(this, M, "f").call(this, n, r, a, e, s, o)
+                    i.get(this, M, "f").call(this, n, r, a, playCategory(e), s, o)
                 }
                 )),
                 c.appendChild(u);
@@ -10937,30 +10966,28 @@ window.__nswsTrackQuery = function(trackId) {
             ,
             Q = function(e) {
                 $ = e,
-                i.get(this, T, "f").saveTrackSelectionTab($),
-                "official" == e ? (i.get(this, C, "f").classList.add("selected"),
-                i.get(this, R, "f").classList.remove("selected"),
-                i.get(this, P, "f").classList.remove("selected"),
-                i.get(this, I, "f").classList.add("open"),
-                i.get(this, L, "f").classList.remove("open"),
-                i.get(this, U, "f").classList.remove("open")) : "community" == e ? (i.get(this, C, "f").classList.remove("selected"),
-                i.get(this, R, "f").classList.add("selected"),
-                i.get(this, P, "f").classList.remove("selected"),
-                i.get(this, I, "f").classList.remove("open"),
-                i.get(this, L, "f").classList.add("open"),
-                i.get(this, U, "f").classList.remove("open")) : (i.get(this, C, "f").classList.remove("selected"),
-                i.get(this, R, "f").classList.remove("selected"),
-                i.get(this, P, "f").classList.add("selected"),
-                i.get(this, I, "f").classList.remove("open"),
-                i.get(this, L, "f").classList.remove("open"),
-                i.get(this, U, "f").classList.add("open"))
+                "kodub" != e && i.get(this, T, "f").saveTrackSelectionTab($);
+                for (const [name, button, container] of [["official", i.get(this, C, "f"), i.get(this, I, "f")], ["community", i.get(this, R, "f"), i.get(this, L, "f")], ["custom", i.get(this, P, "f"), i.get(this, U, "f")], ["kodub", this.kodubButton, this.kodubContainer]])
+                    button.classList.toggle("selected", name == e),
+                    container.classList.toggle("open", name == e)
+            }
+            ,
+            // "nsws" shows the Not So Weekly Shorts tab; "kodub" shows Kodub's official and community tracks.
+            applyTrackMode = function() {
+                const kodub = "kodub" == trackMode;
+                kodub ? this.categoryBar.replaceChildren(i.get(this, C, "f"), this.kodubButton) : this.categoryBar.replaceChildren(i.get(this, R, "f")),
+                this.modeLabel.textContent = kodub ? "Not So Weekly Shorts" : "Official & Community",
+                this.modeButton.title = kodub ? "Play the Not So Weekly Shorts tracks" : "Play Kodub's official and community tracks";
+                const tab = kodub ? ("official" == $ || "kodub" == $ ? $ : "official") : "community";
+                i.get(this, v, "m", Q).call(this, tab),
+                "official" == tab ? i.get(this, I, "f").scrollTop = ee : "kodub" == tab ? this.kodubContainer.scrollTop = kodubScroll : i.get(this, L, "f").scrollTop = te
             }
             ,
             J = function() {
                 const e = i.get(this, G, "f").value.trim().toLowerCase();
                 for (const t of i.get(this, B, "f"))
                     t.trackMetadata.name.toLowerCase().includes(e) || t.trackMetadata.author?.toLowerCase().includes(e) ? t.buttonContainer.style.display = "" : t.buttonContainer.style.display = "none";
-                for (const e of ["official", "community", "custom"]) {
+                for (const e of ["official", "community", "custom", "kodub"]) {
                     let t;
                     switch (e) {
                     case "official":
@@ -10970,7 +10997,10 @@ window.__nswsTrackQuery = function(trackId) {
                         t = i.get(this, N, "f");
                         break;
                     case "custom":
-                        t = i.get(this, D, "f")
+                        t = i.get(this, D, "f");
+                        break;
+                    case "kodub":
+                        t = this.kodubGroups
                     }
                     for (const [n,r] of t.entries())
                         i.get(this, B, "f").some((t => t.category == e && t.group == n && "none" != t.buttonContainer.style.display)) ? r.style.display = "" : r.style.display = "none"
@@ -11037,7 +11067,7 @@ window.__nswsTrackQuery = function(trackId) {
                             entry = i.get(this, B, "f").find(e => e.trackId === trackId);
                         }
                         if (!entry) return false;
-                        u(entry.trackMetadata, entry.trackEnvironment, entry.trackData, entry.category, entry.trackId, entry.thumbnail);
+                        u(entry.trackMetadata, entry.trackEnvironment, entry.trackData, playCategory(entry.category), entry.trackId, entry.thumbnail);
                         return true;
                     },
                     window.__bw_getTrackName = trackId => {
@@ -11076,6 +11106,24 @@ window.__nswsTrackQuery = function(trackId) {
                     const q = document.createElement("div");
                     q.className = "cover",
                     i.get(this, R, "f").prepend(q),
+                    this.categoryBar = m,
+                    i.get(this, C, "f").className = "button official",
+                    i.get(this, C, "f").append(document.createTextNode(i.get(this, b, "f").get("Official tracks"))),
+                    i.get(this, C, "f").prepend(Object.assign(document.createElement("div"), { className: "cover" })),
+                    i.get(this, C, "f").addEventListener("click", ( () => {
+                        i.get(this, w, "f").playUIClick(),
+                        i.get(this, v, "m", Q).call(this, "official")
+                    }
+                    )),
+                    this.kodubButton = document.createElement("button"),
+                    this.kodubButton.className = "button community",
+                    this.kodubButton.append(document.createTextNode(i.get(this, b, "f").get("Community tracks"))),
+                    this.kodubButton.prepend(Object.assign(document.createElement("div"), { className: "cover" })),
+                    this.kodubButton.addEventListener("click", ( () => {
+                        i.get(this, w, "f").playUIClick(),
+                        i.get(this, v, "m", Q).call(this, "kodub")
+                    }
+                    )),
                     i.set(this, P, document.createElement("button"), "f"),
                     i.set(this, I, document.createElement("div"), "f"),
                     i.get(this, I, "f").className = "tracks-container",
@@ -11085,7 +11133,11 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, _, "f").appendChild(i.get(this, L, "f")),
                     i.set(this, U, document.createElement("div"), "f"),
                     i.get(this, U, "f").className = "tracks-container no-group-containers",
-                    i.get(this, _, "f").appendChild(i.get(this, U, "f"));
+                    i.get(this, _, "f").appendChild(i.get(this, U, "f")),
+                    this.kodubContainer = document.createElement("div"),
+                    this.kodubContainer.className = "tracks-container",
+                    this.kodubGroups = new Map,
+                    i.get(this, _, "f").appendChild(this.kodubContainer);
                     let Z = null;
                     const ie = e => {
                         Z = 1 == e.touches.length ? {
@@ -11098,11 +11150,23 @@ window.__nswsTrackQuery = function(trackId) {
                         if (null != Z && 1 == e.changedTouches.length) {
                             const t = e.changedTouches[0].clientX - Z.x
                               , n = e.changedTouches[0].clientY - Z.y;
-                            Date.now() - Z.time < 500 && Math.abs(t) > 75 && Math.abs(n) < Math.abs(t) && (t > 0 ? "community" == $ ? i.get(this, v, "m", Q).call(this, "official") : "custom" == $ && i.get(this, v, "m", Q).call(this, "community") : "official" == $ ? i.get(this, v, "m", Q).call(this, "community") : "community" == $ && i.get(this, v, "m", Q).call(this, "custom"))
+                            Date.now() - Z.time < 500 && Math.abs(t) > 75 && Math.abs(n) < Math.abs(t) && "kodub" == trackMode && i.get(this, v, "m", Q).call(this, t > 0 ? "official" : "kodub")
                         }
                         Z = null
                     }
                     ;
+                    this.kodubContainer.addEventListener("touchstart", ie, {
+                        passive: !0
+                    }),
+                    this.kodubContainer.addEventListener("touchend", re, {
+                        passive: !0
+                    }),
+                    this.kodubContainer.addEventListener("scroll", ( () => {
+                        kodubScroll = this.kodubContainer.scrollTop
+                    }
+                    ), {
+                        passive: !0
+                    }),
                     i.get(this, I, "f").addEventListener("touchstart", ie, {
                         passive: !0
                     }),
@@ -11131,7 +11195,20 @@ window.__nswsTrackQuery = function(trackId) {
                         d()
                     }
                     )),
-                    g.appendChild(ae);
+                    g.appendChild(ae),
+                    this.modeButton = document.createElement("button"),
+                    this.modeButton.className = "button",
+                    this.modeButton.style.marginLeft = "auto",
+                    this.modeButton.innerHTML = '<img class="button-icon" src="images/list.svg"> ',
+                    this.modeLabel = document.createElement("span"),
+                    this.modeButton.appendChild(this.modeLabel),
+                    this.modeButton.addEventListener("click", ( () => {
+                        i.get(this, w, "f").playUIClick(),
+                        trackMode = "kodub" == trackMode ? "nsws" : "kodub",
+                        applyTrackMode.call(this)
+                    }
+                    )),
+                    g.appendChild(this.modeButton);
                     i.set(this, G, document.createElement("input"), "f");
                     window.addEventListener("keydown", i.set(this, V, (e => {
                         i.get(this, O, "f") && "Escape" == e.code && (d(),
@@ -11187,14 +11264,7 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, _, "f").classList.remove("hidden"),
                     i.set(this, O, !0, "f"),
                     this.refresh(),
-                    $ = "community",
-                    (i.get(this, C, "f").classList.remove("selected"),
-                    i.get(this, R, "f").classList.add("selected"),
-                    i.get(this, P, "f").classList.remove("selected"),
-                    i.get(this, I, "f").classList.remove("open"),
-                    i.get(this, L, "f").classList.add("open"),
-                    i.get(this, U, "f").classList.remove("open"),
-                    i.get(this, L, "f").scrollTop = te)
+                    applyTrackMode.call(this)
                 }
                 get isOpen() {
                     return i.get(this, O, "f") || null != i.get(this, F, "f")
@@ -11204,9 +11274,15 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, I, "f").innerHTML = "",
                     i.get(this, L, "f").innerHTML = "",
                     i.get(this, U, "f").innerHTML = "",
+                    this.kodubContainer.innerHTML = "",
                     i.get(this, z, "f").clear(),
                     i.get(this, N, "f").clear(),
                     i.get(this, D, "f").clear(),
+                    this.kodubGroups.clear(),
+                    i.get(this, S, "f").forEachKodubCommunityTrack(( (e, t, n, r, a, s) => {
+                        i.get(this, v, "m", q).call(this, "kodub", t, n, r, a, e, s)
+                    }
+                    )),
                     i.get(this, S, "f").forEachOfficialTrack(( (e, t, n, r) => {
                         i.get(this, v, "m", q).call(this, "official", n.environment, t, n.environment, ( () => Promise.resolve(n)), e, r)
                     }
@@ -50659,6 +50735,13 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, ws, "f").generateMeshes()
             }
             )),
+            C.get(this, ms, "m", Gs).call(this, "Menu background", [{
+                title: "Track",
+                value: "false"
+            }, {
+                title: "Solid colour",
+                value: "true"
+            }], R.A.SolidMenuBackground),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Shadows"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
                 value: "0",
@@ -51185,9 +51268,9 @@ window.__nswsTrackQuery = function(trackId) {
         const DEVICE_PRESET_STORAGE_KEY = "_nswsDevicePreset";
         const POLYFX_PRESET_STORAGE_KEY = "_polyfxGraphicsPreset";
         const DEVICE_PRESETS = [
-            { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", renderScale: "0.75", polyFx: "0" },
-            { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", renderScale: "1", polyFx: "1" },
-            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4" }
+            { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", renderScale: "0.75", polyFx: "0", solidBackground: "true" },
+            { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", renderScale: "1", polyFx: "1", solidBackground: "false" },
+            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4", solidBackground: "false" }
         ];
         const DEVICE_PRESET_ICONS = {
             low: '<rect x="17" y="5" width="30" height="54" rx="6"/><path d="M28 11h8M29 52h6"/>',
@@ -51198,11 +51281,14 @@ window.__nswsTrackQuery = function(trackId) {
             return '<svg class="device-preset-icon" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' + DEVICE_PRESET_ICONS[id] + "</svg>";
         }
         // Ultra shadows need a shadow texture larger than some GPUs allow.
-        function devicePresetSettings(preset, renderer) {
+        // The menu background is left out of preset matching, so changing it alone keeps the preset highlighted.
+        function devicePresetSettings(preset, renderer, forMatching) {
             let shadows = preset.shadows;
             for (; shadows > 0 && !renderer.isShadowQualitySupported(shadows); )
                 shadows--;
-            return [[R.A.LowPerformanceMode, preset.lowPerformance], [R.A.ShadowQuality, shadows.toString()], [R.A.CloudsEnabled, preset.effects], [R.A.ParticlesEnabled, preset.effects], [R.A.FogEnabled, preset.effects], [R.A.RenderScale, preset.renderScale]];
+            const list = [[R.A.LowPerformanceMode, preset.lowPerformance], [R.A.ShadowQuality, shadows.toString()], [R.A.CloudsEnabled, preset.effects], [R.A.ParticlesEnabled, preset.effects], [R.A.FogEnabled, preset.effects], [R.A.RenderScale, preset.renderScale]];
+            if (!forMatching) list.push([R.A.SolidMenuBackground, preset.solidBackground]);
+            return list;
         }
         function getPolyFxPreset() {
             try {
@@ -51226,7 +51312,17 @@ window.__nswsTrackQuery = function(trackId) {
             }
         }
         function matchingDevicePreset(getSetting, renderer) {
-            return DEVICE_PRESETS.find(p => p.polyFx === getPolyFxPreset() && devicePresetSettings(p, renderer).every(([k, v]) => getSetting(k) === v)) ?? null;
+            return DEVICE_PRESETS.find(p => p.polyFx === getPolyFxPreset() && devicePresetSettings(p, renderer, true).every(([k, v]) => getSetting(k) === v)) ?? null;
+        }
+        // The canvas keeps its size while hidden, so the renderer's layout is unchanged.
+        function showSolidMenuBackground(solid) {
+            if (solid && !document.getElementById("nsws-solid-bg-style")) {
+                const style = document.createElement("style");
+                style.id = "nsws-solid-bg-style";
+                style.textContent = "body.nsws-solid-bg { background: var(--surface-tertiary-color); } body.nsws-solid-bg #screen { visibility: hidden; }";
+                document.head.appendChild(style);
+            }
+            document.body.classList.toggle("nsws-solid-bg", !!solid);
         }
         let refreshDevicePresetBar = null;
         function ensureDevicePresetStyle() {
@@ -51249,6 +51345,189 @@ window.__nswsTrackQuery = function(trackId) {
 .settings-menu-ui > .container > .device-preset-bar > .button > span { overflow: hidden; text-overflow: ellipsis; }
 `;
             document.head.appendChild(style);
+        }
+        function applyDevicePreset(preset, renderer, settings, meshes) {
+            settings.updateSettings(devicePresetSettings(preset, renderer));
+            settings.saveSettings();
+            meshes.generateMeshes();
+            setPolyFxPreset(preset.polyFx);
+            try {
+                localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, preset.id);
+            } catch (e) {}
+        }
+        function showGraphicsNote(text) {
+            const note = document.createElement("div");
+            note.textContent = text;
+            note.style.cssText = "position:fixed;left:50%;bottom:72px;transform:translateX(-50%);z-index:10003;max-width:calc(100% - 40px);box-sizing:border-box;text-align:center;" +
+                "background:var(--surface-color,#28346a);color:#fff;padding:12px 22px;font-size:18px;line-height:1.3;" +
+                "clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);box-shadow:0 8px 24px rgba(0,0,0,.4);pointer-events:none;";
+            document.body.appendChild(note);
+            setTimeout(() => note.remove(), 9000);
+        }
+        // navigator.deviceMemory is rounded to a power of two and missing outside Chromium. Android
+        // Chrome stops at 8, so every Android phone counts as under 16 GB.
+        function autoPickDevicePreset(renderer, settings, meshes) {
+            const memory = navigator.deviceMemory;
+            if ("number" != typeof memory || !(memory > 0) || memory >= 16)
+                return !1;
+            applyDevicePreset(DEVICE_PRESETS[0], renderer, settings, meshes);
+            showGraphicsNote("Graphics are set to Low End Device because this device has less than 16 GB of memory. You can change it at the top of Settings.");
+            return !0;
+        }
+        // Ultra can be more than a weak GPU or a small amount of memory can take: a render throws, the
+        // WebGL context is lost (the canvas goes black or white), or the whole tab crashes. Each case
+        // lowers the graphics one step instead of leaving the game broken.
+        const GFX_ALIVE_KEY = "_nswsGfxAlive";
+        const GFX_RELOADS_KEY = "_nswsGfxReloads";
+        // A tab on Ultra rewrites its entry every 5 s while visible and holds a Web Lock for as long as it lives,
+        // so an entry whose lock is gone belongs to a tab that died. Without Web Locks, only age can tell.
+        const GFX_LOCK_PREFIX = "nsws-gfx-";
+        const GFX_STALE_MS = 20000;
+        const GFX_CRASH_WINDOW_MS = 6 * 3600 * 1000;
+        let graphicsGuard = null;
+        let pendingGraphicsNote = null;
+        let graphicsNoteReady = !1;
+        function graphicsLevel(settings) {
+            const shadows = settings.getSettingInteger(R.A.ShadowQuality);
+            const fx = parseInt(getPolyFxPreset(), 10) || 0;
+            if (shadows > 2 || fx > 1)
+                return 2;
+            if (shadows > 0 || fx > 0 || !settings.getSettingBoolean(R.A.LowPerformanceMode) || settings.getSettingBoolean(R.A.CloudsEnabled) || settings.getSettingBoolean(R.A.ParticlesEnabled))
+                return 1;
+            return 0;
+        }
+        // Only ever lowers settings, and returns the name of the step it went to (null at the bottom).
+        function lowerGraphics(renderer, settings, meshes) {
+            const level = graphicsLevel(settings);
+            if (0 == level)
+                return null;
+            if (2 == level) {
+                settings.updateSettings([[R.A.ShadowQuality, Math.min(settings.getSettingInteger(R.A.ShadowQuality), 2).toString()]]);
+                setPolyFxPreset(Math.min(parseInt(getPolyFxPreset(), 10) || 0, 1).toString());
+            } else {
+                const low = DEVICE_PRESETS[0];
+                const scale = settings.getSettingFloat(R.A.RenderScale) <= parseFloat(low.renderScale) ? settings.getSetting(R.A.RenderScale) : low.renderScale;
+                settings.updateSettings(devicePresetSettings(low, renderer).filter(([k]) => k != R.A.RenderScale).concat([[R.A.RenderScale, scale]]));
+                setPolyFxPreset(low.polyFx);
+            }
+            settings.saveSettings();
+            meshes.generateMeshes();
+            refreshDevicePresetBar?.();
+            return 2 == level ? "High End Device" : "Low End Device";
+        }
+        function graphicsMessage(text, button, then) {
+            const box = window.__nswsMessageBox;
+            if (box && !box.isOpen)
+                box.show(text, button, then);
+            else
+                showGraphicsNote(text);
+        }
+        function readGraphicsAlive() {
+            try {
+                const map = JSON.parse(localStorage.getItem(GFX_ALIVE_KEY));
+                return map && "object" == typeof map ? map : {};
+            } catch (e) {
+                return {};
+            }
+        }
+        function writeGraphicsAlive(map) {
+            try {
+                Object.keys(map).length ? localStorage.setItem(GFX_ALIVE_KEY, JSON.stringify(map)) : localStorage.removeItem(GFX_ALIVE_KEY);
+            } catch (e) {}
+        }
+        // At most two automatic reloads in five minutes, so a device that loses WebGL at any setting can't loop.
+        function mayAutoReload() {
+            try {
+                const now = Date.now();
+                const recent = (JSON.parse(sessionStorage.getItem(GFX_RELOADS_KEY)) || []).filter(t => now - t < 300000);
+                if (recent.length >= 2)
+                    return !1;
+                recent.push(now);
+                sessionStorage.setItem(GFX_RELOADS_KEY, JSON.stringify(recent));
+                return !0;
+            } catch (e) {
+                return !1;
+            }
+        }
+        function installGraphicsGuard(renderer, settings, meshes) {
+            if (graphicsGuard)
+                return;
+            graphicsGuard = {};
+            const tabId = Math.random().toString(36).slice(2);
+            (async () => {
+                let held = null;
+                try {
+                    navigator.locks?.query && (held = new Set(((await navigator.locks.query()).held || []).map(l => l.name)));
+                } catch (e) {}
+                const now = Date.now();
+                const alive = readGraphicsAlive();
+                let crashed = !1;
+                for (const [id, at] of Object.entries(alive)) {
+                    if (id == tabId)
+                        continue;
+                    const valid = "number" == typeof at;
+                    if (valid && (held ? held.has(GFX_LOCK_PREFIX + id) : now - at < GFX_STALE_MS))
+                        continue;
+                    delete alive[id];
+                    valid && now - at < GFX_CRASH_WINDOW_MS && (crashed = !0);
+                }
+                writeGraphicsAlive(alive);
+                if (crashed && 2 == graphicsLevel(settings)) {
+                    const step = lowerGraphics(renderer, settings, meshes);
+                    step && (pendingGraphicsNote = "The game closed unexpectedly last time while using Ultra graphics, so they were lowered to " + step + ". You can change this at the top of Settings.");
+                    graphicsNoteReady && flushGraphicsNote();
+                }
+            }
+            )();
+            try {
+                navigator.locks?.request(GFX_LOCK_PREFIX + tabId, () => new Promise(() => {}));
+            } catch (e) {}
+            const beat = () => {
+                const map = readGraphicsAlive();
+                "visible" == document.visibilityState && 2 == graphicsLevel(settings) ? map[tabId] = Date.now() : delete map[tabId];
+                writeGraphicsAlive(map);
+            };
+            setInterval(beat, 5000);
+            document.addEventListener("visibilitychange", beat);
+            window.addEventListener("pagehide", () => {
+                const map = readGraphicsAlive();
+                delete map[tabId];
+                writeGraphicsAlive(map);
+            });
+            beat();
+            let lastFailure = 0;
+            window.__nswsGraphicsFailed = err => {
+                const step = lowerGraphics(renderer, settings, meshes);
+                if (!step)
+                    return !1;
+                console.error("Rendering failed, graphics lowered to " + step + ":", err);
+                Date.now() - lastFailure > 10000 && graphicsMessage("Graphics hit an error on this device, so they were lowered to " + step + ". You can change this at the top of Settings.", "Ok", null);
+                lastFailure = Date.now();
+                return !0;
+            };
+            renderer.canvas.addEventListener("webglcontextlost", () => {
+                // Below Ultra a lost context is rarely the settings' fault, so they are kept and the browser may restore it.
+                const step = 2 == graphicsLevel(settings) ? lowerGraphics(renderer, settings, meshes) : null;
+                if (step && mayAutoReload()) {
+                    graphicsMessage("This device ran out of graphics memory, so graphics were lowered to " + step + ". Reloading...", "Reload", () => location.reload());
+                    setTimeout(() => location.reload(), 4000);
+                    return;
+                }
+                let restored = !1;
+                renderer.canvas.addEventListener("webglcontextrestored", () => {
+                    restored = !0;
+                }, { once: !0 });
+                setTimeout(() => {
+                    restored || graphicsMessage("Graphics stopped working on this device. Close other tabs or apps, then reload." + (step ? " Graphics were lowered to " + step + "." : ""), "Reload", () => location.reload());
+                }, 4000);
+            });
+        }
+        function flushGraphicsNote() {
+            graphicsNoteReady = !0;
+            if (!pendingGraphicsNote)
+                return;
+            showGraphicsNote(pendingGraphicsNote);
+            pendingGraphicsNote = null;
         }
         function showDevicePresetPopup(container, audio, renderer, settings, meshes, done) {
             ensureDevicePresetStyle();
@@ -51276,13 +51555,7 @@ window.__nswsTrackQuery = function(trackId) {
                 button.appendChild(hint);
                 button.addEventListener("click", ( () => {
                     audio.playUIClick();
-                    settings.updateSettings(devicePresetSettings(preset, renderer));
-                    settings.saveSettings();
-                    meshes.generateMeshes();
-                    setPolyFxPreset(preset.polyFx);
-                    try {
-                        localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, preset.id);
-                    } catch (e) {}
+                    applyDevicePreset(preset, renderer, settings, meshes);
                     container.removeChild(popup);
                     done();
                 }
@@ -54467,6 +54740,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, bc, n, "f"),
                 C.set(this, wc, r, "f"),
                 C.set(this, xc, l, "f"),
+                installGraphicsGuard(n, d, r),
                 null == $c ? C.set(this, Fc, $c = o.loadIsMusicEnabled(), "f") : C.set(this, Fc, $c, "f");
                 const w = document.getElementById("ui");
                 if (null == w)
@@ -54545,8 +54819,9 @@ window.__nswsTrackQuery = function(trackId) {
                     n?.fadeOut(( () => {
                         n.dispose();
                         const showMenu = () => {
-                            hasChosenDevicePreset() ? (C.get(this, vc, "m", Yc).call(this),
+                            hasChosenDevicePreset() || autoPickDevicePreset(C.get(this, bc, "f"), d, r) ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
+                            flushGraphicsNote(),
                             window.__nswsClipsOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
@@ -54685,18 +54960,38 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, dh, o, "f"),
                 C.set(this, uh, new eh(a,h,c,g,t,o,l,d,u,f,r,p,s,m,A,v,y,b,w,x,S), "f"),
                 c.setCamera(C.get(this, uh, "f").camera),
-                g.hasLoaded() ? C.get(this, th, "m", fh).call(this) : g.addCompleteListener(( () => {
-                    C.get(this, th, "m", fh).call(this)
+                this.assetsLoaded = !1,
+                this.solidBackground = null,
+                g.hasLoaded() ? (this.assetsLoaded = !0, this.syncBackground()) : g.addCompleteListener(( () => {
+                    this.assetsLoaded = !0,
+                    this.syncBackground()
                 }
                 ))
             }
+            // Returns whether the 3D background is switched off right now.
+            syncBackground() {
+                const solid = C.get(this, lh, "f").getSettingBoolean(R.A.SolidMenuBackground);
+                if (!this.assetsLoaded || solid === this.solidBackground)
+                    return !0 === this.solidBackground;
+                this.solidBackground = solid;
+                showSolidMenuBackground(solid);
+                solid ? (C.get(this, ph, "f")?.dispose(),
+                C.set(this, ph, null, "f"),
+                C.get(this, ih, "f").clear(),
+                C.get(this, rh, "f").clearMountains()) : C.get(this, th, "m", fh).call(this);
+                return solid
+            }
             dispose() {
+                showSolidMenuBackground(!1),
                 C.get(this, ph, "f")?.dispose(),
                 C.get(this, uh, "f").dispose(),
                 C.get(this, ih, "f").clear(),
                 C.get(this, rh, "f").clearMountains()
             }
             update(e) {
+                if (this.syncBackground())
+                    return C.get(this, uh, "f").update(e),
+                    void C.get(this, hh, "f").update(e, C.get(this, uh, "f").isMusicEnabled, C.get(this, ch, "f"));
                 C.get(this, ph, "f")?.update(e),
                 C.get(this, uh, "f").update(e),
                 C.get(this, rh, "f").update(C.get(this, ih, "f")),
@@ -55104,6 +55399,79 @@ window.__nswsTrackQuery = function(trackId) {
                 e()
         }
         ;
+        // Kodub's community tracks as shipped in PolyTrack 0.6.3, newest group first; files are tracks/kodub/<file>.track.
+        const KODUB_COMMUNITY_TRACKS = [
+            {"id":"387aab2d3400ebf74b5a780d15c911cdc695053b94be3e7ad23f6ae313b2471c","group":"0.6.3","name":"La Infinita","author":"BonnieBeans","env":"Winter","file":"la_infinita","modified":"2026-09-06T00:51:55.000Z"},
+            {"id":"a680fa81e6a4b9dec06b4197833f0a96334a275faf387d495c9c674ffd6b8686","group":"0.6.3","name":"Oyasumi","author":"Karpin, Dice","env":"Summer","file":"oyasumi","modified":"2026-09-04T14:16:40.000Z"},
+            {"id":"439f1c61263987365996667f99d65f899ec482dfe21c64edcd9a1b1ae5b4a0a9","group":"0.6.3","name":"Zenith","author":"HummusHere","env":"Summer","file":"zenith","modified":"2026-07-29T18:47:49.000Z"},
+            {"id":"dc7783fef2a5fbb7a2d75b9c6fdd6a9d600b833d47c6274374ea4388c707517a","group":"0.6.3","name":"𝔚𝔦𝔫𝔱𝔢𝔯𝔱𝔦𝔡𝔢","author":"Vanyayuyay + Kaiser-Burn","env":"Winter","file":"wintertide","modified":"2026-09-13T17:06:50.000Z"},
+            {"id":"f40d385d5e97e00a166a9a05d19789d8f2bf3621a8c1c8919c8bec41ab6347ab","group":"0.6.3","name":"The CrossFades","author":"CXKat","env":"Summer","file":"the_crossfades","modified":"2026-09-13T20:43:20.000Z"},
+            {"id":"d57a81355f36d5ef0bd2c063d251baf6d28401c275a8b3e3a62e0ae5071a2559","group":"0.6.3","name":"Out of Bounds","author":"Kiki","env":"Summer","file":"out_of_bounds","modified":"2026-06-22T20:47:30.000Z"},
+            {"id":"225fad12335dadc12b60bfa1b31369b1026d8a084fd4670583870fb3b71f7ec0","group":"0.6.3","name":"Solaris","author":"HummusHere & cheesebob","env":"Desert","file":"solaris","modified":"2026-06-07T19:59:43.000Z"},
+            {"id":"0338f449b9948f06c03ffc2ab3ab6cf551fd08a9f2c09a16156b93ef52dd4411","group":"0.6.3","name":"݁˖.˚ Evanescent Bliss. ݁₊˚ .","author":"Raylee & HummusHere","env":"Summer","file":"evanescent_bliss","modified":"2026-07-19T03:28:11.000Z"},
+            {"id":"27c3384de80b1bed23f1ea15316abe62c8cca33e955805f23d461803f6dee8d4","group":"0.6.3","name":"𐌀𐌕𐌋𐌀𐌍𐌕𐌉𐌔","author":"Apex & Xander","env":"Summer","file":"atlantis","modified":"2026-09-13T09:57:59.000Z"},
+            {"id":"d9bc51ec180bc46558e079c7949ba10b9ade52078c4c145f217a6a8543df2377","group":"0.6.3","name":"Tucks Factory","author":"Tuck and Mask","env":"Summer","file":"tucks_factory","modified":"2026-09-02T12:38:21.000Z"},
+            {"id":"5159a8dac6a1f397407a7b5233ad570613531f6609f7dc897490c28c9f2c7a4e","group":"0.6.1","name":"Apostle","author":"BonnieBeans","env":"Desert","file":"apostle","modified":"2026-03-16T11:51:42.000Z"},
+            {"id":"1783b7b6c30e7fddf7ffb7c8a4a8a3b65c1ef6ec317d908d6eb05e6c905a57f6","group":"0.6.1","name":"Stardust","author":"CXKat","env":"Summer","file":"stardust","modified":"2026-05-17T03:23:04.000Z"},
+            {"id":"ddfe00045807e2786552d1e31e1363384c365487180f65d4eff1aa41e334a8e8","group":"0.6.1","name":"Overclocked","author":"CXKat","env":"Summer","file":"overclocked","modified":"2026-03-15T19:31:56.000Z"},
+            {"id":"4058e3616fbd79b848e70037adde4f12b4413011050aaf1c9d875cdbe2e33d68","group":"0.6.1","name":"Amberbound","author":"Hero <3","env":"Summer","file":"amberbound"},
+            {"id":"2ec74a179c8aba94354e3c6dee2a2920bedd7d84adf4d0a691f4a7453afdb1e8","group":"0.6.1","name":"The Eldritch Estate","author":"HummusHere","env":"Summer","file":"the_eldritch_estate","modified":"2026-04-03T04:55:09.000Z"},
+            {"id":"76e1920a3ca015033a0b21156848def2c248c95d97ccf4aab2312a0302beefe0","group":"0.6.1","name":"Star Bound","author":"skrdh & CXKat","env":"Desert","file":"star_bound"},
+            {"id":"81cede50724b1ee0c2ebcef973c37d620680766bd75771c5ae2728b8732c7a66","group":"0.6.1","name":"Natsu","author":"ben, 10quo07, BLAK3","env":"Summer","file":"natsu","modified":"2026-05-30T09:42:57.000Z"},
+            {"id":"76269faf38e8726671c05b2b9044f7aa3e66c4313cb4fa5d0fbb23fc8524fe9e","group":"0.6.1","name":"Lenore","author":"Td.blox","env":"Summer","file":"lenore","modified":"2026-02-16T03:58:31.000Z"},
+            {"id":"151f12fd3ebc8942f7aaef669024a0fc149bc220f370753efe14d9371acc9c87","group":"0.6.1","name":"sandy lanes II","author":"2xi and qwertyuiop","env":"Desert","file":"sandy_lanes_ii","modified":"2026-05-17T01:13:27.000Z"},
+            {"id":"f9283607ecec9c89583205cf08715c8f504cc271eec51209bb6fc0cc37ddc915","group":"0.6.1","name":"Planet 97","author":"BonnieBeans","env":"Summer","file":"planet_97","modified":"2026-05-25T04:04:14.000Z"},
+            {"id":"64bf7efaed2a47dfb03a6b152e3aef637ac251b68a725a28352f3376ff1384d7","group":"0.6.0","name":"Marvelous Marble","author":"BonnieBeans","env":"Summer","file":"marvelous_marble","modified":"2026-03-04T10:55:21.000Z"},
+            {"id":"520c4f511821ced30b99bceafbb02e6b7531e867126b0756e68d5e157691ef2f","group":"0.6.0","name":"Arx Lucida","author":"Flatbread","env":"Summer","file":"arx_lucida"},
+            {"id":"315c9e95c567cce4feca78f5ad6e8d08d0a22dac0d56061af567b43eea3d4fa8","group":"0.6.0","name":"Koselig","author":"Flatbread & BonnieBeans","env":"Winter","file":"koselig"},
+            {"id":"a8913b96daceb5b615fe45aad2bb104e04eb7db140242934657111e1d1f55b89","group":"0.6.0","name":"Sky Bound","author":"CXKat","env":"Summer","file":"sky_bound"},
+            {"id":"66f43b2d2a17f3cee05a127040ca409795058510bd3d1ac7eee224512ec532f5","group":"0.6.0","name":"ShardMir","author":"Jurre","env":"Desert","file":"shardmir"},
+            {"id":"fcbba504800751b0fb404a7cd1c9591befdf688ad5451ab2bc1f3651590cc5fc","group":"0.6.0","name":"𝔖𝔱𝔢𝔦𝔫𝔴𝔞𝔩𝔩𝔟𝔲𝔯𝔤","author":"TD_blox","env":"Summer","file":"steinwallburg"},
+            {"id":"9ba44e8eafd0158e7e1f63e7d609db308c53f337b79e86bd0b630225451eef34","group":"0.6.0","name":"𝕻𝖆𝖗𝖆𝖉𝖎𝖘𝖊 𝕻𝖆𝖑𝖆𝖈𝖊","author":"TD_blox","env":"Summer","file":"paradise_palace"},
+            {"id":"b3889905b6df31cbe302e58e975988385607771605bf6e8e8e8e31b3d2dc8aa1","group":"0.6.0","name":"Sunken Glyphs","author":"2xi","env":"Summer","file":"sunken_glyphs"},
+            {"id":"3cd94552b12fb3a8ac45ca3a5e21a882b71b31c788989b396ab382afc69414ac","group":"0.6.0","name":"Grimspyre","author":"2xi and imracer","env":"Summer","file":"grimspyre"},
+            {"id":"3125a5f98c3b43cf1e2604e25e8504bffd714ea5843200fa8ddf0b4c58842f16","group":"0.6.0","name":"Magenta Mines","author":"CheeseWaffleBoy & BonnieBeans","env":"Summer","file":"magenta_mines"},
+            {"id":"a2137c20c03ad1848098b47f70417cc0b0bf169010c825dc6fb82f37066808a0","group":"0.6.0","name":"Cruising Altitude","author":"Shovelfish","env":"Winter","file":"cruising_altitude"},
+            {"id":"d03b9f7c10c95f40eed389458be51bdf2437febd5673d028da134e59e503c10b","group":"0.6.0","name":"Termite Terror","author":"Herny🇦🇺","env":"Desert","file":"termite_terror"},
+            {"id":"f68a709a296a60f6e6f73a2da670f95aca424be0f2fda5d6b608ece71f339b7c","group":"0.6.0","name":"4 seasons","author":"TD_blox & Xav","env":"Winter","file":"4_seasons","modified":"2026-02-27T22:59:29.000Z"},
+            {"id":"a1f41dc9e884d5d4b1b6025158d70f0934dc4d892076e6c4b32dc3f3846b882e","group":"0.6.0","name":"Lost at sea","author":"Henrik","env":"Summer","file":"lost_at_sea"},
+            {"id":"b430aad5e481caa4588e30f46352b876b62f1ba0cf7730a15efd026c91a8f32e","group":"0.6.0","name":"Frosted Fjords 寒い","author":"CXKat","env":"Winter","file":"frosted_fjords"},
+            {"id":"95d8f7cbe11053dbdfaeeb2f3c3d8f53f0d45fb6abeb411a74949a4cf52f427f","group":"0.6.0","name":"〜✧〜Ḽevitation〜✧〜","author":"Porg","env":"Summer","file":"levitation"},
+            {"id":"409f26b9faf55bd0ad748177bf85ebdcfc0ddd572190e7f464f38b4a60587b7e","group":"0.6.0","name":"Frozen Ramparts","author":"2xi & CSniper","env":"Winter","file":"frozen_ramparts"},
+            {"id":"c1a2c5aef1029d7bbf946f08cd087dd25bad6e019a41694a48a0024c27627dc8","group":"0.6.0","name":"Tangled Cliffs","author":"PHILR, Karpin_","env":"Summer","file":"tangled_cliffs"},
+            {"id":"9e53d03f4efe86834c49ce202b528d769d9aa7a6e17732d0fc56440463956a1b","group":"0.6.0","name":"Sludge Pipe Circuit","author":"HummusHere imracer","env":"Summer","file":"sludge_pipe_circuit"},
+            {"id":"b77ec520a40c4b38d3d7d653b747b1f8627c98709096568db22cd1bfec534ba6","group":"0.5.2","name":"Zealot","author":"BonnieBeans","env":"Winter","file":"zealot"},
+            {"id":"9f827673c4132828009237a03e12ead73eae87504b4708a79c6cc0858212262d","group":"0.5.2","name":"Shrouded Oasis","author":"Hiksi & BonnieBeans","env":"Desert","file":"shrouded_oasis"},
+            {"id":"9acd9aef650c4ccc41bb01f72ed44dfaa13f2e4404d2e3466f09cc1adcd9a9c0","group":"0.5.2","name":"⚙︎Cogware⚙︎","author":"AZiggy","env":"Summer","file":"cogware"},
+            {"id":"62d9989187e4508f7866e7b30aa187ddbee2595df21ff5988d7fec3589f9048d","group":"0.5.2","name":"Land of the Rising Sun","author":"2xi, imracer, KoiPoi","env":"Summer","file":"land_of_the_rising_sun"},
+            {"id":"b36162623435dc90a54f57590d2baa9f2d67a51cb12c393531f4b6d5e5528ebf","group":"0.5.2","name":"Midas Metropolis","author":"BonnieBeans","env":"Desert","file":"midas_metropolis"},
+            {"id":"74ae56c0f278a19f3b69f3903198c7b9de09981133205856b53bf6bdf8db4211","group":"0.5.2","name":"Frozen In Time","author":"BonnieBeans","env":"Winter","file":"frozen_in_time"},
+            {"id":"9f4597449906aa0c2baf9a4737406385c829533e64e9e972b25b4189f4593a54","group":"0.5.2","name":"Winterfell","author":"Forty Shovelfish","env":"Winter","file":"winterfell"},
+            {"id":"28b658c7d10eb8b5de6f465e034e87e40f70b37e4534d8c37d1f2af06b5a36d7","group":"0.5.2","name":"Launch Control","author":"BonnieBeans","env":"Summer","file":"launch_control"},
+            {"id":"470af92ed4c0a6f62028d7dea4dbc7765d1db16a3698d6a0c271be582a20a7c6","group":"0.5.2","name":"Fractured Shores","author":"2xi & imracer","env":"Summer","file":"fractured_shores","modified":"2026-02-16T03:10:30.000Z"},
+            {"id":"a6b990137e404c9ef2cb4399c463acbed8ebfa3bb82ab5315027118604c4ec03","group":"0.5.2","name":"Starry Tropisx","author":"Leaf, Forty, WB","env":"Desert","file":"starry_tropisx","modified":"2026-03-03T10:34:19.000Z"},
+            {"id":"35fe02bf18312713c05528f0b7b8fd15c83dac50bcdcbd373040a16e8bfcc138","group":"0.5.1","name":"Flying Dreams","author":"Forty, Shovelfish, Hero","env":"Summer","file":"flying_dreams","modified":"2026-03-02T10:11:02.000Z"},
+            {"id":"18b69f54f119cfb2867abded9a1574f0799a750ef94aa744d9ec8ef6b4d565ae","group":"0.5.1","name":"Ghost City","author":"Nexus","env":"Summer","file":"ghost_city"},
+            {"id":"5ea46b3ae268a0196dcc59dabe88926400b56e29814658bfed06a284f837cefd","group":"0.5.1","name":"MOS ESPA","author":"Tacopanda, Arkangel","env":"Summer","file":"mos_espa"},
+            {"id":"ab8e1c13ddf394102be1cb04adcff8411127f1e7140a216d27a94fc19b7d0428","group":"0.5.1","name":"Joenail Jones","author":"Tacopanda","env":"Desert","file":"joenail_jones"},
+            {"id":"86335d78d1a06d3dc81d80f84b8ac2e8f6359e9a206826e2c36f7d3f4351bea4","group":"0.5.1","name":"Anubis","author":"paldeanp","env":"Desert","file":"anubis"},
+            {"id":"a510bbd3341f2992a12db8a3780cb8943b6087538345d58d16602d6129742df0","group":"0.5.1","name":"Natsujō","author":"🇧🇦 ѕєαѕση","env":"Summer","file":"natsujo"},
+            {"id":"8cf99166f12cbb56a9df4e022a0e9b8c78973adb929dbf1e265ebb9f99f01163","group":"0.5.0","name":"Arabica","author":"Forty","env":"Desert","file":"arabica"},
+            {"id":"33d99aad2ad5cef45b1d3afb8735c5229cfd98ac7cc24916e0da7283f7a545ce","group":"0.5.0","name":"Hyperion's Sanctuary","author":"AZiggy & ChickenHotel813","env":"Winter","file":"hyperions_sanctuary"},
+            {"id":"5c00f2c90bcf8230183484225d1a417e45b0ad310379acfafd4c8f1dc7345dd7","group":"0.5.0","name":"Winter Hollow","author":"Lotus","env":"Winter","file":"winter_hollow"},
+            {"id":"009fad7fcc215022c6b2dbb2b6de622f07cd88d4930b8e2b6a6b74c1f5de9e44","group":"0.5.0","name":"Clay temples","author":"HeroHunter","env":"Desert","file":"clay_temples"},
+            {"id":"1ad53694ee3e96aea27afa7b64d5c29d115de88a17b69cf3fe3f5609c52b040b","group":"0.5.0","name":"Las Calles","author":"Shovelfish, Tacopanda, Forty","env":"Desert","file":"las_calles"},
+            {"id":"2ed125037366052871fbb97da6e1bda49cfeb471f6b9c8fa799d520bdb3683e2","group":"0.5.0","name":"DESERT STALLION","author":"ARKANGEL","env":"Desert","file":"desert_stallion"},
+            {"id":"f79b1d863d50f9e3b4489988698065c6d775ff3ec90bf91085bad05ad5ec8316","group":"0.5.0","name":"Last Remnant","author":"cwcinc","env":"Desert","file":"last_remnant"},
+            {"id":"27429a1d1bf05770851e3919af70f47c6cd7a269c67032b084fb4345f6c271ce","group":"0.5.0","name":"lu muvimento","author":"Noia","env":"Summer","file":"lu_muvimento"},
+            {"id":"f5c327cf09b90e4de8c3c1f9c910dbb7988cf15485d2e4beec3cc03aef408c5c","group":"0.5.0","name":"90*RESET","author":"Haru-PT","env":"Summer","file":"90_reset"},
+            {"id":"7451c2128cb96bc28195cf0ca0f83a46c3b55d78d434232d9de085dd1cf0ab36","group":"0.5.0","name":"Opal Palace - Repolished","author":"Tini","env":"Winter","file":"opal_palace_ii"},
+            {"id":"af6ef508e1f6e47a462a6998b950ef535d1e8a38fe67ead891bf5f2de1346f43","group":"0.5.0","name":"Re : Akina","author":"Marcus","env":"Summer","file":"re_akina","modified":"2026-02-25T12:16:34.000Z"},
+            {"id":"089f2aebcfe4f24d8dda3a8a630172d2bd13793e78c5247adfaa760743a377e1","group":"0.5.0","name":"Sandline Ultimatum","author":"Haru-PT","env":"Desert","file":"sandline_ultimatum"},
+            {"id":"5e40f730509204c77e9c610839ed43addddbe0f8aa007168447f7fde38583905","group":"0.5.0","name":"Malformations","author":"HeroHunter, Lotus","env":"Desert","file":"malformations"},
+            {"id":"191737cc4d1b74949e992d99371e5c7f5fc446a716af571c6e5449b23e9f4558","group":"0.5.0","name":"Snow Park","author":"Vlady87","env":"Winter","file":"snow_park"},
+            {"id":"39bd3fa6c3c769b298c219aee7561af35a6d856bfee14b46b0b48499e7a57ed5","group":"0.5.0","name":"concrete jungle","author":"HeroHunter","env":"Summer","file":"concrete_jungle"}
+        ];
         const sd = class {
             constructor(e, t) {
                 Qh.add(this),
@@ -55349,6 +55717,25 @@ window.__nswsTrackQuery = function(trackId) {
                     thumbnail: e.thumbnail,
                     saveTime: null
                 }))), "f");
+                this.kodubCommunity = KODUB_COMMUNITY_TRACKS.map((t => ({
+                    id: t.id,
+                    group: t.group,
+                    trackMetadata: {
+                        name: t.name,
+                        author: t.author,
+                        lastModified: t.modified ? new Date(t.modified) : null
+                    },
+                    environment: TrackEnvironment[t.env],
+                    trackData: async () => {
+                        let n = C.get(this, Zh, "f").get(t.id);
+                        null == n && (n = C.get(this, Qh, "m", id).call(this, "tracks/kodub/" + t.file + ".track"),
+                        C.get(this, Zh, "f").set(t.id, n),
+                        n.catch(( () => C.get(this, Zh, "f").delete(t.id))));
+                        return (await n).trackData
+                    }
+                    ,
+                    thumbnail: "tracks/kodub/thumbnails/" + t.file + ".png"
+                })));
                 const n = C.get(this, $h, "f").getAllCustomTrackNames();
                 if (null != n) {
                     const e = [];
@@ -55418,6 +55805,10 @@ window.__nswsTrackQuery = function(trackId) {
                     e(t, i, r, a, s)
                 }
                 )),
+                this.forEachKodubCommunityTrack(( (t, n, i, r, a, s) => {
+                    e(t, i, r, a, s)
+                }
+                )),
                 this.forEachCustomTrack(( (t, n, i, r) => {
                     e(t, n, i.environment, ( () => Promise.resolve(i)), r)
                 }
@@ -55429,6 +55820,10 @@ window.__nswsTrackQuery = function(trackId) {
             }
             forEachCommunityTrack(e) {
                 for (const t of C.get(this, Xh, "f"))
+                    e(t.id, t.group, t.trackMetadata, t.environment, t.trackData, t.thumbnail)
+            }
+            forEachKodubCommunityTrack(e) {
+                for (const t of this.kodubCommunity)
                     e(t.id, t.group, t.trackMetadata, t.environment, t.trackData, t.thumbnail)
             }
             forEachCustomTrack(e) {
@@ -55463,7 +55858,7 @@ window.__nswsTrackQuery = function(trackId) {
                         trackData: () => Promise.resolve(t.trackData),
                         trackCategory: "official"
                     };
-                const n = C.get(this, Xh, "f").find((t => t.trackMetadata.name == e));
+                const n = C.get(this, Xh, "f").find((t => t.trackMetadata.name == e)) ?? this.kodubCommunity.find((t => t.trackMetadata.name == e));
                 if (null != n)
                     return {
                         id: n.id,
@@ -55483,7 +55878,7 @@ window.__nswsTrackQuery = function(trackId) {
                 return C.get(this, Jh, "f").some((t => t.id == e))
             }
             isCommunityTrack(e) {
-                return C.get(this, Xh, "f").some((t => t.id == e))
+                return C.get(this, Xh, "f").some((t => t.id == e)) || this.kodubCommunity.some((t => t.id == e))
             }
             isCustomTrack(e) {
                 return C.get(this, Yh, "f").some((t => t.id == e))
@@ -57869,7 +58264,7 @@ window.__nswsTrackQuery = function(trackId) {
                 keyBindSettings = this;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -60010,8 +60405,13 @@ window.__nswsTrackQuery = function(trackId) {
         });
     }
 
+    // Medals exist only on NSWS tracks; on Kodub's tracks the Author Time scan would page through huge boards.
+    function hasMedals(trackId) {
+        return trackId != null && window.__nswsTrackWeek?.(trackId) != null;
+    }
+
     function renderMedalBadge(container, trackId, pbSeconds) {
-        if (!container || trackId == null) return;
+        if (!container || !hasMedals(trackId)) return;
         injectCSS();
         var oldSlot = container.querySelector(".nsws-medal-badge-slot");
         if (oldSlot) oldSlot.remove();
@@ -60048,7 +60448,7 @@ window.__nswsTrackQuery = function(trackId) {
     }
 
     function handleFinish(trackId, finishSeconds) {
-        if (!enabled) return;
+        if (!enabled || !hasMedals(trackId)) return;
         var finishRunId = runId;
         setTimeout(function () {
             Promise.all([fetchSettledPlacement(trackId), determineTierAsync(trackId, finishSeconds)]).then(function (results) {

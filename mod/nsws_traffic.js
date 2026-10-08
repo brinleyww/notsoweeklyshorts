@@ -167,6 +167,10 @@
         seen(id) {
             seenAnn = id;
         },
+        // The beat reply carries the same online count Race Control shows.
+        refreshOnline() {
+            if (performance.now() - lastBeat >= MIN_GAP_MS) beat(false);
+        },
     };
 
     async function ownerToken() {
