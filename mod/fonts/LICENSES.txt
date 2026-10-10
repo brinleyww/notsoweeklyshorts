@@ -1,4 +1,4 @@
-Fonts used by the chat window (mod/nsws_chat.js)
+Fonts used by the chat window (mod/nsws_chat.js) and the Trackmania 2020 HUD style (main.bundle.js)
 
 Figtree.woff2  - Figtree, Copyright 2022 The Figtree Project Authors (https://github.com/erikdkennedy/figtree).
                  SIL Open Font License 1.1 (below). Latin subset from Fontsource.
@@ -11,6 +11,9 @@ Twemoji.woff2  - Twemoji COLR font (https://github.com/mrdrogdrog/twemoji-color-
 TwemojiCountryFlags.woff2 - from country-flag-emoji-polyfill (MIT, TalkJS,
                  https://github.com/talkjs/country-flag-emoji-polyfill). Flag graphics: Twemoji,
                  Copyright Twitter, Inc. and other contributors, CC-BY 4.0.
+BarlowCondensed.woff2 - Barlow Condensed SemiBold Italic, Copyright 2017 The Barlow Project Authors
+                 (https://github.com/jpt/barlow). SIL Open Font License 1.1 (below). Latin subset
+                 from Fontsource.
 
 ------------------------------------------------------------------------------------------------
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
