@@ -84,7 +84,7 @@ window.__nswsTrackQuery = function(trackId) {
         if (null != tmHudFont)
             return tmHudFont;
         const style = document.createElement("style");
-        style.textContent = "@font-face{font-family:'Barlow Condensed';src:url(mod/fonts/BarlowCondensed.woff2) format('woff2');font-style:italic;font-weight:600;font-display:swap}.tm-split{position:absolute;left:0;right:0;top:30%;display:flex;justify-content:center;gap:5px;pointer-events:none;opacity:0;font:italic 600 36px 'Barlow Condensed','Arial Narrow',ForcedSquare,sans-serif;letter-spacing:.5px;color:#fff;white-space:nowrap}.tm-split *{font:inherit}.tm-split>.tm-plate{transform:skewX(-14deg);padding:0 18px;background:rgba(10,12,20,.72)}.tm-split>.tm-plate>span{display:inline-block;transform:skewX(14deg)}.tm-split>.tm-diff{background:#1e6ff0}.tm-split>.tm-diff.behind{background:#e0302c}";
+        style.textContent = "@font-face{font-family:'Barlow Condensed';src:url(mod/fonts/BarlowCondensed.woff2) format('woff2');font-style:italic;font-weight:600;font-display:swap}.tm-split{position:absolute;left:0;right:0;top:30%;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;opacity:0;font:italic 600 36px 'Barlow Condensed','Arial Narrow',ForcedSquare,sans-serif;letter-spacing:.5px;color:#fff;white-space:nowrap}.tm-split *{font:inherit}.tm-split .tm-row{display:flex;gap:5px}.tm-split .tm-speed{font-size:24px}.tm-split .tm-plate{transform:skewX(-14deg);padding:0 18px;background:rgba(10,12,20,.72)}.tm-split .tm-speed .tm-plate{padding:0 12px}.tm-split .tm-plate>span{display:inline-block;transform:skewX(14deg)}.tm-split .tm-diff{background:#1e6ff0}.tm-split .tm-diff.behind{background:#e0302c}";
         document.head.appendChild(style);
         const done = () => {
             tmHudFontReady = !0;
@@ -26023,22 +26023,41 @@ window.__nswsTrackQuery = function(trackId) {
                         e.cancel();
                     i.get(this, _, "f").length = 0
                 }
-                showTmSplit(e, t) {
+                showTmSplit(e, t, s, o) {
                     useTmHud();
                     let n = this.tmSplit;
+                    const l = '<div class="tm-row"><div class="tm-plate"><span></span></div><div class="tm-plate tm-diff"><span></span></div></div>';
                     null == n && (n = this.tmSplit = document.createElement("div"),
                     n.className = "tm-split",
-                    n.innerHTML = '<div class="tm-plate"><span></span></div><div class="tm-plate tm-diff"><span></span></div>',
-                    i.get(this, v, "f").appendChild(n)),
-                    n.children[0].firstChild.textContent = N.formatTmTime(e, !1);
-                    const r = n.children[1];
-                    if (null == t)
-                        r.style.display = "none";
+                    n.innerHTML = l + l,
+                    n.children[1].classList.add("tm-speed"),
+                    i.get(this, v, "f").appendChild(n));
+                    const [c,h] = n.children[0].children
+                      , [d,u] = n.children[1].children;
+                    if (c.firstChild.textContent = N.formatTmTime(e, !1),
+                    null == t)
+                        h.style.display = "none";
                     else {
                         const a = e.difference(t);
-                        r.style.display = "",
-                        r.firstChild.textContent = N.formatTmTime(a, !0),
-                        r.classList.toggle("behind", a.numberOfFrames > 0)
+                        h.style.display = "",
+                        h.firstChild.textContent = N.formatTmTime(a, !0),
+                        h.classList.toggle("behind", a.numberOfFrames > 0)
+                    }
+                    const p = i.get(this, b, "f").getSettingBoolean(z.A.ImperialUnitsEnabled)
+                      , f = p ? 1.609344 : 1
+                      , g = p ? " mph" : " km/h";
+                    if (null == s)
+                        n.children[1].style.display = "none";
+                    else if (n.children[1].style.display = "",
+                    d.firstChild.textContent = Math.trunc(Math.abs(s) / f) + g,
+                    null == o)
+                        u.style.display = "none";
+                    else {
+                        let a = (Math.abs(s) - Math.abs(o)) / f;
+                        a = Math.abs(a) >= 1 ? Math.trunc(a) : Math.abs(a) >= .1 ? Math.trunc(10 * a) / 10 : Math.abs(a) >= .01 ? Math.trunc(100 * a) / 100 : Math.trunc(1e3 * a) / 1e3,
+                        u.style.display = "",
+                        u.firstChild.textContent = (a < 0 ? "" : "+") + a + g,
+                        u.classList.toggle("behind", a < 0)
                     }
                     i.get(this, _, "f").push(n.animate([{
                         opacity: 0,
@@ -26067,10 +26086,12 @@ window.__nswsTrackQuery = function(trackId) {
                       , s = (n % 1e3).toString().padStart(3, "0");
                     return (t ? e.isNegative() ? "-" : "+" : "") + (t && 0 == r ? a.toString() : r + ":" + a.toString().padStart(2, "0")) + "." + s
                 }
-                showCheckpointTime(e, t) {
+                // Returns true when the checkpoint speed went onto the Trackmania split instead of the speedometer.
+                showCheckpointTime(e, t, n, r) {
                     if ("tm2020" == i.get(this, b, "f").getSetting(z.A.HudStyle))
                         return this.hideCheckpointTime(),
-                        void this.showTmSplit(e, t);
+                        this.showTmSplit(e, t, n, r),
+                        !0;
                     if (this.hideCheckpointTime(),
                     null != i.get(this, E, "f") && null != t && (i.get(this, E, "f").textContent = N.formatTimeString(t, !1),
                     i.get(this, _, "f").push(i.get(this, E, "f").animate([{
@@ -43750,13 +43771,11 @@ window.__nswsTrackQuery = function(trackId) {
             s.addCheckpointCallback((e => {
                 const t = C.get(this, _r, "m", Za).call(this)
                   , n = s.getTime();
-                let i = null;
-                if (null != t && t.checkpoints.length > e && (i = t.checkpoints[e].time),
-                C.get(this, sa, "f").showCheckpointTime(n, i),
-                null != t && t.checkpoints.length > e) {
-                    const n = t.checkpoints[e].speedKmh;
-                    C.get(this, aa, "f").showCheckpointSpeed(s.getSpeedKmh(), n)
-                }
+                let i = null
+                  , r = null;
+                null != t && t.checkpoints.length > e && (i = t.checkpoints[e].time,
+                r = t.checkpoints[e].speedKmh),
+                C.get(this, sa, "f").showCheckpointTime(n, i, s.getSpeedKmh(), r) || null == r || C.get(this, aa, "f").showCheckpointSpeed(s.getSpeedKmh(), r)
             }
             )),
             s.addFinishCallback((e => {
