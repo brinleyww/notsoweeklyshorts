@@ -71,6 +71,8 @@ window.__nswsTrackQuery = function(trackId) {
     let watchClipFunction = () => {};
     let replayLoaderClass;
     let watchingClip;
+    // Set by __nswsWatchRun: where the replay hands back to instead of the clips menu.
+    let afterClipWatch = null;
     let openClipsMenuOnLoad = false;
     let runHasClip = false;
     let openClipsMenu = () => {};
@@ -1277,6 +1279,26 @@ window.__nswsTrackQuery = function(trackId) {
         }
         _playClipNow(clip);
     }
+    // Plays an uploaded run (Race Control's lobby PB review), then calls `done`.
+    window.__nswsWatchRun = async function(run, done) {
+        const RecordingClass = window.__clipRecordingClass;
+        const TimeClass = window.__clipTimeClass;
+        const recording = RecordingClass && TimeClass ? RecordingClass.deserialize(run.recording) : null;
+        if (!recording) return false;
+        let carStyle = null;
+        try {
+            carStyle = window.__clipCarStyleClass?.deserializeSafe(run.carStyle) ?? null;
+        } catch (e) {}
+        if (_currentTrackId() !== run.trackId) {
+            const previous = watchClipFunction;
+            if (!window.__bw_selectTrackById?.(run.trackId)) return false;
+            if (!await _waitForWatchFunctionRebind(previous, 5000)) return false;
+        }
+        watchingClip = true;
+        afterClipWatch = done;
+        watchClipFunction([{ recording, carStyle, nickname: run.nickname, time: new TimeClass(run.frames), isSelf: false }]);
+        return true;
+    };
     function framesToTime(frames) {
         // A game frame is one millisecond (the game's own timer divides frames by 1000).
         var ms = frames;
@@ -44149,7 +44171,7 @@ window.__nswsTrackQuery = function(trackId) {
                     }
                     ;
                     e(w.multiplayerConnection);
-                    const t = .15;
+                    const t = w.multiplayerConnection.remoteDelay ?? .15;
                     if (w.multiplayerConnection.addConnectionLostCallback(C.set(this, ka, (e => {
                         S(e)
                     }
@@ -53988,6 +54010,20 @@ window.__nswsTrackQuery = function(trackId) {
             x.appendChild(S),
             C.get(this, Nc, "f").appendChild(x),
             C.get(this, Dc, "f").push(x);
+            if (window.__nswsLobby) {
+                const mpBtn = document.createElement("button");
+                mpBtn.className = "button button-image";
+                mpBtn.innerHTML = '<img src="images/multiplayer.svg">';
+                mpBtn.addEventListener("click", () => {
+                    n.playUIClick();
+                    window.__nswsLobby.open();
+                });
+                const mpText = document.createElement("p");
+                mpText.textContent = t.get("Multiplayer");
+                mpBtn.appendChild(mpText);
+                C.get(this, Nc, "f").appendChild(mpBtn);
+                C.get(this, Dc, "f").push(mpBtn);
+            }
             const T = document.createElement("button");
             T.className = "button button-image",
             T.innerHTML = '<img src="images/play.svg">',
@@ -57963,7 +57999,7 @@ window.__nswsTrackQuery = function(trackId) {
                         else {
                             window.__nswsTraffic?.event("uploads", r);
                             const __nswsWeek = window.__nswsTrackWeek(r)
-                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek);
+                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? ""));
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;
@@ -59658,6 +59694,21 @@ window.__nswsTrackQuery = function(trackId) {
             }
             ;
             window.__bw_returnToMenu = () => M(!1, null);
+            // For mod/nsws_lobby.js: lobby rounds run in the game's own multiplayer race.
+            window.__nswsMp = {
+                startRace: (meta, trackData, mp) => W(meta, trackData, "community", [], mp),
+                toMenu: () => M(!1, null),
+                forEachTrack: cb => y.forEachCommunityTrack(cb),
+                profile: () => w.getCurrentUserProfile(),
+                messageBox: E,
+                CarState: Kt,
+                CarStyle: jt.A,
+                Time: yt.A,
+                pako: Ht.Ay,
+                GameMode: Yt,
+                country: Gn.j,
+                formatTime: e => Ve.A.formatTimeString(e)
+            };
             window.__nswsMessageBox = E;
             const _ = () => {
                 o.trigger((async () => {
@@ -59780,7 +59831,7 @@ window.__nswsTrackQuery = function(trackId) {
                     ),j,d,( (e, t, n, i) => {
                         if (null == c)
                             throw new Error("Tried to start new multiplayer session without a multiplayer connection");
-                        W(n, i, "custom", [], {
+                        W(n, i, c.multiplayerConnection.playCategory ?? "custom", [], {
                             multiplayerConnection: c.multiplayerConnection,
                             sessionId: e,
                             gameMode: t
@@ -59800,7 +59851,7 @@ window.__nswsTrackQuery = function(trackId) {
                             showClipSkyOverlay(),
                             watchingClip = false,
                             M(!1, null),
-                            openClipsMenu(),
+                            afterClipWatch ? (afterClipWatch(), afterClipWatch = null) : openClipsMenu(),
                             setTimeout(hideClipSkyOverlay, 400)
                         } else
                             W(e, t, n, i, null)

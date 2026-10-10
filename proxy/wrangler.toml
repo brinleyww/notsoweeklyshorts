@@ -92,3 +92,16 @@ class_name = "Accounts"
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["Accounts"]
+
+# Multiplayer (src/lobby.js): one LobbyRoom per lobby code, and the directory of codes and public lobbies.
+[[durable_objects.bindings]]
+name = "LOBBY"
+class_name = "LobbyRoom"
+
+[[durable_objects.bindings]]
+name = "LOBBY_DIR"
+class_name = "LobbyDirectory"
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["LobbyRoom", "LobbyDirectory"]

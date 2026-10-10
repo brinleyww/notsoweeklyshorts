@@ -22,6 +22,7 @@
         "no-recording": "Recording missing",
         "unreadable": "Recording unreadable",
         "bad-time": "Impossible time",
+        "owner-hidden": "You hid it (lobby PB review)",
     };
 
     const CSS = `
@@ -1105,6 +1106,66 @@
         }
         body.appendChild(blocked);
         body.appendChild(el("div", "nrc-foot", "Owner only. Refreshes every minute while this tab is open."));
+        renderLobbyRuns(body, a, blocked);
+    }
+
+    // Personal bests set in multiplayer lobbies. They already passed the replay check and stay up
+    // unless hidden here; Watch plays the uploaded run, then comes back to this tab.
+    function renderLobbyRuns(body, a, before) {
+        const counts = Object.fromEntries((a.lobbyCounts || []).map((c) => [c.state, c.n]));
+        const box = card("Lobby PBs to review", "multiplayer",
+            "Personal bests set in multiplayer lobbies. They passed the replay check and are on the boards. Watch each one, then Verify it or Hide it from the boards. " +
+            num(counts.verified || 0) + " verified, " + num(counts.hidden || 0) + " hidden so far.");
+        box.style.marginBottom = "14px";
+        const list = a.lobby || [];
+        if (!list.length) box.appendChild(el("div", "nrc-empty", "Nothing waiting."));
+        else {
+            const small = (text, onClick) => {
+                const b = el("button", "button", text);
+                b.style.cssText = "font-size:13px;padding:4px 12px;margin-left:4px;";
+                b.addEventListener("click", () => onClick(b));
+                return b;
+            };
+            const decide = async (r, verdict, b) => {
+                b.disabled = true;
+                try {
+                    await post("anticheat/lobby", { id: r.id, verdict });
+                } catch {}
+                loadAnti();
+            };
+            box.appendChild(table(
+                [["Set", "num"], ["Player", "name"], ["Track", "name"], ["Time", "num"], ["Lobby"], [""]],
+                list.map((r) => {
+                    const actions = el("span");
+                    actions.style.whiteSpace = "nowrap";
+                    actions.appendChild(small("Watch", (b) => watchLobbyRun(r, b)));
+                    actions.appendChild(small("Verify", (b) => decide(r, "verified", b)));
+                    actions.appendChild(small("Hide", (b) => decide(r, "hidden", b)));
+                    return [fmt.dateTime(r.at), r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), r.lobby || "", actions];
+                })));
+        }
+        body.insertBefore(box, before);
+    }
+
+    async function watchLobbyRun(r, b) {
+        b.disabled = true;
+        let run = null;
+        try {
+            run = await post("anticheat/lobby/run", { id: r.id });
+        } catch {}
+        b.disabled = false;
+        if (!run || !window.__nswsWatchRun) {
+            b.textContent = "No replay";
+            return;
+        }
+        close();
+        const back = () => {
+            ui.tab = "anticheat";
+            open();
+            loadAnti();
+        };
+        const started = await window.__nswsWatchRun({ trackId: run.track, recording: run.recording, frames: run.frames, nickname: run.nickname, carStyle: run.carStyle }, back);
+        if (!started) back();
     }
 
     function annName() {

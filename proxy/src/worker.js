@@ -5,8 +5,9 @@ import { TrafficStats, readBeat, readAnnouncement, describeClient } from "./traf
 import { AntiCheat, RunChecker } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
+import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -656,6 +657,14 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
             state: check.state, recording: check.state === "pending" ? check.recording : null,
         });
+        // A personal best set in a multiplayer lobby also goes on the owner's review list.
+        const lobby = (url.searchParams.get("nswsLobby") || "").toUpperCase();
+        if (LOBBY_CODE.test(lobby)) {
+            await anti.lobbyRun({
+                track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames, lobby,
+                carStyle: (form.get("carStyle") ?? "").slice(0, 256), recording: check.recording,
+            }).catch((err) => console.error("lobby review failed:", err && err.message));
+        }
     }
     if (!response.ok || !result || typeof result !== "object" || !Number.isSafeInteger(result.newPosition)) {
         return new Response(text, {
@@ -960,6 +969,15 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         }
         return plain(404, "Not found", origin);
     }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/lobby") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        return json(await anti.lobbyVerdict(body.id, body.verdict), origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/lobby/run") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        const run = await anti.lobbyRecording(body.id);
+        return run ? json(run, origin) : plain(404, "Not found", origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.approve(body.id), origin);
@@ -1007,6 +1025,43 @@ async function handleChat(request, url, env, fromSite, origin) {
     });
 }
 
+// A refusal the page can read: a failed WebSocket handshake only ever shows as a bare close.
+function socketRefusal(text) {
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].send(JSON.stringify({ t: "err", text }));
+    pair[1].close(4029, "Refused");
+    return new Response(null, { status: 101, webSocket: pair[0] });
+}
+
+// Multiplayer (src/lobby.js). /lobby/list is the public lobby list; /lobby/ws is a lobby's
+// WebSocket, either ?code=XXXXX to join or ?create=1 for a new lobby. Only the site can use them.
+async function handleLobby(request, url, env, fromSite, origin) {
+    if (!fromSite) return forbidden();
+    if (url.pathname === TRAFFIC_PREFIX + "lobby/list") {
+        if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+        if (!env.LOBBY_DIR) return plain(503, "Multiplayer is off", origin);
+        if (request.method !== "GET") return plain(405, "Method not allowed", origin);
+        return json(await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).list(), origin);
+    }
+    if (url.pathname !== TRAFFIC_PREFIX + "lobby/ws") return plain(404, "Not found", origin);
+    if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
+    if (!env.LOBBY || !env.LOBBY_DIR) return socketRefusal("Multiplayer is off right now.");
+    const ip = (await sha256Hex("nsws-lobby-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+    const headers = new Headers(request.headers);
+    let code = String(url.searchParams.get("code") || "").trim().toUpperCase();
+    if (url.searchParams.get("create") === "1") {
+        code = await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).reserve(ip);
+        if (!code) return socketRefusal("Too many new lobbies from your network. Try again in a few minutes.");
+        headers.set("X-Lobby-Create", "1");
+    } else if (!LOBBY_CODE.test(code)) {
+        return socketRefusal("That isn't a lobby code.");
+    }
+    headers.set("X-Lobby-Code", code);
+    headers.set("X-Lobby-Ip", ip);
+    return env.LOBBY.get(env.LOBBY.idFromName(code)).fetch(new Request(request, { headers }));
+}
+
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -1019,6 +1074,14 @@ export default {
             const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
+            }
+            if (url.pathname.startsWith(TRAFFIC_PREFIX + "lobby/")) {
+                try {
+                    return await handleLobby(request, url, env, fromSite, requestOrigin);
+                } catch (err) {
+                    console.error("lobby error:", err && err.message);
+                    return plain(500, "Multiplayer failed", requestOrigin);
+                }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags)\//.test(url.pathname)) {
                 try {

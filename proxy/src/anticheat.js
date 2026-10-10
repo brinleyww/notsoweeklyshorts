@@ -52,6 +52,13 @@ export class AntiCheat extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS queue (
             qid INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, track TEXT NOT NULL, week INTEGER,
             user_id TEXT, nickname TEXT, frames INTEGER NOT NULL, recording TEXT, added INTEGER NOT NULL)`);
+        // Personal bests set in a multiplayer lobby, kept for the owner to watch. state: review |
+        // verified | hidden. The recording is dropped once the owner has decided.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS lobby_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, upload_id INTEGER, track TEXT NOT NULL, week INTEGER,
+            user_id TEXT, nickname TEXT, frames INTEGER NOT NULL, lobby TEXT, car_style TEXT, recording TEXT,
+            state TEXT NOT NULL DEFAULT 'review', at INTEGER NOT NULL)`);
+        this.sql.exec("CREATE INDEX IF NOT EXISTS lobby_runs_state ON lobby_runs(state, at)");
     }
 
     board(track, week, entries) {
@@ -236,6 +243,36 @@ export class AntiCheat extends DurableObject {
         return { stored: tracks.length };
     }
 
+    async lobbyRun(r) {
+        this.sql.exec(`INSERT INTO lobby_runs (upload_id, track, week, user_id, nickname, frames, lobby, car_style, recording, at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            Number.isSafeInteger(r.uploadId) ? r.uploadId : null, r.track, r.week, r.userId, r.nickname, r.frames,
+            r.lobby, r.carStyle, r.recording, Date.now());
+    }
+
+    async lobbyRecording(id) {
+        const row = this.sql.exec("SELECT track, nickname, frames, car_style, recording FROM lobby_runs WHERE id = ?", id).toArray()[0];
+        return row?.recording ? { track: row.track, nickname: row.nickname, frames: row.frames, carStyle: row.car_style, recording: row.recording } : null;
+    }
+
+    // "verified" keeps the run up; "hidden" takes it off the boards like a failed replay.
+    async lobbyVerdict(id, verdict) {
+        const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
+        if (!row || (verdict !== "verified" && verdict !== "hidden")) return { ok: false };
+        this.sql.exec("UPDATE lobby_runs SET state = ?, recording = NULL, at = ? WHERE id = ?", verdict, Date.now(), id);
+        if (verdict === "hidden") {
+            if (row.upload_id != null) {
+                this.saveRun(row.track, row.week, { id: row.upload_id, userId: row.user_id, nickname: row.nickname, frames: row.frames },
+                    "invalid", "lobby", "owner-hidden");
+            }
+            if (row.user_id) {
+                this.sql.exec("DELETE FROM passes WHERE track = ? AND user_id = ? AND frames = ?", row.track, row.user_id, row.frames);
+                this.boards.get(row.track)?.passes.delete(row.user_id + "|" + row.frames);
+            }
+        }
+        return { ok: true };
+    }
+
     async approve(id) {
         const row = this.sql.exec("SELECT track FROM runs WHERE id = ?", id).toArray()[0];
         if (!row) return { ok: false };
@@ -257,6 +294,9 @@ export class AntiCheat extends DurableObject {
         const blocked = this.sql.exec(`SELECT id, track, week, user_id, nickname, frames, source, reason, at FROM runs
             WHERE state = 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
         const boards = this.sql.exec("SELECT COUNT(*) AS n FROM boards").one().n;
-        return { tracks, counts, queue, rejects, rejectTotals, blocked, boards };
+        const lobby = this.sql.exec(`SELECT id, upload_id, track, week, user_id, nickname, frames, lobby, at FROM lobby_runs
+            WHERE state = 'review' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
+        const lobbyCounts = this.sql.exec("SELECT state, COUNT(*) AS n FROM lobby_runs GROUP BY state").toArray();
+        return { tracks, counts, queue, rejects, rejectTotals, blocked, boards, lobby, lobbyCounts };
     }
 }
