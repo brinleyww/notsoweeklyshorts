@@ -64,6 +64,7 @@ const site = window as unknown as {
   __nswsCupHostOptions?: (HostSettings & { chat: string }) | null;
   __nswsCupPool?: MapPool;
   __nswsUIClick?: () => void;
+  __nswsCupKeysPanel?: () => void;
 };
 const MAIN = ['Summer', 'Winter', 'Desert'];
 const CODE = /^[A-HJ-NP-Z2-9]{5}$/;
@@ -99,7 +100,11 @@ const CSS = `
 .nsws-cup .dim{opacity:.6}
 .nsws-cup .field{display:flex;align-items:center;gap:10px;font-size:19px;flex-wrap:wrap}
 .nsws-cup .field label{flex:0 0 120px;opacity:.8}
-.nsws-cup .field input[type=range]{flex:1;min-width:100px}
+.nsws-cup .field input[type=range]{flex:1;width:auto;min-width:0;margin:0 4px}
+.nsws-cup input[type=range]::-webkit-slider-runnable-track{height:6px}
+.nsws-cup input[type=range]::-webkit-slider-thumb{width:14px;height:20px;margin:-7px 0 0;border-width:3px;outline-width:1px}
+.nsws-cup input[type=range]::-moz-range-track{height:6px}
+.nsws-cup input[type=range]::-moz-range-thumb{width:8px;height:14px;border-width:3px;outline-width:1px}
 .nsws-cup .hint{font-size:15px;opacity:.65}
 .nsws-cup .error{color:#ff9a9a;font-size:17px;min-height:20px}
 .nsws-cup .list{display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:46vh}
@@ -234,7 +239,11 @@ export class CompetitionsHub {
   #build() {
     const panel = el('div', 'panel');
     const head = el('div', 'head');
-    head.append(el('h2', undefined, 'Competitions'), button('Close', () => this.close(), 'small'));
+    head.append(
+      el('h2', undefined, 'Competitions'),
+      button('Keys', () => site.__nswsCupKeysPanel?.(), 'small'),
+      button('Close', () => this.close(), 'small'),
+    );
     const body = el('div', 'body');
 
     const left = el('div', 'col');
@@ -307,7 +316,7 @@ export class CompetitionsHub {
       visField,
       maxField,
       mapsField,
-      el('div', 'hint', 'Racers and spectators both take a place in the room (a cup races 2 to 8). You pick the format and rules in the cup panel once the room is open.'),
+      el('div', 'hint', 'Racers and spectators both take a place in the room (a cup races 2 to 8). You pick the format and rules in the cup panel once the room is open. Keys (top right) lists every key a cup uses.'),
       button('Host', () => {
         settings.name = name.value.trim();
         try {

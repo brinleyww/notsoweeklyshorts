@@ -22,6 +22,27 @@ import { recordTrack, sessionRecord, standings } from './standings.ts';
 import { formatGap, formatTime as time } from './time.ts';
 import { CupToolbar } from './toolbar.ts';
 import css from './world-cup.css';
+
+// Not So Weekly Shorts: these keys are set in the game's Settings (Competitions) or the Keys list.
+type SiteKey = 'scoreboard' | 'spectatePrevious' | 'spectateNext';
+const siteKeys = () =>
+  (
+    window as unknown as {
+      __nswsCupKeys?: Record<SiteKey, () => string> & {
+        matches(event: KeyboardEvent, binding: string): boolean;
+        format(binding: string): string;
+      };
+    }
+  ).__nswsCupKeys;
+const defaultKeys: Record<SiteKey, string> = {
+  scoreboard: 'Tab',
+  spectatePrevious: 'BracketLeft',
+  spectateNext: 'BracketRight',
+};
+const siteKey = (id: SiteKey) => siteKeys()?.[id]() ?? defaultKeys[id];
+const keyIs = (event: KeyboardEvent, id: SiteKey) =>
+  siteKeys()?.matches(event, siteKey(id)) ?? event.code === defaultKeys[id];
+const keyLabel = (id: SiteKey) => siteKeys()?.format(siteKey(id)) ?? siteKey(id);
 const names = {
   registration: 'Registration',
   loading: 'Preparing round',
@@ -192,7 +213,7 @@ export class CupUI {
           event.stopImmediatePropagation();
           return;
         }
-        if (event.code !== 'Tab') return;
+        if (!keyIs(event, 'scoreboard')) return;
         if (this.#peekCup) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -204,10 +225,6 @@ export class CupUI {
           !state ||
           state.phase === 'registration' ||
           isEditing(event) ||
-          event.ctrlKey ||
-          event.altKey ||
-          event.metaKey ||
-          event.shiftKey ||
           document.querySelector('dialog[open]')
         )
           return;
@@ -223,7 +240,7 @@ export class CupUI {
     window.addEventListener(
       'keyup',
       (event) => {
-        if (event.code === 'Tab' && this.#peekCup) {
+        if (event.code === siteKey('scoreboard').split('+').pop() && this.#peekCup) {
           event.preventDefault();
           event.stopImmediatePropagation();
           this.endScoreboardPeek();
@@ -274,10 +291,10 @@ export class CupUI {
       if (
         !['INPUT', 'TEXTAREA', 'SELECT'].includes(this.#shadow.activeElement?.tagName ?? '') &&
         this.#c.canSpectate() &&
-        ['BracketLeft', 'BracketRight'].includes(e.code)
+        (keyIs(e, 'spectatePrevious') || keyIs(e, 'spectateNext'))
       ) {
         e.preventDefault();
-        this.#c.cycleWatch(e.code === 'BracketLeft' ? -1 : 1);
+        this.#c.cycleWatch(keyIs(e, 'spectatePrevious') ? -1 : 1);
       }
     });
   }
@@ -568,7 +585,10 @@ export class CupUI {
         rules.setAttribute('aria-haspopup', 'dialog');
         header.append(rules);
       }
-      header.append(hide);
+      // Not So Weekly Shorts: every key a cup uses, and rebinding them (polycup/nsws/keys.ts).
+      const keysButton = this.button('Keys', () => (window as unknown as { __nswsCupKeysPanel?: () => void }).__nswsCupKeysPanel?.(), 'quiet header-rules');
+      keysButton.setAttribute('aria-haspopup', 'dialog');
+      header.append(keysButton, hide);
       this.#panel.append(header);
       if (c.error) {
         const error = h('p', c.error, 'error');
@@ -1670,8 +1690,8 @@ export class CupUI {
     const previous = this.button('', () => c.cycleWatch(-1), 'pov-cycle previous');
     const next = this.button('', () => c.cycleWatch(1), 'pov-cycle next');
     for (const [button, label, key] of [
-      [previous, 'Previous racer', '['],
-      [next, 'Next racer', ']'],
+      [previous, 'Previous racer', keyLabel('spectatePrevious')],
+      [next, 'Next racer', keyLabel('spectateNext')],
     ] as const) {
       button.setAttribute('aria-label', `${label} (${key})`);
       button.setAttribute('aria-keyshortcuts', key);

@@ -238,7 +238,7 @@ window.__nswsTrackQuery = function(trackId) {
         return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
     }
     function isKeyBindingInUse(binding) {
-        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
         return all.some(b => null != b && sameKeyBinding(b, binding));
     }
     // What each key last went down as, so its release matches the same bindings
@@ -384,8 +384,61 @@ window.__nswsTrackQuery = function(trackId) {
             localStorage.setItem(CUP_SPECTATE_STORAGE_KEY, enabled ? "true" : "false");
         } catch (e) {}
     }
+    // The cup's other keys: hold to see the standings, and the racer to watch while spectating.
+    const CUP_KEYS = [["scoreboard", "Show the cup standings (hold)", "_cupScoreboardKeyBind", "Tab"], ["spectatePrevious", "Watch the previous racer", "_cupSpectatePrevKeyBind", "BracketLeft"], ["spectateNext", "Watch the next racer", "_cupSpectateNextKeyBind", "BracketRight"]].map(([id, label, storageKey, fallback]) => ({
+        id,
+        label,
+        get() {
+            try {
+                return localStorage.getItem(storageKey) || fallback;
+            } catch (e) {
+                return fallback;
+            }
+        },
+        set(code) {
+            try {
+                localStorage.setItem(storageKey, code);
+            } catch (e) {}
+        }
+    }));
+    const cupKey = id => CUP_KEYS.find(k => k.id === id);
+    // Every key a cup uses, for the Keys list (polycup/nsws/keys.ts). Game keys have two slots
+    // and are saved like Settings -> Controls; "fixed" ones can't be changed.
+    const GAME_CUP_KEYS = [[0, "Accelerate"], [2, "Brake"], [3, "Turn left"], [1, "Turn right"], [4, "Reset to checkpoint"], [5, "Restart"], [6, "Cockpit camera"], [7, "Hide the HUD"], [8, "Pause"]];
+    function cupKeyList() {
+        const own = (id, label, get, set) => ({ id, group: "Competitions", label, keys: [get()], set: (slot, code) => set(code) });
+        return [
+            own("chat", "Open cup chat", getCupChatKeyBind, setCupChatKeyBind),
+            own("ghosts", "Show / hide other players' ghosts", getGhostsKeyBind, setGhostsKeyBind),
+            ...CUP_KEYS.map(k => own(k.id, k.label, k.get, k.set)),
+            { id: "send", group: "Competitions", label: "Send a chat message", keys: ["Enter"], fixed: !0 },
+            { id: "close", group: "Competitions", label: "Close the chat or cup panel", keys: ["Escape"], fixed: !0 },
+            ...GAME_CUP_KEYS.map(([bind, label]) => ({
+                id: "game" + bind,
+                group: "Racing",
+                label,
+                keys: keyBindSettings ? [...keyBindSettings.getKeyBindings(bind)] : [null, null],
+                set(slot, code) {
+                    if (!keyBindSettings) return;
+                    const keys = [...keyBindSettings.getKeyBindings(bind)];
+                    keys[slot] = code;
+                    keyBindSettings.setKeyBindings(new Map([[bind, keys]]));
+                }
+            }))
+        ];
+    }
     // For mod/polycup.js, which is only fetched once someone opens Competitions or a cup link.
-    window.__nswsCupKeys = { chat: getCupChatKeyBind, ghosts: getGhostsKeyBind, matches: (e, binding) => keyBindingMatches(e, binding) };
+    window.__nswsCupKeys = {
+        chat: getCupChatKeyBind,
+        ghosts: getGhostsKeyBind,
+        scoreboard: () => cupKey("scoreboard").get(),
+        spectatePrevious: () => cupKey("spectatePrevious").get(),
+        spectateNext: () => cupKey("spectateNext").get(),
+        matches: (e, binding) => keyBindingMatches(e, binding),
+        list: cupKeyList,
+        format: formatClipKeyName,
+        record: recordKeyBinding
+    };
     let cupApp = null;
     function loadCompetitions() {
         cupApp ??= new Promise((resolve, reject) => {
@@ -51411,6 +51464,21 @@ window.__nswsTrackQuery = function(trackId) {
                 _wrap.appendChild(_keyBtn);
                 _row.appendChild(_wrap);
                 _container.appendChild(_row);
+                for (const key of CUP_KEYS) {
+                    const row = document.createElement("div");
+                    row.className = "setting key-binding";
+                    const label = document.createElement("p");
+                    label.textContent = key.label;
+                    row.appendChild(label);
+                    const wrap = document.createElement("div");
+                    wrap.className = "button-wrapper";
+                    const button = document.createElement("button");
+                    button.className = "button";
+                    bindKeyBindingButton(button, key.get, key.set);
+                    wrap.appendChild(button);
+                    row.appendChild(wrap);
+                    _container.appendChild(row);
+                }
             }
             )(),
             ( () => {

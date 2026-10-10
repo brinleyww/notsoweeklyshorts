@@ -5,6 +5,7 @@ import { Controller } from '../src/controller.ts';
 import { CupUI } from '../src/ui.ts';
 import { installTransport } from './transport.js';
 import { CompetitionsHub, poolLabel, type MapPool } from './hub.ts';
+import { KeysPanel } from './keys.ts';
 
 type KeyBinding = { getter: () => string; callback: (event: KeyboardEvent) => void };
 type Keys = { chat(): string; ghosts(): string; matches(event: KeyboardEvent, binding: string): boolean };
@@ -17,6 +18,7 @@ const site = window as unknown as {
   __nswsCupRoom?: () => { code: string; secret: string | null } | null;
   __nswsCupPool?: MapPool;
   __nswsCupPoolLabel?: () => string;
+  __nswsCupKeysPanel?: () => void;
 };
 
 installTransport();
@@ -61,6 +63,8 @@ ui = new CupUI(controller);
 ui.render();
 
 const hub = new CompetitionsHub(controller);
+const keysPanel = new KeysPanel();
+site.__nswsCupKeysPanel = () => keysPanel.open();
 
 // Personal bests set in a cup upload with the cup code, so Race Control holds them for review.
 site.__nswsLobbyTag = () => {

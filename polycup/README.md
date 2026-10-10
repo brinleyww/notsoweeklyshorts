@@ -46,6 +46,9 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `ui.ts`, `controller.ts`: no "Create a Simple Cup" screen (the cup is named before the room opens),
   and no autosave or restore (a new room has a new code, so a restored cup couldn't reach its racers).
 - `main.ts` and `version-check.ts` (PolyModLoader only) are removed.
+- `ui.ts`: the standings peek (Tab) and the spectator keys ([ and ]) are rebindable, and a Keys button
+  in the header opens `nsws/keys.ts`, the list of every key a cup uses (also on the Competitions
+  screen). Its game keys are saved the same way as Settings -> Controls.
 - `invite.ts`: a Link button that copies `?cup=CODE`.
 - `ui.ts`, `toolbar.ts`: no F8 shortcut (the menu button and the race toolbar open the panel), no
   version label over the menus, and the HUD layout pass is throttled and only watches the game UI.
