@@ -130,9 +130,12 @@ window.__nswsTrackQuery = function(trackId) {
                     homeEl.style.removeProperty("pointer-events");
                 }
             }
+            hudHiding = hide || clipsMenuOpen;
         }
+        // While something is hidden, re-apply every frame in case the game restyles it.
+        var hudHiding = true;
         requestAnimationFrame(function _clipHudLoop() {
-            applyHudState();
+            if (hudHiding || watchingClip) applyHudState();
             requestAnimationFrame(_clipHudLoop);
         });
         new MutationObserver(applyHudState).observe(document.body, {
@@ -5959,8 +5962,9 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, M, "f").updateProjectionMatrix())
                 }
                 e = i.get(this, x, "f")?.getSettingBoolean(W.A.ScreenPixelDensity) ?? 1 ? window.devicePixelRatio : 1;
+                // Low performance mode draws at most one pixel per CSS pixel: a phone's 3x screen is 9x the GPU work.
                 const n = i.get(this, k, "f").getPixelRatio()
-                  , a = Math.min(i.get(this, k, "f").capabilities.maxTextureSize / window.innerWidth, i.get(this, k, "f").capabilities.maxTextureSize / window.innerHeight)
+                  , a = Math.min(i.get(this, k, "f").capabilities.maxTextureSize / window.innerWidth, i.get(this, k, "f").capabilities.maxTextureSize / window.innerHeight, i.get(this, x, "f")?.getSettingBoolean(W.A.LowPerformanceMode) ? 1 : 1 / 0)
                   , s = Math.min(e * t, a);
                 n != s && i.get(this, k, "f").setPixelRatio(s)
             }
@@ -26061,6 +26065,27 @@ window.__nswsTrackQuery = function(trackId) {
                         s + i.toString().padStart(2, "0") + ":" + r.toString().padStart(2, "0") + "." + a.toString().padStart(3, "0")
                     }
                 }
+                // Rebuilding every digit span each frame churns DOM nodes and fires every page-wide MutationObserver.
+                static setDigits(e, t, n) {
+                    const i = e.children;
+                    if (i.length != t.length) {
+                        e.innerHTML = "";
+                        for (let i = 0; i < t.length; ++i) {
+                            const r = document.createElement("span");
+                            0 == i && n && (r.className = "sign"),
+                            r.textContent = t[i],
+                            e.appendChild(r)
+                        }
+                        return
+                    }
+                    for (let e = 0; e < i.length; ++e) {
+                        const r = i[e]
+                          , a = r.firstChild
+                          , s = 0 == e && n ? "sign" : "";
+                        null != a && 3 == a.nodeType ? a.nodeValue != t[e] && (a.nodeValue = t[e]) : r.textContent = t[e],
+                        r.className != s && (r.className = s)
+                    }
+                }
                 update(e) {
                     const t = e.getFinishTime() ?? e.getTime();
                     let n;
@@ -26068,36 +26093,20 @@ window.__nswsTrackQuery = function(trackId) {
                     null != i.get(this, C, "f")) {
                         const e = N.formatTimeString(this.record, !1);
                         if (e != i.get(this, I, "f")) {
-                            i.get(this, C, "f").innerHTML = "";
-                            for (const t of e) {
-                                const e = document.createElement("span");
-                                e.textContent = t,
-                                i.get(this, C, "f").appendChild(e)
-                            }
+                            N.setDigits(i.get(this, C, "f"), e, !1),
                             i.set(this, I, e, "f")
                         }
                         null == this.record ? "small center" != i.get(this, C, "f").className && (i.get(this, C, "f").className = "small center") : "small" != i.get(this, C, "f").className && (i.get(this, C, "f").className = "small")
                     }
                     const r = N.formatTimeString(t, !1);
                     if (r != i.get(this, L, "f")) {
-                        i.get(this, R, "f").innerHTML = "";
-                        for (const e of r) {
-                            const t = document.createElement("span");
-                            t.textContent = e,
-                            i.get(this, R, "f").appendChild(t)
-                        }
+                        N.setDigits(i.get(this, R, "f"), r, !1),
                         i.set(this, L, r, "f")
                     }
                     if (null != i.get(this, P, "f")) {
                         const e = N.formatTimeString(n, !0);
                         if (e != i.get(this, U, "f")) {
-                            i.get(this, P, "f").innerHTML = "";
-                            for (let t = 0; t < e.length; ++t) {
-                                const r = document.createElement("span");
-                                0 == t && Number.isFinite(n) && (r.className = "sign"),
-                                r.textContent = e[t],
-                                i.get(this, P, "f").appendChild(r)
-                            }
+                            N.setDigits(i.get(this, P, "f"), e, Number.isFinite(n)),
                             i.set(this, U, e, "f")
                         }
                         null == n ? "small center" != i.get(this, P, "f").className && (i.get(this, P, "f").className = "small center") : n.isNegative() ? "small green" != i.get(this, P, "f").className && (i.get(this, P, "f").className = "small green") : "small red" != i.get(this, P, "f").className && (i.get(this, P, "f").className = "small red")
@@ -30282,6 +30291,8 @@ window.__nswsTrackQuery = function(trackId) {
                 return new Uint8Array(e)
             }
             ;
+            // Every restart sends the track to the physics worker, and compressing it twice at level 9 stalls weak devices.
+            const trackSaveStrings = new WeakMap;
             const TrackData = class {
                 constructor(environment, sunDirection) {
                     i.add(this),
@@ -30397,6 +30408,10 @@ window.__nswsTrackQuery = function(trackId) {
                     return null
                 }
                 toSaveString() {
+                    const id = this.getId()
+                      , cached = trackSaveStrings.get(this);
+                    if (cached && cached.id === id)
+                        return cached.value;
                     const e = d.get(this, i, "m", h).call(this)
                       , t = new u.Ay.Deflate({
                         level: 9,
@@ -30410,8 +30425,13 @@ window.__nswsTrackQuery = function(trackId) {
                         windowBits: 15,
                         memLevel: 9
                     });
-                    return r.push(n, !0),
-                    Base62.encode(r.result)
+                    r.push(n, !0);
+                    const value = Base62.encode(r.result);
+                    return trackSaveStrings.set(this, {
+                        id,
+                        value
+                    }),
+                    value
                 }
                 toExportString(e) {
                     const t = (new TextEncoder).encode(e.name);
@@ -40746,11 +40766,19 @@ window.__nswsTrackQuery = function(trackId) {
                 n = C.get(this, Ge, "f") ? t / 1.609344 : t;
                 const i = Math.trunc(n).toString();
                 if (i != C.get(this, Be, "f")) {
-                    C.get(this, Ne, "f").innerHTML = "";
-                    for (const e of i) {
-                        const t = document.createElement("span");
-                        t.textContent = e,
-                        C.get(this, Ne, "f").appendChild(t)
+                    const r = C.get(this, Ne, "f").children;
+                    if (r.length == i.length)
+                        for (let e = 0; e < i.length; ++e) {
+                            const t = r[e].firstChild;
+                            null != t && 3 == t.nodeType ? t.nodeValue != i[e] && (t.nodeValue = i[e]) : r[e].textContent = i[e]
+                        }
+                    else {
+                        C.get(this, Ne, "f").innerHTML = "";
+                        for (const e of i) {
+                            const t = document.createElement("span");
+                            t.textContent = e,
+                            C.get(this, Ne, "f").appendChild(t)
+                        }
                     }
                     C.set(this, Be, i, "f")
                 }
@@ -60632,14 +60660,14 @@ window.__nswsTrackQuery = function(trackId) {
         }
         prevInGame = inGame;
         if (!inGame) {
-            cpsEl.classList.add("hidden");
+            setHidden(true);
             return;
         }
         if (window.__PolyFX && window.__PolyFX.photo && window.__PolyFX.photo.active) {
-            cpsEl.classList.add("hidden");
+            setHidden(true);
             return;
         }
-        cpsEl.classList.remove("hidden");
+        setHidden(false);
 
         var playerState = typeof window.__getPlayerState === "function" ? window.__getPlayerState() : null;
         var controls = playerState && typeof playerState.getControls === "function" ? playerState.getControls() : null;
@@ -60676,9 +60704,17 @@ window.__nswsTrackQuery = function(trackId) {
             var now = performance.now();
             var cutoff = now - 1e3;
             while (inputTimes.length && inputTimes[0] < cutoff) inputTimes.shift();
-            burstSpan.textContent = inputTimes.length;
+            setText(burstSpan.firstChild, String(inputTimes.length));
         }
-        cpsEl.childNodes[0].nodeValue = totalInputs + "/";
+        setText(cpsEl.firstChild, totalInputs + "/");
+    }
+
+    // Writing the DOM every frame, even unchanged, runs every page-wide MutationObserver and restyles the HUD.
+    function setText(node, text) {
+        if (node.nodeValue !== text) node.nodeValue = text;
+    }
+    function setHidden(hidden) {
+        if (cpsEl.classList.contains("hidden") !== hidden) cpsEl.classList.toggle("hidden", hidden);
     }
 
     function tryInit() {

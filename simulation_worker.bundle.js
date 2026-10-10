@@ -13050,6 +13050,7 @@
                 }
             }();
             const e = [];
+            let createCarTrack = null;
             function i(i) {
                 const s = i.data;
                 switch (s.messageType) {
@@ -13143,7 +13144,12 @@
                     }
                 case Ki.CreateCar:
                     !function(t) {
-                        const i = Zo.fromSaveString(t.trackData);
+                        // Restarts resend the same track; only reading methods are used on it.
+                        null != createCarTrack && createCarTrack.saveString === t.trackData || (createCarTrack = {
+                            saveString: t.trackData,
+                            track: Zo.fromSaveString(t.trackData)
+                        });
+                        const i = createCarTrack.track;
                         if (null == i)
                             throw new Error("Failed to load track");
                         let s, n = null;
