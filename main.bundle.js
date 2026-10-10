@@ -238,7 +238,7 @@ window.__nswsTrackQuery = function(trackId) {
         return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
     }
     function isKeyBindingInUse(binding) {
-        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
         return all.some(b => null != b && sameKeyBinding(b, binding));
     }
     // What each key last went down as, so its release matches the same bindings
@@ -340,6 +340,23 @@ window.__nswsTrackQuery = function(trackId) {
             window.addEventListener("pointerdown", cancel, true);
         });
     }
+    const GHOSTS_KEYBIND_STORAGE_KEY = "_ghostsKeyBind";
+    const DEFAULT_GHOSTS_KEYBIND = "KeyG";
+    function getGhostsKeyBind() {
+        try {
+            return localStorage.getItem(GHOSTS_KEYBIND_STORAGE_KEY) || DEFAULT_GHOSTS_KEYBIND;
+        } catch (e) {
+            return DEFAULT_GHOSTS_KEYBIND;
+        }
+    }
+    function setGhostsKeyBind(code) {
+        try {
+            localStorage.setItem(GHOSTS_KEYBIND_STORAGE_KEY, code);
+        } catch (e) {}
+    }
+    // Every other car in a race: chosen opponents, your own ghost, and multiplayer players. Lasts
+    // until pressed again or the page reloads.
+    let ghostsHidden = false;
     const VISUALFX_KEYBIND_STORAGE_KEY = "_visualFxKeyBind";
     const DEFAULT_VISUALFX_KEYBIND = "KeyV";
     function getVisualFxKeyBind() {
@@ -1907,6 +1924,13 @@ window.__nswsTrackQuery = function(trackId) {
         _receiveClipLink(id);
         return true;
     };
+    window.addEventListener("keydown", function(e) {
+        var focused = document.activeElement;
+        if (e.repeat || window.__nswsKeyBindCapturing || !keyBindingMatches(e, getGhostsKeyBind())) return;
+        if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
+        ghostsHidden = !ghostsHidden;
+        showClipSavedNotification(ghostsHidden ? "Ghosts hidden" : "Ghosts shown");
+    });
     window.addEventListener("keydown", function(e) {
         var focused = document.activeElement;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
@@ -9955,7 +9979,7 @@ window.__nswsTrackQuery = function(trackId) {
                         const i = l.get(this, be, "f").position.distanceToSquared(l.get(this, Ae, "f").camera.position)
                           , r = 2.5
                           , a = 50;
-                        l.get(this, be, "f").visible = l.get(this, ie, "f").hasStarted && i >= r * r && i <= a * a,
+                        l.get(this, be, "f").visible = l.get(this, ve, "f").visible && l.get(this, ie, "f").hasStarted && i >= r * r && i <= a * a,
                         l.get(this, be, "f").visible && l.get(this, be, "f").lookAt(l.get(this, Ae, "f").camera.position)
                     }
                     const t = this.getMatrix4()
@@ -44546,14 +44570,17 @@ window.__nswsTrackQuery = function(trackId) {
                                 }
                                 e.car.update(n)
                             }
-                            e.hasEnded || C.get(this, Ba, "f").isEnabled ? e.car.audioVolume = 0 : e.car.audioVolume = C.get(this, Oa, "f")
+                            e.hasEnded || e.car.setVisible(!ghostsHidden),
+                            e.hasEnded || ghostsHidden || C.get(this, Ba, "f").isEnabled ? e.car.audioVolume = 0 : e.car.audioVolume = C.get(this, Oa, "f")
                         }
+                    const remoteDelay = C.get(this, Sa, "f")?.multiplayerConnection.remoteDelay ?? .15;
                     for (const e of C.get(this, Ra, "f").values()) {
                         if (e.car.isPaused = !1,
-                        e.car.audioVolume = C.get(this, Oa, "f"),
+                        e.car.setVisible(!ghostsHidden),
+                        e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
                         e.bufferedCarStates.length > 0) {
                             const t = e.bufferedCarStates[e.bufferedCarStates.length - 1].frames / 1e3 - e.time
-                              , i = .15
+                              , i = remoteDelay
                               , r = .1;
                             let a = e.time + n;
                             t < i - r ? a -= .5 * r : t > i + r && (a += .5 * r);
@@ -44579,8 +44606,7 @@ window.__nswsTrackQuery = function(trackId) {
                             }
                             e.time = a
                         } else {
-                            const t = .15;
-                            e.time = e.car.getCarState().frames / 1e3 - t
+                            e.time = e.car.getCarState().frames / 1e3 - remoteDelay
                         }
                         e.car.update(n)
                     }
@@ -51104,6 +51130,24 @@ window.__nswsTrackQuery = function(trackId) {
                 _refresh();
                 _wrap.appendChild(_offBtn);
                 _wrap.appendChild(_onBtn);
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
+            )(),
+            C.get(this, ms, "m", Ds).call(this, "Ghosts"),
+            ( () => {
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting key-binding";
+                const _label = document.createElement("p");
+                _label.textContent = "Hide / show ghosts mid-run";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _keyBtn = document.createElement("button");
+                _keyBtn.className = "button";
+                bindKeyBindingButton(_keyBtn, getGhostsKeyBind, setGhostsKeyBind);
+                _wrap.appendChild(_keyBtn);
                 _row.appendChild(_wrap);
                 _container.appendChild(_row);
             }
@@ -58080,8 +58124,9 @@ window.__nswsTrackQuery = function(trackId) {
                     l.timeout = C.get(this, wu, "f"),
                     l.overrideMimeType("text/plain"),
                     l.onreadystatechange = () => {
-                        4 == l.readyState && (200 == l.status ? r() : a(Object.assign(new Error(409 == l.status ? "Nickname is already taken" : "Failed to connect to server"), {
-                            nicknameTaken: 409 == l.status
+                        4 == l.readyState && (200 == l.status ? r() : a(Object.assign(new Error(409 == l.status ? "Nickname is already taken" : 422 == l.status ? "Nickname isn't allowed" : "Failed to connect to server"), {
+                            nicknameTaken: 409 == l.status || 422 == l.status,
+                            nicknameBlocked: 422 == l.status
                         })))
                     }
                     ,

@@ -1945,7 +1945,7 @@
                     const __nswsProfiles = i.get(this, Hn, "f")
                       , __nswsApi = i.get(this, Un, "f");
                     __nswsApi.submitUserProfile(t, n, e, s).catch((t => {
-                        t?.nicknameTaken ? (window.__nswsAccounts?.showNameTaken(),
+                        t?.nicknameTaken ? (window.__nswsAccounts?.showNameTaken(void 0, t.nicknameBlocked),
                         __nswsProfiles.syncUserProfile(__nswsApi)) : console.warn(t)
                     }
                     ))

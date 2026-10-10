@@ -8,7 +8,7 @@
 // on a short debounce, never per car message.
 
 import { DurableObject } from "cloudflare:workers";
-import { censor } from "./chatfilter.js";
+import { censor, cleanText, moderate } from "./chatfilter.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 5;
@@ -57,14 +57,6 @@ const CREATE_WINDOW_MS = 10 * 60_000;
 const LISTING_STALE_MS = 3 * HEARTBEAT_MS;
 const LIST_CACHE_MS = 3_000;
 
-const STRIP = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u034f\u115f\u1160\u3164\uffa0\u2028\u2029]/gu;
-
-function cleanText(value, max) {
-    if (typeof value !== "string") return "";
-    const text = value.normalize("NFC").replace(STRIP, "").replace(/\s+/g, " ").trim();
-    return [...text.replace(/(\p{M}{2})\p{M}+/gu, "$1")].slice(0, max).join("");
-}
-
 async function sha256Hex(text) {
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -92,7 +84,7 @@ function shuffle(list) {
 export function readSettings(raw, previous, nick) {
     const s = raw && typeof raw === "object" ? raw : {};
     const out = {
-        name: censor(cleanText(s.name, MAX_NAME)) || previous?.name || (nick ? nick + "'s lobby" : "Lobby"),
+        name: moderate(s.name, MAX_NAME) || previous?.name || (nick ? nick + "'s lobby" : "Lobby"),
         public: s.public === undefined ? previous?.public ?? true : !!s.public,
         rounds: clampInt(s.rounds ?? previous?.rounds, NUMBERS.rounds),
         minutes: clampInt(s.minutes ?? previous?.minutes, NUMBERS.minutes),
@@ -515,7 +507,7 @@ export class LobbyRoom extends DurableObject {
     async hello(ws, a, msg) {
         if (!HEX32.test(msg.v ?? "")) return ws.close(1008, "Bad hello");
         const uid = (await sha256Hex("nsws-lobby:" + msg.v)).slice(0, 16);
-        const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+        const nick = moderate(msg.nick, MAX_NICK) || "Guest";
         const country = typeof msg.country === "string" && /^[a-z]{2}(-[a-z]{2,3})?$/i.test(msg.country) ? msg.country : null;
         const car = typeof msg.car === "string" && msg.car.length <= 256 && /^[\x20-\x7e]*$/.test(msg.car) ? msg.car : "";
         const now = Date.now();

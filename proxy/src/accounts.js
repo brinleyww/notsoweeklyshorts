@@ -3,6 +3,7 @@
 // token; the token itself is never stored.
 
 import { DurableObject } from "cloudflare:workers";
+import { findSlurs } from "./chatfilter.js";
 
 const MAX_NICK = 100;
 const MAX_CLIP_NAME = 100;
@@ -383,13 +384,17 @@ export class Accounts extends DurableObject {
         return holder == null || holder === userId;
     }
 
+    // Names are held to the chat's slur filter (chatfilter.js) as well as being unique.
     checkName(userId, nickname) {
-        return { available: this.available(userId, text(nickname, MAX_NICK)) };
+        nickname = text(nickname, MAX_NICK);
+        if (findSlurs(nickname).length) return { available: false, blocked: true };
+        return { available: this.available(userId, nickname) };
     }
 
     // Taking a new name gives up every name the account held before.
     claimName(userId, nickname) {
         nickname = text(nickname, MAX_NICK);
+        if (findSlurs(nickname).length) return { available: false, blocked: true };
         if (!this.available(userId, nickname)) return { available: false };
         const key = nameKey(nickname);
         this.sql.exec("DELETE FROM names WHERE user_id = ? AND name_key != ?", userId, key);

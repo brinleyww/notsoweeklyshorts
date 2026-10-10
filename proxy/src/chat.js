@@ -5,7 +5,7 @@
 // each socket to cap connections per address.
 
 import { DurableObject } from "cloudflare:workers";
-import { censor } from "./chatfilter.js";
+import { censor, cleanText } from "./chatfilter.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
@@ -61,28 +61,6 @@ const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX32 = /^[0-9a-f]{32}$/;
-// Invisible characters, bidi overrides and other controls, which could hide or reorder text.
-const STRIP = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\u034f\u115f\u1160\u3164\uffa0\u2028\u2029]/gu;
-// Joins the pieces of emoji like a coder or a family; anywhere else it is just invisible.
-const EMOJI_ZWJ = /(?<=\p{Extended_Pictographic}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]?)\u200d(?=\p{Extended_Pictographic})/uy;
-// The tag characters that spell out the England, Scotland and Wales flags; elsewhere they hide text.
-const FLAG_TAGS = /(\u{1f3f4}[\u{e0061}-\u{e007a}]{4,6}\u{e007f})/u;
-
-function stripInvisible(text) {
-    return text.split(FLAG_TAGS).map((part, i) => i % 2 ? part : part.replace(STRIP, (ch, at, all) => {
-        if (ch !== "\u200d") return "";
-        EMOJI_ZWJ.lastIndex = at;
-        return EMOJI_ZWJ.test(all) ? ch : "";
-    })).join("");
-}
-
-function cleanText(value, max) {
-    if (typeof value !== "string") return "";
-    const text = stripInvisible(value.normalize("NFC")).replace(/\s+/g, " ").trim();
-    // Zalgo text: at most two combining marks on any character.
-    return [...text.replace(/(\p{M}{2})\p{M}+/gu, "$1")].slice(0, max).join("");
-}
-
 function ownerHashes(value) {
     const list = Array.isArray(value) ? value : String(value ?? "").replace(/[[\]"\s]/g, "").split(",");
     return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => HEX64.test(h)));

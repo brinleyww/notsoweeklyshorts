@@ -6,6 +6,7 @@ import { AntiCheat, RunChecker } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
+import { censor, findSlurs } from "./chatfilter.js";
 
 export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory };
 
@@ -457,6 +458,17 @@ function shield(entry, position, callerHashValue, cfg) {
     };
 }
 
+// Every nickname the boards hand out goes through the chat's slur filter. Bans and name
+// matching use the raw name, so this is only ever applied on the way out.
+function censorNames(value) {
+    if (Array.isArray(value)) return value.map(censorNames);
+    if (!value || typeof value !== "object") return value;
+    const out = { ...value };
+    if (typeof out.nickname === "string") out.nickname = censor(out.nickname);
+    if (out.entry && typeof out.entry === "object") out.entry = censorNames(out.entry);
+    return out;
+}
+
 function antiCheat(env) {
     return env.ANTICHEAT ? env.ANTICHEAT.get(env.ANTICHEAT.idFromName("global")) : null;
 }
@@ -531,8 +543,8 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
 
     const body = {
         total: filteredTotal(view, cfg),
-        entries: page,
-        userEntry: hash ? await ownEntry(cfg, request, track, read, view, hash) : null,
+        entries: censorNames(page),
+        userEntry: hash ? censorNames(await ownEntry(cfg, request, track, read, view, hash)) : null,
     };
     if (owner && track.secret) body.owner = true;
     return json(body, origin);
@@ -545,7 +557,7 @@ async function handleUserEntry(request, url, cfg, origin) {
     if (!hash) return json(null, origin);
     const read = readOptions(params);
     const view = await loadView(cfg, request, track, read);
-    return json(await ownEntry(cfg, request, track, read, view, hash), origin);
+    return json(censorNames(await ownEntry(cfg, request, track, read, view, hash)), origin);
 }
 
 function postUpstream(request, cfg, path, body) {
@@ -606,7 +618,9 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     observeNames(env, ctx, [{ userId: hash, nickname: form.get("nickname") }]);
     const ownerUpload = cfg.owner || await isOwner(token, cfg);
     const read = readOptions(form);
-    const body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
+    let body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
+    const uploadNick = form.get("nickname");
+    if (typeof uploadNick === "string" && censor(uploadNick) !== uploadNick) body = replaceFormValue(body, "nickname", censor(uploadNick));
 
     // Upstream reports positions on the board it stored the run on, counting
     // banned players (and, for a hidden week, missing the runs still under the
@@ -632,7 +646,14 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             state = "valid";
         }
         await anti.expect({ track: trackId, userId: hash, frames, state });
-        check = { recording, nickname, state };
+        check = { recording, nickname, state, hold: null };
+        const lobby = (url.searchParams.get("nswsLobby") || "").toUpperCase();
+        if (LOBBY_CODE.test(lobby)) {
+            check.hold = await anti.lobbyHold({
+                track: trackId, week: track.week, userId: hash, nickname, frames, lobby,
+                carStyle: (form.get("carStyle") ?? "").slice(0, 256), recording,
+            });
+        }
     }
 
     const before = await loadView(cfg, request, track, read).catch(() => null);
@@ -657,14 +678,9 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
             state: check.state, recording: check.state === "pending" ? check.recording : null,
         });
-        // A personal best set in a multiplayer lobby also goes on the owner's review list.
-        const lobby = (url.searchParams.get("nswsLobby") || "").toUpperCase();
-        if (LOBBY_CODE.test(lobby)) {
-            await anti.lobbyRun({
-                track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames, lobby,
-                carStyle: (form.get("carStyle") ?? "").slice(0, 256), recording: check.recording,
-            }).catch((err) => console.error("lobby review failed:", err && err.message));
-        }
+        if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
+    } else if (check?.hold != null) {
+        await anti.lobbyDiscard(check.hold);
     }
     if (!response.ok || !result || typeof result !== "object" || !Number.isSafeInteger(result.newPosition)) {
         return new Response(text, {
@@ -769,6 +785,7 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
     const form = new URLSearchParams(raw);
     const token = form.get("userToken") ?? "";
     const nickname = form.get("nickname");
+    if (nickname != null && findSlurs(nickname).length) return json({ nicknameBlocked: true }, origin, 422);
     const stub = accounts(env);
     if (stub && HEX64.test(token) && nickname != null) {
         let taken = false;

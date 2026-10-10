@@ -420,12 +420,25 @@ by its 5-character code; `LobbyDirectory` ("global") hands out codes and lists p
   times. The host passes to the longest-connected player when the host leaves for good. An
   empty lobby deletes its storage and its directory row.
 - **Lobby PBs go to the owner:** a personal best set during a lobby race is uploaded with
-  `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal replay check, and is
-  also kept with its recording in `lobby_runs` in the `AntiCheat` Durable Object. Race Control ->
-  Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in the game
-  (`window.__nswsWatchRun`), **Verify** keeps it, **Hide** takes it off the boards (it then shows
-  under "Hidden from the boards", where Allow undoes it). The recording is dropped after either.
+  `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal replay check and is put
+  on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to Kodub, so other
+  players never see it until the owner verifies it; the player still gets their own entry back.
+  Race Control -> Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in the
+  game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
+  shows under "Hidden from the boards", where Allow puts it up). The recording is dropped after either.
+  While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
   Times inside the lobby itself (round results) are not replayed.
+
+## Name moderation
+
+Every name and line players write goes through the chat's filter (`proxy/src/chatfilter.js`:
+`cleanText` strips invisible and direction-changing characters and zalgo, `censor` replaces slurs
+with `#`; `moderate` is both): chat messages and nicknames, lobby names, lobby nicknames and lobby
+chat. Usernames follow the same filter: a profile save (`POST /v6/user`) or a name check whose name
+has a slur is refused (`422 {nicknameBlocked}` / `{available: false, blocked: true}`, shown as "That
+username isn't allowed"), upload nicknames are censored before they reach Kodub, and every nickname
+the leaderboard routes hand out is censored on the way out. Bans and name matching still use the
+raw name.
 
 ## Privacy note
 

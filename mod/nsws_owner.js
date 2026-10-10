@@ -1109,12 +1109,12 @@
         renderLobbyRuns(body, a, blocked);
     }
 
-    // Personal bests set in multiplayer lobbies. They already passed the replay check and stay up
-    // unless hidden here; Watch plays the uploaded run, then comes back to this tab.
+    // Personal bests set in multiplayer lobbies, held off the boards until verified here. Watch plays
+    // the uploaded run, then comes back to this tab.
     function renderLobbyRuns(body, a, before) {
         const counts = Object.fromEntries((a.lobbyCounts || []).map((c) => [c.state, c.n]));
         const box = card("Lobby PBs to review", "multiplayer",
-            "Personal bests set in multiplayer lobbies. They passed the replay check and are on the boards. Watch each one, then Verify it or Hide it from the boards. " +
+            "Personal bests set in multiplayer lobbies stay off the boards until you Verify them (the player still sees their own). Watch each one, then Verify it to put it up or Hide it for good. " +
             num(counts.verified || 0) + " verified, " + num(counts.hidden || 0) + " hidden so far.");
         box.style.marginBottom = "14px";
         const list = a.lobby || [];

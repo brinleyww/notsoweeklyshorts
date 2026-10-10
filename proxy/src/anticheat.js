@@ -71,12 +71,15 @@ export class AntiCheat extends DurableObject {
             this.sql.exec("INSERT OR IGNORE INTO boards (track, week, cutoff, seen) VALUES (?, ?, ?, ?)", track, week, cutoff, Date.now());
             row = this.sql.exec("SELECT cutoff FROM boards WHERE track = ?", track).one();
         }
-        board = { cutoff: row.cutoff, runs: new Map(), passes: new Map() };
+        board = { cutoff: row.cutoff, runs: new Map(), passes: new Map(), holds: new Set() };
         for (const r of this.sql.exec("SELECT id, state, source FROM runs WHERE track = ?", track)) {
             board.runs.set(r.id, { state: r.state, source: r.source });
         }
         for (const p of this.sql.exec("SELECT user_id, frames, state FROM passes WHERE track = ?", track)) {
             board.passes.set(p.user_id + "|" + p.frames, p.state);
+        }
+        for (const h of this.sql.exec("SELECT user_id, frames, upload_id FROM lobby_runs WHERE track = ? AND state != 'verified'", track)) {
+            for (const key of this.holdKeys(h)) board.holds.add(key);
         }
         this.boards.set(track, board);
         return board;
@@ -118,7 +121,8 @@ export class AntiCheat extends DurableObject {
                     run = this.saveRun(track, week, e, "invalid", "outside", "not-uploaded-here");
                 }
             }
-            if (run.state === "invalid" || (run.state === "pending" && run.source !== "legacy")) blocked.push(e.id);
+            const held = board.holds.has(e.userId + "|" + e.frames) || board.holds.has("#" + e.id);
+            if (held || run.state === "invalid" || (run.state === "pending" && run.source !== "legacy")) blocked.push(e.id);
         }
         if (queued) await this.kick();
         return blocked;
@@ -243,11 +247,42 @@ export class AntiCheat extends DurableObject {
         return { stored: tracks.length };
     }
 
-    async lobbyRun(r) {
-        this.sql.exec(`INSERT INTO lobby_runs (upload_id, track, week, user_id, nickname, frames, lobby, car_style, recording, at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            Number.isSafeInteger(r.uploadId) ? r.uploadId : null, r.track, r.week, r.userId, r.nickname, r.frames,
-            r.lobby, r.carStyle, r.recording, Date.now());
+    holdKeys(row) {
+        const keys = [];
+        if (row.user_id) keys.push(row.user_id + "|" + row.frames);
+        if (row.upload_id != null) keys.push("#" + row.upload_id);
+        return keys;
+    }
+
+    // A lobby PB stays off the boards from before it is uploaded until the owner verifies it.
+    async lobbyHold(r) {
+        const id = this.sql.exec(`INSERT INTO lobby_runs (upload_id, track, week, user_id, nickname, frames, lobby, car_style, recording, at)
+            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+            r.track, r.week, r.userId, r.nickname, r.frames, r.lobby, r.carStyle, r.recording, Date.now()).one().id;
+        this.boards.get(r.track)?.holds.add(r.userId + "|" + r.frames);
+        return id;
+    }
+
+    async lobbyUploaded(id, uploadId) {
+        if (!Number.isSafeInteger(uploadId)) return;
+        const row = this.sql.exec("SELECT track FROM lobby_runs WHERE id = ?", id).toArray()[0];
+        if (!row) return;
+        this.sql.exec("UPDATE lobby_runs SET upload_id = ? WHERE id = ?", uploadId, id);
+        this.boards.get(row.track)?.holds.add("#" + uploadId);
+    }
+
+    // The upload never reached Kodub, so there is nothing to review.
+    async lobbyDiscard(id) {
+        const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
+        if (!row) return;
+        this.sql.exec("DELETE FROM lobby_runs WHERE id = ?", id);
+        const holds = this.boards.get(row.track)?.holds;
+        if (holds) for (const key of this.holdKeys(row)) holds.delete(key);
+    }
+
+    unhold(row) {
+        const holds = this.boards.get(row.track)?.holds;
+        if (holds) for (const key of this.holdKeys(row)) holds.delete(key);
     }
 
     async lobbyRecording(id) {
@@ -260,6 +295,7 @@ export class AntiCheat extends DurableObject {
         const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
         if (!row || (verdict !== "verified" && verdict !== "hidden")) return { ok: false };
         this.sql.exec("UPDATE lobby_runs SET state = ?, recording = NULL, at = ? WHERE id = ?", verdict, Date.now(), id);
+        if (verdict === "verified") this.unhold(row);
         if (verdict === "hidden") {
             if (row.upload_id != null) {
                 this.saveRun(row.track, row.week, { id: row.upload_id, userId: row.user_id, nickname: row.nickname, frames: row.frames },
@@ -278,6 +314,8 @@ export class AntiCheat extends DurableObject {
         if (!row) return { ok: false };
         this.sql.exec("UPDATE runs SET state = 'valid', source = 'approved', reason = NULL, at = ? WHERE id = ?", Date.now(), id);
         this.sql.exec("DELETE FROM queue WHERE run_id = ?", id);
+        for (const held of this.sql.exec("SELECT * FROM lobby_runs WHERE upload_id = ?", id).toArray()) this.unhold(held);
+        this.sql.exec("UPDATE lobby_runs SET state = 'verified', recording = NULL WHERE upload_id = ?", id);
         const run = this.boards.get(row.track)?.runs.get(id);
         if (run) Object.assign(run, { state: "valid", source: "approved" });
         return { ok: true };

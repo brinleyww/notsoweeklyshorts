@@ -5,6 +5,9 @@
     const TOKEN = /^[0-9a-f]{64}$/;
     const UNCLAIMED_KEY = "_nswsNameUnclaimed";
     const NAME_TAKEN = "This username is already taken. Please pick another one.";
+    const NAME_BLOCKED = "That username isn't allowed. Please pick another one.";
+    // Whether the last name refused was refused by the slur filter rather than for being taken.
+    let lastBlocked = false;
 
     function profileToken() {
         const token = window.__nswsProfileToken?.();
@@ -31,16 +34,19 @@
     async function nameAvailable(token, nickname, claim) {
         if (!API || !TOKEN.test(token || "")) return null;
         try {
-            return (await call(claim ? "names/claim" : "names/check", { userToken: token, nickname })).available === true;
+            const answer = await call(claim ? "names/claim" : "names/check", { userToken: token, nickname });
+            lastBlocked = answer.blocked === true;
+            return answer.available === true;
         } catch {
             return null;
         }
     }
 
-    function showNameTaken(onOk) {
+    function showNameTaken(onOk, blocked) {
+        const text = blocked ?? lastBlocked ? NAME_BLOCKED : NAME_TAKEN;
         const box = window.__nswsMessageBox;
-        if (box && !box.isOpen) box.show(NAME_TAKEN, "Ok", onOk || null);
-        else alert(NAME_TAKEN);
+        if (box && !box.isOpen) box.show(text, "Ok", onOk || null);
+        else alert(text);
     }
 
     function markUnclaimed(token) {
