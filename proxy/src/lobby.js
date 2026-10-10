@@ -45,7 +45,7 @@ const NUMBERS = {
     rounds: [1, 20, 5],
     minutes: [1, 15, 3],
     maxPlayers: [2, 16, 8],
-    intermission: [5, 30, 12],
+    intermission: [5, 60, 20],
 };
 const SKIP_RULES = ["majority", "twothirds", "all", "off"];
 const SCORING = ["h2h", "wins"];
@@ -93,6 +93,7 @@ export function readSettings(raw, previous, nick) {
         skip: SKIP_RULES.includes(s.skip) ? s.skip : previous?.skip ?? "majority",
         scoring: SCORING.includes(s.scoring) ? s.scoring : previous?.scoring ?? "h2h",
         lateJoin: s.lateJoin === undefined ? previous?.lateJoin ?? true : !!s.lateJoin,
+        warmup: s.warmup === undefined ? previous?.warmup ?? true : !!s.warmup,
         liveTimes: s.liveTimes === undefined ? previous?.liveTimes ?? true : !!s.liveTimes,
         ghosts: s.ghosts === undefined ? previous?.ghosts ?? true : !!s.ghosts,
         pool: previous?.pool ?? [],
@@ -185,6 +186,8 @@ export class LobbyRoom extends DurableObject {
             round: s.round,
             session: s.session,
             track: s.track,
+            warmup: s.warmup ?? null,
+            nextTrack: s.nextTrack ?? null,
             endsAt: s.endsAt,
             deadline: s.deadline,
             skipsLeft: Math.max(0, MAX_SKIPS_PER_ROUND - s.skips),
@@ -331,8 +334,11 @@ export class LobbyRoom extends DurableObject {
 
     newMap(skipped) {
         const s = this.state;
-        s.session = (s.session + 1) >>> 0 || 1;
-        s.track = this.pickTrack();
+        // The warm-up took the next id, so the round itself starts on a fresh one.
+        s.session = ((s.warmup ?? s.session) + 1) >>> 0 || 1;
+        s.track = s.nextTrack ?? this.pickTrack();
+        s.nextTrack = null;
+        s.warmup = null;
         s.phase = "loading";
         s.deadline = Date.now() + LOAD_MS;
         s.endsAt = null;
@@ -406,6 +412,12 @@ export class LobbyRoom extends DurableObject {
         s.history.push({ round: s.round, track: s.track, winners: rows.filter((r) => r.place === 1).map((r) => r.id) });
         s.phase = "results";
         s.deadline = Date.now() + s.settings.intermission * 1000;
+        // The next map is picked now so everyone can warm up on it during the break. Warm-up
+        // runs go on their own session id, and nothing on it is scored.
+        if (!s.lastResults.last && s.settings.warmup && s.settings.pool.length) {
+            s.nextTrack = this.pickTrack();
+            s.warmup = (s.session + 1) >>> 0 || 1;
+        }
         this.dirty();
         this.broadcastState();
     }
@@ -419,6 +431,8 @@ export class LobbyRoom extends DurableObject {
         }
         s.phase = "final";
         s.deadline = Date.now() + FINAL_MS;
+        s.nextTrack = null;
+        s.warmup = null;
         this.dirty();
         this.broadcastState();
     }
@@ -429,6 +443,8 @@ export class LobbyRoom extends DurableObject {
         s.deadline = null;
         s.endsAt = null;
         s.track = null;
+        s.nextTrack = null;
+        s.warmup = null;
         s.players = s.players.filter((p) => !p.left);
         for (const p of s.players) {
             p.ready = false;
@@ -589,13 +605,15 @@ export class LobbyRoom extends DurableObject {
     // id after the type byte out. The room never reads the car states themselves.
     relay(ws, a, raw) {
         const s = this.state;
-        if (!s || !s.settings.ghosts || (s.phase !== "loading" && s.phase !== "race")) return;
+        if (!s || !s.settings.ghosts) return;
         const data = new Uint8Array(raw);
         if (data.length < 9 || data.length > MAX_CAR_FRAME || (data[0] !== 1 && data[0] !== 2)) return;
         const session = (data[1] | data[2] << 8 | data[3] << 16 | data[4] << 24) >>> 0;
-        if (session !== s.session) return;
+        const live = (s.phase === "loading" || s.phase === "race") && session === s.session;
+        const warm = s.phase === "results" && s.warmup != null && session === s.warmup;
+        if (!live && !warm) return;
         const p = this.player(a.pid);
-        if (!p || !p.inRound || p.left) return;
+        if (!p || p.left || (live && !p.inRound)) return;
         const now = Date.now();
         if (!this.carRate) this.carRate = new Map();
         let r = this.carRate.get(a.pid);
@@ -737,6 +755,8 @@ export class LobbyRoom extends DurableObject {
             }
             s.phase = "final";
             s.deadline = now + FINAL_MS;
+            s.nextTrack = null;
+            s.warmup = null;
             this.message("The host ended the match.");
             this.dirty();
             this.broadcastState();

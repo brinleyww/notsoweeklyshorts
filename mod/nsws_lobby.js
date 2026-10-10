@@ -22,10 +22,12 @@
     const CHAT_SHOWN = 60;
     const FEED_MS = 9000;
     const CODE_RE = /^[A-HJ-NP-Z2-9]{5}$/;
+    // How far into the break the warm-up starts, so the results are seen first.
+    const WARMUP_DELAY_MS = 5000;
 
     const DEFAULTS = {
-        name: "", public: true, rounds: 5, minutes: 3, maxPlayers: 8, intermission: 12,
-        skip: "majority", scoring: "h2h", lateJoin: true, liveTimes: true, ghosts: true, weeks: null,
+        name: "", public: true, rounds: 5, minutes: 3, maxPlayers: 8, intermission: 20,
+        skip: "majority", scoring: "h2h", lateJoin: true, liveTimes: true, ghosts: true, warmup: true, weeks: null,
     };
 
     function storageGet(key) {
@@ -52,6 +54,22 @@
     }
 
     const bridge = () => window.__nswsMp || null;
+
+    // ?lobby=CODE (an invite link) joins that lobby once the menu is up.
+    let pendingLobby = null;
+    try {
+        const url = new URL(location.href);
+        const code = (url.searchParams.get("lobby") || "").trim().toUpperCase();
+        if (url.searchParams.has("lobby")) {
+            url.searchParams.delete("lobby");
+            history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+        }
+        if (/^[A-HJ-NP-Z2-9]{5}$/.test(code)) pendingLobby = code;
+    } catch {}
+
+    function inviteLink(code) {
+        return location.origin + location.pathname + "?lobby=" + code;
+    }
     const uiClick = () => window.__nswsUIClick?.();
 
     function el(tag, className, text) {
@@ -195,6 +213,13 @@
             this.remoteDelay = REMOTE_DELAY;
             this.pingTimer = null;
             this.pingTicks = 0;
+            this.warmupId = null;
+            this.warmupPlanned = null;
+            this.warmupTimer = null;
+        }
+
+        isWarmup() {
+            return this.warmupId != null && this.warmupId === this.sessionId && !this.sessionEnded;
         }
 
         open(params) {
@@ -385,10 +410,24 @@
             if (this.params?.create) this.params = { code: snap.code };
             const me = this.me();
             const racing = snap.phase === "loading" || snap.phase === "race";
+            const warming = this.isWarmup();
             if (racing && me?.inRound && snap.session !== this.sessionId && this.loadingSession !== snap.session) {
-                this.beginSession(snap.session, snap.track);
+                this.beginSession(snap.session, snap.track, false);
+            } else if (racing && warming && !me?.inRound) {
+                // Warmed up, but sits this round out (joined mid-match with late joining off).
+                this.endSession();
+                this.backToLobby();
             }
-            if (!racing && this.sessionId && !this.sessionEnded) this.endSession();
+            if (!racing && this.sessionId && !this.sessionEnded && this.sessionId !== snap.warmup) this.endSession();
+            if (snap.phase === "results" && snap.warmup != null && snap.nextTrack && me && !me.left && this.warmupPlanned !== snap.warmup) {
+                this.warmupPlanned = snap.warmup;
+                clearTimeout(this.warmupTimer);
+                const delay = Math.max(0, Math.min(WARMUP_DELAY_MS, (snap.deadline - snap.now) / 3));
+                this.warmupTimer = setTimeout(() => {
+                    const now = this.state;
+                    if (!this.closed && now?.phase === "results" && now.warmup === snap.warmup) this.beginSession(snap.warmup, snap.nextTrack, true);
+                }, delay);
+            }
             if (snap.phase === "lobby" && prev && prev.phase !== "lobby") this.backToLobby();
             this.firePlayers();
             this.h.state(snap, prev);
@@ -398,11 +437,11 @@
             for (const cb of [...this.cb.players]) cb(this.sessionId);
         }
 
-        async beginSession(session, trackId) {
+        async beginSession(session, trackId, warmup) {
             this.loadingSession = session;
             const sitOut = (text) => {
                 if (this.loadingSession === session) this.loadingSession = null;
-                if (this.state?.session === session) this.sendJson({ t: "loaded", s: session, fail: true });
+                if (!warmup && this.state?.session === session) this.sendJson({ t: "loaded", s: session, fail: true });
                 this.h.toast(text);
             };
             const entry = findTrack(trackId);
@@ -413,7 +452,8 @@
             } catch {
                 return sitOut("This map failed to load, so you sit it out.");
             }
-            if (this.closed || this.loadingSession !== session || this.state?.session !== session) return;
+            const current = warmup ? this.state?.warmup : this.state?.session;
+            if (this.closed || this.loadingSession !== session || current !== session) return;
             this.loadingSession = null;
             this.flush();
             this.sessionId = session;
@@ -423,10 +463,11 @@
             this.bufferBytes = 0;
             this.loadedSent = false;
             this.selfRecord = null;
+            this.warmupId = warmup ? session : null;
             const mode = bridge().GameMode.Competitive;
             const meta = entry.meta;
             lobbyRun = { code: this.code, ids: new Set([trackId, trackData.getId?.()].filter(Boolean)) };
-            this.h.raceStarting();
+            this.h.raceStarting(warmup);
             if (this.inRace()) {
                 for (const cb of [...this.cb.newSession]) cb(session, mode, meta, trackData);
             } else {
@@ -539,7 +580,7 @@
             if (session !== this.sessionId || this.sessionEnded) return;
             if (!this.loadedSent) {
                 this.loadedSent = true;
-                this.sendJson({ t: "loaded", s: session });
+                if (!this.isWarmup()) this.sendJson({ t: "loaded", s: session });
             }
             if (counter <= this.resetCounter) return;
             this.buffer = [];
@@ -614,7 +655,7 @@
         }
 
         sendRecord(session, time) {
-            if (session !== this.sessionId || this.sessionEnded) return;
+            if (session !== this.sessionId || this.sessionEnded || this.isWarmup()) return;
             this.selfRecord = time.clone ? time.clone() : time;
             this.sendJson({ t: "rec", s: session, f: time.numberOfFrames });
             const me = this.me();
@@ -640,9 +681,10 @@
             const s = this.state;
             const mp = bridge();
             if (!s || !mp) return [];
-            return s.players.filter((p) => p.id === this.you || (p.inRound && !p.left)).map((p) => {
+            const warm = this.isWarmup();
+            return s.players.filter((p) => p.id === this.you || (!p.left && (warm ? p.connected : p.inRound))).map((p) => {
                 const self = p.id === this.you;
-                const frames = self && this.selfRecord ? this.selfRecord.numberOfFrames : p.best;
+                const frames = warm ? null : self && this.selfRecord ? this.selfRecord.numberOfFrames : p.best;
                 return {
                     id: p.id,
                     nickname: p.nick,
@@ -1045,7 +1087,7 @@ body.nsws-mp-board-open .player-list-ui{display:none}
         range("Rounds", "rounds", 1, 20, () => "");
         range("Minutes per round", "minutes", 1, 15, () => " min");
         range("Max players", "maxPlayers", 2, 16, () => "");
-        range("Break between rounds", "intermission", 5, 30, () => " s");
+        range("Break between rounds", "intermission", 5, 60, () => " s");
         seg("Scoring", "scoring", [["h2h", "Head-to-head"], ["wins", "Round wins"]], (v) => v === "h2h"
             ? "Every round, you get a point for each player you beat. Beat all 3 rivals = 3 points."
             : "Only the round winner scores: 1 point per map won.");
@@ -1053,6 +1095,9 @@ body.nsws-mp-board-open .player-list-ui{display:none}
         seg("Opponents' times", "liveTimes", [[true, "Live"], [false, "Hidden until the round ends"]]);
         seg("Opponents' cars", "ghosts", [[true, "Shown"], [false, "Hidden"]]);
         seg("Join mid-match", "lateJoin", [[true, "Allowed"], [false, "Wait for next match"]]);
+        seg("Warm-up in the break", "warmup", [[true, "On"], [false, "Off"]], (v) => v
+            ? "After each round's results, everyone can practise the next map until the round starts. Warm-up times don't count."
+            : "The break only shows the results.");
 
         const weeks = weekList();
         const chosen = new Set(Array.isArray(s.weeks) ? s.weeks : weeks.map((w) => w.week));
@@ -1172,9 +1217,14 @@ body.nsws-mp-board-open .player-list-ui{display:none}
             reconnecting: (on) => {
                 if (ui.conn === conn && on) toast("Reconnecting to the lobby...");
             },
-            raceStarting: () => {
+            raceStarting: (warmup) => {
                 if (ui.conn !== conn) return;
                 close();
+                if (warmup) {
+                    ui.minimized = true;
+                    toast("Warm-up on the next map - times don't count.");
+                }
+                renderMatchUi();
             },
             lobby: () => {
                 if (ui.conn !== conn) return;
@@ -1327,7 +1377,17 @@ body.nsws-mp-board-open .player-list-ui{display:none}
             navigator.clipboard?.writeText(conn.code).then(() => toast("Lobby code copied."), () => {});
         });
         const vis = el("span", "nsws-mp-tag");
-        const { p, h } = panel("", [el("span", "nsws-mp-dim", "Code"), code, vis, button("Hide", close)]);
+        const extra = [el("span", "nsws-mp-dim", "Code"), code, vis];
+        if (host) {
+            extra.push(button("Copy invite link", (b) => {
+                const link = inviteLink(conn.code);
+                navigator.clipboard?.writeText(link).then(() => toast("Invite link copied. Anyone who opens it joins this lobby."), () => {
+                    b.textContent = link;
+                });
+            }, "small"));
+        }
+        extra.push(button("Hide", close));
+        const { p, h } = panel("", extra);
         const banner = el("div", "nsws-mp-banner");
         p.appendChild(banner);
         const body = el("div", "nsws-mp-body");
@@ -1430,14 +1490,15 @@ body.nsws-mp-board-open .player-list-ui{display:none}
         }
         const me = conn.me();
         const now = conn.serverNow();
-        const label = trackLabel(s.track);
-        setText(ui.pillRound, "Round " + s.round + "/" + s.settings.rounds);
+        const warm = conn.isWarmup();
+        const label = trackLabel(warm ? s.nextTrack : s.track);
+        setText(ui.pillRound, warm ? "Warm-up" : "Round " + s.round + "/" + s.settings.rounds);
         let clock = "";
         if (s.phase === "loading") {
             const racers = s.players.filter((p) => p.inRound && !p.left && p.connected);
             clock = "Loading " + racers.filter((p) => p.loaded).length + "/" + racers.length;
         } else if (s.phase === "race" && s.endsAt) clock = fmtClock(s.endsAt - now);
-        else if (s.phase === "results") clock = "Next in " + fmtClock(s.deadline - now);
+        else if (s.phase === "results") clock = (warm ? "Round " + (s.round + 1) + " in " : "Next in ") + fmtClock(s.deadline - now);
         else if (s.phase === "final") clock = "Match over";
         setText(ui.pillClock, clock);
         ui.pillClock.classList.toggle("low", s.phase === "race" && s.endsAt - now < 15000);
@@ -1577,4 +1638,14 @@ body.nsws-mp-board-open .player-list-ui{display:none}
     });
 
     window.__nswsLobby = { open };
+    // Called when the menu first appears; true when it joined an invite link's lobby.
+    window.__nswsLobbyOnLoad = () => {
+        if (!pendingLobby) return false;
+        const code = pendingLobby;
+        pendingLobby = null;
+        ensureDom();
+        ui.root.classList.add("open");
+        connect({ code });
+        return true;
+    };
 })();

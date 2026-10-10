@@ -54921,7 +54921,7 @@ window.__nswsTrackQuery = function(trackId) {
                             hasChosenDevicePreset() || autoPickDevicePreset(C.get(this, bc, "f"), d, r) ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
                             flushGraphicsNote(),
-                            window.__nswsClipsOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
+                            window.__nswsClipsOnLoad?.() || window.__nswsLobbyOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }

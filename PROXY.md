@@ -407,6 +407,13 @@ by its 5-character code; `LobbyDirectory` ("global") hands out codes and lists p
   gives a point for every player you beat on that map (a time beats no time); "Round wins" gives
   1 point to the winner. Vote skip (majority, two thirds or everyone; 3 per round) swaps the map
   without using up a round. After the last round come the final standings, then the lobby.
+- **Invite links:** the host's "Copy invite link" gives `<site>/?lobby=CODE`. Opening it loads the site
+  and joins that lobby once the menu is up (`window.__nswsLobbyOnLoad`, called after clip links and
+  before the first-visit auto-start); the parameter is removed from the address bar.
+- **Warm-up (on by default, "Warm-up in the break"):** when a round ends the room already picks the
+  next map (`nextTrack`) and a warm-up session id (`warmup`). A few seconds into the break everyone
+  drives that map with the others' cars relayed on the warm-up id; nothing on it is scored. The next
+  round then starts on that map with a fresh session id. Breaks run 5-60 s (default 20).
 - **In the game**, a round is the stock multiplayer race (Competitive mode): `LobbyConnection`
   implements the game's connection interface, and `window.__nswsMp` (in `main.bundle.js`)
   starts races with category `community`, so personal bests set in a lobby upload like any
