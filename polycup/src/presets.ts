@@ -80,6 +80,11 @@ export function rulesFor(state: CupState | null): CupRules {
     }
   );
 }
+// Not So Weekly Shorts: the host picks the map pool before the room opens (polycup/nsws/hub.ts), and
+// the game only lists those maps, so a preset's pool only decides whether custom tracks are allowed.
+export function poolAllows(rules: CupRules, category: string) {
+  return category !== 'custom' || rules.pool.includes('custom');
+}
 export function validPreset(value: unknown): value is CupPreset {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const p = value as CupPreset,

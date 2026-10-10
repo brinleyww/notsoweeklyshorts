@@ -208,11 +208,9 @@ export class PresetEditor {
     );
     const pool = h('fieldset', undefined, 'preset-pool');
     pool.append(h('legend', 'Track pool'));
-    for (const [category, label] of [
-      ['official', 'Main tracks'],
-      ['community', 'Community tracks'],
-      ['custom', 'Allow custom tracks'],
-    ] as const) {
+    // Not So Weekly Shorts: the maps were picked before the room opened.
+    pool.append(h('small', 'Maps come from the pool picked when the cup was hosted.', 'muted'));
+    for (const [category, label] of [['custom', 'Allow custom tracks']] as const) {
       const row = h('label'),
         input = h('input');
       input.type = 'checkbox';

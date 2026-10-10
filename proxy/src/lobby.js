@@ -43,6 +43,18 @@ function randomHex(bytes) {
     return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// The maps a cup draws from, picked before the room opens: the weekly shorts, the main tracks of
+// each environment, and the community tracks of each game version.
+function cleanPool(value) {
+    const o = value && typeof value === "object" ? value : {};
+    const list = (v, ok) => [...new Set(Array.isArray(v) ? v : [])].filter(ok).slice(0, 20);
+    return {
+        shorts: o.shorts !== false,
+        main: list(o.main, (e) => ["Summer", "Winter", "Desert"].includes(e)),
+        community: list(o.community, (v) => typeof v === "string" && /^\d{1,2}\.\d{1,2}\.\d{1,2}$/.test(v)),
+    };
+}
+
 function text(ws, data) {
     try {
         ws.send(JSON.stringify(data));
@@ -93,6 +105,20 @@ export class LobbyRoom extends DurableObject {
         return this.sockets("host").find((ws) => ws.deserializeAttachment().invited) ?? null;
     }
 
+    // For players about to join (worker.js /cup/info): the cup's name and map pool.
+    info() {
+        const host = this.host();
+        if (!host) return null;
+        const a = host.deserializeAttachment();
+        return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null) };
+    }
+
+    // Called by the cup's chat room (chat.js) to recognise the organizer.
+    isHost(secret) {
+        const host = this.host();
+        return !!host && typeof secret === "string" && host.deserializeAttachment().chatKey === secret;
+    }
+
     joinFor(session) {
         return this.sockets("join").find((ws) => ws.deserializeAttachment().session === session) ?? null;
     }
@@ -108,6 +134,8 @@ export class LobbyRoom extends DurableObject {
             a.public = o.public === true;
             a.max = Number.isSafeInteger(o.max) ? Math.min(16, Math.max(2, o.max)) : 8;
             a.name = moderate(o.name, MAX_NAME) || a.nick + "'s cup";
+            a.pool = cleanPool(o.pool);
+            a.chatKey = typeof o.chat === "string" && /^[0-9a-f]{32}$/.test(o.chat) ? o.chat : null;
             ws.serializeAttachment(a);
             text(ws, { type: "createInvite", inviteCode: a.code, key: randomHex(16), timeoutMilliseconds: null, censoredNickname: a.nick });
             this.listing(true);

@@ -27,10 +27,9 @@ export function presetSummary(rules: CupRules) {
     ['Selection', rules.selection === 'random' ? 'Random rotation' : 'Racer draft'],
     [
       'Pool',
-      rules.pool
-        .filter((c) => c !== 'custom')
-        .map((c) => (c === 'official' ? 'Main' : 'Community'))
-        .join(' + ') || 'Custom only',
+      // Not So Weekly Shorts: the pool the host picked before the room opened.
+      (window as unknown as { __nswsCupPoolLabel?: () => string }).__nswsCupPoolLabel?.() ??
+        'Not So Weekly Shorts',
     ],
     ['Custom tracks', rules.pool.includes('custom') ? 'Allowed' : 'Disabled'],
   ];

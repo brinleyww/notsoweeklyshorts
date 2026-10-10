@@ -6170,7 +6170,7 @@ window.__nswsTrackQuery = function(trackId) {
               , r = n.n(i)
               , a = n(6314)
               , s = n.n(a)()(r());
-            s.push([e.id, ".game-toolbar-ui {\n\tdisplay: flex;\n\tflex-direction: column;\n\talign-items: stretch;\n\tposition: absolute;\n\tleft: var(--safe-area-horizontal);\n\tbottom: 0;\n\tz-index: 1;\n\topacity: 0;\n\ttransform: translateX(-10px);\n\ttransition: opacity 0.2s ease-in-out 0.5s, transform 0.2s ease-in-out 0.5s;\n\tpointer-events: none;\n}\n.game-toolbar-ui.up {\n\tflex-direction: column-reverse;\n\tposition: absolute;\n\tbottom: auto;\n\ttop: 0;\n}\n.game-toolbar-ui.visible {\n\topacity: 1;\n\ttransform: translateX(0);\n\ttransition: opacity ease-in-out 0.2s, transform ease-in-out 0.2s;\n\tpointer-events: auto;\n}\n\n.game-toolbar-ui > .info-container {\n\talign-self: flex-start;\n\tmargin-bottom: -1px; /* Prevents gap when UI is scaled */\n\tmargin-right: 8px;\n\tpadding: 8px 10px 0 10px;\n\tclip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n\tbackground-color: var(--surface-color);\n}\n.game-toolbar-ui.up > .info-container {\n\tmargin-top: -1px; /* Prevents gap when UI is scaled */\n\tpadding: 0 10px 8px 10px;\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n.game-toolbar-ui > .info-container.hidden, #ui.has-safe-area-horizontal .game-toolbar-ui > .info-container {\n\tdisplay: none;\n}\n\n.game-toolbar-ui > .info-container > .content {\n\tpadding: 4px 15px 4px 10px;\n\tclip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n\tbackground-color: var(--surface-tertiary-color);\n\tcolor: var(--text-color);\n}\n.game-toolbar-ui.up > .info-container > .content {\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n\n.game-toolbar-ui > .info-container > .content > .track-name {\n\tfont-size: 28px;\n\tfont-weight: bold;\n}\n\n.game-toolbar-ui > .info-container > .content > .game-mode {\n\tfont-size: 24px;\n\tfont-weight: bold;\n}\n\n.game-toolbar-ui > .info-container > .content > .record {\n\tfont-size: 24px;\n\topacity: 0.5;\n}\n.game-toolbar-ui > .info-container > .content > .position {\n\theight: 0;\n\topacity: 0;\n\tfont-size: 20px;\n\ttransition: height 0.5s ease-in-out, opacity 0.5s ease-in-out;\n}\n.game-toolbar-ui > .info-container > .content > .position.visible {\n\theight: 20px;\n\topacity: 1;\n}\n\n.game-toolbar-ui > .button-container {\n\tpadding: 8px 10px;\n\tbackground-color: var(--surface-color);\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n\n#ui.has-safe-area-horizontal .game-toolbar-ui > .button-container {\n\tpadding-right: 16px;\n\tclip-path: polygon(10px 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n}\n#ui.has-safe-area-horizontal .game-toolbar-ui.up > .button-container {\n\tpadding-left: 16px;\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 8px 100%);\n}\n\n.game-toolbar-ui.touch > .button-container > .button {\n\tfont-size: 24px;\n}\n.game-toolbar-ui.touch > .button-container > .button > img {\n\twidth: 24px;\n\theight: 24px;\n}\n", ""]);
+            s.push([e.id, ".game-toolbar-ui {\n\tdisplay: flex;\n\tflex-direction: column;\n\talign-items: stretch;\n\tposition: absolute;\n\tleft: var(--safe-area-horizontal);\n\tbottom: 0;\n\tz-index: 1;\n\topacity: 0;\n\ttransform: translateX(-10px);\n\ttransition: opacity 0.7s ease-out 0.05s, transform 0.7s ease-out 0.05s;\n\tpointer-events: none;\n}\n.game-toolbar-ui.up {\n\tflex-direction: column-reverse;\n\tposition: absolute;\n\tbottom: auto;\n\ttop: 0;\n}\n.game-toolbar-ui.visible {\n\topacity: 1;\n\ttransform: translateX(0);\n\ttransition: opacity ease-in-out 0.2s, transform ease-in-out 0.2s;\n\tpointer-events: auto;\n}\n\n.game-toolbar-ui > .info-container {\n\talign-self: flex-start;\n\tmargin-bottom: -1px; /* Prevents gap when UI is scaled */\n\tmargin-right: 8px;\n\tpadding: 8px 10px 0 10px;\n\tclip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n\tbackground-color: var(--surface-color);\n}\n.game-toolbar-ui.up > .info-container {\n\tmargin-top: -1px; /* Prevents gap when UI is scaled */\n\tpadding: 0 10px 8px 10px;\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n.game-toolbar-ui > .info-container.hidden, #ui.has-safe-area-horizontal .game-toolbar-ui > .info-container {\n\tdisplay: none;\n}\n\n.game-toolbar-ui > .info-container > .content {\n\tpadding: 4px 15px 4px 10px;\n\tclip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n\tbackground-color: var(--surface-tertiary-color);\n\tcolor: var(--text-color);\n}\n.game-toolbar-ui.up > .info-container > .content {\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n\n.game-toolbar-ui > .info-container > .content > .track-name {\n\tfont-size: 28px;\n\tfont-weight: bold;\n}\n\n.game-toolbar-ui > .info-container > .content > .game-mode {\n\tfont-size: 24px;\n\tfont-weight: bold;\n}\n\n.game-toolbar-ui > .info-container > .content > .record {\n\tfont-size: 24px;\n\topacity: 0.5;\n}\n.game-toolbar-ui > .info-container > .content > .position {\n\theight: 0;\n\topacity: 0;\n\tfont-size: 20px;\n\ttransition: height 0.5s ease-in-out, opacity 0.5s ease-in-out;\n}\n.game-toolbar-ui > .info-container > .content > .position.visible {\n\theight: 20px;\n\topacity: 1;\n}\n\n.game-toolbar-ui > .button-container {\n\tpadding: 8px 10px;\n\tbackground-color: var(--surface-color);\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);\n}\n\n#ui.has-safe-area-horizontal .game-toolbar-ui > .button-container {\n\tpadding-right: 16px;\n\tclip-path: polygon(10px 0, calc(100% - 8px) 0, 100% 100%, 0 100%);\n}\n#ui.has-safe-area-horizontal .game-toolbar-ui.up > .button-container {\n\tpadding-left: 16px;\n\tclip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 8px 100%);\n}\n\n.game-toolbar-ui.touch > .button-container > .button {\n\tfont-size: 24px;\n}\n.game-toolbar-ui.touch > .button-container > .button > img {\n\twidth: 24px;\n\theight: 24px;\n}\n", ""]);
             const o = s
         }
         ,
@@ -42777,43 +42777,8 @@ window.__nswsTrackQuery = function(trackId) {
                     }
                 } else
                     C.set(this, Jn, null, "f");
-                if (s?.multiplayerConnection instanceof Fn) {
-                    const e = document.createElement("button");
-                    e.className = "button",
-                    e.innerHTML = '<img class="button-icon" src="images/invite.svg"> ',
-                    e.append(document.createTextNode(n.get("Invite"))),
-                    e.addEventListener("click", ( () => {
-                        t.playUIClick(),
-                        h()
-                    }
-                    )),
-                    m.appendChild(e),
-                    C.get(this, Yn, "f").push(e)
-                }
-                if (null != s) {
-                    const e = document.createElement("button");
-                    e.className = "button",
-                    e.innerHTML = '<img class="button-icon" src="images/list.svg"> ',
-                    e.append(document.createTextNode(n.get("Players"))),
-                    e.addEventListener("click", ( () => {
-                        t.playUIClick(),
-                        d()
-                    }
-                    )),
-                    m.appendChild(e),
-                    C.get(this, Yn, "f").push(e)
-                }
-                s?.multiplayerConnection instanceof Fn && (C.set(this, Xn, document.createElement("button"), "f"),
-                C.get(this, Xn, "f").className = "button",
-                C.get(this, Xn, "f").innerHTML = '<img class="button-icon" src="images/load.svg"> ',
-                C.get(this, Xn, "f").append(document.createTextNode(n.get("Change Track"))),
-                C.get(this, Xn, "f").addEventListener("click", ( () => {
-                    t.playUIClick(),
-                    u()
-                }
-                )),
-                m.appendChild(C.get(this, Xn, "f")),
-                C.get(this, Yn, "f").push(C.get(this, Xn, "f"))),
+                // Multiplayer is only Competitions now, and PolyCup's panel has the invite, the players
+                // (with kicks) and the track choice, so the stock Invite/Players/Change Track buttons are gone.
                 C.get(this, Wn, "f").appendChild(C.get(this, Kn, "f")),
                 C.get(this, Hn, "f").addChangeListener(C.set(this, $n, ( () => {
                     C.get(this, Hn, "f").touchEnabled ? p.classList.add("hidden") : p.classList.remove("hidden"),
@@ -43972,21 +43937,38 @@ window.__nswsTrackQuery = function(trackId) {
             const settingsOf = g => C.get(g, Gr, "f");
             const restartAllowed = g => null == C.get(g, ca, "f") && !C.get(g, Pa, "f");
             const thumbnail = t => t instanceof HTMLCanvasElement ? t.toDataURL() : t;
+            const cupPool = () => window.__nswsCupPool ?? { shorts: !0, main: [], community: [] };
+            const mainEnv = meta => /^(Summer|Winter|Desert)\b/.exec(meta?.name ?? "")?.[1];
             return {
                 Host: Fn,
                 Client: Dl,
                 Game: ts,
                 TrackLibrary: sd,
+                // Only the maps in the cup's pool (window.__nswsCupPool, picked before the room opened):
+                // the weekly shorts and the chosen main tracks are "official", Kodub's community tracks "community".
                 trackLibrary: {
                     forEachTrack(cb) {
-                        y.forEachOfficialTrack((id, meta, data, thumb) => cb(id, meta, "official", data?.environment, async () => ({ trackData: data, trackMetadata: meta }), thumbnail(thumb)));
-                        const community = (id, group, meta, env, load, thumb) => cb(id, meta, "community", env, async () => ({ trackData: await load(), trackMetadata: meta }), thumbnail(thumb));
-                        y.forEachCommunityTrack(community);
-                        y.forEachKodubCommunityTrack(community);
+                        const pool = cupPool();
+                        y.forEachOfficialTrack((id, meta, data, thumb) => pool.main.includes(mainEnv(meta)) && cb(id, meta, "official", data?.environment, async () => ({ trackData: data, trackMetadata: meta }), thumbnail(thumb)));
+                        const listed = category => (id, group, meta, env, load, thumb) => cb(id, meta, category, env, async () => ({ trackData: await load(), trackMetadata: meta }), thumbnail(thumb));
+                        pool.shorts && y.forEachCommunityTrack(listed("official"));
+                        const community = listed("community");
+                        y.forEachKodubCommunityTrack((id, group, ...rest) => pool.community.includes(group) && community(id, group, ...rest));
                         y.forEachCustomTrack((id, meta, data, thumb) => cb(id, meta, "custom", data?.environment, async () => ({ trackData: data, trackMetadata: meta }), thumbnail(thumb)));
                     },
-                    isOfficialTrack: id => y.isOfficialTrack(id),
-                    isCommunityTrack: id => y.isCommunityTrack(id)
+                    isOfficialTrack(id) {
+                        const pool = cupPool();
+                        let found = !1;
+                        y.forEachOfficialTrack((t, meta) => t === id && pool.main.includes(mainEnv(meta)) && (found = !0));
+                        pool.shorts && y.forEachCommunityTrack(t => t === id && (found = !0));
+                        return found;
+                    },
+                    isCommunityTrack(id) {
+                        const pool = cupPool();
+                        let found = !1;
+                        y.forEachKodubCommunityTrack((t, group) => t === id && pool.community.includes(group) && (found = !0));
+                        return found;
+                    }
                 },
                 watchGames: cb => cb(Sa),
                 leaderboardUploads: (() => {

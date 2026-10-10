@@ -1026,10 +1026,14 @@ async function handleChat(request, url, env, fromSite, origin) {
     if (!isSocket && request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (!env.CHAT) return plain(503, "Chat is off", origin);
     const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
-    const room = env.CHAT.get(env.CHAT.idFromName("global"));
+    // ?cup=CODE is that cup's own chat room (src/chat.js), used by the Competitions panel.
+    const cup = isSocket ? String(url.searchParams.get("cup") || "").toUpperCase() : "";
+    if (cup && !LOBBY_CODE.test(cup)) return plain(404, "Not found", origin);
+    const room = env.CHAT.get(env.CHAT.idFromName(cup ? "cup:" + cup : "global"));
     if (isSocket) {
         const headers = new Headers(request.headers);
         headers.set("X-Chat-Ip", ip);
+        if (cup) headers.set("X-Chat-Cup", cup);
         return room.fetch(new Request(request, { headers }));
     }
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
@@ -1061,6 +1065,13 @@ async function handleCup(request, url, env, fromSite, origin) {
         if (!env.LOBBY_DIR) return plain(503, "Competitions are off", origin);
         if (request.method !== "GET") return plain(405, "Method not allowed", origin);
         return json(await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).list(), origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "cup/info") {
+        if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+        if (!env.LOBBY) return plain(503, "Competitions are off", origin);
+        const code = String(url.searchParams.get("code") || "").trim().toUpperCase();
+        if (!LOBBY_CODE.test(code)) return json({ cup: null }, origin);
+        return json({ cup: await env.LOBBY.get(env.LOBBY.idFromName(code)).info() }, origin);
     }
     const role = { "cup/host": "host", "cup/join": "join", "cup/mux": "mux" }[url.pathname.slice(TRAFFIC_PREFIX.length)];
     if (!role) return plain(404, "Not found", origin);

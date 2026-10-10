@@ -126,6 +126,8 @@ export interface CupState {
   results: { id: PlayerId; place: number }[];
   disconnectPolicy: 'dnf' | 'void';
   draft?: Draft;
+  // Not So Weekly Shorts: vote-skip (cup.ts voteSkip).
+  skipVote?: { trackId: TrackId; ids: PlayerId[] };
 }
 export type PublicCupState = Omit<CupState, 'history'> & { history?: CupState['history'] };
 export type InputEvent = [frame: number, mask: number];

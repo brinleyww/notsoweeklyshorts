@@ -61,6 +61,8 @@ export function validSnapshot(value: unknown): value is PublicCupState {
   if (
     (s.withdrawn !== undefined && !ids(s.withdrawn)) ||
     (s.pendingRacers !== undefined && !ids(s.pendingRacers)) ||
+    (s.skipVote !== undefined &&
+      (!obj(s.skipVote) || !trackId(s.skipVote.trackId) || !ids(s.skipVote.ids))) ||
     s.pendingRacers?.some((id) => s.withdrawn?.includes(id)) ||
     ((!rulesFor(s).allowRacerChanges || s.phase === 'registration') &&
       (s.withdrawn?.length ?? 0) + (s.pendingRacers?.length ?? 0) > 0)

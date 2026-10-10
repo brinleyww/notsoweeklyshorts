@@ -4,7 +4,7 @@ import type { PolyModLoader } from '../src/game-types.ts';
 import { Controller } from '../src/controller.ts';
 import { CupUI } from '../src/ui.ts';
 import { installTransport } from './transport.js';
-import { CompetitionsHub } from './hub.ts';
+import { CompetitionsHub, poolLabel, type MapPool } from './hub.ts';
 
 type KeyBinding = { getter: () => string; callback: (event: KeyboardEvent) => void };
 type Keys = { chat(): string; ghosts(): string; matches(event: KeyboardEvent, binding: string): boolean };
@@ -14,6 +14,9 @@ const site = window as unknown as {
   __nswsKeyBindCapturing?: boolean;
   __nswsCupApp?: unknown;
   __nswsLobbyTag?: (trackId: string) => string;
+  __nswsCupRoom?: () => { code: string; secret: string | null } | null;
+  __nswsCupPool?: MapPool;
+  __nswsCupPoolLabel?: () => string;
 };
 
 installTransport();
@@ -64,6 +67,9 @@ site.__nswsLobbyTag = () => {
   const code = hub.activeCode();
   return code ? '&nswsLobby=' + code : '';
 };
+
+site.__nswsCupRoom = () => hub.room();
+site.__nswsCupPoolLabel = () => poolLabel(site.__nswsCupPool ?? { shorts: true, main: [], community: [] });
 
 site.__nswsCupApp = {
   open: () => hub.open(),

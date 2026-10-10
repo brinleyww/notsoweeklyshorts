@@ -649,3 +649,31 @@ export function publicState(state: CupState) {
   const { history, ...rest } = state;
   return copy(rest);
 }
+// Not So Weekly Shorts: racers vote to skip a random track; more than half of them skips it.
+export function skipTarget(state: CupState | null) {
+  if (!state || rulesFor(state).selection !== 'random' || !currentMatch(state)) return null;
+  if (state.runtime && ['loading', 'warmup', 'countdown', 'racing'].includes(state.phase))
+    return state.runtime.trackId;
+  return state.phase === 'between-rounds' ? nextTrack(state) : null;
+}
+export function skipVotes(state: CupState | null) {
+  const target = skipTarget(state);
+  return target && state?.skipVote?.trackId === target
+    ? state.skipVote.ids.filter((id) => activeIds(state).includes(id))
+    : [];
+}
+export function skipNeeded(state: CupState | null) {
+  return Math.floor(activeIds(state).length / 2) + 1;
+}
+export function voteSkip(state: CupState, id: number) {
+  const target = skipTarget(state);
+  requireThat(target, 'There is no track to skip right now.');
+  requireThat(activeIds(state).includes(id), 'Only racers can vote to skip.');
+  const ids = skipVotes(state);
+  const at = ids.indexOf(id);
+  if (at >= 0) ids.splice(at, 1);
+  else ids.push(id);
+  state.skipVote = { trackId: target, ids };
+  touch(state);
+  return ids.length >= skipNeeded(state);
+}

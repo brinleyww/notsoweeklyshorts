@@ -59,6 +59,11 @@ const POLLS_PER_IP = SOCKETS_PER_IP;
 // One emoji, as Unicode lists it (a flag, a skin tone or a family count as one).
 const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 
+// Cup chats (one room per cup code, see handleChat in worker.js): the organizer's mutes last for the
+// cup, and a room nobody has joined for CUP_KEEP_MS is wiped.
+const CUP_MUTE_MS = 24 * 3600_000;
+const CUP_KEEP_MS = 24 * 3600_000;
+
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX32 = /^[0-9a-f]{32}$/;
 function ownerHashes(value) {
@@ -89,6 +94,21 @@ export class ChatRoom extends DurableObject {
     constructor(ctx, env) {
         super(ctx, env);
         this.sql = ctx.storage.sql;
+        this.schema();
+        // Per player (uid), not per socket, so several tabs share one limit. See recentActivity.
+        this.spam = new Map();
+        // Long-polling state. It lives in memory only: the room can't hibernate while a poll is
+        // waiting, and when it does restart the new epoch tells every poller to reload.
+        this.epoch = crypto.randomUUID();
+        this.seq = 0;
+        this.events = [];
+        this.waiters = new Set();
+        this.pollers = new Map();
+        this.tags = new Map();
+        ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    }
+
+    schema() {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
@@ -103,17 +123,15 @@ export class ChatRoom extends DurableObject {
         this.sql.exec("CREATE TABLE IF NOT EXISTS timeouts (uid TEXT PRIMARY KEY, until INTEGER NOT NULL, level INTEGER NOT NULL)");
         this.sql.exec(`CREATE TABLE IF NOT EXISTS reactions (msg INTEGER NOT NULL, emoji TEXT NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (msg, emoji, uid))`);
-        // Per player (uid), not per socket, so several tabs share one limit. See recentActivity.
-        this.spam = new Map();
-        // Long-polling state. It lives in memory only: the room can't hibernate while a poll is
-        // waiting, and when it does restart the new epoch tells every poller to reload.
-        this.epoch = crypto.randomUUID();
-        this.seq = 0;
-        this.events = [];
-        this.waiters = new Set();
-        this.pollers = new Map();
-        this.tags = new Map();
-        ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+    }
+
+    async alarm() {
+        await this.ctx.storage.deleteAll();
+        this.schema();
+    }
+
+    cupMutes() {
+        return this.sql.exec("SELECT uid FROM mutes WHERE until > ?", Date.now()).toArray().map((r) => r.uid);
     }
 
     // Called by the Worker with the socket's upgrade request, after it has checked the origin.
@@ -124,7 +142,7 @@ export class ChatRoom extends DurableObject {
         if (ipHash && open.length >= SOCKETS_PER_IP) return new Response("Too many chat windows", { status: 429 });
         const pair = new WebSocketPair();
         this.ctx.acceptWebSocket(pair[1]);
-        pair[1].serializeAttachment({ ip: ipHash, joined: false });
+        pair[1].serializeAttachment({ ip: ipHash, joined: false, cup: request.headers.get("X-Chat-Cup") || null });
         return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -478,9 +496,18 @@ export class ChatRoom extends DurableObject {
             const mine = this.ctx.getWebSockets().filter((other) => other !== ws && other.deserializeAttachment()?.uid === who.uid).length;
             if (mine >= SOCKETS_PER_UID) return ws.close(1008, "Too many chat windows");
             who.tag = await this.tagOf(who.uid);
+            if (me.cup) {
+                // The organizer proves it with the secret its page gave the cup room when it opened.
+                if (HEX32.test(msg.host ?? "") && this.env.LOBBY) {
+                    try {
+                        who.cupHost = await this.env.LOBBY.get(this.env.LOBBY.idFromName(me.cup)).isHost(msg.host);
+                    } catch {}
+                }
+                await this.ctx.storage.setAlarm(Date.now() + CUP_KEEP_MS);
+            }
             Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
-            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history() });
+            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), ...(me.cup ? { mutes: this.cupMutes() } : {}) });
             return;
         }
         if (!me.joined) return;
@@ -529,7 +556,7 @@ export class ChatRoom extends DurableObject {
             const text = cleanText(msg.text, MAX_TEXT);
             if (!text) return;
             const until = this.mutedUntil(me.uid);
-            if (until) return reply({ t: "err", text: "You're muted for " + duration(until - Date.now()) + "." });
+            if (until) return reply({ t: "err", text: me.cup ? "The organizer muted you for this cup." : "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
             const refused = me.owner ? null : this.checkSpam(me.uid, text, now);
             if (refused) return reply(refused);
@@ -561,6 +588,12 @@ export class ChatRoom extends DurableObject {
             return;
         }
 
+        if (msg?.t === "cupmute" && me.cup && (me.cupHost || me.owner) && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && msg.uid !== me.uid) {
+            if (msg.on === true) this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + CUP_MUTE_MS);
+            else this.sql.exec("DELETE FROM mutes WHERE uid = ?", msg.uid);
+            this.broadcast({ t: "mutes", uids: this.cupMutes() });
+            return;
+        }
         if (!me.owner) return;
         if (msg?.t === "mute" && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && MUTE_MINUTES.includes(msg.minutes)) {
             this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + msg.minutes * 60000);

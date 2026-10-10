@@ -7,7 +7,14 @@ import type {
   PublicCupState,
   RaceRecord,
 } from './types.ts';
-export type ActionType = 'join' | 'leave' | 'ban' | 'dnf' | 'practice-ready' | 'remove-pick';
+export type ActionType =
+  | 'join'
+  | 'leave'
+  | 'ban'
+  | 'dnf'
+  | 'practice-ready'
+  | 'remove-pick'
+  | 'skip-vote';
 export interface ActionMessage {
   type: ActionType;
   requestId?: string;
@@ -48,7 +55,6 @@ export interface InputViewMessage extends InputContext {
   events: InputEvent[];
 }
 export type Message =
-  | import('./chat.ts').ChatMessage
   | { type: 'identity-open'; cupId: string; publicKey: string }
   | { type: 'identity-challenge'; cupId: string; nonce: string }
   | { type: 'identity-proof'; cupId: string; nonce: string; signature: string }

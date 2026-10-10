@@ -1,5 +1,5 @@
 import type { CupState, Track } from './types.ts';
-import { rulesFor } from './presets.ts';
+import { poolAllows, rulesFor } from './presets.ts';
 // Optional on old saves; every newly created Cup enables the ban draft.
 function requireThat(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(message);
@@ -55,7 +55,7 @@ export function banTrack(
     'Bans must come from the main or community track pool.',
   );
   requireThat(
-    rulesFor(s).pool.includes(track.category as 'official' | 'community'),
+    poolAllows(rulesFor(s), track.category),
     'That track category is not allowed by this preset.',
   );
   requireThat(!isBanned(s, track.id), 'That track is already banned.');

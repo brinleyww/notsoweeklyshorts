@@ -394,9 +394,21 @@ The main menu's **Competitions** button runs PolyCup by Kiki (used with permissi
 link). PolyCup sits on the game's own multiplayer, and every part of it goes through this Worker:
 there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` covers the page side.
 
-- **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), and three WebSockets that
-  stand in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup code, reserved by
-  `LobbyDirectory`, 10 per address per 10 minutes), `/nsws/cup/join?code=` and `/nsws/cup/mux?code=`.
+- **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), `GET /nsws/cup/info?code=`
+  (a cup's name and map pool, read before joining; `{cup: null}` if it isn't open), and three
+  WebSockets that stand in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup
+  code, reserved by `LobbyDirectory`, 10 per address per 10 minutes), `/nsws/cup/join?code=` and
+  `/nsws/cup/mux?code=`.
+- **Set before the room opens** (the host's `createInvite` carries them as `nsws`): the cup's name,
+  public or private, room size, the map pool (`{shorts, main: [Summer|Winter|Desert], community:
+  [game versions]}`; only the weekly shorts are on by default) and a random secret for the cup chat.
+  The room keeps them on the host socket's attachment.
+- **Cup chat** is the universal chat (`ChatRoom`, `src/chat.js`) in a room of its own per cup:
+  `/nsws/chat?cup=CODE` (WebSocket only) is the Durable Object named `cup:CODE`. Same filter, slow
+  mode, spam timeouts and tags as the main chat. The organizer's hello carries the chat secret, which
+  the room checks with `LobbyRoom.isHost`; only that socket (or the owner) can send `cupmute`, which
+  mutes a player for the cup and broadcasts `{t: "mutes", uids}`. A cup chat room wipes itself a day
+  after the last player joined it.
 - **The room** (`LobbyRoom` in `proxy/src/lobby.js`, one Durable Object per code) answers the same
   JSON handshake the game speaks to Kodub (`createInvite`, `joinInvite`, `acceptJoin`,
   `declineJoin`, `iceCandidate`, `joinDisconnect`), censoring nicknames and cup names. It then

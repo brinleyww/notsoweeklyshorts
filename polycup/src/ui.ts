@@ -11,7 +11,7 @@ import { presetSummary } from './preset-summary.ts';
 import { rankingPositions, animateRanking } from './ranking-motion.ts';
 import { ChatUI } from './chat-ui.ts';
 import { PresetEditor } from './preset-ui.ts';
-import { rulesFor, type TrackCategory } from './presets.ts';
+import { poolAllows, rulesFor, type TrackCategory } from './presets.ts';
 import { inputControls } from './inputs.ts';
 import { CupInvite } from './invite.ts';
 import { countryFlag, lobbyPanel } from './lobby.ts';
@@ -753,35 +753,8 @@ export class CupUI {
   }
   setup() {
     const body = h('div', undefined, 'body');
-    body.append(h('h2', this.#c.isHost ? 'Create a Simple Cup' : 'Waiting for the organizer'));
-    if (this.#c.isHost) {
-      const label = h('label', 'Competition name');
-      const input = h('input');
-      input.value = 'Simple Cup';
-      input.dataset.field = 'cup-name';
-      input.maxLength = 64;
-      label.append(input);
-      body.append(label);
-      body.append(this.button('Create Cup', () => this.#c.create(input.value), 'primary'));
-      const saved = localStorage.getItem('pwc-save-v2');
-      if (saved)
-        body.append(this.button('Restore autosave', () => this.#c.restore(saved), 'quiet'));
-      const file = h('input');
-      file.type = 'file';
-      file.accept = '.json';
-      file.hidden = true;
-      file.addEventListener('change', async () => {
-        try {
-          if (file.files?.[0]) this.#c.restore(await file.files[0].text());
-        } catch (e) {
-          this.#c.fail(e);
-        }
-      });
-      body.append(
-        file,
-        this.button('Import saved tournament', () => file.click(), 'quiet'),
-      );
-    }
+    // Not So Weekly Shorts: the host's cup is created with the name picked before the room opened.
+    body.append(h('h2', this.#c.isHost ? 'Setting up the cup…' : 'Waiting for the organizer'));
     this.#panel.append(body);
   }
   roster() {
@@ -795,7 +768,7 @@ export class CupUI {
       'quiet',
     );
     ghosts.title =
-      'Local visibility only. Rebind in Settings → PolyCup. The watched racer stays visible.';
+      'Local visibility only. Rebind in Settings → Ghosts. The watched racer stays visible.';
     ghosts.setAttribute('aria-pressed', String(c.hideOtherGhosts));
     heading.append(h('h2', `${Cup.occupiedSlots(s)} / 8 racer slots`), ghosts);
     this.#body.append(heading);
@@ -1085,14 +1058,26 @@ export class CupUI {
       }
     if (!embedded && s.phase === 'registration' && !joined) this.#body.append(this.joinControls());
     if (s.phase === 'registration' && (joined || banning)) {
-      const pool = rulesFor(s).pool.filter((category) => !banning || category !== 'custom');
+      const grid = h('div', undefined, 'track-grid');
+      let entries: LibraryTrack[] | undefined;
+      try {
+        entries = c.allowedTracks();
+      } catch (error) {
+        grid.append(h('p', error instanceof Error ? error.message : String(error), 'muted'));
+      }
+      // Not So Weekly Shorts: a tab for each collection in the host's map pool.
+      const pool = (['official', 'community', 'custom'] as const).filter((category) =>
+        category === 'custom'
+          ? !banning && poolAllows(rulesFor(s), category)
+          : !entries || entries.some((t) => t.category === category),
+      );
       if (!pool.includes(this.#trackCategory as TrackCategory))
         this.#trackCategory = pool[0] ?? 'official';
       if (c.transferProgress) this.#body.append(h('p', c.transferProgress, 'upload-status'));
       const tabs = h('div', undefined, 'track-tabs');
       tabs.setAttribute('aria-label', 'Track collections');
       for (const [category, text] of [
-        ['official', 'Official tracks'],
+        ['official', 'Tracks'],
         ['community', 'Community tracks'],
         ['custom', 'Custom tracks'],
       ]) {
@@ -1115,13 +1100,6 @@ export class CupUI {
       search.setAttribute('aria-label', 'Search tracks');
       search.dataset.field = 'track-search';
       search.className = 'track-search';
-      const grid = h('div', undefined, 'track-grid');
-      let entries: LibraryTrack[] | undefined;
-      try {
-        entries = c.allowedTracks();
-      } catch (error) {
-        grid.append(h('p', error instanceof Error ? error.message : String(error), 'muted'));
-      }
       const draw = () => {
         if (!entries) return;
         grid.replaceChildren();
@@ -1255,6 +1233,8 @@ export class CupUI {
         this.#membershipControls = membership;
       }
       this.#body.append(this.scoreboard(true));
+      const skip = this.skipControl();
+      if (skip) this.#body.append(skip);
       if (s.runtime) {
         const status = h(
           'p',
@@ -1657,6 +1637,11 @@ export class CupUI {
       ),
     );
     this.#hud.append(summary, this.scoreboard());
+    const skip = this.skipControl();
+    if (skip) {
+      this.#practiceHud.hidden = false;
+      this.#practiceHud.append(skip);
+    }
     if (s.phase === 'warmup') {
       this.#practiceHud.hidden = false;
       this.#practiceHud.append(this.practiceControls());
@@ -1787,6 +1772,24 @@ export class CupUI {
       }
     }
     this.#body = parent;
+  }
+  // Not So Weekly Shorts: vote-skip for random tracks.
+  skipControl() {
+    const c = this.#c,
+      s = c.state,
+      target = Cup.skipTarget(s);
+    if (!s || !target || c.localPlayerId === null || !Cup.activeIds(s).includes(c.localPlayerId))
+      return null;
+    const votes = Cup.skipVotes(s),
+      mine = votes.includes(c.localPlayerId);
+    const button = this.button(
+      `${mine ? 'Voted to skip' : 'Vote to skip track'} ${votes.length}/${Cup.skipNeeded(s)}`,
+      () => c.action('skip-vote', target),
+      mine ? 'selected' : 'quiet',
+    );
+    button.setAttribute('aria-pressed', String(mine));
+    button.classList.add('skip-vote');
+    return button;
   }
   practiceControls() {
     const c = this.#c,
