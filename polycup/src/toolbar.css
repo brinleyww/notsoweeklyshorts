@@ -1,0 +1,27 @@
+/* Only the toolbar containing our button receives the wrapping layout. All
+   button visuals and UI scaling remain owned by PolyTrack's native stylesheet. */
+.game-toolbar-ui.polycup-toolbar {
+  max-width:calc(100% - 2 * var(--safe-area-horizontal,0px) - 8px);
+}
+.game-toolbar-ui.polycup-toolbar > .button-container {
+  display:flex;
+  flex-wrap:wrap;
+  row-gap:4px;
+}
+.game-toolbar-ui.polycup-toolbar > .button-container > .button { white-space:nowrap; }
+.game-toolbar-ui .polycup-toolbar-button { pointer-events:inherit; }
+.game-toolbar-ui .polycup-toolbar-button > .polycup-trophy { filter:brightness(0) invert(1); }
+.polycup-inputs { position:fixed; right:18px; bottom:max(50px,var(--pwc-bottom,0px)); z-index:100099; pointer-events:none; color:#b3c7df; font:italic 18px/1 ForcedSquare,Arial,sans-serif; }
+.polycup-inputs[hidden] { display:none !important; }
+.polycup-inputs .input-visualizer-ui { position:relative; left:auto; bottom:auto; margin:0; --size:38px; }
+.polycup-inputs .input-visualizer-ui > div > img { padding:8px; }
+.polycup-inputs .input-visualizer-ui > div.active > img { padding:10px; }
+.polycup-inputs .input-status { max-width:170px; margin-top:6px; text-align:center; }
+.polycup-inputs .input-status[hidden] { display:none; }
+.game-ui.polycup-watching > :is(.time-announcer-ui, .hint-ui, .timer-ui, .checkpoint-ui, .speedometer-ui),
+.game-ui.polycup-session-ended > .player-list-ui,
+.session-end-ui.polycup-session-ended {
+  /* Keep native results and callbacks intact; suppress only their presentation.
+     The ordinary Players panel stays available during an active session. */
+  display: none !important;
+}

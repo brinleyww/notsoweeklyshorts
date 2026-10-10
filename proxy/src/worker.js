@@ -1042,40 +1042,41 @@ async function handleChat(request, url, env, fromSite, origin) {
     });
 }
 
-// A refusal the page can read: a failed WebSocket handshake only ever shows as a bare close.
-function socketRefusal(text) {
+// A refusal the game can read: a failed WebSocket handshake only ever shows as a bare close.
+function socketRefusal(error) {
     const pair = new WebSocketPair();
     pair[1].accept();
-    pair[1].send(JSON.stringify({ t: "err", text }));
+    pair[1].send(JSON.stringify({ type: "error", error }));
     pair[1].close(4029, "Refused");
     return new Response(null, { status: 101, webSocket: pair[0] });
 }
 
-// Multiplayer (src/lobby.js). /lobby/list is the public lobby list; /lobby/ws is a lobby's
-// WebSocket, either ?code=XXXXX to join or ?create=1 for a new lobby. Only the site can use them.
-async function handleLobby(request, url, env, fromSite, origin) {
+// Competitions (src/lobby.js). /cup/list is the public cup list. The sockets stand in for Kodub's
+// matchmaking server and for WebRTC: /cup/host (a new cup code), /cup/join?code= and /cup/mux?code=
+// (the relayed data channels). Only the site can use them.
+async function handleCup(request, url, env, fromSite, origin) {
     if (!fromSite) return forbidden();
-    if (url.pathname === TRAFFIC_PREFIX + "lobby/list") {
+    if (url.pathname === TRAFFIC_PREFIX + "cup/list") {
         if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
-        if (!env.LOBBY_DIR) return plain(503, "Multiplayer is off", origin);
+        if (!env.LOBBY_DIR) return plain(503, "Competitions are off", origin);
         if (request.method !== "GET") return plain(405, "Method not allowed", origin);
         return json(await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).list(), origin);
     }
-    if (url.pathname !== TRAFFIC_PREFIX + "lobby/ws") return plain(404, "Not found", origin);
+    const role = { "cup/host": "host", "cup/join": "join", "cup/mux": "mux" }[url.pathname.slice(TRAFFIC_PREFIX.length)];
+    if (!role) return plain(404, "Not found", origin);
     if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
-    if (!env.LOBBY || !env.LOBBY_DIR) return socketRefusal("Multiplayer is off right now.");
-    const ip = (await sha256Hex("nsws-lobby-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
-    const headers = new Headers(request.headers);
+    if (!env.LOBBY || !env.LOBBY_DIR) return socketRefusal("ServerUnavailable");
     let code = String(url.searchParams.get("code") || "").trim().toUpperCase();
-    if (url.searchParams.get("create") === "1") {
+    if (role === "host") {
+        const ip = (await sha256Hex("nsws-lobby-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
         code = await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).reserve(ip);
-        if (!code) return socketRefusal("Too many new lobbies from your network. Try again in a few minutes.");
-        headers.set("X-Lobby-Create", "1");
+        if (!code) return socketRefusal("IpLimit");
     } else if (!LOBBY_CODE.test(code)) {
-        return socketRefusal("That isn't a lobby code.");
+        return socketRefusal("ExpiredInvite");
     }
-    headers.set("X-Lobby-Code", code);
-    headers.set("X-Lobby-Ip", ip);
+    const headers = new Headers(request.headers);
+    headers.set("X-Cup-Code", code);
+    headers.set("X-Cup-Role", role);
     return env.LOBBY.get(env.LOBBY.idFromName(code)).fetch(new Request(request, { headers }));
 }
 
@@ -1092,12 +1093,12 @@ export default {
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
             }
-            if (url.pathname.startsWith(TRAFFIC_PREFIX + "lobby/")) {
+            if (url.pathname.startsWith(TRAFFIC_PREFIX + "cup/")) {
                 try {
-                    return await handleLobby(request, url, env, fromSite, requestOrigin);
+                    return await handleCup(request, url, env, fromSite, requestOrigin);
                 } catch (err) {
-                    console.error("lobby error:", err && err.message);
-                    return plain(500, "Multiplayer failed", requestOrigin);
+                    console.error("cup error:", err && err.message);
+                    return plain(500, "Competitions failed", requestOrigin);
                 }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags)\//.test(url.pathname)) {

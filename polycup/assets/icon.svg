@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="28" fill="#111c2e"/>
+  <path d="M0 208 208 0H256L0 256Z" fill="#1d3046"/>
+  <path d="M20 226 226 20" stroke="#365267" stroke-width="3"/>
+  <path d="M80 60H48V96L76 120H91M176 60H208V96L180 120H165" fill="none" stroke="#dca53c" stroke-width="12" stroke-linejoin="round"/>
+  <path d="M76 46H180L170 116 128 152 86 116Z" fill="#f1c55b"/>
+  <path d="M128 46H180L170 116 128 152Z" fill="#dca53c"/>
+  <path d="M120 148H136V180H120ZM96 180H160V192H96ZM80 192H176V206H80Z" fill="#f1c55b"/>
+  <!-- PolyTrack 0.6.3 images/icon.svg: original P path, fill and stroke preserved. -->
+  <g transform="translate(72 34) scale(2.1)"><path d="m18.136 15.178-3.9736 23.305h4.0872l1.5955-9.3577h16.667l2.3782-13.947zm3.2744 4.7681h12.421l-0.78268 4.5896h-12.421z" fill="#b3c1ff" stroke="#112052" stroke-width=".93948"/></g>
+  <path d="M60 222H196" stroke="#77dbc5" stroke-width="5"/>
+</svg>

@@ -387,54 +387,37 @@ or exact `nickname`), `/nsws/tagadmin/grant`, `/nsws/tagadmin/bonus`. Deploy
 the Worker before pushing the site; until then the Tags tab and Referrals window
 say they aren't switched on yet.
 
-## Multiplayer (lobbies)
+## Competitions (PolyCup)
 
-The main menu's Multiplayer button (`mod/nsws_lobby.js`) opens lobbies that run entirely through
-this Worker: the lobby, every round, the chat and every car position. Nothing is peer to peer, and
-Kodub's multiplayer server is never used. Each lobby is its own `LobbyRoom` Durable Object, named
-by its 5-character code; `LobbyDirectory` ("global") hands out codes and lists public lobbies
-(`proxy/src/lobby.js`, bindings `LOBBY` and `LOBBY_DIR`, migration `v5`).
+The main menu's **Competitions** button runs PolyCup by Kiki (used with permission; source in
+`polycup/`, built to `mod/polycup.js`, which only loads when someone opens Competitions or a cup
+link). PolyCup sits on the game's own multiplayer, and every part of it goes through this Worker:
+there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` covers the page side.
 
-- **Routes** (allowed sites only): `GET /nsws/lobby/list` (public lobbies), and the WebSocket
-  `/nsws/lobby/ws?create=1` (new lobby) or `?code=XXXXX` (join). Refusals (bad code, full,
-  kicked, too many new lobbies from one address: 6 per 10 minutes) arrive as an `err` message
-  before the socket closes, so the page can show why.
-- **A match:** the host's settings (rounds 1-20, minutes per round 1-15, max players 2-16, break
-  5-30 s, scoring, vote-skip rule, live or hidden times, cars shown or hidden, joining mid-match,
-  and which weeks make up the map pool) travel with `create`/`settings`. Each round the room
-  picks a map from the pool without repeats, waits up to 12 s for everyone to load it, then runs
-  the clock. Records count until 1.5 s after the buzzer (network delay). Head-to-head scoring
-  gives a point for every player you beat on that map (a time beats no time); "Round wins" gives
-  1 point to the winner. Vote skip (majority, two thirds or everyone; 3 per round) swaps the map
-  without using up a round. After the last round come the final standings, then the lobby.
-- **Invite links:** the host's "Copy invite link" gives `<site>/?lobby=CODE`. Opening it loads the site
-  and joins that lobby once the menu is up (`window.__nswsLobbyOnLoad`, called after clip links and
-  before the first-visit auto-start); the parameter is removed from the address bar.
-- **Warm-up (on by default, "Warm-up in the break"):** when a round ends the room already picks the
-  next map (`nextTrack`) and a warm-up session id (`warmup`). A few seconds into the break everyone
-  drives that map with the others' cars relayed on the warm-up id; nothing on it is scored. The next
-  round then starts on that map with a fresh session id. Breaks run 5-60 s (default 20).
-- **In the game**, a round is the stock multiplayer race (Competitive mode): `LobbyConnection`
-  implements the game's connection interface, and `window.__nswsMp` (in `main.bundle.js`)
-  starts races with category `community`, so personal bests set in a lobby upload like any
-  other run. Remote cars are drawn 0.45 s behind (`remoteDelay`) to smooth over batching.
-- **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. The page sends car
-  states in one deflated batch every 200 ms while driving (about 5 messages a second per racer,
-  so roughly 900 requests an hour per racer), and the room relays them without reading or
-  storing them. The room saves its state with a 3 s debounce (one row), never per car message.
-  Idle lobbies hibernate. Lobbies with cars hidden send no car traffic at all.
-- **Reconnects:** a dropped player keeps their place and points for 45 s; the page retries 5
-  times. The host passes to the longest-connected player when the host leaves for good. An
-  empty lobby deletes its storage and its directory row.
-- **Lobby PBs go to the owner:** a personal best set during a lobby race is uploaded with
-  `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal replay check and is put
-  on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to Kodub, so other
-  players never see it until the owner verifies it; the player still gets their own entry back.
-  Race Control -> Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in the
-  game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
+- **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), and three WebSockets that
+  stand in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup code, reserved by
+  `LobbyDirectory`, 10 per address per 10 minutes), `/nsws/cup/join?code=` and `/nsws/cup/mux?code=`.
+- **The room** (`LobbyRoom` in `proxy/src/lobby.js`, one Durable Object per code) answers the same
+  JSON handshake the game speaks to Kodub (`createInvite`, `joinInvite`, `acceptJoin`,
+  `declineJoin`, `iceCandidate`, `joinDisconnect`), censoring nicknames and cup names. It then
+  relays data channels: each page's mux socket carries frames of records
+  `[u32 link][u16 channel][u8 kind][u32 length][bytes]`, and the room forwards each record to the
+  other end of its link (one frame per destination). It never reads the game data and stores nothing;
+  socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
+  are kept from the earlier lobbies, so no migration was needed).
+- **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
+  it sends into at most one frame every 200 ms (measured 3-5 a second per page in a live round), so an
+  8-player cup is about 2 requests a second, roughly 7,000 an hour. The room rejects more than 60
+  frames a second from one socket.
+- **Cup PBs go to the owner:** with "Upload leaderboard times" on in a cup's rules, a personal best set
+  in a cup is uploaded with `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal
+  replay check and is put on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to
+  Kodub, so other players never see it until the owner verifies it; the player still gets their own
+  entry back. Race Control -> Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in
+  the game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
   shows under "Hidden from the boards", where Allow puts it up). The recording is dropped after either.
   While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
-  Times inside the lobby itself (round results) are not replayed.
+  Cup results themselves are not replayed.
 
 ## Name moderation
 
