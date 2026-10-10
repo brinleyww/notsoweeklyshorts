@@ -76,22 +76,6 @@ window.__nswsTrackQuery = function(trackId) {
     let openClipsMenuOnLoad = false;
     let runHasClip = false;
     let openClipsMenu = () => {};
-    // Trackmania 2020 HUD style. Canvas nametags drawn before the font arrives fall back
-    // to another font, so they wait on the returned promise and redraw.
-    let tmHudFont = null;
-    let tmHudFontReady = false;
-    function useTmHud() {
-        if (null != tmHudFont)
-            return tmHudFont;
-        const style = document.createElement("style");
-        style.textContent = "@font-face{font-family:'Barlow Condensed';src:url(mod/fonts/BarlowCondensed.woff2) format('woff2');font-style:italic;font-weight:600;font-display:swap}.tm-split{position:absolute;left:0;right:0;top:30%;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none;opacity:0;font:italic 600 36px 'Barlow Condensed','Arial Narrow',ForcedSquare,sans-serif;letter-spacing:.5px;color:#fff;white-space:nowrap}.tm-split *{font:inherit}.tm-split .tm-row{display:flex;gap:5px}.tm-split .tm-speed{font-size:24px}.tm-split .tm-plate{transform:skewX(-14deg);padding:0 18px;background:rgba(10,12,20,.72)}.tm-split .tm-speed .tm-plate{padding:0 12px}.tm-split .tm-plate>span{display:inline-block;transform:skewX(14deg)}.tm-split .tm-diff{background:#1e6ff0}.tm-split .tm-diff.behind{background:#e0302c}";
-        document.head.appendChild(style);
-        const done = () => {
-            tmHudFontReady = !0;
-        };
-        tmHudFont = document.fonts.load("italic 600 64px 'Barlow Condensed'").then(done, done);
-        return tmHudFont;
-    }
     // The replay session on screen (the game's "Watch" view), or null when not
     // watching. Set and cleared by that session's own constructor/dispose.
     let watchSession = null;
@@ -9319,8 +9303,7 @@ window.__nswsTrackQuery = function(trackId) {
                 e[e.VibrationEnabled = 22] = "VibrationEnabled",
                 e[e.TouchSteeringSide = 23] = "TouchSteeringSide",
                 e[e.LowPerformanceMode = 24] = "LowPerformanceMode",
-                e[e.SolidMenuBackground = 25] = "SolidMenuBackground",
-                e[e.HudStyle = 26] = "HudStyle"
+                e[e.SolidMenuBackground = 25] = "SolidMenuBackground"
             }(i || (i = {}));
             const r = i
         }
@@ -9926,8 +9909,7 @@ window.__nswsTrackQuery = function(trackId) {
                             }
                         }
                         )),
-                        l.set(this, Ce, e.clone(), "f"),
-                        l.get(this, be, "f")?.userData.tmFade && l.get(this, G, "m", We).call(this)
+                        l.set(this, Ce, e.clone(), "f")
                     }
                 }
                 setOpacity(e) {
@@ -9998,8 +9980,7 @@ window.__nswsTrackQuery = function(trackId) {
                           , r = 2.5
                           , a = 50;
                         l.get(this, be, "f").visible = l.get(this, ve, "f").visible && l.get(this, ie, "f").hasStarted && i >= r * r && i <= a * a,
-                        l.get(this, be, "f").visible && l.get(this, be, "f").lookAt(l.get(this, Ae, "f").camera.position),
-                        l.get(this, be, "f").userData.tmFade && (l.get(this, be, "f").material.opacity = Math.min(1, (a - Math.sqrt(i)) / 20))
+                        l.get(this, be, "f").visible && l.get(this, be, "f").lookAt(l.get(this, Ae, "f").camera.position)
                     }
                     const t = this.getMatrix4()
                       , n = this.getQuaternion();
@@ -10252,50 +10233,7 @@ window.__nswsTrackQuery = function(trackId) {
                 null != l.get(this, ye, "f")) {
                     const e = document.createElement("canvas")
                       , t = e.getContext("2d");
-                    if (null != t && "tm2020" == l.get(this, Ie, "f")?.getSetting(st.A.HudStyle)) {
-                        const n = l.get(this, ye, "f")
-                          , i = "italic 600 64px 'Barlow Condensed', 'Arial Narrow', ForcedSquare, sans-serif"
-                          , r = 22
-                          , a = 12;
-                        tmHudFontReady || useTmHud().then(( () => {
-                            l.get(this, ye, "f") == n && l.get(this, G, "m", We).call(this)
-                        }
-                        )),
-                        t.font = i;
-                        const s = t.measureText(n.name).width;
-                        e.width = Math.ceil(2 * r + a + 20 + s + 18),
-                        e.height = 84,
-                        t.fillStyle = "rgba(10,12,20,0.72)",
-                        t.beginPath(),
-                        t.moveTo(r, 0),
-                        t.lineTo(e.width, 0),
-                        t.lineTo(e.width - r, e.height),
-                        t.lineTo(0, e.height),
-                        t.fill(),
-                        t.fillStyle = "#" + new THREE.Color(l.get(this, Ce, "f").primaryColor).getHexString(),
-                        t.beginPath(),
-                        t.moveTo(r, 0),
-                        t.lineTo(r + a, 0),
-                        t.lineTo(a, e.height),
-                        t.lineTo(0, e.height),
-                        t.fill(),
-                        t.fillStyle = "#fff",
-                        t.font = i,
-                        t.fillText(n.name, r + a + 20, 64);
-                        const o = new THREE.Texture(e);
-                        o.needsUpdate = !0;
-                        const h = .36
-                          , d = new THREE.Mesh(new THREE.PlaneGeometry(h * e.width / e.height,h),new THREE.MeshBasicMaterial({
-                            map: o,
-                            transparent: !0,
-                            depthTest: !1,
-                            depthWrite: !1
-                        }));
-                        d.userData.tmFade = !0,
-                        d.renderOrder = 1,
-                        l.set(this, be, d, "f"),
-                        l.get(this, Ae, "f").scene.add(d)
-                    } else if (null != t) {
+                    if (null != t) {
                         const n = 64
                           , i = `bold ${n.toString()}px ForcedSquare, Arial, sans-serif`;
                         let r, a;
@@ -26008,8 +25946,7 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, v, "f").appendChild(i.get(this, w, "f"))
                 }
                 dispose() {
-                    i.get(this, w, "f").parentElement == i.get(this, v, "f") && i.get(this, v, "f").removeChild(i.get(this, w, "f")),
-                    this.tmSplit?.remove()
+                    i.get(this, w, "f").parentElement == i.get(this, v, "f") && i.get(this, v, "f").removeChild(i.get(this, w, "f"))
                 }
                 setOverridePosition(e) {
                     const t = i.get(this, b, "f").getSetting(z.A.Timer);
@@ -26023,75 +25960,7 @@ window.__nswsTrackQuery = function(trackId) {
                         e.cancel();
                     i.get(this, _, "f").length = 0
                 }
-                showTmSplit(e, t, s, o) {
-                    useTmHud();
-                    let n = this.tmSplit;
-                    const l = '<div class="tm-row"><div class="tm-plate"><span></span></div><div class="tm-plate tm-diff"><span></span></div></div>';
-                    null == n && (n = this.tmSplit = document.createElement("div"),
-                    n.className = "tm-split",
-                    n.innerHTML = l + l,
-                    n.children[1].classList.add("tm-speed"),
-                    i.get(this, v, "f").appendChild(n));
-                    const [c,h] = n.children[0].children
-                      , [d,u] = n.children[1].children;
-                    if (c.firstChild.textContent = N.formatTmTime(e, !1),
-                    null == t)
-                        h.style.display = "none";
-                    else {
-                        const a = e.difference(t);
-                        h.style.display = "",
-                        h.firstChild.textContent = N.formatTmTime(a, !0),
-                        h.classList.toggle("behind", a.numberOfFrames > 0)
-                    }
-                    const p = i.get(this, b, "f").getSettingBoolean(z.A.ImperialUnitsEnabled)
-                      , f = p ? 1.609344 : 1
-                      , g = p ? " mph" : " km/h";
-                    if (null == s)
-                        n.children[1].style.display = "none";
-                    else if (n.children[1].style.display = "",
-                    d.firstChild.textContent = Math.trunc(Math.abs(s) / f) + g,
-                    null == o)
-                        u.style.display = "none";
-                    else {
-                        let a = (Math.abs(s) - Math.abs(o)) / f;
-                        a = Math.abs(a) >= 1 ? Math.trunc(a) : Math.abs(a) >= .1 ? Math.trunc(10 * a) / 10 : Math.abs(a) >= .01 ? Math.trunc(100 * a) / 100 : Math.trunc(1e3 * a) / 1e3,
-                        u.style.display = "",
-                        u.firstChild.textContent = (a < 0 ? "" : "+") + a + g,
-                        u.classList.toggle("behind", a < 0)
-                    }
-                    i.get(this, _, "f").push(n.animate([{
-                        opacity: 0,
-                        transform: "scale(1.15)",
-                        offset: 0
-                    }, {
-                        opacity: 1,
-                        transform: "scale(1)",
-                        offset: .04
-                    }, {
-                        opacity: 1,
-                        transform: "scale(1)",
-                        offset: .93
-                    }, {
-                        opacity: 0,
-                        transform: "scale(1)",
-                        offset: 1
-                    }], {
-                        duration: 3500
-                    }))
-                }
-                static formatTmTime(e, t) {
-                    const n = Math.abs(e.numberOfFrames)
-                      , r = Math.floor(n / 6e4)
-                      , a = Math.floor(n % 6e4 / 1e3)
-                      , s = (n % 1e3).toString().padStart(3, "0");
-                    return (t ? e.isNegative() ? "-" : "+" : "") + (t && 0 == r ? a.toString() : r + ":" + a.toString().padStart(2, "0")) + "." + s
-                }
-                // Returns true when the checkpoint speed went onto the Trackmania split instead of the speedometer.
-                showCheckpointTime(e, t, n, r) {
-                    if ("tm2020" == i.get(this, b, "f").getSetting(z.A.HudStyle))
-                        return this.hideCheckpointTime(),
-                        this.showTmSplit(e, t, n, r),
-                        !0;
+                showCheckpointTime(e, t) {
                     if (this.hideCheckpointTime(),
                     null != i.get(this, E, "f") && null != t && (i.get(this, E, "f").textContent = N.formatTimeString(t, !1),
                     i.get(this, _, "f").push(i.get(this, E, "f").animate([{
@@ -43771,11 +43640,13 @@ window.__nswsTrackQuery = function(trackId) {
             s.addCheckpointCallback((e => {
                 const t = C.get(this, _r, "m", Za).call(this)
                   , n = s.getTime();
-                let i = null
-                  , r = null;
-                null != t && t.checkpoints.length > e && (i = t.checkpoints[e].time,
-                r = t.checkpoints[e].speedKmh),
-                C.get(this, sa, "f").showCheckpointTime(n, i, s.getSpeedKmh(), r) || null == r || C.get(this, aa, "f").showCheckpointSpeed(s.getSpeedKmh(), r)
+                let i = null;
+                if (null != t && t.checkpoints.length > e && (i = t.checkpoints[e].time),
+                C.get(this, sa, "f").showCheckpointTime(n, i),
+                null != t && t.checkpoints.length > e) {
+                    const n = t.checkpoints[e].speedKmh;
+                    C.get(this, aa, "f").showCheckpointSpeed(s.getSpeedKmh(), n)
+                }
             }
             )),
             s.addFinishCallback((e => {
@@ -50914,13 +50785,6 @@ window.__nswsTrackQuery = function(trackId) {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Top"),
                 value: "top"
             }], R.A.Speedometer),
-            C.get(this, ms, "m", Gs).call(this, "Splits and nametags", [{
-                title: "PolyTrack",
-                value: "polytrack"
-            }, {
-                title: "Trackmania 2020",
-                value: "tm2020"
-            }], R.A.HudStyle),
             C.get(this, ms, "m", Bs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Mobile")),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Vibration"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
@@ -58500,7 +58364,7 @@ window.__nswsTrackQuery = function(trackId) {
                 keyBindSettings = this;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.HudStyle, "polytrack"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
