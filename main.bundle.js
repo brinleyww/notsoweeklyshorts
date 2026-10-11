@@ -5846,6 +5846,7 @@ window.__nswsTrackQuery = function(trackId) {
                     I.set(this, new THREE.Vector3(8,10,10)),
                     L.set(this, []),
                     U.set(this, []),
+                    this.trackCullers = new Set,
                     i.set(this, w, canvas, "f"),
                     i.set(this, x, settings, "f"),
                     i.set(this, S, fogOverride, "f");
@@ -5949,6 +5950,8 @@ window.__nswsTrackQuery = function(trackId) {
                         i.get(this, _, "f").lightDirection = i.get(this, I, "f").clone().negate().normalize(),
                         i.get(this, _, "f").update()
                     }
+                    for (const e of this.trackCullers)
+                        e(i.get(this, M, "f"));
                     i.get(this, y, "m", N).call(this),
                     i.get(this, y, "m", G).call(this),
                     window.__PolyFX ? window.__PolyFX.render(i.get(this, k, "f"), i.get(this, T, "f"), i.get(this, M, "f"), undefined, i.get(this, I, "f")) : i.get(this, k, "f").render(i.get(this, T, "f"), i.get(this, M, "f"))
@@ -5980,6 +5983,18 @@ window.__nswsTrackQuery = function(trackId) {
                 isTrackShadowsEnabled() {
                     const e = i.get(this, x, "f")?.getSettingInteger(W.A.ShadowQuality) ?? 0;
                     return 3 == e || 4 == e || 5 == e
+                }
+                isTrackCullingEnabled() {
+                    return autoTrackSetting(i.get(this, x, "f"), W.A.TrackCulling)
+                }
+                getTrackViewDistance() {
+                    const e = i.get(this, x, "f");
+                    if (null == e)
+                        return 1 / 0;
+                    let t = e.getSetting(W.A.TrackViewDistance);
+                    "auto" == t && (t = e.getSettingBoolean(W.A.LowPerformanceMode) ? "900" : "full");
+                    const n = parseFloat(t);
+                    return n > 0 ? n : 1 / 0
                 }
                 isShadowQualitySupported(e) {
                     return !Number.isSafeInteger(e) || e <= 0 || e > 5 || i.get(this, k, "f").capabilities.maxTextureSize >= i.get(this, y, "m", B).call(this, e)
@@ -6171,8 +6186,15 @@ window.__nswsTrackQuery = function(trackId) {
             ,
             G = function() {
                 let e;
-                e = null != i.get(this, S, "f") ? i.get(this, S, "f") : i.get(this, x, "f")?.getSettingBoolean(W.A.FogEnabled) ?? !0,
-                e ? null == i.get(this, T, "f").fog && (i.get(this, T, "f").fog = new THREE.Fog(10211839,0,b.maxViewDistance)) : null != i.get(this, T, "f").fog && (i.get(this, T, "f").fog = null)
+                e = null != i.get(this, S, "f") ? i.get(this, S, "f") : i.get(this, x, "f")?.getSettingBoolean(W.A.FogEnabled) ?? !0;
+                // A shortened draw distance always ends in fog, so far parts fade out instead of popping.
+                const t = this.getTrackViewDistance()
+                  , n = Number.isFinite(t) ? .5 * t : 0
+                  , r = Number.isFinite(t) ? t : b.maxViewDistance
+                  , a = i.get(this, T, "f").fog;
+                Number.isFinite(t) && null == i.get(this, S, "f") && (e = !0),
+                e ? null == a ? i.get(this, T, "f").fog = new THREE.Fog(10211839,n,r) : (a.near = n,
+                a.far = r) : null != a && (i.get(this, T, "f").fog = null)
             }
             ,
             F = function() {
@@ -6193,6 +6215,12 @@ window.__nswsTrackQuery = function(trackId) {
             }
             ,
             RenderManager.maxViewDistance = 1e4;
+            function autoTrackSetting(e, t) {
+                if (null == e)
+                    return !1;
+                const n = e.getSetting(t);
+                return "auto" == n ? e.getSettingBoolean(W.A.LowPerformanceMode) : "true" == n
+            }
             const H = RenderManager
         }
         ,
@@ -9425,7 +9453,9 @@ window.__nswsTrackQuery = function(trackId) {
                 e[e.VibrationEnabled = 22] = "VibrationEnabled",
                 e[e.TouchSteeringSide = 23] = "TouchSteeringSide",
                 e[e.LowPerformanceMode = 24] = "LowPerformanceMode",
-                e[e.SolidMenuBackground = 25] = "SolidMenuBackground"
+                e[e.SolidMenuBackground = 25] = "SolidMenuBackground",
+                e[e.TrackCulling = 26] = "TrackCulling",
+                e[e.TrackViewDistance = 27] = "TrackViewDistance"
             }(i || (i = {}));
             const r = i
         }
@@ -31292,6 +31322,186 @@ window.__nswsTrackQuery = function(trackId) {
             TrackPartTransform = __webpack_require__(5735), 
             k = __webpack_require__(3476), 
             E = __webpack_require__(8739);
+            // Loading a track skips the parts-by-tile map, which only the editor reads; it is built on first use.
+            const staleTileMaps = new WeakSet
+              , lowestTileYs = new WeakMap
+              , trackRenderStates = new WeakMap;
+            function lowestTileY(e, t, n) {
+                let i = lowestTileYs.get(e);
+                null == i && lowestTileYs.set(e, i = new Map);
+                const r = 8 * t + n;
+                let a = i.get(r);
+                return void 0 === a && (a = 1 / 0,
+                e.rotated(t, n).forEach(( (e, t) => {
+                    a = Math.min(a, t)
+                }
+                )),
+                i.set(r, a)),
+                a
+            }
+            function addPartTiles(e, t) {
+                t.type.configuration.tiles.rotated(t.rotation, t.rotationAxis).forEach(( (n, i, r) => {
+                    const a = (t.x + n).toString() + "|" + (t.y + i).toString() + "|" + (t.z + r).toString()
+                      , s = e.get(a);
+                    null == s ? e.set(a, [t]) : s.push(t)
+                }
+                ))
+            }
+            function ensurePartTiles(e) {
+                if (staleTileMaps.delete(e))
+                    for (const t of m.get(e, l, "f"))
+                        addPartTiles(m.get(e, c, "f"), t)
+            }
+            // Instances per mesh when the track is split for culling: about 24k triangles, at least 32 parts.
+            function maxPartsPerMesh(e) {
+                const t = (null != e.index ? e.index.count : e.attributes.position.count) / 3;
+                return Math.max(32, Math.floor(24e3 / Math.max(t, 1)))
+            }
+            // Splits parts into spatially compact groups of at most n (median splits on the longest axis).
+            function splitTrackParts(e, t) {
+                const n = []
+                  , i = e.slice()
+                  , r = [0, i.length];
+                for (; r.length > 0; ) {
+                    const e = r.pop()
+                      , a = r.pop();
+                    if (e - a <= t) {
+                        n.push(i.slice(a, e));
+                        continue
+                    }
+                    let s = 1 / 0
+                      , o = 1 / 0
+                      , l = 1 / 0
+                      , c = -1 / 0
+                      , h = -1 / 0
+                      , d = -1 / 0;
+                    for (let t = a; t < e; t++) {
+                        const e = i[t];
+                        s = Math.min(s, e.x), o = Math.min(o, e.y), l = Math.min(l, e.z),
+                        c = Math.max(c, e.x), h = Math.max(h, e.y), d = Math.max(d, e.z)
+                    }
+                    const u = c - s >= d - l && c - s >= h - o ? "x" : d - l >= h - o ? "z" : "y"
+                      , p = a + e >> 1;
+                    selectTrackPart(i, a, e - 1, p, u),
+                    r.push(a, p, p, e)
+                }
+                return n
+            }
+            function selectTrackPart(e, t, n, i, r) {
+                for (; n > t; ) {
+                    const a = e[t + n >> 1][r];
+                    let s = t
+                      , o = n;
+                    for (; s <= o; ) {
+                        for (; e[s][r] < a; )
+                            s++;
+                        for (; e[o][r] > a; )
+                            o--;
+                        if (s <= o) {
+                            const t = e[s];
+                            e[s] = e[o], e[o] = t, s++, o--
+                        }
+                    }
+                    if (i <= o)
+                        n = o;
+                    else {
+                        if (!(i >= s))
+                            return;
+                        t = s
+                    }
+                }
+            }
+            // The flat ground shadow of the "Low" shadow setting: the plane projection is baked into the
+            // instances, so each mesh can carry its own bounds for culling.
+            function flatShadowMatrix(e, t) {
+                const n = new THREE.Matrix4
+                  , i = e.normal.x * t.x + e.normal.y * t.y + e.normal.z * t.z + -e.constant * t.w
+                  , r = n.elements;
+                return r[0] = i - t.x * e.normal.x, r[4] = -t.x * e.normal.y, r[8] = -t.x * e.normal.z, r[12] = -t.x * -e.constant,
+                r[1] = -t.y * e.normal.x, r[5] = i - t.y * e.normal.y, r[9] = -t.y * e.normal.z, r[13] = -t.y * -e.constant,
+                r[2] = -t.z * e.normal.x, r[6] = -t.z * e.normal.y, r[10] = i - t.z * e.normal.z, r[14] = -t.z * -e.constant,
+                r[3] = -t.w * e.normal.x, r[7] = -t.w * e.normal.y, r[11] = -t.w * e.normal.z, r[15] = i - t.w * -e.constant,
+                n
+            }
+            function setFlatShadowBounds(e, t, n) {
+                if (!(t.elements[15] > 1e-6))
+                    return !1;
+                e.computeBoundingBox();
+                const i = e.boundingBox
+                  , r = [];
+                for (let e = 0; e < 8; e++)
+                    r.push(new THREE.Vector3(1 & e ? i.max.x : i.min.x,2 & e ? i.max.y : i.min.y,4 & e ? i.max.z : i.min.z).applyMatrix4(t));
+                return n.boundingSphere = (new THREE.Box3).setFromPoints(r).getBoundingSphere(new THREE.Sphere),
+                !0
+            }
+            function shareGeometry(e) {
+                const t = new THREE.BufferGeometry;
+                t.index = e.index;
+                for (const n in e.attributes)
+                    t.attributes[n] = e.attributes[n];
+                return t.groups = e.groups,
+                null === e.boundingBox && e.computeBoundingBox(),
+                null === e.boundingSphere && e.computeBoundingSphere(),
+                t.boundingBox = e.boundingBox,
+                t.boundingSphere = e.boundingSphere,
+                t
+            }
+            // Disposing a shared geometry must not delete the buffers the original still uses.
+            function releaseSharedGeometry(e) {
+                e.index = null,
+                e.attributes = {},
+                e.dispose()
+            }
+            function trackRenderState(e) {
+                let t = trackRenderStates.get(e);
+                return null == t && trackRenderStates.set(e, t = {
+                    meshes: [],
+                    geometries: [],
+                    flatMaterial: null,
+                    cull: null,
+                    distanceCulled: !1,
+                    warm: !1
+                }),
+                t
+            }
+            // Hides split meshes whose bounds lie wholly beyond the draw distance (they are fully fogged there).
+            function cullTrackByDistance(e, t, n) {
+                if (!e.warm) {
+                    e.warm = !0;
+                    for (const t of e.meshes)
+                        t.mesh.frustumCulled = !1, null != t.shadow && (t.shadow.frustumCulled = !1);
+                    return
+                }
+                if (null != e.culledAfterWarmUp) {
+                    for (const t of e.meshes)
+                        t.mesh.frustumCulled = e.culledAfterWarmUp, null != t.shadow && (t.shadow.frustumCulled = t.shadowCulled);
+                    e.culledAfterWarmUp = null
+                }
+                const i = t.getTrackViewDistance();
+                if (!Number.isFinite(i)) {
+                    if (e.distanceCulled) {
+                        for (const t of e.meshes)
+                            t.mesh.visible = !0, null != t.shadow && (t.shadow.visible = !0);
+                        e.distanceCulled = !1
+                    }
+                    return
+                }
+                null === n.parent && n.updateMatrixWorld();
+                const r = n.matrixWorld.elements
+                  , a = r[12]
+                  , s = r[13]
+                  , o = r[14];
+                for (const t of e.meshes) {
+                    const e = t.mesh.boundingSphere
+                      , n = e.center.x - a
+                      , r = e.center.y - s
+                      , l = e.center.z - o
+                      , c = i + e.radius
+                      , h = n * n + r * r + l * l < c * c;
+                    t.mesh.visible = h, null != t.shadow && (t.shadow.visible = h)
+                }
+                e.distanceCulled = !0
+            }
             class T {
                 constructor(e, t, n, i, r, a, s, o, l, c) {
                     if (this.checkpointOrder = null,
@@ -31369,6 +31579,7 @@ window.__nswsTrackQuery = function(trackId) {
                     })))
                 }
                 getPartsAt(e, t, n) {
+                    ensurePartTiles(this);
                     const i = m.get(this, c, "f").get(e.toString() + "|" + t.toString() + "|" + n.toString());
                     return null == i ? [] : i.map((e => ({
                         id: e.type.configuration.id,
@@ -31390,21 +31601,15 @@ window.__nswsTrackQuery = function(trackId) {
                       , g = new THREE.Vector3(e * M.partSize,t * M.partSize,n * M.partSize)
                       , v = (new THREE.Matrix4).compose(g, f, new THREE.Vector3(1,1,1))
                       , y = new T(e,t,n,r,a,o,p,v,d,u);
-                    m.get(this, l, "f").push(y);
-                    p.configuration.tiles.rotated(r, a).forEach(( (i, r, a) => {
-                        const s = (e + i).toString() + "|" + (t + r).toString() + "|" + (n + a).toString();
-                        if (t + r < 0)
-                            throw new Error("Track part below ground");
-                        {
-                            const e = m.get(this, c, "f").get(s);
-                            null == e ? m.get(this, c, "f").set(s, [y]) : e.push(y)
-                        }
-                    }
-                    ));
+                    if (m.get(this, l, "f").push(y),
+                    t + lowestTileY(p.configuration.tiles, r, a) < 0)
+                        throw new Error("Track part below ground");
+                    staleTileMaps.has(this) || addPartTiles(m.get(this, c, "f"), y);
                     const w = m.get(this, h, "f").get(i);
                     null == w ? m.get(this, h, "f").set(i, [y]) : w.push(y)
                 }
                 deletePartsAt(e, t, n) {
+                    ensurePartTiles(this);
                     const r = []
                       , a = m.get(this, c, "f").get(e.toString() + "|" + t.toString() + "|" + n.toString());
                     if (null != a)
@@ -31504,35 +31709,71 @@ window.__nswsTrackQuery = function(trackId) {
                     // Low performance mode drops the track's flat ground shadows at the "Low" shadow
                     // setting: a second draw of every part, about half the track's triangles.
                     m.get(this, a, "f").getSettingBoolean(k.A.LowPerformanceMode) && (c = null);
+                    // Track culling splits each part type into spatial chunks the camera and shadow passes can skip.
+                    const d = m.get(this, r, "f")
+                      , f = d.isTrackCullingEnabled?.() ?? !1
+                      , A = f || Number.isFinite(d.getTrackViewDistance?.() ?? 1 / 0)
+                      , v = trackRenderState(this)
+                      , y = new Map;
+                    for (const e of m.get(this, l, "f")) {
+                        let t = e.color;
+                        t == TrackPartColorId.Default && (t = n);
+                        let i = y.get(e.type);
+                        null == i && y.set(e.type, i = new Map);
+                        const r = i.get(t);
+                        null == r ? i.set(t, [e]) : r.push(e)
+                    }
+                    let w = null;
+                    null != c && (v.flatMaterial = new THREE.MeshBasicMaterial({
+                        color: c,
+                        depthWrite: !1
+                    }),
+                    w = flatShadowMatrix(new THREE.Plane(new THREE.Vector3(0,1,0),0), t));
+                    const x = new THREE.Matrix4;
                     for (const e of m.get(this, s, "f").getAllParts())
-                        for (const [i,a] of e.colors) {
-                            const s = [];
-                            for (const t of m.get(this, l, "f")) {
-                                let r = t.color;
-                                r == TrackPartColorId.Default && (r = n),
-                                t.type == e && r == i && s.push(t)
-                            }
-                            if (s.length > 0) {
-                                if (null == a)
-                                    throw new Error("Mesh is not loaded");
-                                const e = new THREE.InstancedMesh(a.geometry,a.material,s.length);
-                                e.matrixAutoUpdate = !1,
-                                e.matrixWorldAutoUpdate = !1,
-                                e.frustumCulled = !1,
-                                e.castShadow = h,
-                                e.receiveShadow = !0;
-                                for (let t = 0; t < s.length; ++t)
-                                    e.setMatrixAt(t, s[t].matrix);
-                                if (m.get(this, r, "f").scene.add(e),
-                                m.get(this, u, "f").push(e),
-                                null != c) {
-                                    const n = new E.t(e,c);
-                                    n.update(new THREE.Plane(new THREE.Vector3(0,1,0),0), t),
-                                    m.get(this, r, "f").scene.add(n),
-                                    m.get(this, u, "f").push(n)
+                        for (const [t,n] of e.colors) {
+                            const i = y.get(e)?.get(t);
+                            if (null == i)
+                                continue;
+                            if (null == n)
+                                throw new Error("Mesh is not loaded");
+                            for (const e of A ? splitTrackParts(i, maxPartsPerMesh(n.geometry)) : [i]) {
+                                const a = A ? shareGeometry(n.geometry) : n.geometry
+                                  , t = new THREE.InstancedMesh(a,n.material,e.length);
+                                A && v.geometries.push(a);
+                                t.matrixAutoUpdate = !1,
+                                t.matrixWorldAutoUpdate = !1,
+                                t.frustumCulled = f,
+                                t.castShadow = h,
+                                t.receiveShadow = !0;
+                                for (let n = 0; n < e.length; ++n)
+                                    t.setMatrixAt(n, e[n].matrix);
+                                A && t.computeBoundingSphere(),
+                                m.get(this, r, "f").scene.add(t),
+                                m.get(this, u, "f").push(t);
+                                let i = null;
+                                if (null != w) {
+                                    i = new THREE.InstancedMesh(a,v.flatMaterial,e.length);
+                                    for (let t = 0; t < e.length; ++t)
+                                        i.setMatrixAt(t, x.multiplyMatrices(w, e[t].matrix));
+                                    i.matrixAutoUpdate = !1,
+                                    i.matrixWorldAutoUpdate = !1,
+                                    i.renderOrder = -1,
+                                    i.frustumCulled = f && setFlatShadowBounds(t, w, i),
+                                    m.get(this, r, "f").scene.add(i),
+                                    m.get(this, u, "f").push(i)
                                 }
+                                A && v.meshes.push({
+                                    mesh: t,
+                                    shadow: i,
+                                    shadowCulled: null != i && i.frustumCulled
+                                })
                             }
                         }
+                    A && null != d.trackCullers && (v.cull ?? (v.cull = e => cullTrackByDistance(v, d, e)),
+                    v.warm = !1,
+                    v.culledAfterWarmUp = f,
+                    d.trackCullers.add(v.cull)),
                     m.get(this, i, "m", g).call(this)
                 }
                 getCheckpoints() {
@@ -31644,6 +31885,7 @@ window.__nswsTrackQuery = function(trackId) {
                 }
                 loadTrackData(e) {
                     return this.clear(),
+                    staleTileMaps.add(this),
                     this.environment = e.environment,
                     this.sunDirection = e.sunDirection.clone(),
                     e.forEachPart(( (e, t, n, i, r, a, s, o, l) => {
@@ -31665,12 +31907,22 @@ window.__nswsTrackQuery = function(trackId) {
             i = new WeakSet,
             p = function() {
                 for (const e of m.get(this, u, "f"))
-                    m.get(this, r, "f").scene.remove(e);
-                m.get(this, u, "f").length = 0
+                    m.get(this, r, "f").scene.remove(e),
+                    e.dispose?.();
+                m.get(this, u, "f").length = 0;
+                const e = trackRenderStates.get(this);
+                null != e && (e.flatMaterial?.dispose(),
+                e.flatMaterial = null,
+                e.geometries.forEach(releaseSharedGeometry),
+                e.geometries = [],
+                e.meshes = [],
+                e.distanceCulled = !1,
+                m.get(this, r, "f").trackCullers?.delete(e.cull))
             }
             ,
             f = function(e) {
-                if (e < 0 || e >= m.get(this, l, "f").length)
+                if (ensurePartTiles(this),
+                e < 0 || e >= m.get(this, l, "f").length)
                     throw new Error("Track part index out of bounds");
                 const t = m.get(this, l, "f")[e];
                 m.get(this, l, "f").splice(e, 1);
@@ -51140,6 +51392,39 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, ws, "f").generateMeshes()
             }
             )),
+            // "Auto" follows Low performance mode.
+            C.get(this, ms, "m", Gs).call(this, "Track culling", [{
+                title: "Auto",
+                value: "auto"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.TrackCulling, ( () => {
+                C.get(this, ws, "f").generateMeshes()
+            }
+            )),
+            C.get(this, ms, "m", Gs).call(this, "Track draw distance", [{
+                title: "Auto",
+                value: "auto"
+            }, {
+                title: "Full",
+                value: "full"
+            }, {
+                title: "Far",
+                value: "1500"
+            }, {
+                title: "Medium",
+                value: "900"
+            }, {
+                title: "Near",
+                value: "500"
+            }], R.A.TrackViewDistance, ( () => {
+                C.get(this, ws, "f").generateMeshes()
+            }
+            )),
             C.get(this, ms, "m", Gs).call(this, "Menu background", [{
                 title: "Track",
                 value: "false"
@@ -58811,7 +59096,7 @@ window.__nswsTrackQuery = function(trackId) {
                 keyBindSettings = this;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
