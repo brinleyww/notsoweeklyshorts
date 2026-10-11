@@ -59,6 +59,14 @@ export function validSnapshot(value: unknown): value is PublicCupState {
     Object.entries(o).every(([id, n]) => s.roster.some((p) => p.id === Number(id)) && num(n));
   const trackId = (id: string) => s.tracks.some((t) => t.id === id);
   if (
+    s.removedTracks !== undefined &&
+    (!Array.isArray(s.removedTracks) ||
+      s.removedTracks.length > 1000 ||
+      new Set(s.removedTracks).size !== s.removedTracks.length ||
+      !s.removedTracks.every((id) => typeof id === 'string' && /^[a-f0-9]{64}$/i.test(id)))
+  )
+    return false;
+  if (
     (s.withdrawn !== undefined && !ids(s.withdrawn)) ||
     (s.pendingRacers !== undefined && !ids(s.pendingRacers)) ||
     (s.skipVote !== undefined &&
@@ -130,6 +138,12 @@ export function validSnapshot(value: unknown): value is PublicCupState {
     m.winnerCount === 1 &&
     m.winners.length <= 1 &&
     num(m.rounds) &&
+    (m.currentVisit === undefined ||
+      (obj(m.currentVisit) &&
+        trackId(m.currentVisit.trackId) &&
+        num(m.currentVisit.fromRound) &&
+        m.currentVisit.fromRound <= m.rounds)) &&
+    (m.rotationOffset === undefined || (num(m.rotationOffset) && m.rotationOffset <= 240000000)) &&
     Array.isArray(m.order) &&
     m.order.length >= 1 &&
     m.order.length <= (s.preset ? 1000 : 8) &&

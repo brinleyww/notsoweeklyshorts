@@ -71,6 +71,10 @@ export function presetSummary(rules: CupRules) {
   if (rules.allowRacerChanges)
     racers.push(['New racers', '0 points, next round'], ['Returning racers', 'Score retained']);
   else racers.push(['Reconnection', 'Score retained']);
+  racers.push([
+    'Spectator free camera',
+    rules.allowSpectatorFreecam !== false ? 'Allowed' : 'Disabled',
+  ]);
   group('Racers', racers);
 
   const scoring = h('table', undefined, 'rule-points');

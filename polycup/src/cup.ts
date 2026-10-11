@@ -3,7 +3,7 @@ import type { CupState, Match, RaceRecord, Track } from './types.ts';
 // Competition state is owned by the native multiplayer host. No game internals here.
 import { isBanned, picksOpen, resetDraft, rosterOpen } from './draft.ts';
 import { rulesFor, standardPreset, validPreset, type CupPreset, type CupRules } from './presets.ts';
-export const VERSION = '0.3.0';
+export const VERSION = '0.3.1';
 export const RULES = Object.freeze({
   points: [10, 8, 6, 5, 4, 3, 2, 1],
   target: 140,
@@ -341,7 +341,7 @@ export function trackProgress(state: CupState, completedRounds = currentMatch(st
   // Saves created before 0.2.8 retain their original four-round rotation.
   const count = (id: string) => m.trackRounds?.[id] ?? RULES.fallbackRounds;
   const cycle = m.order.reduce((sum, id) => sum + count(id), 0);
-  let offset = completedRounds % cycle;
+  let offset = (completedRounds + (m.rotationOffset ?? 0)) % cycle;
   for (const trackId of m.order) {
     const rounds = count(trackId);
     if (offset < rounds) return { trackId, round: offset + 1, rounds };
@@ -372,6 +372,7 @@ export function beginRound(state: CupState) {
   const m = state && currentMatch(state);
   const visit = trackProgress(state);
   requireThat(visit, 'No track scheduled.');
+  m.currentVisit = { trackId: visit.trackId, fromRound: m.rounds - visit.round + 1 };
   const firstVisit = !m.roundsLog.some((r) => r.trackId === visit.trackId);
   state.runtime = {
     racers: activeIds(state),
@@ -581,6 +582,96 @@ export function undoRound(state: CupState) {
   state.phase = 'between-rounds';
   note(state, 'Organizer undid the last scored round.');
   touch(state);
+}
+export function currentTrackVisit(state: CupState) {
+  const m = currentMatch(state);
+  if (!m || ['registration', 'complete'].includes(state.phase)) return null;
+  if (m.currentVisit)
+    return {
+      ...m.currentVisit,
+      round: m.rounds - m.currentVisit.fromRound + 1,
+      rounds: m.trackRounds?.[m.currentVisit.trackId] ?? RULES.fallbackRounds,
+    };
+  const completed = state.runtime ? m.rounds : Math.max(0, m.rounds - 1);
+  const visit = trackProgress(state, completed);
+  return visit ? { ...visit, fromRound: completed - visit.round + 1 } : null;
+}
+function redirectRotation(state: CupState, m: Match, nextId?: string) {
+  const original = [...m.order];
+  const progress = trackProgress({ ...state, matches: [m], matchIndex: 0 }, m.rounds);
+  m.order = original.filter((id) => !state.removedTracks?.includes(id));
+  requireThat(m.order.length, 'No tracks remain in the rotation.');
+  const count = (id: string) => m.trackRounds?.[id] ?? RULES.fallbackRounds;
+  for (const id of original.filter((id) => !m.order.includes(id))) {
+    if (m.trackRounds) delete m.trackRounds[id];
+    if (m.trackWarmups) delete m.trackWarmups[id];
+  }
+  const oldIndex = original.indexOf(progress?.trackId ?? original[0]);
+  const following = [...original.slice(oldIndex), ...original.slice(0, oldIndex)].find((id) =>
+    m.order.includes(id),
+  )!;
+  const desired = nextId && m.order.includes(nextId) ? nextId : following;
+  const round = !nextId && progress?.trackId === desired ? progress.round : 1;
+  const cycle = m.order.reduce((sum, id) => sum + count(id), 0);
+  const offset =
+    m.order.slice(0, m.order.indexOf(desired)).reduce((sum, id) => sum + count(id), 0) + round - 1;
+  m.rotationOffset = (((offset - m.rounds) % cycle) + cycle) % cycle;
+}
+export function removeCurrentTrack(state: CupState, replacement?: Track, wr?: RaceRecord) {
+  const visit = currentTrackVisit(state);
+  requireThat(visit, 'There is no current track to remove.');
+  const next = copy(state),
+    current = currentMatch(next),
+    rules = rulesFor(next);
+  const originalOrder = [...current.order];
+  const index = originalOrder.indexOf(visit.trackId);
+  const nextId = [...originalOrder.slice(index + 1), ...originalOrder.slice(0, index)].find(
+    (id) => !next.removedTracks?.includes(id),
+  );
+  if (rules.selection === 'random' || !nextId) {
+    requireThat(
+      replacement &&
+        replacement.id !== visit.trackId &&
+        !next.removedTracks?.includes(replacement.id),
+      'No replacement track is available. Add another track to the pool before removing this one.',
+    );
+  }
+  next.runtime = null;
+  next.phase = 'between-rounds';
+  while (currentMatch(next).rounds > visit.fromRound) undoRound(next);
+  const restored = currentMatch(next);
+  delete restored.currentVisit;
+  next.removedTracks = [...(next.removedTracks ?? []), visit.trackId];
+  next.results = [];
+  if (replacement && !next.tracks.some((t) => t.id === replacement.id))
+    next.tracks.push(copy(replacement));
+  const target = rules.selection === 'random' || !nextId ? replacement!.id : nextId;
+  for (const m of [restored, ...next.history.map((h) => h.before)]) {
+    if (rules.selection === 'random') {
+      if (m === restored || (m.randomTrack && next.removedTracks.includes(m.randomTrack.id))) {
+        if (!m.order.includes(target)) m.order.push(target);
+        (m.trackRounds ??= {})[target] = rules.roundsPerTrack;
+        (m.trackWarmups ??= {})[target] = practiceForRecord(wr, rules);
+        m.randomTrack = { id: target, fromRound: m.rounds, rounds: rules.roundsPerTrack };
+        m.currentVisit = { trackId: target, fromRound: m.rounds };
+      }
+    } else {
+      if (!m.order.some((id) => !next.removedTracks!.includes(id))) {
+        m.order.push(target);
+        (m.trackRounds ??= {})[target] = rules.roundsPerTrack;
+        (m.trackWarmups ??= {})[target] = practiceForRecord(wr, rules);
+      }
+      redirectRotation(next, m, m === restored ? target : undefined);
+    }
+  }
+  if (wr) (next.records[target] ??= { pbs: {} }).wr = wr;
+  refreshSessionRecords(next);
+  note(
+    next,
+    `Removed ${next.tracks.find((t) => t.id === visit.trackId)?.name ?? 'track'} from this Cup; undid ${current.rounds - visit.fromRound} scored rounds from this visit.`,
+  );
+  touch(next);
+  Object.assign(state, next);
 }
 export function rebindPlayer(state: CupState, oldId: number, newId: number, name: string) {
   requireThat(

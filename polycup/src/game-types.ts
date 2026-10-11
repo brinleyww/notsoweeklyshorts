@@ -125,6 +125,8 @@ export interface NativeApi {
   ghostKeys(game: NativeGame): string[];
   autoSpectate(game: NativeGame): boolean;
   restartPressed(game: NativeGame, event: KeyboardEvent): boolean;
+  freecamPressed?(game: NativeGame, event: KeyboardEvent): boolean;
+  enterFreecam?(game: NativeGame): void;
   startRespawnPressed(game: NativeGame, event: KeyboardEvent): boolean;
   showRoundTime(game: NativeGame, frames: number): void;
   showRoundCheckpoint(game: NativeGame, frames: number): void;
@@ -172,6 +174,7 @@ export interface NativeApi {
   };
 }
 export interface PolyModLoader {
+  getPhysicsWasmURL?: (...args: unknown[]) => string;
   registerClassMixin(
     path: string,
     method: string,

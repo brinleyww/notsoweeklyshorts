@@ -6,6 +6,7 @@ import { CupUI } from '../src/ui.ts';
 import { installTransport } from './transport.js';
 import { CompetitionsHub, poolLabel, type MapPool } from './hub.ts';
 import { KeysPanel } from './keys.ts';
+import { PhysicsIntegrity } from '../src/physics-integrity.ts';
 
 type KeyBinding = { getter: () => string; callback: (event: KeyboardEvent) => void };
 type Keys = { chat(): string; ghosts(): string; matches(event: KeyboardEvent, binding: string): boolean };
@@ -19,6 +20,7 @@ const site = window as unknown as {
   __nswsCupPool?: MapPool;
   __nswsCupPoolLabel?: () => string;
   __nswsCupKeysPanel?: () => void;
+  __nswsCupNewCup?: () => Promise<void>;
 };
 
 installTransport();
@@ -41,6 +43,8 @@ const pml = {
   registerSettingCategory() {},
   registerSetting() {},
   registerBindCategory() {},
+  // The site's physics binary, which PhysicsIntegrity hashes so the host sees modified copies.
+  getPhysicsWasmURL: () => new URL('polytrack_physics.wasm', document.baseURI).href,
   registerKeybind(_label: string, key: string, _event: string, primary: string, _secondary: null, callback: (event: KeyboardEvent) => void) {
     keys.push({ getter: keyGetters[key] ?? (() => primary), callback });
   },
@@ -52,6 +56,10 @@ window.addEventListener('keydown', (event) => {
 
 let ui: CupUI | undefined;
 const controller = new Controller(() => ui?.render());
+const physics = new PhysicsIntegrity();
+physics.install(pml);
+pml.getPhysicsWasmURL?.();
+controller.setPhysicsSource(() => physics.report);
 try {
   controller.init(pml);
   pml.registerKeybind('Open Cup chat', 'PolyCupChat', 'keydown', 'KeyY', null, (event) => ui?.chatHotkey(event));
@@ -73,6 +81,7 @@ site.__nswsLobbyTag = () => {
 };
 
 site.__nswsCupRoom = () => hub.room();
+site.__nswsCupNewCup = () => hub.newCup();
 site.__nswsCupPoolLabel = () => poolLabel(site.__nswsCupPool ?? { shorts: true, main: [], community: [] });
 
 site.__nswsCupApp = {

@@ -512,8 +512,16 @@ export class CompetitionsHub {
     return ((await response.json()) as { cup: { name: string; pool: MapPool } | null }).cup;
   }
 
-  // The race (and PolyCup's view of it) only exists a moment after startRace. The organizer's cup is
-  // created under the room's name as the proxy filtered it.
+  // A new cup in the organizer's room, under the room's name as the proxy filtered it.
+  async newCup() {
+    const code = this.activeCode();
+    if (!code || this.#controller.state || !this.#controller.isHost) return;
+    const info = await this.#info(code).catch(() => null);
+    if (this.activeCode() !== code || this.#controller.state) return;
+    this.#controller.create(info?.name || this.#profileName() + "'s cup");
+  }
+
+  // The race (and PolyCup's view of it) only exists a moment after startRace.
   #openPanelSoon(message = '', create = false) {
     const started = Date.now();
     let creating = false;
@@ -523,12 +531,7 @@ export class CompetitionsHub {
         if (creating) return;
         if (create && !this.#controller.state) {
           creating = true;
-          this.#info(code!)
-            .catch(() => null)
-            .then((info) => {
-              if (this.activeCode() !== code || this.#controller.state) return;
-              this.#controller.create(info?.name || this.#profileName() + "'s cup");
-            })
+          this.newCup()
             .catch((error) => this.#controller.fail(error))
             .finally(() => {
               window.clearInterval(timer);

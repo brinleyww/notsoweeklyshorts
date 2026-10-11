@@ -9,7 +9,6 @@ export function reviewPanel(ui: CupUI) {
 
   box.append(
     h('h2', 'Run review'),
-    h('p', 'Private · saved with Cup exports', 'muted'),
     h(
       'p',
       'Inputs are client-reported. Flags prompt a review; they never apply penalties.',
@@ -18,36 +17,16 @@ export function reviewPanel(ui: CupUI) {
   );
   const flags = log.runs.filter((r) => r.flag),
     controls = h('div', undefined, 'controls');
-  controls.append(
-    h('strong', `${flags.filter((r) => !r.reviewed).length} to review`),
-    ui.button(
-      'Export review log',
-      () => {
-        const url = URL.createObjectURL(
-          new Blob([JSON.stringify(log.data(), null, 2)], { type: 'application/json' }),
-        );
-        const a = h('a');
-        a.href = url;
-        a.download = 'polycup-review.json';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      },
-      'quiet',
-    ),
-  );
+  const pending = flags.filter((r) => !r.reviewed).length;
+  controls.append(h('strong', pending ? `${pending} to review` : 'No flags to review'));
   box.append(controls);
   const records = [...log.runs]
     .reverse()
     .sort((a, b) => Number(!!b.flag && !b.reviewed) - Number(!!a.flag && !a.reviewed));
   if (!records.length) box.append(h('p', 'No scored runs yet.', 'muted'));
   for (const r of records) {
-    const detail = h('details', undefined, `review-run${r.flag ? ' flagged' : ''}`);
-    detail.open = ui.reviewExpanded.has(r.id);
-    detail.addEventListener('toggle', () => {
-      if (!detail.isConnected) return;
-      detail.open ? ui.reviewExpanded.add(r.id) : ui.reviewExpanded.delete(r.id);
-    });
-    const summary = h('summary'),
+    const detail = h('section', undefined, `review-run${r.flag ? ' flagged' : ' review-compact'}`);
+    const summary = h('div', undefined, 'review-heading'),
       title = h('span', undefined, 'review-title');
     title.append(
       ui.playerLabel(
@@ -62,7 +41,14 @@ export function reviewPanel(ui: CupUI) {
     );
     summary.append(
       title,
-      h('span', r.finish ? formatTime(r.finish) : r.outcome.toUpperCase()),
+      h(
+        'span',
+        r.finish
+          ? formatTime(r.finish)
+          : r.outcome === 'pending'
+            ? 'In progress'
+            : r.outcome.toUpperCase(),
+      ),
       h(
         'span',
         r.flag ? (r.reviewed ? 'Reviewed' : 'Review') : evidenceStatus(r),
@@ -85,7 +71,6 @@ export function reviewPanel(ui: CupUI) {
           r.reviewed ? 'Mark unreviewed' : 'Mark reviewed',
           () => {
             log.markReviewed(r.id, !r.reviewed);
-            c.save(true);
           },
           'quiet',
         ),
@@ -126,13 +111,14 @@ export function reviewPanel(ui: CupUI) {
         detail.append(table);
       }
     }
-    detail.append(
-      h(
-        'p',
-        `${evidenceStatus(r)} · ${r.inputs.length} input samples · ${r.checkpoints.length}/${r.expectedCheckpoints} checkpoints · ${r.outcome}`,
-        'muted',
-      ),
-    );
+    if (r.flag)
+      detail.append(
+        h(
+          'p',
+          `${evidenceStatus(r)} · ${r.inputs.length} input samples · ${r.checkpoints.length}/${r.expectedCheckpoints} checkpoints · ${r.outcome}`,
+          'muted',
+        ),
+      );
     box.append(detail);
   }
   if (log.dropped)

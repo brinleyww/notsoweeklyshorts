@@ -1,7 +1,7 @@
 # Competitions (PolyCup)
 
 The main menu's **Competitions** button runs [PolyCup](https://github.com/Prawnfoot05/PolyCup) by
-**Kiki** (Prawnfoot05), version 0.3.0, used with permission. `src/` is PolyCup's TypeScript source;
+**Kiki** (Prawnfoot05), version 0.3.1, used with permission. `src/` is PolyCup's TypeScript source;
 `nsws/` adapts it to this site. Build output: `mod/polycup.js` (do not edit it).
 
 ## How it runs here
@@ -30,13 +30,26 @@ proxy instead:
 - During a multiplayer race the game's own Invite, Players and Change Track buttons are gone; the cup
   panel has all three.
 
+## Updating PolyCup
+
+The site's edits are merged onto each PolyCup release with a three-way merge: the previous release's
+`src/` is the base, this folder's `src/` is one side and the new release's `src/` the other (0.3.0 to
+0.3.1 was done this way). Then port what the new `main.ts` and `native.ts` add: `main.ts` becomes
+`nsws/entry.ts`, and new NativeApi functions go into `cupNative` in `main.bundle.js`.
+
+From 0.3.1: `physics-integrity.ts` hashes `polytrack_physics.wasm` (`entry.ts` gives it the URL; the
+site's binary is the stock one), the spectator free camera (`freecamPressed`/`enterFreecam` in
+`cupNative`, off on tracks whose week blocks free camera), the player menu, track removal and the
+spectator eye counter. The physics reports and eye counts are only relayed when they change.
+
 ## Changes to PolyCup's own source
 
 Each is marked "Not So Weekly Shorts" in the file:
 
 - `native.ts`: `connectNative` uses the site bridge; no load-time source patching.
-- `chat.ts`: rewritten. The cup chat runs on the site's universal chat (`/nsws/chat?cup=CODE`), so it
-  shares its filter, slow mode and timeouts; `chat-ui.ts` (how it looks and where it sits) is unchanged.
+- `chat.ts`: rewritten. The cup chat runs on the site's universal chat, so it shares its filter, slow
+  mode and timeouts: a Cup tab (`/nsws/chat?cup=CODE`) and a Global tab (the main chat, connected
+  only once opened). `chat-ui.ts` keeps its look and place, with the two tabs at the top.
   PolyCup's own `chat-filter.ts` is gone.
 - `cup.ts`, `controller.ts`, `ui.ts`, `types.ts`, `protocol.ts`, `validation.ts`: vote-skip for random
   tracks (`skip-vote` action, `skipVote` in the state). More than half of the racers skips the track;
@@ -46,6 +59,8 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `ui.ts`, `controller.ts`: no "Create a Simple Cup" screen (the cup is named before the room opens),
   and no autosave or restore (a new room has a new code, so a restored cup couldn't reach its racers).
 - `main.ts` and `version-check.ts` (PolyModLoader only) are removed.
+- `controller.ts`: physics reports and spectator counts are sent only when they change (or every
+  30 s / 10 s), not every 3 s / 1 s.
 - `ui.ts`: the standings peek (Tab) and the spectator keys ([ and ]) are rebindable, and a Keys button
   in the header opens `nsws/keys.ts`, the list of every key a cup uses (also on the Competitions
   screen). Its game keys are saved the same way as Settings -> Controls.

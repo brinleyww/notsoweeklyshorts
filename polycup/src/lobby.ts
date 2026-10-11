@@ -56,6 +56,7 @@ export function lobbyPanel(ui: CupUI) {
   const shell = h('section', undefined, 'cup-lobby'),
     roster = h('aside', undefined, 'lobby-roster'),
     action = h('section', undefined, 'lobby-action');
+  shell.classList.toggle('drafting', view.mode !== 'join');
   roster.setAttribute('aria-label', 'Racer roster');
   action.setAttribute('aria-label', 'Current lobby action');
   const preset = ui.presetPanel(),
@@ -71,8 +72,10 @@ export function lobbyPanel(ui: CupUI) {
       undefined,
       `lobby-racer${view.turn === id ? ' current-turn' : ''}${id === c.selfId ? ' you' : ''}`,
     );
-    const identity = ui.racerName(id, ui.name(id), true);
+    const identity = ui.racerName(id, ui.name(id), true, true);
     const car = identity.querySelector('.car-skin');
+    const actions = identity.querySelector('.player-actions-toggle');
+    if (actions) row.append(actions);
     if (car) row.append(car);
     row.append(identity, ui.playerTools(id));
     if (!c.lobby.some((p) => p.id === id) || c.needsRebind?.has(id))
@@ -93,11 +96,7 @@ export function lobbyPanel(ui: CupUI) {
     roster.append(row);
   }
   if (view.mode === 'join') {
-    const join = ui.button(
-      view.joined ? 'Joined' : 'Join',
-      () => c.action('join'),
-      view.joined ? 'quiet' : 'primary',
-    );
+    const join = ui.button(view.joined ? 'Joined' : 'Join', () => c.action('join'), 'primary');
     join.disabled = view.joined || s.roster.length >= 8;
     roster.append(join);
   }
@@ -107,8 +106,10 @@ export function lobbyPanel(ui: CupUI) {
   if (!spectators.length) more.append(h('p', 'No spectators.', 'muted'));
   for (const p of spectators) {
     const row = h('div', undefined, `lobby-racer${p.id === c.selfId ? ' you' : ''}`);
-    const identity = ui.racerName(p.id, p.nickname, true),
+    const identity = ui.racerName(p.id, p.nickname, true, true),
       car = identity.querySelector('.car-skin');
+    const actions = identity.querySelector('.player-actions-toggle');
+    if (actions) row.append(actions);
     if (car) row.append(car);
     row.append(identity, ui.playerTools(p.id));
     more.append(row);
@@ -117,7 +118,7 @@ export function lobbyPanel(ui: CupUI) {
     const spectate = ui.button(
       view.joined ? 'Spectate' : 'Spectating',
       () => c.action('leave'),
-      'quiet',
+      'primary',
     );
     spectate.disabled = !view.joined;
     more.append(spectate);
@@ -127,7 +128,20 @@ export function lobbyPanel(ui: CupUI) {
   if (view.mode === 'ban' && view.turn !== c.selfId && view.turn !== null) {
     actionTitle.replaceChildren(ui.playerLabel(view.turn, ui.name(view.turn), true), '’s ban');
   }
-  if (view.mode !== 'join') action.append(actionTitle);
+  if (view.mode !== 'join') {
+    const progress = h('ol', undefined, 'draft-progress');
+    progress.setAttribute('aria-label', 'Cup setup progress');
+    for (const [stage, label] of [
+      ['roster', 'Racers'],
+      ...(rules.bansPerRacer ? [['bans', 'Bans']] : []),
+      ['picks', 'Picks'],
+    ]) {
+      const item = h('li', label);
+      if (stage === view.stage) item.setAttribute('aria-current', 'step');
+      progress.append(item);
+    }
+    action.append(progress, actionTitle);
+  }
   if (!s.draft && !view.joined) action.append(ui.joinControls());
   if (view.mode === 'join') {
     if (c.isHost) {
@@ -144,8 +158,12 @@ export function lobbyPanel(ui: CupUI) {
       );
       begin.disabled = s.roster.length < 2 || ui.presetDirty || !!c.startingCup;
       begin.dataset.setupStart = '';
-      if (s.roster.length < 2)
-        roster.append(h('p', 'At least two racers are needed to begin.', 'muted'));
+      begin.title =
+        s.roster.length < 2
+          ? 'At least two racers are needed.'
+          : ui.presetDirty
+            ? 'Finish editing the rules to continue.'
+            : '';
       ui.setLobbyStart(begin);
     } else
       roster.append(
@@ -233,10 +251,20 @@ export function lobbyPanel(ui: CupUI) {
     );
     start.disabled =
       !!c.startingCup || s.roster.length < 2 || view.ready !== s.roster.length || ui.presetDirty;
+    start.title =
+      s.roster.length < 2
+        ? 'At least two racers are needed.'
+        : view.ready !== s.roster.length
+          ? `Waiting for ${s.roster.length - view.ready} racer(s) to pick.`
+          : ui.presetDirty
+            ? 'Finish editing the rules to continue.'
+            : '';
     ui.setLobbyStart(start);
   }
   if (view.mode === 'join') preset.classList.add('preset-at-top');
   action.append(preset);
-  shell.append(roster, action);
+  const people = h('div', undefined, 'lobby-column');
+  people.append(roster, h('div', undefined, 'lobby-chat-slot'));
+  shell.append(people, action);
   return shell;
 }

@@ -1,9 +1,7 @@
-import { frameNumber, validInputEvents } from './inputs.ts';
 import type {
   CupState,
   InputEvent,
   InputPacket,
-  ReviewArchive,
   ReviewFlag,
   ReviewOutcome,
   ReviewRun,
@@ -161,6 +159,12 @@ export class ReviewLog {
     r.checkpoints.push([index, frames]);
     this.#revision++;
   }
+  undoTrackVisit(trackId: string, fromRound: number) {
+    for (const run of this.#runs)
+      if (run.trackId === trackId && run.round > fromRound) run.outcome = 'undone';
+    this.analyze();
+    this.#revision++;
+  }
   close(state: Pick<CupState, 'runtime'>, outcome: 'scored' | ReviewOutcome = 'scored') {
     const run = state?.runtime;
     if (!run) return;
@@ -251,99 +255,6 @@ export class ReviewLog {
     if (!r?.flag) return;
     r.reviewed = !!value;
     this.#revision++;
-  }
-  static restore(value: unknown, state: CupState) {
-    const data = value as ReviewArchive;
-    const log = new ReviewLog(state.id);
-    if (data === undefined) return log;
-    const text = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 128;
-    const obj = (v: unknown) => !!v && typeof v === 'object' && !Array.isArray(v);
-    if (
-      !obj(data) ||
-      data.schema !== 1 ||
-      data.cupId !== state.id ||
-      JSON.stringify(data).length > REVIEW_LIMITS.bytes ||
-      !obj(data.identities) ||
-      Object.keys(data.identities).length > 128 ||
-      !Object.entries(data.identities).every(
-        ([id, key]) => state.roster.some((p) => p.id === Number(id)) && text(key),
-      ) ||
-      new Set(Object.values(data.identities)).size !== Object.keys(data.identities).length ||
-      !Array.isArray(data.runs) ||
-      data.runs.length > REVIEW_LIMITS.runs ||
-      !Number.isSafeInteger(data.dropped) ||
-      data.dropped < 0
-    )
-      throw new Error('Invalid organizer review log.');
-    const runs: ReviewRun[] = data.runs.map((r) => {
-      if (
-        !obj(r) ||
-        !text(r.id) ||
-        !text(r.roundId) ||
-        !Number.isSafeInteger(r.round) ||
-        r.round < 1 ||
-        !text(r.name) ||
-        !Object.values(data.identities).includes(r.racerKey) ||
-        !state.tracks.some((t) => t.id === r.trackId) ||
-        !['pending', 'finished', 'dnf', 'void', 'undone', 'interrupted'].includes(r.outcome) ||
-        !(r.finish === null || (frameNumber(r.finish) && r.finish > 0)) ||
-        (r.outcome === 'finished' && r.finish === null) ||
-        !Number.isSafeInteger(r.expectedCheckpoints) ||
-        r.expectedCheckpoints < 0 ||
-        r.expectedCheckpoints > 100000 ||
-        !Array.isArray(r.checkpoints) ||
-        r.checkpoints.length > REVIEW_LIMITS.checkpoints ||
-        !r.checkpoints.every(
-          (e, i) =>
-            Array.isArray(e) &&
-            e.length === 2 &&
-            Number.isSafeInteger(e[0]) &&
-            e[0] >= 0 &&
-            e[0] < r.expectedCheckpoints &&
-            frameNumber(e[1]) &&
-            e[1] > 0 &&
-            (!i || (e[0] > r.checkpoints[i - 1][0] && e[1] >= r.checkpoints[i - 1][1])),
-        ) ||
-        !(r.through === -1 || frameNumber(r.through)) ||
-        !validInputEvents(r.inputs, r.through, REVIEW_LIMITS.events) ||
-        !Number.isSafeInteger(r.nextSeq) ||
-        r.nextSeq < 0 ||
-        typeof r.gap !== 'boolean' ||
-        typeof r.reviewed !== 'boolean'
-      )
-        throw new Error('Invalid saved run evidence.');
-      return {
-        id: r.id,
-        roundId: r.roundId,
-        round: r.round,
-        trackId: r.trackId,
-        racerKey: r.racerKey,
-        name: r.name,
-        outcome: r.outcome === 'pending' ? 'interrupted' : r.outcome,
-        finish: r.finish,
-        expectedCheckpoints: r.expectedCheckpoints,
-        checkpoints: r.checkpoints.map((e) => [...e]),
-        inputs: r.inputs.map((e) => [...e]),
-        through: r.through,
-        nextSeq: r.nextSeq,
-        gap: r.gap,
-        reviewed: r.reviewed,
-        flag: null,
-      };
-    });
-    if (
-      new Set(runs.map((r) => r.id)).size !== runs.length ||
-      runs.reduce((n, r) => n + r.inputs.length, 0) > REVIEW_LIMITS.totalEvents
-    )
-      throw new Error('Invalid review history size.');
-    log.#identities = { ...data.identities };
-    log.#runs = runs;
-    log.#dropped = data.dropped;
-    log.analyze();
-    runs.forEach((r, i) => {
-      r.reviewed = data.runs[i].reviewed && !!r.flag;
-    });
-    return log;
   }
 }
 

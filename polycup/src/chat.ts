@@ -1,12 +1,14 @@
-// Not So Weekly Shorts: the cup chat runs on the site's universal chat (proxy/src/chat.js), in a
-// room of its own for each cup code, so it has the same filter, slow mode and timeouts as the main
-// chat. Only the panel (chat-ui.ts) is PolyCup's. The organizer's mutes are enforced by that room.
+// Not So Weekly Shorts: the cup chat runs on the site's universal chat (proxy/src/chat.js). Its Cup
+// tab is a room of its own for each cup code and its Global tab is the main chat, so both have the
+// same filter, slow mode and timeouts. Only the panel (chat-ui.ts) is PolyCup's. The organizer's
+// mutes are enforced by the cup's room. The Global tab only connects once someone opens it.
 export const CHAT_LIMIT = 200;
 const MAX_LINES = 2000;
 const KEEPALIVE_MS = 30000;
 const RETRY_MS = 3000;
 const SEND_TIMEOUT_MS = 8000;
 
+export type ChatTab = 'cup' | 'global';
 export interface ChatLine {
   seq: number;
   at: number;
@@ -41,6 +43,11 @@ interface Identity {
   nickname(): string;
   ownerKey(): Promise<string | null>;
 }
+interface Room {
+  key: string;
+  query: string;
+  secret: string | null;
+}
 
 const site = window as unknown as {
   __nswsApiBase?: string;
@@ -54,10 +61,10 @@ function colorOf(uid: string) {
   return hash % 8;
 }
 
-export class CupChat {
-  #options: ChatOptions;
-  #cupId = '';
-  #code = '';
+// One chat room over one WebSocket.
+class ChatChannel {
+  #changed: () => void;
+  #key = '';
   #ws: WebSocket | null = null;
   #retryAt = 0;
   #keepAlive = 0;
@@ -67,24 +74,17 @@ export class CupChat {
   #speakers = new Map<string, Speaker>();
   #mutes = new Set<string>();
   #pending: { resolve: () => void; reject: (e: Error) => void; timer: number } | null = null;
-  #revision = 0;
-  constructor(options: ChatOptions) {
-    this.#options = options;
-  }
-  get cupId() {
-    return this.#cupId;
+  revision = 0;
+  constructor(changed: () => void) {
+    this.#changed = changed;
   }
   get lines(): readonly ChatLine[] {
     return this.#lines;
   }
-  get revision() {
-    return this.#revision;
-  }
   get muted() {
     return !!this.#uid && this.#mutes.has(this.#uid);
   }
-  get speakers() {
-    const host = !!this.#options.context()?.host;
+  speakers(host: boolean) {
     return [...this.#speakers.values()].map(({ uid, id, name, color }) => ({
       id,
       name,
@@ -93,27 +93,22 @@ export class CupChat {
       canMute: host && uid !== this.#uid,
     }));
   }
-  tick() {
-    const context = this.#options.context();
-    const room = context ? (site.__nswsCupRoom?.() ?? null) : null;
-    if (context) this.#cupId = context.cupId;
-    const code = room?.code ?? '';
-    if (code !== this.#code) {
+  tick(room: Room | null) {
+    const key = room?.key ?? '';
+    if (key !== this.#key) {
       this.#close();
-      this.#code = code;
+      this.#key = key;
       this.#reset([]);
       this.#retryAt = 0;
     }
     if (room && !this.#ws && Date.now() >= this.#retryAt) this.#open(room);
   }
-  #open(room: { code: string; secret: string | null }) {
+  #open(room: Room) {
     const identity = site.__nswsChatIdentity;
     if (!identity || !site.__nswsApiBase) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(
-        site.__nswsApiBase.replace(/^http/, 'ws') + 'nsws/chat?cup=' + encodeURIComponent(room.code),
-      );
+      ws = new WebSocket(site.__nswsApiBase.replace(/^http/, 'ws') + 'nsws/chat' + room.query);
     } catch {
       this.#retryAt = Date.now() + RETRY_MS;
       return;
@@ -191,8 +186,8 @@ export class CupChat {
   }
   #relist() {
     this.#lines = this.#messages.map((m, i) => ((m.line.seq = i + 1), m.line));
-    this.#revision++;
-    this.#options.changed();
+    this.revision++;
+    this.#changed();
   }
   #server(data: { t?: string; [key: string]: unknown }) {
     if (data.t === 'init') {
@@ -217,8 +212,8 @@ export class CupChat {
       this.#relist();
     } else if (data.t === 'mutes') {
       this.#mutes = new Set(Array.isArray(data.uids) ? (data.uids as string[]) : []);
-      this.#revision++;
-      this.#options.changed();
+      this.revision++;
+      this.#changed();
     } else if (data.t === 'err' || data.t === 'timeout') {
       this.#settle(typeof data.text === 'string' ? data.text : 'Message not sent.');
     } else if (data.t === 'slow') {
@@ -243,12 +238,74 @@ export class CupChat {
     return sent;
   }
   mute(speakerId: number, muted: boolean) {
-    if (!this.#options.context()?.host) throw new Error('Only the organizer can mute chat.');
     const speaker = [...this.#speakers.values()].find((s) => s.id === speakerId);
     if (!speaker || speaker.uid === this.#uid || this.#ws?.readyState !== WebSocket.OPEN) return;
     this.#ws.send(JSON.stringify({ t: 'cupmute', uid: speaker.uid, on: muted }));
   }
-  archive() {
-    return { cupId: this.#cupId, lines: structuredClone(this.#lines) };
+}
+
+export class CupChat {
+  #options: ChatOptions;
+  #cupId = '';
+  #tab: ChatTab = 'cup';
+  #globalOpened = false;
+  #revision = 0;
+  #channels: Record<ChatTab, ChatChannel>;
+  constructor(options: ChatOptions) {
+    this.#options = options;
+    const changed = () => {
+      this.#revision++;
+      options.changed();
+    };
+    this.#channels = { cup: new ChatChannel(changed), global: new ChatChannel(changed) };
+  }
+  get cupId() {
+    return this.#cupId;
+  }
+  get tab() {
+    return this.#tab;
+  }
+  set tab(tab: ChatTab) {
+    if (tab === this.#tab) return;
+    this.#tab = tab;
+    if (tab === 'global') this.#globalOpened = true;
+    this.#revision++;
+    this.tick();
+    this.#options.changed();
+  }
+  get #active() {
+    return this.#channels[this.#tab];
+  }
+  get lines() {
+    return this.#active.lines;
+  }
+  linesOf(tab: ChatTab) {
+    return this.#channels[tab].lines;
+  }
+  get revision() {
+    return this.#revision;
+  }
+  get muted() {
+    return this.#active.muted;
+  }
+  get speakers() {
+    return this.#active.speakers(this.#tab === 'cup' && !!this.#options.context()?.host);
+  }
+  tick() {
+    const context = this.#options.context();
+    const room = context ? (site.__nswsCupRoom?.() ?? null) : null;
+    if (context) this.#cupId = context.cupId;
+    this.#channels.cup.tick(
+      room ? { key: room.code, query: '?cup=' + encodeURIComponent(room.code), secret: room.secret } : null,
+    );
+    this.#channels.global.tick(room && this.#globalOpened ? { key: 'global', query: '', secret: null } : null);
+    if (!room) this.#globalOpened = this.#tab === 'global';
+  }
+  post(text: string) {
+    return this.#active.post(text);
+  }
+  mute(speakerId: number, muted: boolean) {
+    if (!this.#options.context()?.host) throw new Error('Only the organizer can mute chat.');
+    if (this.#tab === 'cup') this.#channels.cup.mute(speakerId, muted);
   }
 }

@@ -404,7 +404,7 @@ window.__nswsTrackQuery = function(trackId) {
     const cupKey = id => CUP_KEYS.find(k => k.id === id);
     // Every key a cup uses, for the Keys list (polycup/nsws/keys.ts). Game keys have two slots
     // and are saved like Settings -> Controls; "fixed" ones can't be changed.
-    const GAME_CUP_KEYS = [[0, "Accelerate"], [2, "Brake"], [3, "Turn left"], [1, "Turn right"], [4, "Reset to checkpoint"], [5, "Restart"], [6, "Cockpit camera"], [7, "Hide the HUD"], [8, "Pause"]];
+    const GAME_CUP_KEYS = [[0, "Accelerate"], [2, "Brake"], [3, "Turn left"], [1, "Turn right"], [4, "Reset to checkpoint"], [5, "Restart"], [6, "Cockpit camera"], [25, "Free camera (spectating)"], [7, "Hide the HUD"], [8, "Pause"]];
     function cupKeyList() {
         const own = (id, label, get, set) => ({ id, group: "Competitions", label, keys: [get()], set: (slot, code) => set(code) });
         return [
@@ -44143,7 +44143,21 @@ window.__nswsTrackQuery = function(trackId) {
                 },
                 startRespawnPressed: (g, e) => {
                     const car = C.get(g, wa, "f");
-                    return !(P.ip() || C.get(g, Ba, "f").isEnabled || Ha.call(g) || !restartAllowed(g) || !car.hasStarted() || car.hasFinished() || 0 !== car.getNextCheckpointIndex() || !settingsOf(g).checkKeyBinding(e, KeyBind.VehicleCheckpointReset));
+                    return !(P.ip() || C.get(g, Ba, "f").isEnabled || Ha.call(g) || !restartAllowed(g) || car.hasFinished() || 0 !== car.getNextCheckpointIndex() || !settingsOf(g).checkKeyBinding(e, KeyBind.VehicleCheckpointReset));
+                },
+                // Spectators' free camera (PolyCup 0.3.1), off on tracks whose week blocks it.
+                freecamPressed: (g, e) => !P.ip() && settingsOf(g).checkKeyBinding(e, KeyBind.ToggleSpectatorCamera) && !window.__nswsFreecamBlocked?.(C.get(g, Yr, "f").getId()),
+                enterFreecam: g => {
+                    const renderer = C.get(g, zr, "f"), camera = renderer.camera, spectator = C.get(g, Ba, "f");
+                    if (camera !== spectator.camera) {
+                        spectator.camera.position.copy(camera.position);
+                        spectator.camera.quaternion.copy(camera.quaternion);
+                        spectator.camera.fov = camera.fov;
+                        spectator.camera.updateProjectionMatrix();
+                    }
+                    spectator.isEnabled = !0;
+                    renderer.setCamera(spectator.camera);
+                    C.get(g, ea, "f").isVisible = !1 !== C.get(g, $r, "f");
                 },
                 showRoundTime: (g, frames) => C.get(g, sa, "f").update({ getTime: () => new yt.A(frames), getFinishTime: () => null }),
                 showRoundCheckpoint: (g, frames) => C.get(g, sa, "f").showCheckpointTime(new yt.A(frames), null),

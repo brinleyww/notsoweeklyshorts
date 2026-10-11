@@ -101,6 +101,9 @@ export class ReconnectRegistry {
   key(id: number) {
     return this.#peers.get(id);
   }
+  ownerKey(id: number) {
+    return [...this.#owners].find(([, owner]) => owner === id)?.[0];
+  }
   authenticated(id: number) {
     return this.#peers.has(id);
   }

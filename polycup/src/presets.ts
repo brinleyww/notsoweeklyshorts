@@ -3,6 +3,7 @@ import type { CupState } from './types.ts';
 export type TrackCategory = 'official' | 'community' | 'custom';
 export interface CupRules {
   allowRacerChanges: boolean;
+  allowSpectatorFreecam?: boolean;
   uploadLeaderboardTimes?: boolean;
   roundsPerTrack: number;
   pointsToWin: number;
@@ -29,6 +30,7 @@ export interface CupPreset {
 }
 const standard: CupRules = {
   allowRacerChanges: false,
+  allowSpectatorFreecam: true,
   uploadLeaderboardTimes: false,
   roundsPerTrack: 4,
   pointsToWin: 140,
@@ -103,12 +105,15 @@ export function validPreset(value: unknown): value is CupPreset {
     !Array.isArray(r) &&
     Object.keys(p).every((k) => ['format', 'schema', 'name', 'rules'].includes(k)) &&
     Object.keys(r).length ===
-      Object.keys(standard).length - (r.uploadLeaderboardTimes === undefined ? 1 : 0) &&
+      Object.keys(standard).length -
+        (r.uploadLeaderboardTimes === undefined ? 1 : 0) -
+        (r.allowSpectatorFreecam === undefined ? 1 : 0) &&
     Object.keys(r).every((k) => k in standard) &&
     integer(r.roundsPerTrack, 1, 30) &&
     integer(r.pointsToWin, 1, 10000) &&
     typeof r.finalist === 'boolean' &&
     typeof r.allowRacerChanges === 'boolean' &&
+    (r.allowSpectatorFreecam === undefined || typeof r.allowSpectatorFreecam === 'boolean') &&
     (r.uploadLeaderboardTimes === undefined || typeof r.uploadLeaderboardTimes === 'boolean') &&
     Array.isArray(r.points) &&
     r.points.length === 8 &&
@@ -158,7 +163,10 @@ export function parsePreset(text: string): CupPreset {
     );
   if (!validPreset(value))
     throw new Error('Unsupported or invalid preset. Check its rules and preset format.');
-  return { ...structuredClone(value), rules: { uploadLeaderboardTimes: false, ...value.rules } };
+  return {
+    ...structuredClone(value),
+    rules: { allowSpectatorFreecam: true, uploadLeaderboardTimes: false, ...value.rules },
+  };
 }
 export function presetText(preset: CupPreset) {
   if (!validPreset(preset)) throw new Error('Fix the preset rules before exporting.');
@@ -167,6 +175,7 @@ export function presetText(preset: CupPreset) {
 export function presetKey(preset: CupPreset) {
   const rules = {
     ...preset.rules,
+    allowSpectatorFreecam: preset.rules.allowSpectatorFreecam !== false,
     uploadLeaderboardTimes: preset.rules.uploadLeaderboardTimes === true,
   };
   return JSON.stringify({
@@ -188,7 +197,11 @@ export class PresetLibrary {
             .slice(0, 30)
             .map((preset) => ({
               ...preset,
-              rules: { uploadLeaderboardTimes: false, ...preset.rules },
+              rules: {
+                allowSpectatorFreecam: true,
+                uploadLeaderboardTimes: false,
+                ...preset.rules,
+              },
             }))
         : [];
     } catch {

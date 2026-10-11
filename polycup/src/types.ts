@@ -88,6 +88,8 @@ export interface ScoredRound {
   tiedFirst: boolean;
 }
 export interface Match {
+  currentVisit?: { trackId: TrackId; fromRound: number };
+  rotationOffset?: number;
   randomTrack?: { id: TrackId; fromRound: number; rounds: number };
   name: string;
   players: PlayerId[];
@@ -104,6 +106,7 @@ export interface Match {
   ranking: PlayerId[];
 }
 export interface CupState {
+  removedTracks?: TrackId[];
   withdrawn?: PlayerId[];
   pendingRacers?: PlayerId[];
   preset?: import('./presets.ts').CupPreset;
@@ -192,13 +195,6 @@ export interface ReviewRun {
   gap: boolean;
   flag: ReviewFlag | null;
   reviewed: boolean;
-}
-export interface ReviewArchive {
-  schema: number;
-  cupId: string | null;
-  identities: Record<PlayerId, string>;
-  runs: ReviewRun[];
-  dropped: number;
 }
 
 export type CameraView = Omit<CameraPose, 'carPosition' | 'carQuaternion' | 'at'> & {

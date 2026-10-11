@@ -1,5 +1,5 @@
 import { element as h } from './dom.ts';
-import { CHAT_LIMIT, type ChatLine } from './chat.ts';
+import { CHAT_LIMIT, type ChatLine, type ChatTab } from './chat.ts';
 import { isEditing } from './held-inputs.ts';
 import type { CupUI } from './ui.ts';
 const colors = [
@@ -29,10 +29,18 @@ export class ChatUI {
   #selectedSpeaker: number | null = null;
   #hidePreview = h('input');
   #expanded = false;
+  #persistent = false;
   #cupId = '';
   #shownRevision = -1;
-  #known = 0;
-  #read = 0;
+  // Not So Weekly Shorts: a Cup tab and a Global tab, each with its own unread count.
+  #tabs: Record<ChatTab, HTMLButtonElement> = {
+    cup: h('button', 'Cup', 'chat-tab'),
+    global: h('button', 'Global', 'chat-tab'),
+  };
+  #seen: Record<ChatTab, { known: number; read: number }> = {
+    cup: { known: 0, read: 0 },
+    global: { known: 0, read: 0 },
+  };
   #limit = 60;
   #expires = 0;
   #sending = false;
@@ -44,10 +52,20 @@ export class ChatUI {
     this.#root.setAttribute('aria-label', 'Cup chat');
     this.#button.type = 'button';
     this.#button.addEventListener('click', () => (this.#expanded ? this.close() : this.open()));
+    this.#panel.id = 'cup-chat-panel';
     this.#panel.setAttribute('aria-label', 'Chat history');
     const heading = h('div', undefined, 'chat-heading');
-    heading.append(h('strong', 'Cup chat'));
-    const close = h('button', 'Close', 'quiet');
+    const tabs = h('div', undefined, 'chat-tabs');
+    tabs.setAttribute('role', 'tablist');
+    for (const tab of ['cup', 'global'] as const) {
+      const button = this.#tabs[tab];
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.addEventListener('click', () => this.#switchTab(tab));
+      tabs.append(button);
+    }
+    heading.append(tabs);
+    const close = h('button', 'Close', 'quiet chat-close');
     close.type = 'button';
     close.addEventListener('click', () => this.close());
     heading.append(close);
@@ -118,7 +136,21 @@ export class ChatUI {
     shadow.append(this.#root);
     this.#panel.hidden = true;
     this.#root.hidden = true;
-    this.#panel.addEventListener('focusin', () => ui.c.clearDrivingInput());
+    this.#panel.addEventListener('focusin', () => {
+      ui.c.clearDrivingInput();
+      if (this.#persistent) {
+        this.#expanded = true;
+        ui.c.setChatTyping(true);
+      }
+    });
+    this.#panel.addEventListener('focusout', () => {
+      queueMicrotask(() => {
+        if (this.#persistent && !this.#panel.contains(shadow.activeElement)) {
+          this.#expanded = false;
+          ui.c.setChatTyping(false);
+        }
+      });
+    });
     for (const type of ['keydown', 'keyup', 'keypress'] as const)
       window.addEventListener(
         type,
@@ -128,6 +160,7 @@ export class ChatUI {
           event.stopImmediatePropagation();
           if (type === 'keydown' && !event.isComposing) {
             if (event.code === 'Tab') {
+              if (this.#persistent) return;
               event.preventDefault();
               const focusable = [
                 ...this.#panel.querySelectorAll<HTMLElement>(
@@ -166,8 +199,22 @@ export class ChatUI {
       { capture: true },
     );
   }
+  get unread() {
+    const chat = this.#ui.c.chat;
+    return (['cup', 'global'] as const).reduce(
+      (n, tab) => n + Math.max(0, chat.linesOf(tab).length - this.#seen[tab].read),
+      0,
+    );
+  }
   get isOpen() {
     return this.#expanded;
+  }
+  mount(target: HTMLElement | null, persistent = false) {
+    this.#persistent = !!target && persistent;
+    this.#root.classList.toggle('chat-docked', !!target);
+    const parent = target ?? this.#shadow;
+    if (this.#root.parentNode !== parent) parent.append(this.#root);
+    this.#panel.querySelector<HTMLElement>('.chat-close')!.hidden = this.#persistent;
   }
   hotkey(event: KeyboardEvent) {
     if (
@@ -185,10 +232,22 @@ export class ChatUI {
     event.preventDefault();
     this.open();
   }
+  #switchTab(tab: ChatTab) {
+    const chat = this.#ui.c.chat;
+    if (chat.tab === tab) return;
+    this.#hidePersonMenu();
+    chat.tab = tab;
+    this.#limit = 60;
+    this.#stickBottom = true;
+    this.#shownRevision = -1;
+    this.#status.textContent = '';
+    this.render();
+    this.#input.focus();
+  }
   open() {
     if (!this.#ui.c.state) return;
     this.#expanded = true;
-    this.#read = this.#ui.c.chat.lines.length;
+    this.#seen[this.#ui.c.chat.tab].read = this.#ui.c.chat.lines.length;
     this.#stickBottom = true;
     this.#shownRevision = -1;
     this.#ui.c.setChatTyping(true);
@@ -262,8 +321,7 @@ export class ChatUI {
     if (state.id !== this.#cupId) {
       this.#hidePersonMenu();
       this.#cupId = state.id;
-      this.#known = 0;
-      this.#read = 0;
+      this.#seen = { cup: { known: 0, read: 0 }, global: { known: 0, read: 0 } };
       this.#limit = 60;
       this.#shownRevision = -1;
       this.#expanded = false;
@@ -274,18 +332,31 @@ export class ChatUI {
     if (this.#expanded && !document.hidden && !this.#panel.contains(this.#shadow.activeElement))
       this.#input.focus();
     const lines = chat.cupId === state.id ? chat.lines : [];
-    if (lines.length > this.#known) {
-      this.#expires = Date.now() + 8000;
-      this.#known = lines.length;
+    let unread = 0;
+    for (const tab of ['cup', 'global'] as const) {
+      const seen = this.#seen[tab],
+        count = chat.cupId === state.id ? chat.linesOf(tab).length : 0;
+      if (count < seen.read) seen.read = seen.known = count;
+      if (count > seen.known) {
+        if (tab === chat.tab) this.#expires = Date.now() + 4000;
+        seen.known = count;
+      }
+      if (tab === chat.tab && (this.#expanded || this.#persistent) && this.#stickBottom)
+        seen.read = count;
+      const waiting = Math.max(0, count - seen.read);
+      unread += waiting;
+      const button = this.#tabs[tab];
+      button.textContent = `${tab === 'cup' ? 'Cup' : 'Global'}${waiting && tab !== chat.tab ? ` (${waiting})` : ''}`;
+      button.classList.toggle('selected', tab === chat.tab);
+      button.setAttribute('aria-selected', String(tab === chat.tab));
     }
-    if (this.#expanded && this.#stickBottom) this.#read = lines.length;
-    const unread = Math.max(0, lines.length - this.#read);
+    this.#input.placeholder = chat.tab === 'cup' ? 'Message the Cup…' : 'Message everyone on the site…';
     const keys = c.game && !c.info?.disposed ? (c.native.chatKeys?.(c.game) ?? []) : [];
     this.#button.textContent = `Chat${unread ? ` (${unread})` : ''}${keys.length ? ` · ${keys.join(' / ')}` : ''}`;
     this.#button.setAttribute('aria-expanded', String(this.#expanded));
-    this.#root.classList.toggle('chat-open', this.#expanded);
-    this.#panel.hidden = !this.#expanded;
-    this.#button.hidden = this.#expanded;
+    this.#root.classList.toggle('chat-open', this.#expanded || this.#persistent);
+    this.#panel.hidden = !this.#expanded && !this.#persistent;
+    this.#button.hidden = this.#expanded || this.#ui.panelOpen;
     this.#preview.hidden =
       this.#expanded ||
       this.#ui.panelOpen ||
@@ -308,7 +379,7 @@ export class ChatUI {
     }
     this.#bottom.hidden = this.#stickBottom;
     this.#sendButton.disabled = this.#sending || chat.muted || !this.#input.value.trim();
-    if (chat.muted) this.#status.textContent = 'The organizer muted you for this Cup.';
+    if (chat.muted && chat.tab === 'cup') this.#status.textContent = 'The organizer muted you for this Cup.';
     else if (this.#status.textContent === 'The organizer muted you for this Cup.')
       this.#status.textContent = '';
   }

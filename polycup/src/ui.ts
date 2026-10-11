@@ -18,6 +18,7 @@ import { countryFlag, lobbyPanel } from './lobby.ts';
 import { RestartHint } from './restart-hint.ts';
 import { resultRows, resultsImage } from './results.ts';
 import { reviewPanel } from './review-ui.ts';
+import { PlayerMenu } from './player-menu.ts';
 import { recordTrack, sessionRecord, standings } from './standings.ts';
 import { formatGap, formatTime as time } from './time.ts';
 import { CupToolbar } from './toolbar.ts';
@@ -67,6 +68,17 @@ export class CupUI {
   setLobbyStart(button: HTMLButtonElement) {
     this.#lobbyStart = button;
   }
+  #startControls() {
+    const button = this.#lobbyStart;
+    if (!button) return null;
+    const start = h('div', undefined, 'setup-start');
+    const note = h('small', button.title, 'setup-start-note');
+    note.id = 'setup-start-note';
+    note.hidden = !button.disabled || !button.title;
+    button.setAttribute('aria-describedby', note.id);
+    start.append(note, button);
+    return start;
+  }
   get presetDirty() {
     return this.#presetEditor.dirty;
   }
@@ -81,17 +93,12 @@ export class CupUI {
   get c() {
     return this.#c;
   }
-  get reviewExpanded() {
-    return this.#reviewExpanded;
-  }
   get editingPick() {
     return this.#editingPick;
   }
 
-  #reviewExpanded = new Set<string>();
   #c: Controller;
   #open: boolean = false;
-  #tab: string = 'Tournament';
   #signature: string = '';
   #restartHint: RestartHint = new RestartHint();
   #trackCategory: string = 'official';
@@ -110,6 +117,7 @@ export class CupUI {
   #downtime: HTMLElement;
   #practiceHud: HTMLElement;
   #finishCue: HTMLElement;
+  #viewerBadge = h('div', undefined, 'viewer-count');
   #inputHud: HTMLElement;
   #inputView: InputVisualizer | undefined;
   #inputStatus: HTMLElement;
@@ -118,10 +126,13 @@ export class CupUI {
   #toolbar: CupToolbar;
   #ghostHintCup: string | undefined;
   #noticeTimer: number = 0;
+  #noticeUntil = 0;
+  #noticeCupId: string | null = null;
   #seenPanelRequest: number = 0;
   #lobbyKey: string = '';
   #editingPick: boolean = false;
-  #renderedTab: string = '';
+  #renderedView = '';
+  #playerMenu: PlayerMenu;
   #membershipControls: HTMLElement | null = null;
   #peekCup: string | null = null;
   #rulesDialog = h('dialog', undefined, 'rules-dialog');
@@ -139,7 +150,11 @@ export class CupUI {
     document.body.append(root);
     this.#shadow = root.attachShadow({ mode: 'open' });
     const style = h('style', css);
-    this.#shadow.append(style);
+    this.#shadow.append(style, this.#viewerBadge);
+    this.#playerMenu = new PlayerMenu(this, this.#shadow);
+    this.#viewerBadge.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg><span></span>';
+    this.#viewerBadge.hidden = true;
     const menuVersion = h('div', `PolyCup ${Cup.VERSION}`, 'menu-version');
     this.#panel = h('section', undefined, 'panel');
     this.#panel.setAttribute('aria-label', 'Simple Cup');
@@ -205,11 +220,15 @@ export class CupUI {
     window.addEventListener(
       'keydown',
       (event) => {
-        if (this.#rulesDialog.open) {
-          if (event.code === 'F8') {
+        if (this.#playerMenu.open) {
+          if (event.code === 'Escape') {
             event.preventDefault();
-            this.#rulesDialog.close();
+            this.#playerMenu.close();
           }
+          event.stopImmediatePropagation();
+          return;
+        }
+        if (this.#rulesDialog.open) {
           event.stopImmediatePropagation();
           return;
         }
@@ -231,7 +250,7 @@ export class CupUI {
         event.preventDefault();
         event.stopImmediatePropagation();
         this.#peekCup = state.id;
-        this.#tab = 'Tournament';
+
         this.#open = true;
         this.redraw();
       },
@@ -244,14 +263,17 @@ export class CupUI {
           event.preventDefault();
           event.stopImmediatePropagation();
           this.endScoreboardPeek();
-        } else if (this.#rulesDialog.open) event.stopImmediatePropagation();
+        } else if (this.#rulesDialog.open || this.#playerMenu.open)
+          event.stopImmediatePropagation();
       },
       { capture: true },
     );
     window.addEventListener('blur', () => this.endScoreboardPeek());
     document.addEventListener('visibilitychange', () => {
+      this.expireNotice();
       if (document.hidden) this.endScoreboardPeek();
     });
+    window.addEventListener('focus', () => this.expireNotice());
     for (const type of ['keydown', 'keyup', 'keypress'] as const)
       this.#panel.addEventListener(type, (e) => {
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement).tagName))
@@ -429,14 +451,29 @@ export class CupUI {
     this.#rulesDialog.replaceChildren(header, body);
     this.#rulesDialog.showModal();
   }
+  dismissNotice() {
+    clearTimeout(this.#noticeTimer);
+    this.#noticeUntil = 0;
+    this.#notice.hidden = true;
+  }
+  expireNotice() {
+    if (this.#noticeUntil && (document.hidden || Date.now() >= this.#noticeUntil))
+      this.dismissNotice();
+  }
   showNotice(text: string, duration: number, gameplayOnly = false) {
+    if (document.hidden) {
+      this.dismissNotice();
+      return;
+    }
+    if (!this.#notice.hidden && this.#notice.textContent === text && this.#noticeUntil > Date.now())
+      return;
+    this.dismissNotice();
+    const lifetime = Math.min(3500, Math.max(800, duration));
+    this.#noticeUntil = Date.now() + lifetime;
     this.#notice.classList.toggle('gameplay-notice', gameplayOnly);
     this.#notice.textContent = text;
     this.#notice.hidden = false;
-    clearTimeout(this.#noticeTimer);
-    this.#noticeTimer = setTimeout(() => {
-      this.#notice.hidden = true;
-    }, duration);
+    this.#noticeTimer = setTimeout(() => this.expireNotice(), lifetime);
   }
   name(id: number | null) {
     return Cup.player(this.#c.state, id)?.name ?? `Player ${id}`;
@@ -444,6 +481,11 @@ export class CupUI {
   render() {
     const c = this.#c,
       s = c.state;
+    if (this.#noticeCupId !== (s?.id ?? null)) {
+      this.dismissNotice();
+      this.#noticeCupId = s?.id ?? null;
+    }
+    this.expireNotice();
     this.#restartHint.update(
       c.game ? c.native.hudElement(c.game) : null,
       s?.phase === 'racing' &&
@@ -457,10 +499,9 @@ export class CupUI {
         this.#peekCup = null;
         this.#open = c.panelRequest.open;
         if (this.#open) {
-          this.#tab = s?.phase === 'complete' ? 'Results' : 'Tournament';
           if (c.game && !c.info?.disposed) c.native?.clearInput?.(c.game);
         } else (this.#shadow.activeElement as HTMLElement | null)?.blur();
-        if (c.panelRequest.message) this.showNotice(c.panelRequest.message, 6500);
+        if (c.panelRequest.message) this.showNotice(c.panelRequest.message, 2500);
       }
     }
     if (this.#peekCup && (!s || s.id !== this.#peekCup || s.phase === 'registration')) {
@@ -474,16 +515,9 @@ export class CupUI {
       this.#lobbyKey = lobbyKey;
       this.#editingPick = false;
     }
-    if (!c.isHost || !['Organizer', 'Racers', 'Review'].includes(this.#tab))
-      this.#tab = 'Tournament';
-    this.#panel.classList.toggle(
-      'lobby-panel',
-      s?.phase === 'registration' && this.#tab === 'Tournament',
-    );
-    this.#panel.classList.toggle(
-      'scoreboard-panel',
-      !!s && s.phase !== 'registration' && this.#tab === 'Tournament',
-    );
+
+    this.#panel.classList.toggle('lobby-panel', s?.phase === 'registration');
+    this.#panel.classList.toggle('scoreboard-panel', !!s && s.phase !== 'registration');
     this.#invite.update(c.connection, this.#open);
     this.#panel.hidden = !this.#open;
     this.#notice.classList.toggle('panel-open', this.#open || this.#chatUI.isOpen);
@@ -499,12 +533,16 @@ export class CupUI {
       const keys = c.game && !c.info?.disposed ? (c.native?.ghostKeys?.(c.game) ?? []) : [];
       if (keys.length) {
         this.#ghostHintCup = s.id;
-        this.showNotice(`${keys.join(' / ')} · Toggle other ghosts`, 6000, true);
+        this.showNotice(`${keys.join(' / ')} · Toggle other ghosts`, 3000, true);
       }
     }
+    this.#viewerBadge.hidden =
+      !c.viewerCount || this.#open || !s?.runtime || !Cup.racingIds(s).includes(c.selfId!);
+    this.#viewerBadge.querySelector('span')!.textContent = String(c.viewerCount);
+    this.#viewerBadge.setAttribute('aria-label', `${c.viewerCount} spectators watching you`);
+    this.#viewerBadge.title = `${c.viewerCount} spectators watching you`;
     const key = JSON.stringify([
       this.#open,
-      this.#tab,
       s?.id,
       s?.revision,
       c.isHost,
@@ -518,6 +556,7 @@ export class CupUI {
         p.carStyle?.serialize(),
       ]),
       c.error,
+      c.physicsWarnings,
       !!c.connection,
       c.auto,
       c.watchId,
@@ -528,26 +567,31 @@ export class CupUI {
       !!c.startingCup,
       c.preparingRandom,
       c.canSpectate(),
-      this.#tab === 'Review'
+      c.isHost
         ? [c.review.dropped, c.review.runs.map((r) => [r.id, r.outcome, r.flag, r.reviewed])]
         : null,
     ]);
     if (key !== this.#signature) {
       const previousPositions = rankingPositions(this.#shadow);
+      const lobbyScroll = [
+        ...this.#shadow.querySelectorAll<HTMLElement>('.lobby-roster,.lobby-action'),
+      ].map((element) => [element.className, element.scrollTop] as const);
       // Preserve a partially entered track code/name when unrelated lobby updates arrive.
+      const buttonFocus = (this.#shadow.activeElement as HTMLElement | null)?.dataset.actionKey;
       const focus = (this.#shadow.activeElement as HTMLElement | null)?.dataset?.field,
         presetFocus = (this.#shadow.activeElement as HTMLElement | null)?.dataset?.presetField,
-        bodyScroll = this.#renderedTab === this.#tab ? (this.#body?.scrollTop ?? 0) : 0;
+        view = `${s?.id}:${s?.phase === 'registration' ? 'setup' : s?.phase === 'complete' ? 'results' : 'race'}`,
+        bodyScroll = this.#renderedView === view ? (this.#body?.scrollTop ?? 0) : 0;
       const presetInput = presetFocus ? (this.#shadow.activeElement as HTMLInputElement) : null;
       const presetSelection =
         presetInput?.type === 'text'
           ? ([presetInput.selectionStart, presetInput.selectionEnd] as const)
           : null;
       const gridScroll =
-        this.#renderedTab === this.#tab
+        this.#renderedView === view
           ? (this.#shadow.querySelector('.track-grid')?.scrollTop ?? 0)
           : 0;
-      this.#renderedTab = this.#tab;
+      this.#renderedView = view;
       const inviteSelection =
         this.#shadow.activeElement === this.#invite.input
           ? ([this.#invite.input.selectionStart, this.#invite.input.selectionEnd] as const)
@@ -581,6 +625,15 @@ export class CupUI {
       );
       header.append(title, this.#invite.element);
       if (s && s.phase !== 'registration') {
+        const chat = this.button(
+          'Chat',
+          () => (this.#chatUI.isOpen ? this.#chatUI.close() : this.#chatUI.open()),
+          'quiet header-chat',
+        );
+        chat.setAttribute('aria-controls', 'cup-chat-panel');
+        header.append(chat);
+      }
+      if (s && s.phase !== 'registration') {
         const rules = this.button('Rules', () => this.showRules(), 'quiet header-rules');
         rules.setAttribute('aria-haspopup', 'dialog');
         header.append(rules);
@@ -595,79 +648,90 @@ export class CupUI {
         error.setAttribute('role', 'alert');
         this.#panel.append(error);
       }
+      if (c.physicsWarnings.length) {
+        const warnings = h('div', undefined, 'physics-warnings');
+        warnings.setAttribute('role', 'status');
+        for (const warning of c.physicsWarnings)
+          warnings.append(
+            h(
+              'p',
+              `${this.name(warning.id)}: modified physics reported${warning.driveForce !== null && warning.driveForce !== 4000 ? ` (drive force ${warning.driveForce}; standard 4000)` : ''}.`,
+              'warning',
+            ),
+          );
+        warnings.title =
+          'Client-reported physics check. This warns only; it does not block racing or prove a client is unmodified.';
+        this.#panel.append(warnings);
+      }
       if (!c.connection) this.welcome();
       else if (!s) this.setup();
       else {
-        const organizing = c.isHost && ['Organizer', 'Racers', 'Review'].includes(this.#tab);
-        if (organizing) {
-          const nav = h('nav');
-          nav.append(
-            this.button(
-              '← Lobby',
-              () => {
-                this.#tab = 'Tournament';
-              },
-              'quiet',
-            ),
-          );
-          for (const [tab, label] of [
-            ['Organizer', 'Controls'],
-            ['Racers', 'Manage racers'],
-            ['Review', 'Run review'],
-          ]) {
-            const button = this.button(
-              label,
-              () => {
-                this.#tab = tab;
-              },
-              tab === this.#tab ? 'selected' : 'quiet',
-            );
-            button.setAttribute('aria-current', tab === this.#tab ? 'page' : 'false');
-            nav.append(button);
-          }
-          this.#panel.append(nav);
-        }
         this.#body = h('div', undefined, 'body');
         this.#panel.append(this.#body);
-        if (this.#tab === 'Racers') this.roster();
-        else if (this.#tab === 'Organizer') this.organizer();
-        else if (this.#tab === 'Review' && c.isHost) this.#body.append(reviewPanel(this));
-        else this.tournament();
+        this.tournament();
+        if (c.isHost) {
+          this.hostControls();
+          if (s.phase !== 'registration') this.lobbyPeople();
+          if (c.review.runs.length || c.review.dropped) this.#body.append(reviewPanel(this));
+        }
+        this.#panel.append(h('div', undefined, 'panel-chat-slot'));
         if (this.#resultControls) this.#panel.append(this.#resultControls);
         if (c.isHost || this.#membershipControls) {
           const footer = h('footer');
-          const exportButton = this.button('Export tournament', () => this.download(), 'quiet');
-          exportButton.title =
-            'Download all results and race history. Autosaves stay on this device.';
-          if (organizing) footer.append(exportButton);
-          else if (c.isHost)
-            footer.append(
-              this.button(
-                'Organizer controls',
-                () => {
-                  this.#tab = 'Organizer';
-                },
-                'quiet',
-              ),
+          if (c.isHost) {
+            const tools = h('div', undefined, 'cup-actions');
+            const automatic = this.button(
+              c.auto ? 'Auto rounds: on' : 'Auto rounds: off',
+              () => c.toggleAutomaticRounds(),
+              'quiet',
             );
-          if (organizing)
-            footer.append(
+            automatic.setAttribute('aria-pressed', String(c.auto));
+            tools.append(automatic);
+            if (c.review.runs.length || c.review.dropped)
+              tools.append(
+                this.button(
+                  'Run review',
+                  () => {
+                    this.#shadow
+                      .querySelector('.review-panel')
+                      ?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+                  },
+                  'quiet',
+                ),
+              );
+            tools.prepend(
               this.button(
-                'End Cup for everyone',
+                'End Cup',
                 () => {
                   if (
-                    !confirm(
-                      'End this Cup for everyone and return to normal multiplayer? You can restore the autosave later.',
+                    confirm(
+                      'End this Cup for everyone? Its standings can’t be brought back.',
                     )
                   )
-                    return;
-                  c.endCup();
+                    c.endCup();
                 },
-                'quiet',
+                'quiet danger',
               ),
             );
-          if (!organizing && this.#membershipControls) footer.append(this.#membershipControls);
-          if (!organizing && this.#lobbyStart) footer.append(this.#lobbyStart);
+            footer.append(tools);
+          }
+          if (this.#membershipControls) footer.append(this.#membershipControls);
+          const startControl = this.#startControls();
+          if (startControl) footer.append(startControl);
+          else if (c.isHost && s.phase === 'between-rounds') {
+            const next = this.button(
+              'Start next round',
+              async () => {
+                await c.runRound();
+                this.#open = false;
+              },
+              'primary',
+            );
+            next.disabled = !c.canStartRound();
+            if (next.disabled)
+              next.title = 'Waiting for connected racers or saved identity confirmation.';
+            footer.append(next);
+          }
           this.#panel.append(footer);
         }
       }
@@ -675,6 +739,10 @@ export class CupUI {
         '[data-field]',
       ))
         if (e.dataset.field! in drafts) e.value = drafts[e.dataset.field!];
+      if (buttonFocus && this.#open)
+        [...this.#shadow.querySelectorAll<HTMLButtonElement>('button[data-action-key]')]
+          .find((button) => button.dataset.actionKey === buttonFocus && !button.disabled)
+          ?.focus({ preventScroll: true });
       if (focus && this.#open)
         this.#shadow.querySelector<HTMLElement>(`[data-field="${focus}"]`)?.focus();
       if (presetFocus && this.#open) {
@@ -691,13 +759,32 @@ export class CupUI {
       this.renderHud();
       animateRanking(this.#shadow, previousPositions);
       if (this.#body) this.#body.scrollTop = bodyScroll;
+      for (const [className, scroll] of lobbyScroll) {
+        const region = this.#shadow.querySelector<HTMLElement>(`.${className}`);
+        if (region) region.scrollTop = scroll;
+      }
       const grid = this.#shadow.querySelector('.track-grid');
       if (grid) grid.scrollTop = gridScroll;
     }
     for (const badge of this.#shadow.querySelectorAll<HTMLElement>('[data-record-until]'))
       badge.hidden = Date.now() >= Number(badge.dataset.recordUntil);
+    this.#playerMenu.sync();
     this.updatePings();
+    const chatSlot =
+      this.#open && s
+        ? this.#shadow.querySelector<HTMLElement>(
+            s.phase === 'registration' && innerWidth > 950
+              ? '.lobby-chat-slot'
+              : '.panel-chat-slot',
+          )
+        : null;
+    this.#chatUI.mount(chatSlot, s?.phase === 'registration');
     this.#chatUI.render();
+    const chatButton = this.#shadow.querySelector<HTMLButtonElement>('.header-chat');
+    if (chatButton) {
+      chatButton.setAttribute('aria-expanded', String(this.#chatUI.isOpen));
+      chatButton.textContent = this.#chatUI.unread ? `Chat (${this.#chatUI.unread})` : 'Chat';
+    }
     this.updateInputOverlay();
     const seconds = this.#open ? null : roundSeconds(s, c.now());
     this.#roundTimer.classList.toggle('visible', seconds !== null);
@@ -726,7 +813,10 @@ export class CupUI {
   }
   welcome() {
     const content = h('div', undefined, 'body');
-    content.append(h('h2', 'Multiplayer required'), h('p', 'Host or join a multiplayer lobby.'));
+    content.append(
+      h('h2', 'Not in a cup'),
+      h('p', 'Open Competitions from the main menu to host or join one.'),
+    );
     this.#panel.append(content);
   }
   updateInputOverlay() {
@@ -762,9 +852,9 @@ export class CupUI {
         c.info?.disposed ? null : (c.info?.sessionId ?? null),
         c.now(),
       );
+    this.#startCue.hidden = !value || this.#open;
     if (value === this.#startCueValue) return;
     this.#startCueValue = value;
-    this.#startCue.hidden = !value;
     this.#startCue.replaceChildren();
     if (!value) return;
     const signal = h('div', undefined, `start-signal${value === 'GO' ? ' go' : ''}`);
@@ -773,107 +863,42 @@ export class CupUI {
   }
   setup() {
     const body = h('div', undefined, 'body');
-    // Not So Weekly Shorts: the host's cup is created with the name picked before the room opened.
-    body.append(h('h2', this.#c.isHost ? 'Setting up the cup…' : 'Waiting for the organizer'));
+    // Not So Weekly Shorts: the host's cup is created with the name picked before the room opened,
+    // so this only shows once a cup has ended; the room can start a new one under the same name.
+    if (this.#c.isHost) {
+      body.append(
+        h('h2', 'No cup is running'),
+        this.button(
+          'Start a new cup',
+          () => (window as unknown as { __nswsCupNewCup?: () => Promise<void> }).__nswsCupNewCup?.(),
+          'primary',
+        ),
+      );
+    } else body.append(h('h2', 'Waiting for the organizer'));
     this.#panel.append(body);
   }
-  roster() {
-    const s = this.#c.cup,
-      c = this.#c;
-    const heading = h('div', undefined, 'roster-heading');
-    const keys = c.game && !c.info?.disposed ? (c.native?.ghostKeys?.(c.game) ?? []) : [];
-    const ghosts = this.button(
-      `${c.hideOtherGhosts ? 'Show' : 'Hide'} other ghosts${keys.length ? ` · ${keys.join(' / ')}` : ''}`,
-      () => this.toggleGhosts(),
-      'quiet',
+  lobbyPeople() {
+    const c = this.#c,
+      s = c.cup;
+    const people = c.lobby.filter(
+      (p) => !Cup.player(s, p.id) || s.withdrawn?.includes(p.id) || s.pendingRacers?.includes(p.id),
     );
-    ghosts.title =
-      'Local visibility only. Rebind in Settings → Ghosts. The watched racer stays visible.';
-    ghosts.setAttribute('aria-pressed', String(c.hideOtherGhosts));
-    heading.append(h('h2', `${Cup.occupiedSlots(s)} / 8 racer slots`), ghosts);
-    this.#body.append(heading);
-    const list = h('div', undefined, 'rows');
-    for (const p of s.roster) {
-      const row = h('div', undefined, 'row');
-      row.append(this.racerName(p.id, p.name, true), this.playerTools(p.id));
-      const pick = s.tracks.find((t) => t.id === s.picks[p.id]);
-      const membership = s.withdrawn?.includes(p.id)
-        ? 'Spectating · score saved'
-        : s.pendingRacers?.includes(p.id)
-          ? 'Joining next round'
-          : null;
-      if (membership) row.append(h('span', membership, 'muted'));
-      else if (s.phase === 'registration')
-        row.append(h('span', pick?.name ?? 'No pick yet', pick ? 'badge' : 'muted'));
-      else row.append(h('span', 'Racer', 'badge'));
-      const online = c.lobby.some((l) => l.id === p.id);
-      if (!online || c.needsRebind?.has(p.id))
-        row.append(
-          h('small', c.needsRebind?.has(p.id) ? 'Confirm identity' : 'Disconnected', 'muted'),
-        );
-      if (c.isHost && rosterOpen(s)) {
-        row.append(
-          this.button(
-            'Remove',
-            () =>
-              c.change((s) => {
-                Cup.removePlayer(s, p.id);
-                c.pruneTrackData();
-              }),
-            'quiet',
-          ),
-        );
-      }
-      if (c.isHost && c.needsRebind?.has(p.id) && !s.runtime) {
-        const select = h('select');
-        select.setAttribute('aria-label', `Reconnect ${p.name}`);
-        for (const l of c.lobby.filter(
-          (l) => !s.roster.some((p) => p.id === l.id) || l.id === p.id,
-        )) {
-          const option = h('option', this.optionName(l.id, l.nickname));
-          option.value = String(l.id);
-          select.append(option);
-        }
-        row.append(
-          select,
-          this.button(
-            'Reconnect',
-            () => {
-              const id = Number(select.value),
-                found = c.lobby.find((l) => l.id === id);
-              if (!found) throw new Error('Choose a connected player.');
-              const oldId = p.id;
-              c.rebindRacer(oldId, id, found.nickname);
-              c.needsRebind?.delete(oldId);
-            },
-            'quiet',
-          ),
-        );
-      }
+    const missing = s.roster.filter((p) => !c.lobby.some((peer) => peer.id === p.id));
+    if (!people.length && !missing.length) return;
+    const section = h('section', undefined, 'cup-people');
+    section.append(h('h3', 'Spectators & returning racers'));
+    const list = h('div', undefined, 'cup-people-list');
+    for (const p of [...people.map((p) => ({ id: p.id, name: p.nickname })), ...missing]) {
+      const row = h('div', undefined, 'cup-person');
+      row.append(this.racerName(p.id, p.name, true, true));
+      if (missing.some((person) => person.id === p.id))
+        row.append(h('small', 'Disconnected', 'muted'));
+      else if (s.pendingRacers?.includes(p.id))
+        row.append(h('small', 'Joining next round', 'muted'));
       list.append(row);
     }
-    this.#body.append(list);
-    if (s.phase === 'registration') this.#body.append(this.joinControls());
-    this.#body.append(h('h3', 'Lobby & spectators'));
-    for (const l of c.lobby) {
-      const row = h('div', undefined, 'row');
-      row.append(this.racerName(l.id, l.nickname, true), this.playerTools(l.id));
-      if (c.isHost && !l.isSelf && !c.hello.has(l.id))
-        row.append(h('small', 'Awaiting mod', 'muted'));
-      if (s.pendingRacers?.includes(l.id)) row.append(h('span', 'Joining next round', 'badge'));
-      else if (s.roster.some((p) => p.id === l.id) && !s.withdrawn?.includes(l.id))
-        row.append(h('span', 'Racer', 'badge'));
-      else if (c.isHost && rosterOpen(s) && s.roster.length < 8)
-        row.append(
-          this.button(
-            'Register racer',
-            () => c.change((s) => Cup.addPlayer(s, l.id, l.nickname)),
-            'quiet',
-          ),
-        );
-      else row.append(h('span', 'Spectator', 'badge'));
-      this.#body.append(row);
-    }
+    section.append(list);
+    this.#body.append(section);
   }
   country(id: number | null) {
     return (
@@ -915,30 +940,6 @@ export class CupUI {
     bars.append(h('i'), h('i'), h('i'));
     ping.append(bars, h('small', '—', 'ping-value'));
     tools.append(ping);
-    if (this.#c.isHost && id !== this.#c.selfId && this.#c.lobby.some((p) => p.id === id)) {
-      const kick = this.button(
-        '×',
-        () => {
-          const state = this.#c.state;
-          const name = this.#c.lobby.find((p) => p.id === id)?.nickname ?? this.name(id);
-          const draft = state?.phase === 'registration' && !rosterOpen(state);
-          if (
-            confirm(
-              `Kick ${name} from the multiplayer lobby?${draft ? ' This restarts the draft for the remaining racers.' : ''}`,
-            )
-          )
-            this.#c.kickPlayer(id);
-        },
-        'quiet lobby-kick',
-        `kick:${id}`,
-      );
-      kick.setAttribute(
-        'aria-label',
-        `Kick ${this.#c.lobby.find((p) => p.id === id)?.nickname ?? this.name(id)}`,
-      );
-      kick.title = 'Kick from multiplayer lobby';
-      tools.append(kick);
-    }
     return tools;
   }
   updatePings() {
@@ -953,9 +954,10 @@ export class CupUI {
       element.querySelector('.ping-value')!.textContent = ping === null ? '—' : `${ping} ms`;
     }
   }
-  racerName(id: number, name: string, showFlag = false) {
+  racerName(id: number, name: string, showFlag = false, actions = false) {
     const group = h('span', undefined, 'racer-name grow'),
       image = h('img', undefined, 'car-skin');
+    group.title = name;
     image.alt = '';
     image.title = `${name}'s car`;
     image.draggable = false;
@@ -967,6 +969,23 @@ export class CupUI {
     const flag = showFlag ? this.flag(this.country(id)) : null;
     if (flag) group.append(flag);
     group.append(h('span', name));
+    if (actions && this.#c.isHost) {
+      const button = this.button(
+        '',
+        () => this.#playerMenu.show(id, button),
+        'player-actions-toggle',
+        `player-menu:${id}`,
+      );
+      button.innerHTML =
+        '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7 5 5 5-5"/></svg>';
+      button.setAttribute('aria-label', `Manage ${name}`);
+      button.setAttribute('aria-haspopup', 'dialog');
+      button.setAttribute('aria-controls', 'player-actions-menu');
+      button.setAttribute('aria-expanded', 'false');
+      button.dataset.playerMenuId = String(id);
+      button.title = 'Player actions';
+      group.prepend(button);
+    }
     return group;
   }
   async thumbnail(id: number) {
@@ -989,43 +1008,15 @@ export class CupUI {
     const s = this.#c.cup,
       box = h('div', undefined, 'controls'),
       joined = !!Cup.player(s, this.#c.localPlayerId);
-    if (!rosterOpen(s)) {
-      if (banTurn(s) === this.#c.localPlayerId)
-        box.append(
-          this.button(
-            'Ban a track',
-            () => {
-              this.#tab = 'Tournament';
-            },
-            'ban-button',
-          ),
-        );
-      else if (joined && picksOpen(s))
-        box.append(
-          this.button(
-            'Choose my track',
-            () => {
-              this.#tab = 'Tournament';
-            },
-            'primary',
-          ),
-        );
-      return box;
-    }
+    if (!rosterOpen(s)) return box;
     const full = !joined && s.roster.length >= 8;
     const join = this.button(
       joined ? 'Switch to spectator' : full ? 'Grid full · spectating' : 'Join as racer',
       () => this.#c.action(joined ? 'leave' : 'join'),
-      joined || full ? 'quiet' : 'primary',
+      'primary',
     );
     join.disabled = full;
     box.append(join);
-    if (joined && picksOpen(s))
-      box.append(
-        this.button('Choose my track', () => {
-          this.#tab = 'Tournament';
-        }),
-      );
     return box;
   }
   trackPack({ embedded = false } = {}) {
@@ -1196,8 +1187,8 @@ export class CupUI {
       this.#body.append(search, grid);
       draw();
       if (banning || !mayChoose || !rulesFor(s).pool.includes('custom')) return;
-      const advanced = h('details', undefined, 'track-code');
-      advanced.append(h('summary', 'Paste a share code instead'));
+      const advanced = h('section', undefined, 'track-code');
+      advanced.append(h('h3', 'Paste a share code instead'));
       const label = h('label', 'PolyTrack share code'),
         code = h('textarea');
       code.rows = 4;
@@ -1240,7 +1231,7 @@ export class CupUI {
         const button = this.button(
           queued ? 'Cancel join' : joined ? 'Switch to spectator' : 'Join as racer',
           () => c.action(queued || joined ? 'leave' : 'join'),
-          joined ? 'quiet' : 'primary',
+          'primary',
         );
         button.disabled = !joined && !queued && Cup.occupiedSlots(s) >= 8;
         button.title = queued
@@ -1256,15 +1247,17 @@ export class CupUI {
       const skip = this.skipControl();
       if (skip) this.#body.append(skip);
       if (s.runtime) {
+        const roundBar = h('div', undefined, 'scoreboard-meta');
         const status = h(
           'p',
-          `Round ${s.runtime.round} / ${s.tracks.find((t) => t.id === s.runtime!.trackId)?.name} `,
+          `Round ${s.runtime.round} · ${s.tracks.find((t) => t.id === s.runtime!.trackId)?.name} `,
           'scoreboard-round',
         );
         const clock = h('strong');
         clock.dataset.clock = '';
         status.append(clock);
-        this.#body.append(status);
+        roundBar.append(status);
+        this.#body.append(roundBar);
         if (s.phase === 'loading')
           this.#body.append(
             h('p', `Loaded: ${s.runtime.ready.length}/${Cup.activeIds(s).length}`, 'muted'),
@@ -1276,7 +1269,7 @@ export class CupUI {
           Cup.activeIds(s).includes(c.localPlayerId) &&
           !Cup.roundDone(s, c.localPlayerId)
         )
-          this.#body.append(
+          roundBar.append(
             this.button(
               'Retire this round (DNF)',
               async () => {
@@ -1287,24 +1280,13 @@ export class CupUI {
             ),
           );
         if (Cup.roundDone(s, c.localPlayerId) && !c.canSpectate() && c.watchable().length)
-          this.#body.append(
+          roundBar.append(
             this.button('Watch remaining racers', () => {
               c.watchRemaining();
               this.#open = false;
             }),
           );
       }
-      if (c.isHost && s.phase === 'between-rounds')
-        this.#body.append(
-          this.button(
-            'Start next round',
-            async () => {
-              await c.runRound();
-              this.#open = false;
-            },
-            'primary',
-          ),
-        );
     }
   }
   recovery() {
@@ -1316,79 +1298,21 @@ export class CupUI {
       );
       return;
     }
-    this.#body.append(h('p', 'Reconnect each returning player, then start the round.'));
+    this.#body.append(h('p', 'Click each saved racer’s name to confirm their lobby identity.'));
     for (const racer of c.recoveryRacers()) {
       const row = h('div', undefined, 'row');
-      row.append(this.racerName(racer.id, racer.name, true));
-      const select = h('select');
-      select.setAttribute('aria-label', `Reconnect ${racer.name}`);
-      const placeholder = h('option', 'Choose returning player');
-      placeholder.value = '';
-      select.append(placeholder);
-      for (const player of c.lobby.filter((p) => !Cup.player(c.state, p.id) || p.id === racer.id)) {
-        const option = h(
-          'option',
-          `${this.optionName(player.id, player.nickname)} · #${player.id}`,
-        );
-        option.value = String(player.id);
-        option.disabled = !player.isSelf && !c.hello.has(player.id);
-        select.append(option);
-      }
-      const reconnect = this.button(
-        'Reconnect',
-        () => {
-          if (!select.value) return;
-          const player = c.lobby.find((p) => p.id === Number(select.value));
-          if (player) c.rebindRacer(racer.id, player.id, player.nickname);
-        },
-        'primary',
-      );
-      reconnect.disabled = true;
-      select.addEventListener('change', () => {
-        reconnect.disabled = !select.value;
-      });
-      row.append(select, reconnect);
+      row.append(this.racerName(racer.id, racer.name, true, true));
       this.#body.append(row);
     }
   }
-  organizer() {
+  hostControls() {
     const c = this.#c,
       s = c.cup;
-    if (s.phase === 'between-rounds' && this.#c.needsRebind.size) {
-      this.recovery();
-      return;
-    }
-    this.#body.append(h('h2', 'Organizer controls'));
-    if (s.phase === 'registration' && s.draft?.stage !== 'roster') {
-      this.#body.append(
-        this.button(
-          'Reopen roster',
-          () => {
-            if (confirm('Reopen the roster and clear all bans and picks?')) {
-              c.reopenRoster();
-              this.#tab = 'Tournament';
-            }
-          },
-          'quiet',
-        ),
-      );
-    }
     const controls = h('div', undefined, 'controls');
-    if (s.phase === 'between-rounds')
-      controls.append(
-        this.button(
-          'Start next round',
-          async () => {
-            await c.runRound();
-            this.#open = false;
-          },
-          'primary',
-        ),
-      );
     if (s.phase === 'racing')
       controls.append(
         this.button(
-          'End round · unfinished DNF',
+          'End round',
           () => {
             if (confirm('Score the current finishes and give every unfinished racer a DNF?'))
               c.finishRound();
@@ -1396,31 +1320,60 @@ export class CupUI {
           'quiet',
         ),
       );
-    if (s.runtime) controls.append(this.button('Void & stop round', () => c.voidRound(), 'quiet'));
-    if (['between-rounds', 'complete'].includes(s.phase))
+    if (s.runtime)
       controls.append(
         this.button(
-          'Undo last scored round',
+          'Void round',
           () => {
-            if (confirm('Undo the last scored round in this match?')) c.change(Cup.undoRound);
+            if (confirm('Stop this round without awarding points?')) c.voidRound();
           },
           'quiet',
         ),
       );
-    controls.append(
-      this.button(
-        c.auto ? 'Automatic rounds: on' : 'Automatic rounds: off',
+    if (['between-rounds', 'complete'].includes(s.phase)) {
+      const undo = this.button(
+        'Undo last scored round',
         () => {
-          c.toggleAutomaticRounds();
+          if (confirm('Undo the last scored round in this match?')) c.change(Cup.undoRound);
         },
         'quiet',
-      ),
-    );
-    this.#body.append(controls);
+      );
+      undo.disabled = s.history.at(-1)?.matchIndex !== s.matchIndex;
+      controls.append(undo);
+    }
+    if (Cup.currentTrackVisit(s))
+      controls.append(
+        this.button(
+          'Remove current track',
+          async () => {
+            if (
+              confirm(
+                'Remove this track for the rest of the Cup and undo every scored round from this visit? Earlier visits keep their scores.',
+              )
+            )
+              await c.removeTrack();
+          },
+          'quiet',
+        ),
+      );
+    if (controls.childElementCount || s.phase !== 'registration') {
+      const section = h('section', undefined, 'host-round-controls');
+      const heading = h('div', undefined, 'section-heading');
+      heading.append(h('h3', 'Round controls'));
+      const ghosts = this.button(
+        c.hideOtherGhosts ? 'Show ghosts' : 'Hide ghosts',
+        () => this.toggleGhosts(),
+        'quiet',
+      );
+      ghosts.setAttribute('aria-pressed', String(c.hideOtherGhosts));
+      heading.append(ghosts);
+      section.append(heading, controls);
+      this.#body.append(section);
+    }
 
-    if (c.isHost && !s.runtime) {
-      const advanced = h('details', undefined, 'organizer-settings');
-      advanced.append(h('summary', 'Organizer settings'));
+    if (c.isHost && !s.runtime && s.phase !== 'complete') {
+      const advanced = h('section', undefined, 'organizer-settings');
+
       const label = h('label', undefined, 'disconnect-rule');
       label.append(h('span', 'If a racer disconnects during a race'));
       const select = h('select');
@@ -1442,7 +1395,11 @@ export class CupUI {
       );
       label.append(select);
       advanced.append(label);
-      this.#body.append(advanced);
+      const target =
+        s.phase === 'registration'
+          ? (this.#body.querySelector('.lobby-action') ?? this.#body)
+          : this.#body;
+      target.append(advanced);
     }
   }
   scoreboard(personalBests = false) {
@@ -1474,7 +1431,7 @@ export class CupUI {
         undefined,
         `score-row${r.id === this.#c.localPlayerId ? ' highlighted' : ''}${r.finalist ? ' finalist' : ''}${r.id === this.#c.localPlayerId ? ' self' : ''}`,
       );
-      const name = this.racerName(r.id, this.name(r.id));
+      const name = this.racerName(r.id, this.name(r.id), false, personalBests);
       name.title = this.name(r.id);
       const movement = h(
         'small',
@@ -1521,6 +1478,10 @@ export class CupUI {
       identity.append(name);
       if (personalBests) {
         row.classList.add('with-pb');
+        const car = name.querySelector('.car-skin');
+        if (car) identity.prepend(car);
+        const actions = name.querySelector('.player-actions-toggle');
+        if (actions) identity.append(actions);
         const track = recordTrack(s);
         const pb = track ? s.records[track]?.pbs[r.id] : null;
         const best = !track
@@ -1703,28 +1664,13 @@ export class CupUI {
     }
     const main = h('div', undefined, 'pov-main'),
       name = h('div', undefined, 'pov-name');
-    const select = h('select');
-    select.setAttribute('aria-label', 'Spectate racer');
-    select.disabled = !racers.length;
-    if (!racers.length) select.append(h('option', 'Waiting for racer'));
-    for (const id of racers) {
-      const option = h('option', this.name(id));
-      option.value = String(id);
-      option.selected = id === c.watchId;
-      select.append(option);
-    }
-    select.title =
-      c.watchId !== null && racers.includes(c.watchId) ? this.name(c.watchId) : 'Choose racer';
-    select.addEventListener('change', () => {
-      c.selectWatch(Number(select.value));
-      this.#signature = '';
-      this.render();
-    });
     const selected = h('span', undefined, 'pov-selected');
     if (c.watchId !== null && racers.includes(c.watchId))
       selected.append(this.playerLabel(c.watchId));
-    else selected.textContent = 'Choose racer';
-    name.append(select, selected);
+    else selected.textContent = 'Waiting for racer';
+    name.title =
+      c.watchId !== null && racers.includes(c.watchId) ? this.name(c.watchId) : 'Waiting for racer';
+    name.append(selected);
     main.append(name);
     box.append(previous, main, next);
     return box;
@@ -1757,7 +1703,7 @@ export class CupUI {
         const row = h('div', undefined, `final-row${r.winner ? ' champion' : ''}`);
         const score = h('span', r.score, 'final-score');
         score.title = 'Cup points';
-        row.append(h('strong', r.place), this.racerName(r.id, r.name));
+        row.append(h('strong', r.place), this.racerName(r.id, r.name, false, true));
         if (r.winner) row.append(h('span', 'Winner', 'winner-label'));
         row.append(score);
         board.append(row);
@@ -1772,8 +1718,8 @@ export class CupUI {
       controls.append(this.button('Save results image', () => this.downloadImage(), 'quiet'));
       this.#resultControls = controls;
     }
-    const history = h('details', undefined, 'race-history');
-    history.append(h('summary', this.#c.isHost ? 'Race history' : 'Latest round'));
+    const history = h('section', undefined, 'race-history');
+    history.append(h('h3', this.#c.isHost ? 'Race history' : 'Latest round'));
     const parent = this.#body;
     this.#body.append(history);
     this.#body = history;
@@ -1859,14 +1805,14 @@ export class CupUI {
     );
     this.#finishCue.append(card);
     clearTimeout(this.#finishTimer);
-    this.#finishTimer = setTimeout(() => this.showResults(key), 4000);
+    this.#finishTimer = setTimeout(() => this.showResults(key), 2500);
   }
   showResults(key: string) {
     if (this.#finishKey !== key || this.#c.state?.phase !== 'complete') return;
     clearTimeout(this.#finishTimer);
     this.#finishCue.hidden = true;
     this.#open = true;
-    this.#tab = 'Results';
+
     this.#signature = '';
     this.render();
   }
@@ -1877,15 +1823,6 @@ export class CupUI {
       a = h('a');
     a.href = url;
     a.download = 'polycup-results.png';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-  download() {
-    const data = JSON.stringify(this.#c.exportData(), null, 2),
-      url = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
-    const a = h('a');
-    a.href = url;
-    a.download = 'polytrack-world-cup-results.json';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
