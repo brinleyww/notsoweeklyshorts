@@ -143,6 +143,8 @@ export class CupUI {
   #body: HTMLElement = h('div');
   #startCueValue: string | null = null;
   #finishKey: string | null = null;
+  #othersSeen = -1;
+  #aloneNotice = false;
   #finishTimer: number = 0;
 
   constructor(controller: Controller) {
@@ -484,6 +486,19 @@ export class CupUI {
   render() {
     const c = this.#c,
       s = c.state;
+    // Not So Weekly Shorts: tell the organizer when everyone else has left (once they are looking at
+    // the tab); the room stays open.
+    const others = c.isHost && s ? c.lobby.filter((p) => !p.isSelf).length : -1;
+    if (this.#othersSeen > 0 && others === 0) this.#aloneNotice = true;
+    else if (others !== 0) this.#aloneNotice = false;
+    this.#othersSeen = others;
+    if (this.#aloneNotice && !document.hidden) {
+      this.#aloneNotice = false;
+      this.showNotice(
+        'Everyone else left the cup. The room stays open: share the code to bring players back, or End Cup when you are done.',
+        10000,
+      );
+    }
     if (this.#noticeCupId !== (s?.id ?? null)) {
       this.dismissNotice();
       this.#noticeCupId = s?.id ?? null;
@@ -1365,36 +1380,6 @@ export class CupUI {
       this.#body.append(section);
     }
 
-    if (c.isHost && !s.runtime && s.phase !== 'complete') {
-      const advanced = h('section', undefined, 'organizer-settings');
-
-      const label = h('label', undefined, 'disconnect-rule');
-      label.append(h('span', 'If a racer disconnects during a race'));
-      const select = h('select');
-      select.setAttribute('aria-label', 'Disconnect rule');
-      for (const [value, text] of [
-        ['dnf', 'DNF; organizer may void the round'],
-        ['void', 'Void round and wait for reconnect'],
-      ]) {
-        const option = h('option', text);
-        option.value = value;
-        option.selected = value === s.disconnectPolicy;
-        select.append(option);
-      }
-      select.addEventListener('change', () =>
-        c.change((s) => {
-          s.disconnectPolicy = select.value === 'void' ? 'void' : 'dnf';
-          Cup.touch(s);
-        }),
-      );
-      label.append(select);
-      advanced.append(label);
-      const target =
-        s.phase === 'registration'
-          ? (this.#body.querySelector('.lobby-action') ?? this.#body)
-          : this.#body;
-      target.append(advanced);
-    }
   }
   scoreboard(personalBests = false) {
     const s = this.#c.cup,

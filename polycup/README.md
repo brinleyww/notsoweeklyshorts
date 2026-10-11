@@ -67,6 +67,9 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `ui.ts`, `controller.ts`: a finished cup shows a final podium (each racer's car on their step, like
   Trackmania), then everyone returns to the menu with a message after 20 s (the organizer 3 s later).
   End Cup also sends everyone back (`onCupEnded`, `hub.leave`).
+- `controller.ts`, `ui.ts`: a racer who leaves mid-round gets a DNF at once (one whose connection only
+  stutters gets the usual grace period) and the round goes on; the "void the round" disconnect rule
+  is gone. When everyone else leaves, the organizer gets a notice and the room stays open.
 - `invite.ts`: a Link button that copies `?cup=CODE`.
 - `ui.ts`, `toolbar.ts`: no F8 shortcut (the menu button and the race toolbar open the panel), no
   version label over the menus, and the HUD layout pass is throttled and only watches the game UI.

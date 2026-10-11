@@ -2476,8 +2476,6 @@ export class Controller {
     if (this.#removingTrack) return;
     this.requireHost();
     if (this.#preparingRandom) return this.#preparingRandom;
-    if (!['dnf', 'void'].includes(this.cup.disconnectPolicy))
-      throw new Error('Choose a disconnect rule in Tournament before starting.');
     if (this.cup.roster.some((p) => this.#needsRebind?.has(p.id)))
       throw new Error('Confirm every saved racer’s lobby identity in Racers before resuming.');
     this.updateAvailability();
@@ -2595,12 +2593,7 @@ export class Controller {
         }
       }
     }
-    if (
-      s &&
-      rulesFor(s).allowRacerChanges &&
-      !['registration', 'complete'].includes(s.phase) &&
-      (s.disconnectPolicy === 'dnf' || s.phase !== 'racing')
-    ) {
+    if (s && rulesFor(s).allowRacerChanges && !['registration', 'complete'].includes(s.phase)) {
       for (const id of Cup.activeIds(s))
         if (
           this.#unavailableSince.has(id) &&
@@ -2611,28 +2604,21 @@ export class Controller {
         }
     }
     if (!s?.runtime) return;
+    // Not So Weekly Shorts: a racer who leaves gets a DNF for this round straight away and everyone
+    // else keeps racing; one whose connection only stutters gets the usual grace period first.
     const missing = Cup.racingIds(s).filter(
       (id) =>
         this.#unavailableSince.has(id) &&
-        this.now() - this.#unavailableSince.get(id)! >= RECONNECT_GRACE_MS &&
+        (!this.#lobby.some((p) => p.id === id) ||
+          this.now() - this.#unavailableSince.get(id)! >= RECONNECT_GRACE_MS) &&
         !(id in s.runtime!.finishes) &&
         !s.runtime!.dnfs.includes(id),
     );
     if (!missing.length) return;
-    if (s.disconnectPolicy === 'dnf' || s.phase !== 'racing') {
-      const before = standings(s).map((r) => r.id);
-      for (const id of missing) Cup.sitOut(s, id);
-      updateLiveMovement(s, before);
-      Cup.note(s, 'Disconnected racers sit out this round.');
-    } else {
-      this.#review.close(s, 'void');
-      Cup.voidRound(s);
-      this.#loadingSession = undefined;
-      this.#nextAuto = this.#auto
-        ? Date.now() + rulesFor(this.#state).roundBreakSeconds * 1000
-        : null;
-      this.#error = 'Round voided after a racer disconnected.';
-    }
+    const before = standings(s).map((r) => r.id);
+    for (const id of missing) Cup.sitOut(s, id);
+    updateLiveMovement(s, before);
+    Cup.note(s, 'Racers who left sit out this round.');
   }
   sendReady() {
     if (this.localPlayerId === null || !this.#info || this.#info.disposed) return;
