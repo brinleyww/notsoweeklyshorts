@@ -91,20 +91,22 @@ export function presetSummary(rules: CupRules) {
 
   if (r.knockout) return summary;
   const scoring = h('table', undefined, 'rule-points');
-  scoring.append(h('caption', 'Points by finishing position (after 8th: 0)'));
-  const head = h('thead'),
-    places = h('tr'),
-    body = h('tbody'),
-    points = h('tr');
-  rules.points.forEach((value, index) => {
-    const place = h('th', `${index + 1}${['st', 'nd', 'rd'][index] ?? 'th'}`);
-    place.scope = 'col';
-    places.append(place);
-    points.append(h('td', String(value)));
-  });
-  head.append(places);
-  body.append(points);
-  scoring.append(head, body);
+  scoring.append(h('caption', 'Points by finishing position'));
+  const body = h('tbody');
+  // Not So Weekly Shorts: 25 places, in rows of 9.
+  for (let start = 0; start < rules.points.length; start += 9) {
+    const places = h('tr'),
+      points = h('tr');
+    rules.points.slice(start, start + 9).forEach((value, i) => {
+      const index = start + i,
+        place = h('th', `${index + 1}${['st', 'nd', 'rd'][index] ?? 'th'}`);
+      place.scope = 'col';
+      places.append(place);
+      points.append(h('td', String(value)));
+    });
+    body.append(places, points);
+  }
+  scoring.append(body);
   summary.append(scoring);
   return summary;
 }

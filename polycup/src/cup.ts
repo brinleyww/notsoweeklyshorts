@@ -9,12 +9,13 @@ import {
   validPreset,
   type CupPreset,
   type CupRules,
+  MAX_PLACES,
 } from './presets.ts';
 export const VERSION = '0.3.1';
-// Not So Weekly Shorts: up to 25 racers (the room's size decides how many fit). Places after the
-// points table (8 places) score 0.
-export const MAX_RACERS = 25;
-export const placePoints = (rules: { points: number[] }, place: number) => rules.points[place - 1] ?? 0;
+// Not So Weekly Shorts: up to 25 racers (the room's size decides how many fit), each place with points.
+export const MAX_RACERS = MAX_PLACES;
+export const placePoints = (rules: { points: number[] }, place: number) =>
+  rules.points[Math.min(place, rules.points.length) - 1] ?? 0;
 export const RULES = Object.freeze({
   points: [10, 8, 6, 5, 4, 3, 2, 1],
   target: 140,

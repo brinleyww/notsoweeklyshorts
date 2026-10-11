@@ -350,7 +350,7 @@ button[aria-busy='true']::after {
 .preset-pool { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .preset-pool label { flex-direction: row; align-items: center; color: var(--ice); }
 .preset-pool input[type='checkbox'] { width: 20px; height: 20px; margin: 0; padding: 0; accent-color: var(--gold); }
-.preset-scoring { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; }
+.preset-scoring { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .preset-scoring legend { float: left; width: 100%; grid-column: 1 / -1; }
 .preset-scoring label { text-align: center; }
 .preset-scoring input { padding: 8px 4px; text-align: center; }
@@ -358,7 +358,6 @@ button[aria-busy='true']::after {
 .preset-tools button { font-size: 18px; }
 .preset-status { font-size: 18px; line-height: 1.3; color: var(--gold); margin: 12px 0 0; }
 @media (max-width: 700px) {
-  .preset-scoring { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .preset-heading { flex-wrap: wrap; }
   .preset-heading select { max-width: 100%; }
 }
@@ -545,7 +544,7 @@ button.lobby-kick:hover,button.lobby-kick:focus-visible { color:#ffaaaa; backgro
 .preset-editable .rule-points-editor label { margin:0; text-align:center; color:var(--muted); font-size:17px; }
 .preset-editable .rule-points-editor input { margin-top:6px; text-align:center; padding:6px 3px; font-size:18px; }
 @media(max-width:1050px) { .preset-editable { column-gap:18px; } }
-@media(max-width:560px) { .preset-editable { grid-template-columns:1fr; } .preset-editable .rule-points-editor { grid-template-columns:repeat(4,minmax(0,1fr)); row-gap:12px; } }
+@media(max-width:560px) { .preset-editable { grid-template-columns:1fr; } .preset-editable .rule-points-editor { row-gap:12px; } }
 
 @media(max-width:950px) { .cup-lobby:has(.preset-editable) > .lobby-action { order:-1; } }
 

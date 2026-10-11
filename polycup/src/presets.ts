@@ -31,6 +31,21 @@ export interface CupRules {
   collisions?: boolean;
 }
 export type FullRules = Required<CupRules>;
+// Not So Weekly Shorts: every place up to 25th has points. 1st gets 200 and the points fall with the
+// log of the place, so the last of 25 still gets 10.
+export const MAX_PLACES = 25;
+const logPoints = (top: number, last: number, from = 1) =>
+  Array.from({ length: MAX_PLACES - from + 1 }, (_, i) =>
+    Math.round(top - ((top - last) * Math.log((from + i) / from)) / Math.log(MAX_PLACES / from)),
+  );
+export const DEFAULT_POINTS = logPoints(200, 10);
+// Formula keeps the F1 shape for the top 8, then falls the same way to 10.
+const FORMULA_POINTS = [200, 144, 120, 96, 80, 64, 48, ...logPoints(32, 10, 8)];
+// Tables saved before every place had points carry their last place's points down to 25th.
+function fullPoints(points: number[]) {
+  if (!Array.isArray(points) || !points.length || points.length >= MAX_PLACES) return points;
+  return [...points, ...Array<number>(MAX_PLACES - points.length).fill(points[points.length - 1])];
+}
 export interface CupPreset {
   format: 'polycup-preset';
   schema: 1;
@@ -42,9 +57,9 @@ const standard: FullRules = {
   allowSpectatorFreecam: true,
   uploadLeaderboardTimes: false,
   roundsPerTrack: 4,
-  pointsToWin: 140,
+  pointsToWin: 2800,
   finalist: true,
-  points: [10, 8, 6, 5, 4, 3, 2, 1],
+  points: DEFAULT_POINTS,
   selection: 'draft',
   bansPerRacer: 1,
   picksPerRacer: 1,
@@ -94,20 +109,20 @@ const random = {
   warmup: 'off',
 } as const;
 export function quickplayPreset(): CupPreset {
-  return preset('Quickplay', { ...random, roundsPerTrack: 3, pointsToWin: 100 });
+  return preset('Quickplay', { ...random, roundsPerTrack: 3, pointsToWin: 2000 });
 }
 // Not So Weekly Shorts: more ready-made formats. Each one is only a set of rules.
 export function bundledPresets(): CupPreset[] {
   return [
     quickplayPreset(),
-    preset('Sprint', { ...random, roundsPerTrack: 1, pointsToWin: 60, nextTrack: 'vote' }),
+    preset('Sprint', { ...random, roundsPerTrack: 1, pointsToWin: 1200, nextTrack: 'vote' }),
     preset('Formula', {
       ...random,
       roundsPerTrack: 2,
-      pointsToWin: 150,
-      points: [25, 18, 15, 12, 10, 8, 6, 4],
+      pointsToWin: 1200,
+      points: FORMULA_POINTS,
     }),
-    preset('Cup Finals', { ...random, roundsPerTrack: 3, pointsToWin: 60, finalist: true }),
+    preset('Cup Finals', { ...random, roundsPerTrack: 3, pointsToWin: 1200, finalist: true }),
     preset('Knockout', {
       ...random,
       allowRacerChanges: false,
@@ -118,12 +133,12 @@ export function bundledPresets(): CupPreset[] {
     preset('Time Attack', {
       ...random,
       roundsPerTrack: 1,
-      pointsToWin: 50,
+      pointsToWin: 1000,
       roundStyle: 'time-attack',
       timeAttackSeconds: 180,
       nextTrack: 'vote',
     }),
-    preset('Bumper Cars', { ...random, roundsPerTrack: 3, pointsToWin: 60, collisions: true }),
+    preset('Bumper Cars', { ...random, roundsPerTrack: 3, pointsToWin: 1200, collisions: true }),
     standardPreset(),
   ];
 }
@@ -138,7 +153,8 @@ export function rulesFor(state: CupState | null): FullRules {
   return fullRules(rules);
 }
 export function fullRules(rules: CupRules): FullRules {
-  return { ...(OPTIONAL as FullRules), ...rules } as FullRules;
+  const full = { ...(OPTIONAL as FullRules), ...rules } as FullRules;
+  return { ...full, points: fullPoints(full.points) };
 }
 // Not So Weekly Shorts: the host picks the map pool before the room opens (polycup/nsws/hub.ts), and
 // the game only lists those maps, so a preset's pool only decides whether custom tracks are allowed.
@@ -179,15 +195,16 @@ export function presetProblems(value: unknown): RuleProblem[] {
     if (!(k in OPTIONAL) && !(k in r)) bad(k, 'This rule is missing.');
   const f = fullRules(r);
   if (!integer(f.roundsPerTrack, 1, 30)) bad('roundsPerTrack', 'Use 1 to 30 rounds per track.');
-  if (!integer(f.pointsToWin, 1, 10000)) bad('pointsToWin', 'Use 1 to 10000 points.');
+  if (!integer(f.pointsToWin, 1, 100000)) bad('pointsToWin', 'Use 1 to 100000 points.');
   for (const k of ['finalist', 'allowRacerChanges', 'readyEndsWarmup'] as const)
     if (typeof f[k] !== 'boolean') bad(k, 'Turn this on or off.');
   for (const k of ['allowSpectatorFreecam', 'uploadLeaderboardTimes', 'collisions'] as const)
     if (typeof f[k] !== 'boolean') bad(k, 'Turn this on or off.');
-  if (!Array.isArray(f.points) || f.points.length !== 8) bad('points-0', 'Give points for all eight places.');
+  if (!Array.isArray(r.points) || r.points.length < 8 || r.points.length > MAX_PLACES)
+    bad('points-0', `Give points for all ${MAX_PLACES} places.`);
   else
     f.points.forEach((n, i) => {
-      if (!integer(n, 0, 1000)) bad(`points-${i}`, 'Use 0 to 1000 points.');
+      if (!integer(n, 0, 10000)) bad(`points-${i}`, 'Use 0 to 10000 points.');
       else if (i && n > f.points[i - 1]) bad(`points-${i}`, 'A place can’t earn more than the place above it.');
       else if (!i && n <= 0) bad('points-0', 'First place needs at least 1 point.');
     });

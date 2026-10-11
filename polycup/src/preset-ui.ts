@@ -247,7 +247,7 @@ export class PresetEditor {
     const knockout = r.knockout > 0;
     const race = group('Scoring');
     if (!knockout) {
-      field(race, 'pointsToWin', r.finalist ? 'Finalist target' : 'Points to win', this.number('pointsToWin', 1, 10000));
+      field(race, 'pointsToWin', r.finalist ? 'Finalist target' : 'Points to win', this.number('pointsToWin', 1, 100000));
       field(race, 'finalist', 'Finalist', checkbox('finalist'));
     }
     field(race, 'knockout', 'Knock out per round', this.number('knockout', 0, 7));
@@ -345,7 +345,7 @@ export class PresetEditor {
           input = h('input');
         input.type = 'number';
         input.min = '0';
-        input.max = '1000';
+        input.max = '10000';
         input.step = '1';
         input.value = String(points);
         input.setAttribute('aria-label', `Points for ${place}`);
@@ -357,7 +357,7 @@ export class PresetEditor {
         row.append(input);
         scoring.append(row);
       });
-      scoring.append(h('small', 'Places after 8th score 0 points.', 'rule-hint'), h('small', '', 'rule-error points-error'));
+      scoring.append(h('small', '', 'rule-error points-error'));
       overview.append(scoring);
     }
     return overview;

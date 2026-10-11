@@ -156,7 +156,7 @@ Each is marked "Not So Weekly Shorts" in the file:
 ### Up to 25 racers
 
 - **Limit:** `Cup.MAX_RACERS` (25) replaces every 8-racer limit in `cup.ts`, `controller.ts`, `validation.ts`, `lobby.ts` and `ui.ts`. The room's size (2-25 on the Competitions screen; the proxy clamps it the same way) decides how many people fit, and each one races or watches.
-- **Points:** the points table keeps 8 places; places after 8th score 0 (`placePoints`). Countback counts the first 8 places.
+- **Points:** every place up to 25th has points: 200 for 1st, falling with the log of the place to 10 for 25th (`DEFAULT_POINTS`; Formula keeps the F1 shape for the top 8). Cup targets are 20× the old ones. Tables saved with 8 places carry their last place's points down to 25th (`fullRules`). Countback counts the first 8 places.
 - **Race HUD:** with more than 10 racers it shows the top 8 plus your own row, then "+N more". The panel lists everyone.
 - **Proxy:** `MAX_SOCKETS` 64 and `MAX_PAIRS_PER_SOCKET` 40.
 
