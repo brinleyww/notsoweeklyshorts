@@ -20,7 +20,7 @@ const site = window as unknown as {
   __nswsCupPool?: MapPool;
   __nswsCupPoolLabel?: () => string;
   __nswsCupKeysPanel?: () => void;
-  __nswsCupNewCup?: () => Promise<void>;
+  __nswsCupLeave?: (message: string) => void;
 };
 
 installTransport();
@@ -81,7 +81,10 @@ site.__nswsLobbyTag = () => {
 };
 
 site.__nswsCupRoom = () => hub.room();
-site.__nswsCupNewCup = () => hub.newCup();
+site.__nswsCupLeave = (message) => hub.leave(message);
+// The organizer leaves a moment after the others, so nobody sees the room drop first.
+controller.onCupEnded = (byMe) =>
+  hub.leave(byMe ? 'You ended the cup.' : 'The organizer ended the cup.', byMe ? 2000 : 0);
 site.__nswsCupPoolLabel = () => poolLabel(site.__nswsCupPool ?? { shorts: true, main: [], community: [] });
 
 site.__nswsCupApp = {

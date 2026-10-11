@@ -24,6 +24,9 @@ import { formatGap, formatTime as time } from './time.ts';
 import { CupToolbar } from './toolbar.ts';
 import css from './world-cup.css';
 
+const PODIUM_MS = 20000;
+const HOST_LEAVES_AFTER_MS = 3000;
+
 // Not So Weekly Shorts: these keys are set in the game's Settings (Competitions) or the Keys list.
 type SiteKey = 'scoreboard' | 'spectatePrevious' | 'spectateNext';
 const siteKeys = () =>
@@ -705,7 +708,7 @@ export class CupUI {
                 () => {
                   if (
                     confirm(
-                      'End this Cup for everyone? Its standings can’t be brought back.',
+                      'End this Cup and send everyone back to the menu?',
                     )
                   )
                     c.endCup();
@@ -864,17 +867,8 @@ export class CupUI {
   setup() {
     const body = h('div', undefined, 'body');
     // Not So Weekly Shorts: the host's cup is created with the name picked before the room opened,
-    // so this only shows once a cup has ended; the room can start a new one under the same name.
-    if (this.#c.isHost) {
-      body.append(
-        h('h2', 'No cup is running'),
-        this.button(
-          'Start a new cup',
-          () => (window as unknown as { __nswsCupNewCup?: () => Promise<void> }).__nswsCupNewCup?.(),
-          'primary',
-        ),
-      );
-    } else body.append(h('h2', 'Waiting for the organizer'));
+    // and an ended cup sends everyone back to the menu.
+    body.append(h('h2', this.#c.isHost ? 'Setting up the cup…' : 'Waiting for the organizer'));
     this.#panel.append(body);
   }
   lobbyPeople() {
@@ -1782,39 +1776,89 @@ export class CupUI {
     }
     return box;
   }
+  // Not So Weekly Shorts: a final podium like Trackmania's, with each racer's car on their step.
+  // When it has been shown, everyone leaves the cup room (the organizer a moment after the others,
+  // so nobody sees a dropped connection).
   renderCompletion() {
     const s = this.#c.state,
-      winner = s?.phase === 'complete' ? resultRows(s).find((r) => r.winner) : null;
-    if (!winner) {
-      clearTimeout(this.#finishTimer);
+      rows = s?.phase === 'complete' ? [...resultRows(s)].sort((x, y) => x.place - y.place) : [],
+      winner = rows.find((r) => r.winner);
+    if (!s || !winner) {
+      clearInterval(this.#finishTimer);
       this.#finishCue.hidden = true;
       this.#finishKey = null;
       return;
     }
-    const key = `${s!.id}:${Cup.currentMatch(s!).rounds}:${winner.id}`;
+    const key = `${s.id}:${Cup.currentMatch(s).rounds}:${winner.id}`;
     if (this.#finishKey === key) return;
     this.#finishKey = key;
     this.#open = false;
     this.#finishCue.hidden = false;
-    this.#finishCue.replaceChildren();
-    const card = h('div', undefined, 'champion-card');
-    card.append(
-      h('h2', 'Cup winner'),
-      this.racerName(winner.id, winner.name),
-      this.button('View results', () => this.showResults(key), 'primary'),
-    );
-    this.#finishCue.append(card);
-    clearTimeout(this.#finishTimer);
-    this.#finishTimer = setTimeout(() => this.showResults(key), 2500);
+    this.#finishCue.classList.add('podium-cue');
+    const countdown = h('p', undefined, 'podium-countdown');
+    const message = `${s.name} is over. ${winner.name} won with ${winner.score ?? 0} points.`;
+    const leave = () => {
+      clearInterval(this.#finishTimer);
+      (window as unknown as { __nswsCupLeave?: (message: string) => void }).__nswsCupLeave?.(message);
+    };
+    this.#finishCue.replaceChildren(this.podium(s.name, rows, countdown, leave));
+    const leaveAt = Date.now() + PODIUM_MS + (this.#c.isHost ? HOST_LEAVES_AFTER_MS : 0);
+    const tick = () => {
+      if (this.#finishKey !== key) return clearInterval(this.#finishTimer);
+      const left = leaveAt - Date.now();
+      countdown.textContent = `Leaving the cup in ${Math.max(0, Math.ceil(left / 1000))}s`;
+      if (left <= 0) leave();
+    };
+    clearInterval(this.#finishTimer);
+    tick();
+    this.#finishTimer = window.setInterval(tick, 500);
   }
-  showResults(key: string) {
-    if (this.#finishKey !== key || this.#c.state?.phase !== 'complete') return;
-    clearTimeout(this.#finishTimer);
-    this.#finishCue.hidden = true;
-    this.#open = true;
-
-    this.#signature = '';
-    this.render();
+  podium(
+    name: string,
+    rows: ReturnType<typeof resultRows>,
+    countdown: HTMLElement,
+    leave: () => void,
+  ) {
+    const box = h('div', undefined, 'podium');
+    box.append(h('p', name, 'podium-cup'), h('h2', 'Final podium'));
+    const stage = h('div', undefined, 'podium-stage');
+    for (const step of [2, 1, 3]) {
+      const r = rows[step - 1],
+        slot = h('div', undefined, `podium-slot podium-${step}`);
+      if (r) {
+        const car = h('img', undefined, 'podium-car');
+        car.alt = `${r.name}'s car`;
+        car.draggable = false;
+        car.src = new URL('images/car_thumbnail_placeholder.png', document.baseURI).href;
+        this.thumbnail(r.id).then((url) => {
+          if (url && car.isConnected) car.src = url;
+        });
+        slot.append(car, h('strong', r.name, 'podium-name'), h('span', `${r.score ?? 0} pts`, 'podium-points'));
+      }
+      if (!r) slot.classList.add('empty');
+      const block = h('div', undefined, 'podium-block');
+      block.append(h('span', r ? String(r.place) : '', 'podium-place'));
+      slot.append(block);
+      stage.append(slot);
+    }
+    box.append(stage);
+    if (rows.length > 3) {
+      const rest = h('ol', undefined, 'podium-rest');
+      rest.start = 4;
+      for (const r of rows.slice(3)) {
+        const item = h('li');
+        item.append(h('span', `${r.place}. ${r.name}`), h('span', `${r.score ?? 0} pts`, 'podium-points'));
+        rest.append(item);
+      }
+      box.append(rest);
+    }
+    const controls = h('div', undefined, 'controls podium-controls');
+    controls.append(
+      this.button('Save results image', () => this.downloadImage(), 'quiet'),
+      this.button('Leave now', leave, 'primary'),
+    );
+    box.append(controls, countdown);
+    return box;
   }
   async downloadImage() {
     const state = structuredClone(this.#c.cup),

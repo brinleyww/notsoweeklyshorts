@@ -187,6 +187,30 @@ button.pov-cycle.next { clip-path:polygon(0 0,calc(100% - 8px) 0,100% 100%,8px 1
 .result-controls { flex-shrink:0; justify-content:center; margin:0; padding:12px 24px; border-top:1px solid #3a5075; } .race-history { margin-top:24px; color:var(--muted); font-size:18px; }
 @media(max-width:650px) { .final-row { gap:8px; } .winner-label { display:none; } .final-score { min-width:62px; } }
 @media(prefers-reduced-motion:reduce) { .champion-card { animation:none; } }
+.finish-cue.podium-cue { background:radial-gradient(ellipse at 50% 35%,#2b3b7a,#0b1026); overflow-y:auto; }
+.podium-slot.empty { opacity:.35; }
+.podium { width:min(860px,calc(100vw - 32px)); padding:20px 0; text-align:center; }
+.podium-cup { margin:0; color:var(--muted); font-size:20px; text-transform:uppercase; letter-spacing:1px; }
+.podium h2 { margin:6px 0 22px; color:var(--gold); font:italic 700 42px/1 ForcedSquare,Arial,sans-serif; text-transform:uppercase; }
+.podium-stage { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); align-items:end; gap:12px; }
+.podium-slot { --step:#3b4a86; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; }
+.podium-1 { --step:#ffd26b; } .podium-2 { --step:#d7e1ee; } .podium-3 { --step:#e09a5f; }
+.podium-car { width:min(200px,26vw); aspect-ratio:4/3; object-fit:contain; filter:drop-shadow(0 8px 10px #000b); animation:podium-car .5s ease-out both; }
+.podium-1 .podium-car { width:min(240px,30vw); animation-delay:1.1s; } .podium-2 .podium-car { animation-delay:.75s; } .podium-3 .podium-car { animation-delay:.9s; }
+.podium-name { max-width:100%; font-size:24px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.podium-1 .podium-name { color:var(--gold); font-size:28px; }
+.podium-points { color:var(--muted); font-size:18px; }
+.podium-block { width:100%; margin-top:6px; padding-top:12px; display:flex; justify-content:center; background:linear-gradient(#34427c,#141b40); border-top:6px solid var(--step); clip-path:polygon(10px 0,calc(100% - 10px) 0,100% 100%,0 100%); transform-origin:bottom; animation:podium-rise .6s cubic-bezier(.2,.7,.25,1) both; }
+.podium-1 .podium-block { height:170px; animation-delay:.3s; } .podium-2 .podium-block { height:120px; } .podium-3 .podium-block { height:85px; animation-delay:.15s; }
+.podium-place { color:var(--step); font:italic 700 60px/1 ForcedSquare,Arial,sans-serif; }
+.podium-rest { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:4px 12px; margin:16px 0 0; padding:0; list-style:none; text-align:left; font-size:20px; }
+.podium-rest li { display:flex; justify-content:space-between; gap:8px; padding:6px 14px; background:#212b58; clip-path:var(--cut); }
+.podium-controls { justify-content:center; margin-top:20px; }
+.podium-countdown { margin:10px 0 0; color:var(--muted); font-size:18px; }
+@keyframes podium-rise { from { transform:scaleY(0); } to { transform:scaleY(1); } }
+@keyframes podium-car { from { opacity:0; transform:translateY(-40px); } to { opacity:1; transform:none; } }
+@media(max-height:640px) { .podium-1 .podium-block { height:110px; } .podium-2 .podium-block { height:80px; } .podium-3 .podium-block { height:55px; } .podium-car { width:min(140px,22vw); } .podium-1 .podium-car { width:min(170px,26vw); } .podium h2 { font-size:32px; margin-bottom:12px; } }
+@media(prefers-reduced-motion:reduce) { .podium-block,.podium-car { animation:none; } }
 
 /* One lobby, with the current action beside a persistent roster. */
 .panel.lobby-panel { width:min(1180px,calc(100vw - 36px)); }

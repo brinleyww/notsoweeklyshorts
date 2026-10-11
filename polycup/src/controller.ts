@@ -1540,6 +1540,8 @@ export class Controller {
     this.syncInputScope(null);
     this.#onSpectatorInputs?.();
   }
+  // Not So Weekly Shorts: ending a cup sends everyone in it back to the menu (polycup/nsws/hub.ts).
+  onCupEnded?: (byMe: boolean) => void;
   endCup() {
     this.requireHost();
     if (!this.#state) return;
@@ -1547,6 +1549,7 @@ export class Controller {
     this.releaseCup('Cup ended');
     this.broadcast();
     this.#onChange();
+    this.onCupEnded?.(true);
   }
   acceptTrack(actor: number, code: string) {
     const state = this.cup;
@@ -2201,7 +2204,10 @@ export class Controller {
       ) {
         this.#receivedSequence = m.sequence;
         if (m.state === null) {
-          if (this.#state) this.releaseCup('The organizer ended the cup');
+          if (this.#state) {
+            this.releaseCup('The organizer ended the cup');
+            this.onCupEnded?.(false);
+          }
         } else {
           this.#state = { ...m.state, history: [] };
           this.#error = '';

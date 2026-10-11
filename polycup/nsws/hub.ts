@@ -19,6 +19,7 @@ interface CupBridge {
     };
   };
   startRace(meta: unknown, data: TrackData, mp: { multiplayerConnection: unknown; sessionId: number; gameMode: number }): void;
+  toMenu(): void;
 }
 interface TrackData {
   hasStartingPoint(): boolean;
@@ -65,6 +66,7 @@ const site = window as unknown as {
   __nswsCupPool?: MapPool;
   __nswsUIClick?: () => void;
   __nswsCupKeysPanel?: () => void;
+  __nswsMessageBox?: { show(text: string, button: string, callback: null): void };
 };
 const MAIN = ['Summer', 'Winter', 'Desert'];
 const CODE = /^[A-HJ-NP-Z2-9]{5}$/;
@@ -322,7 +324,7 @@ export class CompetitionsHub {
         try {
           localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         } catch {}
-        this.host(settings);
+        void this.host(settings);
       }, 'go'),
     );
     right.append(joinBox, hostBox, this.#error);
@@ -437,23 +439,30 @@ export class CompetitionsHub {
     return bridge;
   }
 
-  host(settings: HostSettings) {
+  async host(settings: HostSettings) {
     if (this.#busy) return;
+    this.#busy = true;
     try {
       const pool = settings.pool;
       if (!pool.shorts && !pool.main.length && !pool.community.length) throw new Error('Pick at least one set of maps.');
       const cup = this.#bridge();
       const sv = cup.services();
-      const official: { meta: { name: string }; data: TrackData }[] = [];
-      sv.tracks.forEachOfficialTrack((_id, meta, data) => {
-        if (data?.hasStartingPoint?.()) official.push({ meta, data });
+      const library = this.#controller.native?.trackLibrary;
+      if (!library) throw new Error('The game is still loading. Try again in a moment.');
+      // The room opens on a map from the cup's own pool; the cup picks every map after that.
+      site.__nswsCupPool = pool;
+      const maps: (() => Promise<{ trackData: TrackData; trackMetadata: unknown }>)[] = [];
+      library.forEachTrack((_id, _meta, category, _env, load) => {
+        if (category !== 'custom') maps.push(load as () => Promise<{ trackData: TrackData; trackMetadata: unknown }>);
       });
-      if (!official.length) throw new Error('The tracks are still loading. Try again in a moment.');
-      // The room needs a map to open on; the cup itself picks every map after that.
-      const start = official[Math.floor(Math.random() * official.length)];
+      if (!maps.length) throw new Error('The tracks are still loading. Try again in a moment.');
+      this.#error.textContent = 'Opening the room...';
+      const loaded = await maps[Math.floor(Math.random() * maps.length)]();
+      if (!loaded?.trackData?.hasStartingPoint?.()) throw new Error("That map couldn't be loaded. Try again.");
+      const start = { meta: loaded.trackMetadata, data: loaded.trackData };
+      this.#error.textContent = '';
       this.#chatSecret = randomHex(16);
       site.__nswsCupHostOptions = { ...settings, chat: this.#chatSecret };
-      site.__nswsCupPool = pool;
       this.#joinCode = null;
       const host = new cup.Host(sv.loc, sv.api, settings.max, sv.profiles);
       const sessionId = host.startNewSessionImmediate(cup.GameMode.Competitive, start.meta, start.data);
@@ -463,6 +472,8 @@ export class CompetitionsHub {
       this.#openPanelSoon('Your cup room is open. Share the code, then set up the cup.', true);
     } catch (error) {
       this.#error.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.#busy = false;
     }
   }
 
@@ -510,6 +521,18 @@ export class CompetitionsHub {
     const response = await fetch(site.__nswsApiBase + 'nsws/cup/info?code=' + code, { cache: 'no-store' });
     if (!response.ok) throw Object.assign(new Error('server'), { errorType: 'server-connection' });
     return ((await response.json()) as { cup: { name: string; pool: MapPool } | null }).cup;
+  }
+
+  // Back to the main menu (which closes this page's side of the room), then the message.
+  leave(message: string, delay = 0) {
+    const connection = this.#controller.connection;
+    if (!connection) return;
+    window.setTimeout(() => {
+      if (this.#controller.connection !== connection) return;
+      this.#controller.requestPanel(false);
+      site.__nswsCup?.toMenu();
+      window.setTimeout(() => site.__nswsMessageBox?.show(message, 'Ok', null), 600);
+    }, delay);
   }
 
   // A new cup in the organizer's room, under the room's name as the proxy filtered it.
