@@ -7,7 +7,12 @@ export interface HudElements {
   practiceHud: HTMLElement;
   notice: HTMLElement;
   roundTimer?: HTMLElement;
+  // Not So Weekly Shorts: the finish banner and the between-rounds label, kept below the native hint
+  // and finish-time announcer at the top of the screen.
+  banner?: HTMLElement;
+  downtime?: HTMLElement;
 }
+const topParts = '.hint-ui .title,.hint-ui .subtitle,.time-announcer-ui > *';
 interface Bounds {
   left: number;
   right: number;
@@ -42,6 +47,21 @@ export function edgeClearance(
   return { top, bottom };
 }
 
+// Not So Weekly Shorts: the first top at or below base where an element of this height sits clear
+// of every obstacle in its lane.
+export function freeTop(lane: Pick<Bounds, 'left' | 'right'>, base: number, height: number, obstacles: Bounds[], gap = 8) {
+  let top = base;
+  for (let moved = true; moved; ) {
+    moved = false;
+    for (const rect of obstacles)
+      if (rect.right > lane.left && rect.left < lane.right && rect.bottom + gap > top && rect.top < top + height + gap) {
+        top = Math.ceil(rect.bottom + gap);
+        moved = true;
+      }
+  }
+  return top;
+}
+
 export function visibleHudRect(element: Element | null, styleOf = getComputedStyle) {
   if (!element) return null;
   for (
@@ -71,6 +91,8 @@ export function layoutCupHud({
   practiceHud,
   notice,
   roundTimer,
+  banner,
+  downtime,
 }: HudElements) {
   const native = [...document.querySelectorAll(nativeParts)]
     .map((e) => visibleHudRect(e))
@@ -93,6 +115,14 @@ export function layoutCupHud({
     set(element, '--pwc-bottom', clearance.bottom);
     const rect = visibleHudRect(element);
     if (rect) placed.push(rect);
+  }
+  const above: Bounds[] = [...native, ...[...document.querySelectorAll(topParts)].map((e) => visibleHudRect(e)).filter((rect): rect is DOMRect => rect !== null)];
+  for (const [element, base] of [[banner, 0.18], [downtime, 0.27]] as const) {
+    if (!element || element.hidden) continue;
+    const lane = element.getBoundingClientRect();
+    const top = freeTop(lane, Math.round(innerHeight * base), lane.height, above);
+    set(element, '--pwc-top', top);
+    above.push({ left: lane.left, right: lane.right, top, bottom: top + lane.height });
   }
   const overlayRects = [povHud, povRecordHud, inputHud, practiceHud]
     .map((e) => visibleHudRect(e))

@@ -4,7 +4,10 @@ import { rosterOpen } from './draft.ts';
 import type { CupUI } from './ui.ts';
 import {
   PresetLibrary,
+  bundledPresets,
+  isBundledName,
   parsePreset,
+  presetProblems,
   presetText,
   presetKey,
   quickplayPreset,
@@ -12,8 +15,27 @@ import {
   standardPreset,
   validPreset,
   type CupPreset,
-  type CupRules,
+  type FullRules,
 } from './presets.ts';
+
+// Not So Weekly Shorts: every option explains itself on screen (tooltips don't work on touch), a
+// wrong value is marked on its own field, and the tool buttons have text labels.
+const HINTS: Partial<Record<keyof FullRules, string>> = {
+  roundsPerTrack: 'Rounds raced on a track before the next one.',
+  finalist: 'Reach the target to become a finalist, then win a round to take the cup.',
+  uploadLeaderboardTimes: 'On: personal bests set in the cup go to the leaderboards (Race Control reviews them first). Off: cup times stay in the cup.',
+  selection: 'Random: the cup draws tracks from the room’s maps. Draft: each racer bans and picks tracks first.',
+  nextTrack: 'How the next random track is chosen when a track is done.',
+  roundStyle: 'Single: one run, a restart retires you. Time attack: unlimited runs in a time window, your best counts.',
+  knockout: 'Racers knocked out after every round (no finish goes first). The last one in wins.',
+  roundTimeLimit: 'Ends a round nobody can finish. Auto: three times the best known time, 1 to 10 minutes.',
+  collisions: 'Cars bump into each other. Times never count as personal bests, upload, or go to review.',
+  finishTimeoutSeconds: 'Time for everyone else to finish after the first racer does.',
+  roundBreakSeconds: 'Pause between rounds.',
+  allowRacerChanges: 'Players can join or leave between rounds. New racers start on 0 points.',
+  allowSpectatorFreecam: 'Let spectators fly around the track. Turn off for puzzle or discovery maps.',
+  readyEndsWarmup: 'Warmup ends early once every racer presses Ready.',
+};
 
 export class PresetEditor {
   #ui: CupUI;
@@ -55,13 +77,13 @@ export class PresetEditor {
     this.#panel = box;
     box.setAttribute('aria-label', 'Cup preset');
     const heading = h('div', undefined, 'preset-heading');
-    heading.append(h('h2', editable ? 'Cup preset' : current.name));
+    heading.append(h('h2', editable ? 'Cup format' : current.name));
     if (!editable) {
       const details = h('section', undefined, 'preset-details');
       details.append(h('h3', `${current.name} · Cup rules`));
       details.append(presetSummary(rulesFor(state)));
       box.append(details);
-      if (!rulesFor(state).finalist)
+      if (!rulesFor(state).finalist && !rulesFor(state).knockout)
         details.append(h('p', 'A tied lead at the target continues into another round.', 'muted'));
       const footer = h('div', undefined, 'preset-tools');
       details.append(ui.button('Export preset', () => this.download(current), 'quiet'));
@@ -69,19 +91,17 @@ export class PresetEditor {
         footer.append(
           ui.button(
             'Reopen setup',
-            () => {
-              if (confirm('Reopen setup and clear all bans and picks?')) c.reopenRoster();
-            },
+            ui.confirmed('Reopen setup and clear all bans and picks?', 'Reopen setup', () => c.reopenRoster()),
             'quiet',
           ),
         );
       if (footer.childElementCount) box.append(footer);
       return box;
     }
-    const r = this.#draft.rules;
+    const r = this.#draft.rules as FullRules;
     const select = h('select');
     select.setAttribute('aria-label', 'Choose a preset');
-    const presets = [quickplayPreset(), standardPreset(), ...this.#library.list()];
+    const presets = [...bundledPresets(), ...this.#library.list()];
     const selected = presets.findIndex((p) => presetKey(p) === presetKey(this.#draft));
     {
       const option = h('option', selected < 0 ? this.#draft.name || 'Custom' : 'Custom');
@@ -118,7 +138,7 @@ export class PresetEditor {
     } else nameControl.append(select);
     chooser.append(nameControl);
     heading.append(chooser);
-    box.append(heading);
+    box.append(heading, h('p', presetBlurb(r), 'preset-blurb'));
     box.append(this.editableRules(r));
     const file = h('input');
     file.type = 'file';
@@ -138,25 +158,27 @@ export class PresetEditor {
         c.fail(error);
       }
     });
-    const icon = (
+    const tool = (
       kind: 'save' | 'import' | 'export' | 'delete' | 'edit' | 'check',
+      text: string,
       label: string,
       action: () => void,
     ) => {
-      const button = ui.button(label, action, 'quiet preset-icon');
-      button.replaceChildren(presetIcon(kind));
+      const button = ui.button(label, action, 'quiet preset-tool');
+      button.replaceChildren(presetIcon(kind), h('span', text));
       button.setAttribute('aria-label', label);
-      button.title = label;
       return button;
     };
-    const rename = icon(
+    const tools = h('div', undefined, 'preset-tools-row');
+    const rename = tool(
       this.#renaming ? 'check' : 'edit',
+      this.#renaming ? 'Done' : 'Rename',
       this.#renaming ? 'Apply preset name' : 'Rename preset',
       () => (this.#renaming ? this.finishRename() : this.beginRename()),
     );
-    const save = icon('save', 'Save preset', () => {
+    const save = tool('save', 'Save', 'Save preset', () => {
       if (this.#renaming) this.finishRename();
-      if (['standard', 'quickplay', 'custom', ''].includes(this.#draft.name.trim().toLowerCase())) {
+      if (isBundledName(this.#draft.name) || ['custom', ''].includes(this.#draft.name.trim().toLowerCase())) {
         this.beginRename();
         ui.showNotice('Name your preset, then save it.', 3500);
         const input = this.#panel?.querySelector<HTMLInputElement>('[data-preset-field="name"]');
@@ -169,7 +191,7 @@ export class PresetEditor {
       this.applyDraft();
       ui.showNotice(`Saved ${this.#draft.name}`, 2500);
     });
-    const remove = icon('delete', 'Delete saved preset', () => {
+    const remove = tool('delete', 'Delete', 'Delete saved preset', () => {
       if (!this.#library.list().some((p) => p.name === this.#draft.name)) return;
       this.#library.remove(this.#draft.name);
       this.#draft = quickplayPreset();
@@ -178,58 +200,43 @@ export class PresetEditor {
     });
     remove.dataset.deletePreset = '';
     remove.disabled = !this.#library.list().some((p) => p.name === this.#draft.name);
-    const exportButton = icon('export', 'Export preset', () => this.download(this.#draft));
+    const exportButton = tool('export', 'Export', 'Export preset', () => this.download(this.#draft));
     save.dataset.validPreset = '';
     exportButton.dataset.validPreset = '';
     save.disabled = exportButton.disabled = !validPreset(this.#draft);
-    chooser.append(
-      rename,
-      save,
-      icon('import', 'Import preset', () => file.click()),
-      exportButton,
-      remove,
-      file,
-    );
-    const status = h(
-      'p',
-      this.dirty
-        ? validPreset(this.#draft)
-          ? 'Updating rules…'
-          : 'Check the fields: select a valid pool, use the allowed ranges, and keep points in descending order.'
-        : '',
-      'preset-status',
-    );
-    status.hidden = !this.dirty;
+    tools.append(rename, save, tool('import', 'Import', 'Import preset', () => file.click()), exportButton, remove, file);
+    box.append(tools);
+    const status = h('p', '', 'preset-status');
     status.setAttribute('role', 'status');
     box.append(status);
+    queueMicrotask(() => this.sync());
     return box;
   }
-  editableRules(r: CupRules) {
+  editableRules(r: FullRules) {
     const overview = h('div', undefined, 'preset-overview preset-editable');
+    const columns = h('div', undefined, 'rule-columns');
     const group = (title: string) => {
       const section = h('section', undefined, 'rule-group');
       section.setAttribute('aria-label', `${title} rules`);
       section.append(h('h3', title));
+      columns.append(section);
       return section;
     };
-    const field = (section: HTMLElement, label: string, input: HTMLElement, hint?: string) => {
+    const field = (section: HTMLElement, key: keyof FullRules, label: string, input: HTMLElement, disabled = false) => {
       const row = h('label', undefined, 'rule-edit');
+      row.dataset.rule = key;
       row.append(h('strong', `${label}:`), input);
       input.setAttribute('aria-label', label);
-      if (hint) row.title = hint;
+      if (disabled) (input as HTMLInputElement).disabled = true;
+      const hint = HINTS[key];
+      if (hint) row.append(h('small', hint, 'rule-hint'));
+      row.append(h('small', '', 'rule-error'));
       section.append(row);
     };
-    const checkbox = (
-      key:
-        | 'finalist'
-        | 'uploadLeaderboardTimes'
-        | 'allowRacerChanges'
-        | 'allowSpectatorFreecam'
-        | 'readyEndsWarmup',
-    ) => {
+    const checkbox = (key: 'finalist' | 'uploadLeaderboardTimes' | 'allowRacerChanges' | 'allowSpectatorFreecam' | 'readyEndsWarmup' | 'collisions') => {
       const input = h('input');
       input.type = 'checkbox';
-      input.checked = key === 'allowSpectatorFreecam' ? r[key] !== false : r[key] === true;
+      input.checked = r[key] === true;
       input.dataset.presetField = key;
       input.addEventListener('change', () => {
         r[key] = input.checked;
@@ -237,187 +244,122 @@ export class PresetEditor {
       });
       return input;
     };
-    const race = group('Race');
-    field(race, 'Rounds per track', this.number('roundsPerTrack', 1, 30));
+    const knockout = r.knockout > 0;
+    const race = group('Scoring');
+    if (!knockout) {
+      field(race, 'pointsToWin', r.finalist ? 'Finalist target' : 'Points to win', this.number('pointsToWin', 1, 10000));
+      field(race, 'finalist', 'Finalist', checkbox('finalist'));
+    }
+    field(race, 'knockout', 'Knock out per round', this.number('knockout', 0, 7));
+    field(race, 'uploadLeaderboardTimes', 'Upload times', checkbox('uploadLeaderboardTimes'), r.collisions);
+    const format = group('Rounds');
     field(
-      race,
-      r.finalist ? 'Finalist target' : 'Points to win',
-      this.number('pointsToWin', 1, 10000),
+      format,
+      'roundStyle',
+      'Round style',
+      this.select([['single', 'Single run'], ['time-attack', 'Time attack']], r.roundStyle, (v) => (r.roundStyle = v as FullRules['roundStyle'])),
     );
-    field(
-      race,
-      'Finalist',
-      checkbox('finalist'),
-      'Reach the target, then win a later round to win the Cup.',
-    );
-    race.append(
-      h(
-        'p',
-        r.finalist
-          ? 'Reach the target, then win a round.'
-          : 'Lead at the point target to win. Tied leaders race on.',
-        'rule-help',
-      ),
-    );
-    field(
-      race,
-      'Leaderboard uploads',
-      checkbox('uploadLeaderboardTimes'),
-      'Enabled: Casual mode, with native leaderboard uploads. Disabled: Competitive mode, with session-only times.',
-    );
+    if (r.roundStyle === 'time-attack') field(format, 'timeAttackSeconds', 'Time attack (s)', this.number('timeAttackSeconds', 30, 1800));
+    else {
+      field(
+        format,
+        'roundTimeLimit',
+        'Time limit',
+        this.select([['auto', 'Auto'], ['fixed', 'Fixed'], ['off', 'None']], r.roundTimeLimit, (v) => (r.roundTimeLimit = v as FullRules['roundTimeLimit'])),
+      );
+      if (r.roundTimeLimit === 'fixed') field(format, 'roundTimeSeconds', 'Limit (s)', this.number('roundTimeSeconds', 30, 1800));
+      field(format, 'finishTimeoutSeconds', 'Finish window (s)', this.number('finishTimeoutSeconds', 5, 120));
+    }
+    field(format, 'roundBreakSeconds', 'Round break (s)', this.number('roundBreakSeconds', 3, 60));
+    field(format, 'collisions', 'Player collisions', checkbox('collisions'));
     const tracks = group('Tracks');
     field(
       tracks,
+      'selection',
       'Selection',
-      this.select(
-        [
-          ['draft', 'Racer draft'],
-          ['random', 'Random rotation'],
-        ],
-        r.selection,
-        (value) => {
-          r.selection = value as CupRules['selection'];
-          r.bansPerRacer = value === 'random' ? 0 : 1;
-          r.picksPerRacer = value === 'random' ? 0 : 1;
-        },
-      ),
+      this.select([['random', 'Random'], ['draft', 'Racer draft']], r.selection, (value) => {
+        r.selection = value as FullRules['selection'];
+        r.bansPerRacer = value === 'random' ? 0 : 1;
+        r.picksPerRacer = value === 'random' ? 0 : 1;
+        if (value === 'draft') r.nextTrack = 'random';
+      }),
     );
-    // Not So Weekly Shorts: the maps were picked before the room opened, so only custom tracks are a rule.
-    for (const [category, label] of [['custom', 'Custom']] as const) {
+    if (r.selection === 'random')
+      field(
+        tracks,
+        'nextTrack',
+        'Next track',
+        this.select(
+          [['random', 'Random'], ['vote', 'Racers vote'], ['winner', 'Round winner picks'], ['last', 'Last place picks']],
+          r.nextTrack,
+          (v) => (r.nextTrack = v as FullRules['nextTrack']),
+        ),
+      );
+    field(tracks, 'roundsPerTrack', 'Rounds per track', this.number('roundsPerTrack', 1, 30));
+    {
       const input = h('input');
       input.type = 'checkbox';
-      input.checked = r.pool.includes(category);
-      input.dataset.trackCategory = category;
-      input.disabled = category === 'custom' && r.bansPerRacer > 0;
-      input.setAttribute('aria-label', `${label} tracks`);
-      let hint: string | undefined;
-      if (category === 'custom')
-        hint =
-          r.bansPerRacer > 0
-            ? 'Set bans per racer to 0 to allow custom tracks.'
-            : r.selection === 'random'
-              ? 'Include the organizer’s saved custom tracks.'
-              : 'Allow saved custom tracks and track share codes during picks.';
+      input.checked = r.pool.includes('custom');
+      input.dataset.trackCategory = 'custom';
       input.addEventListener('change', () => {
-        r.pool = input.checked ? [...r.pool, category] : r.pool.filter((c) => c !== category);
+        r.pool = input.checked ? [...r.pool, 'custom'] : r.pool.filter((c) => c !== 'custom');
         this.changed();
       });
-      field(tracks, `${label} tracks`, input, hint);
+      field(tracks, 'pool', 'Custom tracks', input, r.bansPerRacer > 0);
     }
     if (r.selection === 'draft') {
-      field(tracks, 'Bans per racer', this.number('bansPerRacer', 0, 3));
-      field(tracks, 'Picks per racer', this.number('picksPerRacer', 1, 3));
+      field(tracks, 'bansPerRacer', 'Bans per racer', this.number('bansPerRacer', 0, 3));
+      field(tracks, 'picksPerRacer', 'Picks per racer', this.number('picksPerRacer', 1, 3));
     }
-    const banHint = h('small', 'Custom tracks require zero bans.', 'custom-ban-hint rule-help');
-    banHint.hidden = r.bansPerRacer === 0;
-    tracks.append(banHint);
-    const timing = group('Timing');
+    const timing = group('Warmup');
     field(
       timing,
+      'warmup',
       'Warmup',
-      this.select(
-        [
-          ['off', 'Disabled'],
-          ['first-visit', 'First visit'],
-          ['every-visit', 'Every visit'],
-        ],
-        r.warmup,
-        (value) => {
-          r.warmup = value as CupRules['warmup'];
-        },
-      ),
+      this.select([['off', 'None'], ['first-visit', 'First visit'], ['every-visit', 'Every visit']], r.warmup, (v) => (r.warmup = v as FullRules['warmup'])),
     );
     if (r.warmup !== 'off') {
       field(
         timing,
-        'Duration',
-        this.select(
-          [
-            ['wr', 'Based on WR'],
-            ['fixed', 'Fixed time'],
-          ],
-          r.warmupTiming,
-          (value) => {
-            r.warmupTiming = value as CupRules['warmupTiming'];
-          },
-        ),
+        'warmupTiming',
+        'Length',
+        this.select([['wr', 'Based on WR'], ['fixed', 'Fixed time']], r.warmupTiming, (v) => (r.warmupTiming = v as FullRules['warmupTiming'])),
       );
       if (r.warmupTiming === 'wr') {
-        field(timing, 'WR multiplier', this.number('warmupMultiplier', 0.5, 5, 0.1));
-        field(timing, 'Minimum (s)', this.number('warmupMinimumSeconds', 10, 300));
+        field(timing, 'warmupMultiplier', 'WR multiplier', this.number('warmupMultiplier', 0.5, 5, 0.1));
+        field(timing, 'warmupMinimumSeconds', 'Minimum (s)', this.number('warmupMinimumSeconds', 10, 300));
       }
-      field(
-        timing,
-        r.warmupTiming === 'fixed' ? 'Duration (s)' : 'Without a WR (s)',
-        this.number('warmupSeconds', 10, 600),
-      );
-      field(timing, 'All ready ends warmup', checkbox('readyEndsWarmup'));
+      field(timing, 'warmupSeconds', r.warmupTiming === 'fixed' ? 'Length (s)' : 'Without a WR (s)', this.number('warmupSeconds', 10, 600));
+      field(timing, 'readyEndsWarmup', 'Ready ends warmup', checkbox('readyEndsWarmup'));
     }
-    field(
-      timing,
-      'Finish window (s)',
-      this.number('finishTimeoutSeconds', 5, 120),
-      'Time for the remaining racers to finish after the leader.',
-    );
-    field(
-      timing,
-      'Round break (s)',
-      this.number('roundBreakSeconds', 3, 60),
-      'Pause between scored rounds.',
-    );
     const racers = group('Racers');
-    field(racers, 'Mid-Cup joining / leaving', checkbox('allowRacerChanges'));
-    if (r.allowRacerChanges)
-      racers.append(
-        h('p', 'New racers: 0 points, next round. Returning racers keep their score.', 'rule-help'),
-      );
-    field(
-      racers,
-      'Spectator free camera',
-      checkbox('allowSpectatorFreecam'),
-      'Let spectators explore the track. Disable for puzzle or discovery maps.',
-    );
-    const pair = (left: HTMLElement, right: HTMLElement) => {
-      const row = h('div', undefined, 'rule-pair');
-      const groups = [left, right];
-      const fieldCount = Math.max(
-        ...groups.map((group) => group.querySelectorAll(':scope > .rule-edit').length),
-      );
-      for (const group of groups) {
-        group.style.gridRow = `span ${fieldCount + 2}`;
-        const fields = group.querySelectorAll<HTMLElement>(':scope > .rule-edit');
-        fields.forEach((field, i) => {
-          field.style.gridRow = String(i + 2);
+    field(racers, 'allowRacerChanges', 'Join or leave mid-cup', checkbox('allowRacerChanges'), knockout);
+    field(racers, 'allowSpectatorFreecam', 'Spectator free camera', checkbox('allowSpectatorFreecam'));
+    overview.append(columns);
+    if (!knockout) {
+      const scoring = h('fieldset', undefined, 'preset-scoring rule-points-editor');
+      scoring.append(h('legend', 'Points by finishing position'));
+      r.points.forEach((points, i) => {
+        const place = `${i + 1}${['st', 'nd', 'rd'][i] ?? 'th'}`,
+          row = h('label', place),
+          input = h('input');
+        input.type = 'number';
+        input.min = '0';
+        input.max = '1000';
+        input.step = '1';
+        input.value = String(points);
+        input.setAttribute('aria-label', `Points for ${place}`);
+        input.dataset.presetField = `points-${i}`;
+        input.addEventListener('input', () => {
+          r.points[i] = input.valueAsNumber;
+          this.changed(false);
         });
-        for (const note of group.querySelectorAll<HTMLElement>(':scope > .rule-help'))
-          note.style.gridRow = String(fieldCount + 2);
-        row.append(group);
-      }
-      overview.append(row);
-    };
-    pair(race, tracks);
-    pair(timing, racers);
-    const scoring = h('fieldset', undefined, 'preset-scoring rule-points-editor');
-    scoring.append(h('legend', 'Points by finishing position'));
-    r.points.forEach((points, i) => {
-      const place = `${i + 1}${['st', 'nd', 'rd'][i] ?? 'th'}`,
-        row = h('label', place),
-        input = h('input');
-      input.type = 'number';
-      input.min = '0';
-      input.max = '1000';
-      input.step = '1';
-      input.value = String(points);
-      input.setAttribute('aria-label', `Points for ${place}`);
-      input.dataset.presetField = `points-${i}`;
-      input.addEventListener('input', () => {
-        r.points[i] = input.valueAsNumber;
-        this.changed(false);
+        row.append(input);
+        scoring.append(row);
       });
-      row.append(input);
-      scoring.append(row);
-    });
-    overview.append(scoring);
+      scoring.append(h('small', '', 'rule-error points-error'));
+      overview.append(scoring);
+    }
     return overview;
   }
   nameKey(event: KeyboardEvent) {
@@ -447,18 +389,19 @@ export class PresetEditor {
   sync() {
     const panel = this.#panel;
     if (!panel) return;
-    const valid = validPreset(this.#draft);
-    for (const input of panel.querySelectorAll<HTMLInputElement>('[data-track-category]')) {
-      input.checked = this.#draft.rules.pool.some(
-        (category) => category === input.dataset.trackCategory,
-      );
-      input.disabled =
-        input.dataset.trackCategory === 'custom' && this.#draft.rules.bansPerRacer > 0;
+    const problems = presetProblems(this.#draft),
+      valid = !problems.length;
+    for (const row of panel.querySelectorAll<HTMLElement>('[data-rule]')) {
+      const problem = problems.find((p) => p.field === row.dataset.rule);
+      const error = row.querySelector<HTMLElement>('.rule-error');
+      if (error) error.textContent = problem?.message ?? '';
+      row.querySelector('input,select')?.setAttribute('aria-invalid', String(!!problem));
     }
-    const banHint = panel.querySelector<HTMLElement>('.custom-ban-hint');
-    if (banHint) banHint.hidden = this.#draft.rules.bansPerRacer === 0;
-    for (const input of panel.querySelectorAll<HTMLInputElement>('input[type=number]'))
-      input.setAttribute('aria-invalid', String(!input.validity.valid || input.value === ''));
+    const points = problems.find((p) => p.field.startsWith('points-'));
+    const pointsError = panel.querySelector<HTMLElement>('.points-error');
+    if (pointsError) pointsError.textContent = points?.message ?? '';
+    for (const input of panel.querySelectorAll<HTMLInputElement>('[data-preset-field^="points-"]'))
+      input.setAttribute('aria-invalid', String(problems.some((p) => p.field === input.dataset.presetField)));
     for (const button of panel.querySelectorAll<HTMLButtonElement>('[data-valid-preset]'))
       button.disabled = !valid;
     const remove = panel.querySelector<HTMLButtonElement>('[data-delete-preset]');
@@ -468,8 +411,8 @@ export class PresetEditor {
       status.textContent = this.dirty
         ? valid
           ? 'Updating rules…'
-          : 'Check the fields: select a valid pool, use the allowed ranges, and keep points in descending order.'
-        : `${this.#draft.name} rules applied.`;
+          : `Fix the marked field: ${problems[0].message}`
+        : '';
       status.hidden = !this.dirty;
     }
     const select = panel.querySelector<HTMLSelectElement>('select[aria-label="Choose a preset"]');
@@ -489,7 +432,7 @@ export class PresetEditor {
       if (note) {
         note.textContent =
           this.#ui.c.cup.roster.length < 2
-            ? 'At least two racers are needed.'
+            ? 'At least two racers are needed. Share the code to bring players in.'
             : this.dirty
               ? 'Finish editing the rules to continue.'
               : '';
@@ -499,7 +442,10 @@ export class PresetEditor {
   }
   applyDraft() {
     clearTimeout(this.#applyTimer);
-    if (!validPreset(this.#draft)) return;
+    if (!validPreset(this.#draft)) {
+      this.#ui.redraw();
+      return;
+    }
     try {
       this.#ui.c.setPreset(this.#draft);
       this.#base = presetKey(this.#draft);
@@ -519,9 +465,16 @@ export class PresetEditor {
   changed(redraw = true) {
     clearTimeout(this.#applyTimer);
     this.#draft.name = 'Custom';
-    if (this.#draft.rules.bansPerRacer > 0) {
-      this.#draft.rules.pool = this.#draft.rules.pool.filter((category) => category !== 'custom');
-      if (!this.#draft.rules.pool.length) this.#draft.rules.pool = ['official', 'community'];
+    const r = this.#draft.rules as FullRules;
+    if (r.bansPerRacer > 0) {
+      r.pool = r.pool.filter((category) => category !== 'custom');
+      if (!r.pool.length) r.pool = ['official', 'community'];
+    }
+    // Options that rule each other out follow along instead of failing validation.
+    if (r.collisions) r.uploadLeaderboardTimes = false;
+    if (r.knockout > 0) {
+      r.finalist = false;
+      r.allowRacerChanges = false;
     }
     const name = this.#panel?.querySelector<HTMLInputElement>('[data-preset-field="name"]');
     if (name) name.value = 'Custom';
@@ -532,18 +485,17 @@ export class PresetEditor {
       this.scheduleApply();
     }
   }
-  number(key: keyof CupRules, min: number, max: number, step = 1) {
+  number(key: keyof FullRules, min: number, max: number, step = 1) {
     const input = h('input');
     input.type = 'number';
     input.min = String(min);
     input.max = String(max);
     input.step = String(step);
-    input.value = String(this.#draft.rules[key]);
-    input.title = `${min}–${max}`;
+    input.value = String((this.#draft.rules as FullRules)[key]);
     input.dataset.presetField = key;
     input.addEventListener('input', () => {
       Object.assign(this.#draft.rules, { [key]: input.valueAsNumber });
-      this.changed(false);
+      this.changed(key === 'knockout');
     });
     return input;
   }
@@ -569,6 +521,17 @@ export class PresetEditor {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+}
+// A one-line description of the format, above the options.
+export function presetBlurb(r: FullRules) {
+  const parts: string[] = [];
+  if (r.knockout) parts.push(`Knockout: the slowest ${r.knockout === 1 ? 'racer is' : `${r.knockout} racers are`} out after every round until one is left.`);
+  else if (r.finalist) parts.push(`Reach ${r.pointsToWin} points to become a finalist, then win a round to take the cup.`);
+  else parts.push(`First to ${r.pointsToWin} points wins.`);
+  parts.push(r.roundStyle === 'time-attack' ? `Each round is a ${Math.round(r.timeAttackSeconds / 60 * 10) / 10}-minute time attack; your best run counts.` : 'One run per round.');
+  parts.push(r.selection === 'draft' ? 'Racers draft the tracks.' : `${r.roundsPerTrack} round${r.roundsPerTrack === 1 ? '' : 's'} per random track.`);
+  if (r.collisions) parts.push('Cars collide.');
+  return parts.join(' ');
 }
 function presetIcon(kind: 'save' | 'import' | 'export' | 'delete' | 'edit' | 'check') {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

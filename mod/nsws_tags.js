@@ -32,6 +32,7 @@
         { id: "youtuber", label: "YOUTUBER", group: "discord", need: "Run a YouTube channel that covers NSWS." },
         { id: "author", label: "AUTHOR TIME", group: "discord", need: "Set the Author Time medals for a week." },
         { id: "og", label: "OG", group: "discord", need: "Have played NSWS since the early weeks." },
+        { id: "cupchamp", label: "CUP CHAMPION", group: "discord", need: "Win an official NSWS cup in Competitions." },
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
@@ -64,6 +65,7 @@
 .nsws-tag.t-youtuber::before{content:"";flex-shrink:0;border-style:solid;border-width:.32em 0 .32em .52em;border-color:transparent transparent transparent #fff;}
 .nsws-tag.t-author{background:#103d3b;color:#5ff2d6;}
 .nsws-tag.t-og{background:#111;color:#ffcc66;}
+.nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
 @keyframes nsws-tag-shine{from{background-position:0 0;}to{background-position:166.667% 0;}}
 @keyframes nsws-tag-slide{from{background-position:0 0;}to{background-position:200% 0;}}
 @keyframes nsws-tag-rainbow{from{background-position:0 0;}to{background-position:150% 0;}}

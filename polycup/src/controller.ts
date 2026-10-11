@@ -46,6 +46,12 @@ import type {
 import { validPB, validSnapshot, validWR } from './validation.ts';
 const RECONNECT_GRACE_MS = 15000;
 const LOAD_GRACE_MS = 30000;
+// Not So Weekly Shorts: how long racers have to choose the next track, and to confirm a retire.
+const TRACK_VOTE_MS = 12000;
+const RETIRE_CONFIRM_MS = 2000;
+// A round waits this long after it ends for finishes still being replayed.
+const VERIFY_WAIT_MS = 10000;
+type Ticker = { every(ms: number, fn: () => void): void };
 export class Controller {
   #physicsSource: () => PhysicsReport = () => ({ hash: null, driveForce: null });
   #physicsReports = new Map<number, { cupId: string; report: PhysicsReport }>();
@@ -199,6 +205,30 @@ export class Controller {
   get error() {
     return this.#error;
   }
+  // Not So Weekly Shorts: a summary for debugging a cup from the console (__nswsCupApp.debug()).
+  debugInfo() {
+    const run = this.#state?.runtime;
+    return {
+      host: this.#isHost,
+      phase: this.#state?.phase ?? null,
+      round: run?.round ?? null,
+      roundSession: run?.sessionId ?? null,
+      gameSession: this.#info?.sessionId ?? null,
+      loadingSession: this.#loadingSession ?? null,
+      self: this.#selfId,
+      racing: this.#selfId !== null && Cup.racingIds(this.#state).includes(this.#selfId),
+      blocked: this.#game ? this.shouldBlock(this.#game) : null,
+      auto: this.#auto,
+      nextAuto: this.#nextAuto,
+      startSoon: this.#startSoon,
+      preparing: !!this.#preparingRandom,
+      error: this.#error,
+    };
+  }
+  // Not So Weekly Shorts: the organizer has answered this page's hello (it can act in the cup).
+  get greeted() {
+    return this.#isHost || this.#bestRtt < Infinity;
+  }
   get auto() {
     return this.#auto;
   }
@@ -292,6 +322,71 @@ export class Controller {
   #loadingSession: number | undefined;
   #sentRevision: number | undefined;
   #chatTyping = false;
+  // Not So Weekly Shorts: verified best per racer in a time-attack round, finishes being replayed,
+  // the restart key's first press, and the track options of an open track vote.
+  #verifiedBest = new Map<string, number>();
+  #verifying = new Map<string, number>();
+  #verifyStarted = 0;
+  #retireArmed = 0;
+  #voteEntries = new Map<string, LibraryTrack>();
+  #helloCount = 0;
+  onRetireWarning?: () => void;
+  // Not So Weekly Shorts: the local player's finished runs in this cup, for "Clip my best run".
+  #myRuns: {
+    cupId: string;
+    round: number;
+    trackId: string;
+    frames: number;
+    attempt: number;
+    recording: string;
+    place: number | null;
+  }[] = [];
+  rememberRun(run: Round, recording: string, attempt: number, frames: number) {
+    const cupId = this.#state!.id;
+    const same = this.#myRuns.find((r) => r.cupId === cupId && r.round === run.round && r.trackId === run.trackId);
+    if (same && same.frames <= frames) return;
+    this.#myRuns = this.#myRuns.filter((r) => r !== same && r.cupId === cupId).slice(-40);
+    this.#myRuns.push({ cupId, round: run.round, trackId: run.trackId, frames, attempt, recording, place: null });
+  }
+  syncMyRuns() {
+    const s = this.#state,
+      last = s && Cup.currentMatch(s)?.roundsLog.at(-1),
+      me = this.#selfId;
+    if (!s || !last || me === null || !(me in last.finishes)) return;
+    for (const r of this.#myRuns)
+      if (r.cupId === s.id && r.round === last.round && r.trackId === last.trackId && r.place === null)
+        r.place = 1 + Object.values(last.finishes).filter((f) => f < last.finishes[me]).length;
+  }
+  get bestRun() {
+    this.syncMyRuns();
+    const runs = this.#myRuns.filter((r) => r.cupId === this.#state?.id && r.place !== null);
+    return runs.reduce<(typeof runs)[number] | null>((best, r) => (!best || r.place! < best.place! || (r.place === best.place && r.round > best.round) ? r : best), null);
+  }
+  async saveBestRun() {
+    const run = this.bestRun,
+      game = this.#game;
+    if (!run || !game || !this.#native.saveClip) throw new Error('There is no run to save.');
+    const track = this.#state?.tracks.find((t) => t.id === run.trackId)?.name ?? 'Cup run';
+    return this.#native.saveClip({
+      recording: run.recording,
+      frames: run.attempt,
+      trackId: run.trackId,
+      carStyle: this.#native.carStyle?.(game) ?? '',
+      nickname: this.#lobby.find((p) => p.isSelf)?.nickname ?? 'Racer',
+      name: `${this.#state?.name ?? 'Cup'} · ${track}`.slice(0, 60),
+    });
+  }
+  onBump?: () => void;
+  #setNextAuto(at: number | null, shown = true) {
+    this.#nextAuto = at;
+    const s = this.#state;
+    if (!s || !this.#isHost || !shown) return;
+    const value = at !== null && s.phase === 'between-rounds' ? at : null;
+    if ((s.nextRoundAt ?? null) !== value) {
+      s.nextRoundAt = value;
+      Cup.touch(s);
+    }
+  }
   setChatTyping(value: boolean) {
     this.#chatTyping = value;
     if (value) this.clearDrivingInput();
@@ -382,10 +477,11 @@ export class Controller {
   toggleAutomaticRounds() {
     this.requireHost();
     this.#auto = !this.#auto;
-    this.#nextAuto =
+    this.#setNextAuto(
       this.#auto && this.#state?.phase === 'between-rounds'
         ? Date.now() + rulesFor(this.#state).roundBreakSeconds * 1000
-        : null;
+        : null,
+    );
   }
   onInputsChanged(callback: () => void) {
     this.#onSpectatorInputs = callback;
@@ -429,7 +525,12 @@ export class Controller {
         }
       }),
     );
-    this.#timer = setInterval(() => this.tick(), 100);
+    // Not So Weekly Shorts: a worker-driven clock keeps a hidden organizer tab on time.
+    const ticker = (window as unknown as { __nswsTicker?: Ticker }).__nswsTicker;
+    if (ticker) {
+      this.#timer = 1;
+      ticker.every(100, () => this.tick());
+    } else this.#timer = setInterval(() => this.tick(), 100);
   }
   now() {
     return Date.now() + (this.#isHost ? 0 : this.#offset);
@@ -507,7 +608,9 @@ export class Controller {
     this.requestPanel(false, 'Left the cup room');
     this.#onChange();
   }
+  #errorAt = 0;
   fail(error: unknown) {
+    this.#errorAt = Date.now();
     this.#error = error instanceof Error ? error.message : String(error);
     console.error('[PolyCup]', error);
     this.#onChange();
@@ -558,6 +661,7 @@ export class Controller {
       this.#resetKey = '';
       this.#readyKey = '';
       this.#lastHello = 0;
+      this.#helloCount = 0;
       this.#offset = 0;
       this.#bestRtt = Infinity;
       this.#watchId = null;
@@ -568,9 +672,12 @@ export class Controller {
       this.#viewCupId = null;
       this.#onChange();
     }
+    // Not So Weekly Shorts: collision cups never save or upload a time.
     this.#native.leaderboardUploads?.(
       game,
-      this.#state ? rulesFor(this.#state).uploadLeaderboardTimes === true : undefined,
+      this.#state
+        ? rulesFor(this.#state).uploadLeaderboardTimes === true && !rulesFor(this.#state).collisions
+        : undefined,
     );
     if (!this.#state || this.localPlayerId === null) return;
     const racing = Cup.racingIds(this.#state).includes(this.localPlayerId);
@@ -626,17 +733,20 @@ export class Controller {
         startDue &&
         (this.#startKey !== run.id || this.#startedCar !== this.gameInfo.car)
       ) {
+        const retry = this.#startKey === run.id && Cup.timeAttack(this.cup);
         this.#startKey = run.id;
         this.#startedCar = this.gameInfo.car;
         this.#native.release?.(game);
         this.gameInfo.spectator.isEnabled = false;
         this.#native.applyDrivingInput?.(game, this.#heldDrivingInputs.controls());
         // Background tabs may process GO late. Count that delay in every Cup time,
-        // while keeping the native recording clock unchanged.
-        this.#raceTimeOffset = Math.max(
-          this.#raceTimeOffset,
-          Math.floor(this.now() - run.startsAt!) - this.gameInfo.car.getTime().numberOfFrames,
-        );
+        // while keeping the native recording clock unchanged. A time-attack retry starts at zero.
+        this.#raceTimeOffset = retry
+          ? 0
+          : Math.max(
+              this.#raceTimeOffset,
+              Math.floor(this.now() - run.startsAt!) - this.gameInfo.car.getTime().numberOfFrames,
+            );
         this.gameInfo.car.start();
         this.captureInputs();
       }
@@ -652,14 +762,25 @@ export class Controller {
       ['racing', 'countdown'].includes(this.cup.phase) &&
       this.cup.runtime?.startsAt !== null &&
       this.now() >= this.round.startsAt! &&
-      !(this.localPlayerId in this.round.finishes) &&
+      !(this.localPlayerId in this.round.finishes && !Cup.timeAttack(this.cup)) &&
       !this.round.dnfs.includes(this.localPlayerId)
     );
   }
   handleRestart(game: NativeGame) {
     if (!this.#state || game !== this.#game) return false;
+    // Not So Weekly Shorts: a time-attack round restarts like warmup: a fresh attempt on a new clock.
+    const attempt =
+      this.cup.phase === 'racing' &&
+      Cup.timeAttack(this.cup) &&
+      this.localPlayerId !== null &&
+      !Cup.roundDone(this.cup, this.localPlayerId) &&
+      this.now() >= (this.cup.runtime?.startsAt ?? Infinity);
+    if (attempt) {
+      this.#raceTimeOffset = 0;
+      this.#raceClockRound = this.cup.runtime!.id;
+    }
     if (
-      this.cup.phase === 'warmup' &&
+      (this.cup.phase === 'warmup' || attempt) &&
       !this.#chatTyping &&
       !this.#info?.disposed &&
       this.localPlayerId !== null &&
@@ -672,7 +793,12 @@ export class Controller {
     return true;
   }
   shouldBlockRestart(game: NativeGame) {
-    return !!this.#state && game === this.#game && this.cup.phase !== 'warmup';
+    return (
+      !!this.#state &&
+      game === this.#game &&
+      this.cup.phase !== 'warmup' &&
+      !(this.cup.phase === 'racing' && Cup.timeAttack(this.cup))
+    );
   }
   restartHotkey(event: KeyboardEvent) {
     if (this.#chatTyping) return false;
@@ -701,9 +827,17 @@ export class Controller {
       this.now() < run.startsAt ||
       !Cup.racingIds(s).includes(this.localPlayerId) ||
       Cup.roundDone(s, this.localPlayerId) ||
+      Cup.timeAttack(s) ||
       !this.#native.restartPressed(this.#game, event)
     )
       return false;
+    // Not So Weekly Shorts: the first press only warns; a second press within 2 s retires.
+    if (Date.now() - this.#retireArmed > RETIRE_CONFIRM_MS) {
+      this.#retireArmed = Date.now();
+      this.onRetireWarning?.();
+      return true;
+    }
+    this.#retireArmed = 0;
     // Do not attach this to the native restart routine: checkpoint reset can
     // call that same routine when no checkpoint is available.
     this.action('dnf', run.id)?.catch((error) => this.fail(error));
@@ -725,6 +859,7 @@ export class Controller {
       this.now() < run.startsAt ||
       !Cup.racingIds(state).includes(id) ||
       Cup.roundDone(state, id) ||
+      Cup.timeAttack(state) ||
       event.isComposing ||
       event.ctrlKey ||
       event.metaKey ||
@@ -807,6 +942,19 @@ export class Controller {
         frames: this.lapFrames(car.getTime().numberOfFrames),
         checkpoint,
       };
+      if (!rulesFor(this.#state).collisions) {
+        try {
+          const recording = car.getRecording?.()?.serialize();
+          if (recording && recording.length <= 50000) {
+            const attempt = (car.getFinishTime() ?? car.getTime()).numberOfFrames;
+            if (!this.#isHost) {
+              message.recording = recording;
+              message.attempt = attempt;
+            }
+            this.rememberRun(run, recording, attempt, message.frames);
+          }
+        } catch {}
+      }
       if (this.#raceTimeOffset > 0) this.#native.showRoundFinish?.(this.activeGame, message.frames);
       if (this.#isHost) this.receiveFinish(this.localPlayerId, message);
       else this.#transport.send(0, message);
@@ -825,6 +973,7 @@ export class Controller {
       )
         run.checkpoints[id] = m.checkpoint;
       updateLiveMovement(this.cup, before);
+      this.verifyFinish(id, m);
       this.broadcast();
     }
   }
@@ -979,7 +1128,7 @@ export class Controller {
       typeof m.gap !== 'boolean' ||
       !Number.isSafeInteger(m.attempt) ||
       m.attempt < 0 ||
-      (context.stage === 'race' && m.attempt !== 0) ||
+      (context.stage === 'race' && m.attempt !== 0 && !Cup.timeAttack(this.#state)) ||
       !validInputEvents(m.events, m.through) ||
       (context.stage === 'race' && m.through > this.now() - this.round.startsAt! + 2000)
     )
@@ -996,7 +1145,7 @@ export class Controller {
       (m.events.length && m.events[0][0] < (timeline.events.at(-1)?.[0] ?? 0))
     )
       return false;
-    if (context.stage === 'race') {
+    if (context.stage === 'race' && !Cup.timeAttack(this.#state)) {
       this.ensureReview();
       if (!this.#review.inputs(m.roundId, id, m)) return false;
     }
@@ -1029,7 +1178,7 @@ export class Controller {
       !Object.entries(context).every(([k, v]) => m[k as keyof InputContext] === v) ||
       !Number.isSafeInteger(m.attempt) ||
       m.attempt < 0 ||
-      (context.stage === 'race' && m.attempt !== 0) ||
+      (context.stage === 'race' && m.attempt !== 0 && !Cup.timeAttack(this.#state)) ||
       !frameNumber(m.through) ||
       !validInputEvents(m.events, m.through)
     )
@@ -1092,9 +1241,12 @@ export class Controller {
     this.#onChange();
   }
   toggleGhosts() {
-    if (!this.#state) return;
+    if (!this.#state || rulesFor(this.#state).collisions) return;
     this.#hideOtherGhosts = !this.#hideOtherGhosts;
     this.#onChange();
+  }
+  get ghostsHidden() {
+    return this.#hideOtherGhosts && !!this.#state && !rulesFor(this.#state).collisions;
   }
   watchable() {
     return this.#state && this.cup.phase !== 'complete'
@@ -1150,7 +1302,7 @@ export class Controller {
       this.#native.presentation?.(game, true, true);
       this.#native.visibility(
         game,
-        this.#hideOtherGhosts ? [] : Cup.racingIds(this.#state),
+        this.ghostsHidden ? [] : Cup.racingIds(this.#state),
         this.#selfId,
       );
       this.#filteredCars = true;
@@ -1161,14 +1313,31 @@ export class Controller {
     // Native session-end screens still render after the session stops accepting
     // controls. Update their presentation before the disposed-session guard.
     this.#native.presentation?.(game, !!this.#state, spectating);
-    if (this.#info?.disposed || this.localPlayerId === null) return;
+    if (this.#info?.disposed || this.localPlayerId === null) {
+      this.#native.collisions?.(game, null);
+      return;
+    }
     if (!this.#state) {
+      this.#native.collisions?.(game, null);
       if (this.#filteredCars) this.#native.visibility(game, null, this.localPlayerId);
       this.#filteredCars = false;
       return;
     }
     const now = this.now(),
       active = Cup.racingIds(this.#state);
+    // Not So Weekly Shorts: in a collision cup the local car hits every racer still on the track.
+    const state = this.#state,
+      self = this.localPlayerId;
+    this.#native.collisions?.(
+      game,
+      rulesFor(state).collisions &&
+        state.phase === 'racing' &&
+        active.includes(self) &&
+        !Cup.roundDone(state, self) &&
+        this.gameInfo.sessionId === state.runtime?.sessionId
+        ? active.filter((id) => id !== self && !(id in (state.runtime?.finishes ?? {})) && !state.runtime?.dnfs.includes(id))
+        : null,
+    );
     if (this.canSpectate() && !this.watchable().includes(this.#watchId!))
       this.selectWatch(this.watchable()[0]);
     if (!spectating && this.#followingGame === game) {
@@ -1201,7 +1370,7 @@ export class Controller {
       this.#watchedPose = null;
       this.#native.visibility(
         game,
-        this.#hideOtherGhosts ? [this.localPlayerId] : active,
+        this.ghostsHidden ? [this.localPlayerId] : active,
         this.localPlayerId,
       );
       this.#filteredCars = true;
@@ -1234,7 +1403,7 @@ export class Controller {
     const viewed = this.watchId!;
     this.#native.visibility(
       game,
-      this.#hideOtherGhosts ? active.filter((id) => id === viewed) : active,
+      this.ghostsHidden ? active.filter((id) => id === viewed) : active,
       this.localPlayerId,
     );
     this.#filteredCars = true;
@@ -1302,11 +1471,15 @@ export class Controller {
       this.syncReconnect();
       this.syncDiagnostics();
       this.#chat.tick();
-      if (Date.now() - this.#lastHello > 2000) {
+      // Not So Weekly Shorts: every message costs a Cloudflare request, so after the first few
+      // seconds an idle page says hello every 5 s instead of 2 s.
+      if (Date.now() - this.#lastHello > (this.#helloCount < 5 ? 2000 : 5000)) {
         this.#lastHello = Date.now();
-        if (!this.#isHost)
-          this.#transport.send(0, { type: 'hello', version: Cup.VERSION, sentAt: Date.now() });
+        if (!this.#isHost && this.#transport.send(0, { type: 'hello', version: Cup.VERSION, sentAt: Date.now() }))
+          this.#helloCount++;
       }
+      this.sendBumps();
+      this.syncMyRuns();
       if (!this.#state) {
         if (this.#isHost && Date.now() - this.#lastBroadcast > 1000) this.broadcast();
         this.#onChange();
@@ -1342,8 +1515,9 @@ export class Controller {
         if (this.cup.phase === 'racing' && !this.#removingTrack) {
           const run = this.round;
           if (
-            Cup.allFinished(this.#state) ||
-            (run.deadline !== null && this.now() >= run.deadline + 1500)
+            (Cup.allFinished(this.#state) ||
+              (run.deadline !== null && this.now() >= run.deadline + 1500)) &&
+            !this.verificationPending()
           )
             this.finishRound();
         }
@@ -1365,19 +1539,28 @@ export class Controller {
         ) {
           if (this.canStartRound())
             this.runRound()?.catch((error) => {
+              this.#autoStopped = this.#auto;
               this.#auto = false;
               this.fail(error);
             });
-          else this.#nextAuto = Date.now() + 1000;
+          else this.#setNextAuto(Date.now() + 1000, false);
         }
         if (Date.now() - this.#lastBroadcast > 1000 || this.#sentRevision !== this.cup.revision)
           this.broadcast();
       }
       this.#onChange();
     } catch (error) {
+      if (this.#auto) this.#autoStopped = true;
       this.#auto = false;
       this.fail(error);
     }
+  }
+  // Not So Weekly Shorts: automatic rounds stopped because of an error (the UI says so once).
+  #autoStopped = false;
+  takeAutoStopped() {
+    const value = this.#autoStopped;
+    this.#autoStopped = false;
+    return value;
   }
   create(name: string) {
     this.#setupDepartures.clear();
@@ -1398,6 +1581,9 @@ export class Controller {
     this.#trackUploads.clear();
     this.#recordRequests.clear();
     this.#auto = true;
+    // Not So Weekly Shorts: the organizer starts on the grid; Spectate moves them off it.
+    const self = this.#lobby.find((p) => p.isSelf);
+    if (self) Cup.addPlayer(this.#state, self.id, self.nickname);
     this.broadcast();
     this.#onChange();
     this.ensureReview();
@@ -1477,7 +1663,7 @@ export class Controller {
     this.#lastWatchPose = null;
     this.#manualWatchRound = null;
     this.#auto = true;
-    this.#nextAuto = null;
+    this.#setNextAuto(null);
     this.#loadingSession = undefined;
     this.#error = '';
     this.broadcast();
@@ -1738,7 +1924,9 @@ export class Controller {
     const previous = Cup.currentMatch(state)?.randomTrack?.id;
     const choices = pool.length > 1 ? pool.filter((t) => t.id !== previous) : pool;
     if (!choices.length) throw new Error('No tracks are available in the preset’s track pool.');
-    const entry = choices[Math.floor(Math.random() * choices.length)];
+    return this.loadTrackEntry(state, choices[Math.floor(Math.random() * choices.length)], timeoutMs);
+  }
+  async loadTrackEntry(state: CupState, entry: LibraryTrack, timeoutMs = 20000) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const track = await Promise.race([
       entry.load(),
@@ -1817,7 +2005,9 @@ export class Controller {
       // Never fall back to nickname matching when profile proof is unavailable.
       void this.#identity.catch(() => {});
     }
-    if (Date.now() - this.#lastIdentity < 2000) return;
+    // Not So Weekly Shorts: a racer already on the roster has nothing to prove; others repeat slowly.
+    if (Cup.player(state, this.#selfId) && !state.withdrawn?.includes(this.#selfId)) return;
+    if (Date.now() - this.#lastIdentity < 4000) return;
     this.#lastIdentity = Date.now();
     void this.#identity
       ?.then((identity) => {
@@ -2029,13 +2219,29 @@ export class Controller {
     } else if (m.type === 'skip-vote') {
       if (m.value !== Cup.skipTarget(this.#state)) return false;
       if (Cup.voteSkip(this.#state, actor)) {
-        this.skipTrack();
-        return true;
+        const run = this.#state.runtime;
+        // Not So Weekly Shorts: once someone has finished, the round still counts and the vote ends
+        // the track after it.
+        if (this.#state.phase === 'racing' && run && Object.keys(run.finishes).length) {
+          this.#state.skipVote!.passed = true;
+          Cup.note(this.#state, 'Racers voted to skip the track. This round still counts; it is the last one here.');
+          Cup.touch(this.#state);
+        } else {
+          this.skipTrack();
+          return true;
+        }
       }
+    } else if (m.type === 'track-vote') {
+      const v = this.#state.trackVote;
+      if (!v || !v.options.some((t) => t.id === m.value) || !Cup.activeIds(this.#state).includes(actor))
+        return false;
+      if (v.mode !== 'vote' && actor !== v.picker)
+        throw new Error('Another racer is picking the next track.');
+      v.votes[actor] = m.value!;
+      Cup.touch(this.#state);
+      this.settleTrackVote(this.#state);
     } else return false;
     this.broadcast();
-    if (this.#state.phase === 'between-rounds' && this.#auto)
-      this.#nextAuto = Date.now() + rulesFor(this.#state).roundBreakSeconds * 1000;
     return true;
   }
   async enrollRacer(id: number, action: ActionMessage) {
@@ -2107,6 +2313,7 @@ export class Controller {
     }
     if (this.#isHost) {
       if (m.type === 'hello' && m.version === Cup.VERSION && Number.isFinite(m.sentAt)) {
+        const fresh = !this.#hello.has(id);
         this.#hello.add(id);
         this.#transport.send(id, {
           type: 'hello-ack',
@@ -2114,7 +2321,8 @@ export class Controller {
           sentAt: m.sentAt,
           hostAt: Date.now(),
         });
-        this.#transport.send(id, this.syncMessage());
+        // Later states arrive with every broadcast.
+        if (fresh) this.#transport.send(id, this.syncMessage());
       } else if (m.type === 'ready' && this.#hello.has(id)) this.markReady(id, m);
       else if (m.type === 'finish' && this.#hello.has(id)) this.receiveFinish(id, m);
       else if (m.type === 'checkpoint' && this.#hello.has(id)) this.receiveCheckpoint(id, m);
@@ -2152,7 +2360,8 @@ export class Controller {
       } else if (m.type === 'pb' && this.#hello.has(id)) this.receivePB(id, m);
       else if (['track-begin', 'track-chunk', 'track-end'].includes(m.type))
         this.receiveTrack(id, m as TrackMessage);
-      else if (['join', 'leave', 'dnf', 'practice-ready', 'ban', 'remove-pick', 'skip-vote'].includes(m.type)) {
+      else if (m.type === 'bump' && this.#hello.has(id)) this.relayBump(id, m);
+      else if (['join', 'leave', 'dnf', 'practice-ready', 'ban', 'remove-pick', 'skip-vote', 'track-vote'].includes(m.type)) {
         const action = m as ActionMessage;
         if (
           action.requestId !== undefined &&
@@ -2196,8 +2405,13 @@ export class Controller {
           m.requestId,
           m.error ? String(m.error).slice(0, 200) : undefined,
         );
-        if (acknowledged && m.error) this.#error = String(m.error).slice(0, 200);
+        if (acknowledged && m.error) {
+          this.#error = String(m.error).slice(0, 200);
+          this.#errorAt = Date.now();
+        }
       } else if (m.type === 'input-view') this.receiveInputView(id, m);
+      else if (m.type === 'bump' && m.cupId === this.#state?.id && m.roundId === this.#state?.runtime?.id && Array.isArray(m.impulse) && m.impulse.length === 3 && m.impulse.every((n) => Number.isFinite(n) && Math.abs(n) <= 40))
+        this.receiveBump(m.impulse);
       else if (m.type === 'track-ack' && this.#pendingUpload?.transferId === m.transferId) {
         this.#pendingUpload.done = !m.error;
         this.#pendingUpload.error = m.error ? String(m.error).slice(0, 200) : null;
@@ -2221,10 +2435,15 @@ export class Controller {
           }
         } else {
           this.#state = { ...m.state, history: [] };
-          this.#error = '';
+          // Not So Weekly Shorts: an error stays readable for a while instead of vanishing with the
+          // next state (about once a second).
+          if (Date.now() - this.#errorAt > 6000) this.#error = '';
         }
         this.syncRoundPanel();
-      } else if (m.type === 'error') this.#error = String(m.message).slice(0, 200);
+      } else if (m.type === 'error') {
+        this.#error = String(m.message).slice(0, 200);
+        this.#errorAt = Date.now();
+      }
     }
     this.#onChange();
   }
@@ -2452,7 +2671,7 @@ export class Controller {
       connection = this.#connection;
     if (!visit || this.#removingTrack) return;
     this.#removingTrack = true;
-    this.#nextAuto = null;
+    this.#setNextAuto(null);
     try {
       const match = Cup.currentMatch(state);
       const needsReplacement =
@@ -2495,7 +2714,11 @@ export class Controller {
       return this.#prefetch.then(() => {
         if (this.#state?.phase === 'between-rounds' && !this.#preparingRandom) return this.runRound();
       });
-    if (this.#preparingRandom) return this.#preparingRandom;
+    // Not So Weekly Shorts: a track still loading (vote, skip) starts the round once it is ready.
+    if (this.#preparingRandom)
+      return this.#preparingRandom.then(() => {
+        if (this.#state?.phase === 'between-rounds' && !this.#preparingRandom) return this.runRound();
+      });
     if (this.cup.roster.some((p) => this.#needsRebind?.has(p.id)))
       throw new Error('Confirm every saved racer’s lobby identity in Racers before resuming.');
     this.updateAvailability();
@@ -2510,7 +2733,13 @@ export class Controller {
     if (rulesFor(this.cup).selection === 'random' && !Cup.nextTrack(this.cup)) {
       const state = this.cup,
         connection = this.#connection;
-      this.#nextAuto = null;
+      this.#setNextAuto(null);
+      // Not So Weekly Shorts: racers choose the next track first when the preset says so.
+      if (this.voting(state)) {
+        this.#startSoon = true;
+        if (!state.trackVote) this.openTrackVote(state);
+        return;
+      }
       const request = this.loadRandomTrack(state)
         .then(({ entry, track, wr }) => {
           if (
@@ -2541,6 +2770,7 @@ export class Controller {
     this.#lastReady = 0;
     this.#loadingSince = 0;
     this.#nextAuto = null;
+    this.#retireArmed = 0;
     this.#loadingSession = this.gameInfo.sessionId;
     this.broadcast();
     const mode = rulesFor(this.cup).uploadLeaderboardTimes === true ? 0 : 1;
@@ -2567,9 +2797,10 @@ export class Controller {
     this.requireHost();
     if (!this.cup.runtime) return;
     this.voidRound();
-    Cup.note(this.cup, 'Organizer restarted the round.');
+    this.cup.audit.pop();
+    Cup.note(this.cup, 'The organizer restarted the round. Nobody scored the stopped attempt.');
     Cup.touch(this.cup);
-    this.#nextAuto = null;
+    this.#setNextAuto(null);
     this.#startSoon = true;
   }
   racerAvailable(id: number) {
@@ -2687,6 +2918,20 @@ export class Controller {
       Cup.touch(s);
       this.broadcast();
     }
+    // Not So Weekly Shorts: if a retried session start produced a newer session, follow it.
+    if (
+      this.#isHost &&
+      run.sessionId !== null &&
+      this.gameInfo.sessionId !== run.sessionId &&
+      this.gameInfo.sessionId !== this.#loadingSession &&
+      this.#loadingStart?.roundId === run.id
+    ) {
+      run.sessionId = this.gameInfo.sessionId;
+      run.ready = [];
+      this.#loadingSince = this.now();
+      Cup.touch(s);
+      this.broadcast();
+    }
     if (this.gameInfo.sessionId !== run.sessionId || !Cup.racingIds(s).includes(this.localPlayerId))
       return;
     const key = `${run.id}:${run.sessionId}`;
@@ -2732,9 +2977,11 @@ export class Controller {
     if (['loading', 'warmup', 'countdown'].includes(s.phase) && !Cup.racingIds(s).length) {
       this.#review.close(s, 'void');
       Cup.voidRound(s);
-      this.#nextAuto = this.#auto
-        ? Date.now() + rulesFor(this.#state).roundBreakSeconds * 1000
-        : null;
+      s.audit.pop();
+      Cup.note(s, 'Nobody was left to race the round, so it was voided.');
+      this.#setNextAuto(
+        this.#auto ? Date.now() + rulesFor(this.#state).roundBreakSeconds * 1000 : null,
+      );
       this.broadcast();
       return;
     }
@@ -2767,19 +3014,28 @@ export class Controller {
     }
   }
   finishRound() {
+    const roundId = this.cup.runtime?.id;
     this.change(Cup.completeRound);
     this.#loadingSession = undefined;
-    this.#nextAuto =
+    for (const key of [...this.#verifiedBest.keys()])
+      if (key.startsWith(`${roundId}:`)) this.#verifiedBest.delete(key);
+    this.#verifying.clear();
+    this.#setNextAuto(
       this.#auto && this.cup.phase === 'between-rounds'
         ? Date.now() + rulesFor(this.cup).roundBreakSeconds * 1000
-        : null;
+        : null,
+    );
+    // Not So Weekly Shorts: a skip vote that passed during the round ends the track now.
+    if (this.cup.phase === 'between-rounds' && this.cup.skipVote?.passed) this.skipTrack();
+    this.broadcast();
   }
   voidRound() {
     this.change(Cup.voidRound);
     this.#loadingSession = undefined;
     this.#loadingStart = null;
+    this.#verifying.clear();
     // Not So Weekly Shorts: automatic rounds carry on after a void.
-    this.#nextAuto = this.#auto ? Date.now() + rulesFor(this.cup).roundBreakSeconds * 1000 : null;
+    this.#setNextAuto(this.#auto ? Date.now() + rulesFor(this.cup).roundBreakSeconds * 1000 : null);
   }
   // Not So Weekly Shorts: the next random track loads during the break between rounds, not after it.
   prepareNextRandomTrack() {
@@ -2791,10 +3047,18 @@ export class Controller {
       this.#preparingRandom ||
       this.#removingTrack ||
       state.phase !== 'between-rounds' ||
-      rulesFor(state).selection !== 'random' ||
-      Cup.nextTrack(state)
+      rulesFor(state).selection !== 'random'
     )
       return;
+    if (state.trackVote) {
+      this.settleTrackVote(state);
+      return;
+    }
+    if (Cup.nextTrack(state)) return;
+    if (this.voting(state)) {
+      this.openTrackVote(state);
+      return;
+    }
     const request = this.loadRandomTrack(state)
       .then(({ entry, track, wr }) => {
         if (
@@ -2821,20 +3085,35 @@ export class Controller {
   skipTrack() {
     const state = this.cup,
       connection = this.#connection;
-    if (state.runtime) this.voidRound();
+    if (state.runtime) {
+      this.voidRound();
+      state.audit.pop();
+    }
+    if (!state.skipVote?.passed) Cup.note(state, 'Racers voted to skip the track.');
     delete state.skipVote;
-    Cup.note(state, 'Racers voted to skip the track.');
     Cup.touch(state);
-    this.#nextAuto = null;
+    this.#setNextAuto(null);
+    if (this.voting(state)) {
+      this.openTrackVote(state);
+      if (this.#auto) this.#startSoon = true;
+      this.broadcast();
+      this.#onChange();
+      return;
+    }
     const request = this.loadRandomTrack(state)
       .then(({ entry, track, wr }) => {
         if (this.#state !== state || this.#connection !== connection || state.phase !== 'between-rounds')
           return;
         this.#tracks.set(entry.id, track);
         Cup.scheduleRandomTrack(state, { id: entry.id, name: entry.name }, wr);
-        if (this.#auto) this.#nextAuto = Date.now() + rulesFor(state).roundBreakSeconds * 1000;
+        if (this.#auto) this.#setNextAuto(Date.now() + rulesFor(state).roundBreakSeconds * 1000);
       })
-      .catch((error) => this.fail(error))
+      .catch((error) => {
+        this.fail(error);
+        // Not So Weekly Shorts: the next round draws a random track itself, so keep going.
+        if (this.#auto && this.#state === state)
+          this.#setNextAuto(Date.now() + rulesFor(state).roundBreakSeconds * 1000);
+      })
       .finally(() => {
         if (this.#preparingRandom === request) this.#preparingRandom = null;
         if (this.#state === state) this.broadcast();
@@ -2843,6 +3122,192 @@ export class Controller {
     this.#preparingRandom = request;
     this.broadcast();
     this.#onChange();
+  }
+  // Not So Weekly Shorts: choosing the next random track (preset "Next track": vote / winner / last).
+  voting(state: CupState) {
+    return rulesFor(state).selection === 'random' && rulesFor(state).nextTrack !== 'random';
+  }
+  openTrackVote(state: CupState) {
+    const rules = rulesFor(state),
+      m = Cup.currentMatch(state);
+    const previous = m.randomTrack?.id;
+    const pool = this.allowedTracks();
+    const choices = pool.length > 1 ? pool.filter((t) => t.id !== previous) : pool;
+    if (!choices.length) throw new Error('No tracks are available in the preset’s track pool.');
+    const options: LibraryTrack[] = [];
+    for (const t of [...choices].sort(() => Math.random() - 0.5))
+      if (!options.some((o) => o.id === t.id) && options.push(t) >= 3) break;
+    const active = Cup.activeIds(state).filter((id) => this.racerAvailable(id));
+    const last = m.roundsLog.at(-1);
+    let picker: number | null = null;
+    if (rules.nextTrack !== 'vote' && last) {
+      const finished = Object.keys(last.finishes)
+        .map(Number)
+        .filter((id) => active.includes(id))
+        .sort((a, b) => last.finishes[a] - last.finishes[b]);
+      const unfinished = active.filter((id) => !(id in last.finishes));
+      picker =
+        rules.nextTrack === 'winner'
+          ? (finished[0] ?? null)
+          : (unfinished.at(-1) ?? finished.at(-1) ?? null);
+    }
+    this.#voteEntries = new Map(options.map((t) => [t.id, t]));
+    state.trackVote = {
+      id: crypto.randomUUID(),
+      mode: picker === null ? 'vote' : rules.nextTrack === 'winner' ? 'winner' : 'last',
+      picker,
+      options: options.map((t) => ({ id: t.id, name: String(t.name).slice(0, 64) })),
+      votes: {},
+      endsAt: this.now() + TRACK_VOTE_MS,
+    };
+    Cup.touch(state);
+    this.broadcast();
+  }
+  settleTrackVote(state: CupState) {
+    const v = state.trackVote;
+    if (!v) return;
+    const voters = Cup.activeIds(state).filter((id) => this.racerAvailable(id));
+    const done =
+      v.mode === 'vote'
+        ? voters.length > 0 && voters.every((id) => id in v.votes)
+        : v.picker !== null && (v.picker in v.votes || !voters.includes(v.picker));
+    if (!done && this.now() < v.endsAt) return;
+    const counts = new Map(v.options.map((t) => [t.id, 0]));
+    for (const choice of Object.values(v.votes)) counts.set(choice, (counts.get(choice) ?? 0) + 1);
+    const most = Math.max(...counts.values());
+    const best = v.options.filter((t) => counts.get(t.id) === most);
+    const chosen = best[Math.floor(Math.random() * best.length)];
+    const entry =
+      this.#voteEntries.get(chosen.id) ?? this.allowedTracks().find((t) => t.id === chosen.id);
+    const connection = this.#connection;
+    if (!entry) {
+      state.trackVote = null;
+      Cup.touch(state);
+      return;
+    }
+    const request = this.loadTrackEntry(state, entry)
+      .then(({ track, wr }) => {
+        if (this.#state !== state || this.#connection !== connection || state.phase !== 'between-rounds')
+          return;
+        this.#tracks.set(entry.id, track);
+        Cup.scheduleRandomTrack(state, { id: entry.id, name: entry.name }, wr);
+        Cup.note(
+          state,
+          v.mode === 'vote'
+            ? `Racers chose ${entry.name}.`
+            : v.picker !== null && v.picker in v.votes
+              ? `${Cup.player(state, v.picker)?.name ?? 'A racer'} picked ${entry.name}.`
+              : `Next track: ${entry.name}.`,
+        );
+        this.broadcast();
+      })
+      .catch((error) => {
+        if (this.#state === state) {
+          state.trackVote = null;
+          Cup.touch(state);
+        }
+        this.fail(error);
+      })
+      .finally(() => {
+        if (this.#preparingRandom === request) this.#preparingRandom = null;
+        this.#onChange();
+      });
+    this.#preparingRandom = request;
+  }
+  // Not So Weekly Shorts: the organizer replays each racer's finish through the game's physics.
+  verifyFinish(id: number, m: FinishMessage) {
+    const state = this.cup,
+      run = state.runtime!;
+    if (id === this.#selfId || rulesFor(state).collisions || !this.#native.verifyRun || !this.#game)
+      return;
+    const key = `${run.id}:${id}`,
+      roundId = run.id;
+    const failed = (reason: string) => {
+      const live = this.#state?.runtime;
+      if (!live || live.id !== roundId || live.finishes[id] !== m.frames) return;
+      const before = standings(this.cup).map((r) => r.id);
+      Cup.rejectFinish(this.cup, id, this.#verifiedBest.get(key) ?? null);
+      updateLiveMovement(this.cup, before);
+      Cup.note(this.cup, `${Cup.player(this.cup, id)?.name ?? 'A racer'}'s finish ${reason} and doesn't count.`);
+      this.broadcast();
+    };
+    if (
+      typeof m.recording !== 'string' ||
+      !m.recording ||
+      m.recording.length > 50000 ||
+      !Number.isSafeInteger(m.attempt) ||
+      m.attempt! <= 0 ||
+      m.attempt! > m.frames
+    ) {
+      failed('came without its replay');
+      return;
+    }
+    this.#verifying.set(key, (this.#verifying.get(key) ?? 0) + 1);
+    this.#verifyStarted = Date.now();
+    this.syncVerifying();
+    this.#native
+      .verifyRun(this.#game, m.recording, m.attempt!)
+      .then(
+        (ok) => {
+          if (ok === false) failed('didn’t match the physics replay');
+          else if (ok && this.#state?.runtime?.finishes[id] === m.frames) this.#verifiedBest.set(key, m.frames);
+        },
+        () => {},
+      )
+      .finally(() => {
+        const left = (this.#verifying.get(key) ?? 1) - 1;
+        if (left > 0) this.#verifying.set(key, left);
+        else this.#verifying.delete(key);
+        if (this.#state?.runtime?.id === roundId) {
+          this.syncVerifying();
+          this.broadcast();
+        }
+        this.#onChange();
+      });
+  }
+  syncVerifying() {
+    const run = this.#state?.runtime;
+    if (!run) return;
+    const ids = [...new Set([...this.#verifying.keys()].filter((k) => k.startsWith(`${run.id}:`)).map((k) => Number(k.split(':')[1])))].filter(
+      (id) => Cup.player(this.#state, id),
+    );
+    if (JSON.stringify(run.verifying ?? []) !== JSON.stringify(ids)) {
+      if (ids.length) run.verifying = ids;
+      else delete run.verifying;
+      Cup.touch(this.cup);
+    }
+  }
+  verificationPending() {
+    return !!this.#state?.runtime?.verifying?.length && Date.now() - this.#verifyStarted < VERIFY_WAIT_MS;
+  }
+  // Not So Weekly Shorts: collision cups pass each hit to the racer who was hit (via the organizer).
+  sendBumps() {
+    const s = this.#state,
+      run = s?.runtime,
+      game = this.#game;
+    if (!s || !run || !game || !rulesFor(s).collisions || !this.#native.bumps) return;
+    for (const hit of this.#native.bumps(game)) {
+      if (!Cup.racingIds(s).includes(hit.id) || hit.id === this.#selfId) continue;
+      const message = { type: 'bump' as const, cupId: s.id, roundId: run.id, to: hit.id, impulse: hit.impulse };
+      if (this.#isHost) this.relayBump(this.#selfId!, message);
+      else this.#transport.send(0, message);
+    }
+  }
+  relayBump(from: number, m: Extract<Message, { type: 'bump' }>) {
+    const s = this.#state;
+    if (!s || m.cupId !== s.id || m.roundId !== s.runtime?.id || typeof m.to !== 'number') return;
+    if (!Cup.racingIds(s).includes(from) || !Cup.racingIds(s).includes(m.to)) return;
+    if (!Array.isArray(m.impulse) || m.impulse.length !== 3 || !m.impulse.every((n) => Number.isFinite(n) && Math.abs(n) <= 40))
+      return;
+    if (m.to === this.#selfId) this.receiveBump(m.impulse);
+    else this.#transport.send(m.to, { type: 'bump', cupId: s.id, roundId: m.roundId, from, impulse: m.impulse });
+  }
+  receiveBump(impulse: number[]) {
+    const s = this.#state;
+    if (!s || !this.#game || !rulesFor(s).collisions || s.phase !== 'racing') return;
+    if (this.localPlayerId === null || Cup.roundDone(s, this.localPlayerId)) return;
+    this.#native.bump?.(this.#game, impulse);
+    this.onBump?.();
   }
 }
 export { validPB, validSnapshot } from './validation.ts';

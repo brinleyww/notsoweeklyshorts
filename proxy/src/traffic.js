@@ -101,6 +101,9 @@ export class TrafficStats extends DurableObject {
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, until INTEGER NOT NULL,
             name TEXT NOT NULL, color TEXT NOT NULL, text TEXT NOT NULL, show_s INTEGER NOT NULL,
             online INTEGER NOT NULL DEFAULT 0, seen INTEGER NOT NULL DEFAULT 0, stopped INTEGER)`);
+        // An official cup's announcement carries its code, for a Join button.
+        if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "cup"))
+            this.sql.exec("ALTER TABLE announcements ADD COLUMN cup TEXT");
     }
 
     // The in-memory list of who is online is lost when the object is evicted.
@@ -265,19 +268,25 @@ export class TrafficStats extends DurableObject {
     liveAnnouncement() {
         const a = this.ann;
         if (!a || a.until <= Date.now()) return null;
-        return { id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s };
+        return { id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s, cup: a.cup ?? null };
     }
 
     announce(a) {
         const now = Date.now();
         this.sql.exec("UPDATE announcements SET stopped = ? WHERE stopped IS NULL AND until > ?", now, now);
-        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now)).one();
+        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online, cup)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now), a.cup ?? null).one();
         return this.announcements();
     }
 
-    stopAnnouncement() {
+    // Without an id, stops whatever is live (Race Control). With one, only that announcement, so a
+    // cup that closes never ends someone else's message.
+    stopAnnouncement(id) {
+        if (id != null && this.ann?.id !== id) {
+            this.sql.exec("UPDATE announcements SET stopped = ? WHERE id = ? AND stopped IS NULL", Date.now(), id);
+            return { stopped: null, ...this.announcements() };
+        }
         const stopped = this.ann?.id ?? null;
         if (stopped != null) this.sql.exec("UPDATE announcements SET stopped = ? WHERE id = ?", Date.now(), stopped);
         this.ann = null;
@@ -290,7 +299,7 @@ export class TrafficStats extends DurableObject {
         const list = this.sql.exec("SELECT * FROM announcements ORDER BY id DESC LIMIT ?", ANNOUNCE_HISTORY).toArray()
             .map((r) => ({
                 id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
-                online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id,
+                online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
             }));
         return { current, list, online: this.onlineCount(now), now };
     }
@@ -533,6 +542,7 @@ export function readAnnouncement(body) {
         color: /^#[0-9a-f]{6}$/i.test(body.color ?? "") ? body.color.toLowerCase() : "#b3c1ff",
         show: ANNOUNCE_SHOW_S.has(body.show) ? body.show : 10,
         reach: ANNOUNCE_REACH_MIN.has(body.reach) ? body.reach : 5,
+        cup: /^[A-HJ-NP-Z2-9]{5}$/.test(body.cup ?? "") ? body.cup : null,
     };
 }
 

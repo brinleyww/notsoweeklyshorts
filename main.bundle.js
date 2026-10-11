@@ -454,7 +454,7 @@ window.__nswsTrackQuery = function(trackId) {
         });
         return cupApp;
     }
-    let cupLinkCode = null;
+    let cupLinkCode = null, cupLinkBad = false;
     try {
         const url = new URL(location.href);
         const code = (url.searchParams.get("cup") || "").trim().toUpperCase();
@@ -463,14 +463,22 @@ window.__nswsTrackQuery = function(trackId) {
             history.replaceState(history.state, "", url.pathname + url.search + url.hash);
         }
         if (/^[A-HJ-NP-Z2-9]{5}$/.test(code)) cupLinkCode = code;
+        else if (code) cupLinkBad = true;
     } catch (e) {}
     window.__nswsCompetitions = {
         open() {
             loadCompetitions().then(app => app.open(), err => window.__nswsMessageBox?.show(err.message, "Ok", null));
+        },
+        join(code) {
+            loadCompetitions().then(app => app.join(code), err => window.__nswsMessageBox?.show(err.message, "Ok", null));
         }
     };
     // Called when the menu first appears; true when it is joining a cup link.
     window.__nswsCompetitionsOnLoad = () => {
+        if (cupLinkBad) {
+            cupLinkBad = false;
+            setTimeout(() => window.__nswsMessageBox?.show("That cup link isn't valid. Cup codes are 5 letters and numbers.", "Ok", null), 300);
+        }
         if (!cupLinkCode) return false;
         const code = cupLinkCode;
         cupLinkCode = null;
@@ -1289,6 +1297,31 @@ window.__nswsTrackQuery = function(trackId) {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
         }
     }
+    // Not So Weekly Shorts: a cup run saved as a clip (polycup "Clip my best run").
+    window.__nswsSaveClip = async ({recording, frames, trackId, carStyle, nickname, name}) => {
+        const pako = window.__clipPako?.Ay ?? window.__clipPako;
+        if (!pako || typeof recording !== "string" || !Number.isSafeInteger(frames) || frames < 1) return false;
+        const inf = new pako.Inflate;
+        inf.push(_base64ToBytes(recording.replace(/-/g, "+").replace(/_/g, "/")), true);
+        if (inf.err) return false;
+        const now = Date.now();
+        const clip = {
+            id: "clip_" + now,
+            name: String(name || formatClipDate(now)).slice(0, 60),
+            playerName: nickname || "Anonymous",
+            trackId,
+            carStyle: typeof carStyle === "string" ? carStyle : "",
+            frames,
+            recordingBytes: _bytesToBase64(inf.result),
+            createdAt: now
+        };
+        if (await _findDuplicateClip(clip)) return "duplicate";
+        if (!localAddClip(clip)) return false;
+        window.__nswsTraffic?.event("clips");
+        showClipSavedNotification();
+        syncClips().catch(() => {});
+        return true;
+    };
     function showClipSavedNotification(text) {
         injectClipCSS();
         const el = document.createElement("div");
@@ -3735,6 +3768,11 @@ window.__nswsTrackQuery = function(trackId) {
                                 r.get(this, p, "f").length = 0;
                                 break
                             }
+                        // Not So Weekly Shorts: hits the worker's collision step reported (cup collisions).
+                        case 12:
+                            (this.__bumps ??= []).push({ carId: t.carId, hits: t.hits }),
+                            this.__bumps.length > 50 && this.__bumps.shift();
+                            break;
                         case o.UpdateResult:
                             {
                                 const e = t.carStateBuffers;
@@ -3905,6 +3943,22 @@ window.__nswsTrackQuery = function(trackId) {
                         isPaused: t
                     };
                     r.get(this, h, "f").postMessage(n)
+                }
+                // Not So Weekly Shorts: other racers' cars for the collision step (11), a hit to apply (13).
+                setRemoteCars(e, t) {
+                    r.get(this, h, "f").postMessage({
+                        messageType: 11,
+                        carId: e,
+                        frame: t.frame,
+                        cars: t.cars
+                    })
+                }
+                impulseCar(e, t) {
+                    r.get(this, h, "f").postMessage({
+                        messageType: 13,
+                        carId: e,
+                        impulse: t
+                    })
                 }
             }
         }
@@ -10081,6 +10135,26 @@ window.__nswsTrackQuery = function(trackId) {
                 }
                 setVisible(e) {
                     l.get(this, ve, "f").visible = e
+                }
+                // Not So Weekly Shorts: cup collisions, through this car's own simulation.
+                setCollisionCars(e) {
+                    const t = l.get(this, Z, "f")
+                      , n = l.get(this, ne, "f");
+                    null != t && null != n && t.setRemoteCars(n, e)
+                }
+                applyImpulse(e) {
+                    const t = l.get(this, Z, "f")
+                      , n = l.get(this, ne, "f");
+                    null != t && null != n && t.impulseCar(n, e)
+                }
+                takeBumps() {
+                    const t = l.get(this, Z, "f")
+                      , n = l.get(this, ne, "f");
+                    if (null == t || null == n || !t.__bumps)
+                        return [];
+                    const i = t.__bumps.filter((e => e.carId === n));
+                    return t.__bumps = t.__bumps.filter((e => e.carId !== n)),
+                    i.flatMap((e => e.hits))
                 }
                 getCarState() {
                     return l.get(this, ie, "f")
@@ -42422,13 +42496,21 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, yn, setInterval(( () => {
                     C.get(this, en, "m", zn).call(this)
                 }
-                ), 100), "f")
+                ), 100), "f");
+                // Not So Weekly Shorts: timers stall in a hidden tab, so a hidden organizer's page also
+                // relays cars from the cup's worker clock (polycup/nsws/transport.js).
+                const relay = new WeakRef(this);
+                window.__nswsTicker?.every(100, () => {
+                    const host = relay.deref();
+                    host && "hidden" === document.visibilityState && null != C.get(host, yn, "f") && C.get(host, en, "m", zn).call(host)
+                })
             }
             dispose() {
                 null != C.get(this, dn, "f") && (clearTimeout(C.get(this, dn, "f").timeout),
                 C.set(this, dn, null, "f")),
                 clearInterval(C.get(this, vn, "f")),
                 clearInterval(C.get(this, yn, "f")),
+                C.set(this, yn, null, "f"),
                 C.set(this, wn, [], "f"),
                 C.set(this, Sn, [], "f"),
                 C.set(this, kn, [], "f"),
@@ -44068,7 +44150,7 @@ window.__nswsTrackQuery = function(trackId) {
                         C.get(this, Sa, "f").gameMode,
                         e = null
                     }
-                    if (null != e)
+                    if (null != e && !cupCollisionCups.has(this))
                         if (0 == C.get(this, xa, "f").length)
                             C.get(this, xa, "f").push({
                                 car: null,
@@ -44199,13 +44281,17 @@ window.__nswsTrackQuery = function(trackId) {
         }
         ,
         $a = function() {
-            const e = C.get(this, wa, "f").getPosition()
-              , t = C.get(this, xa, "f").map((e => e.car)).filter((e => null != e)).concat(Array.from(C.get(this, Ra, "f").values()).map((e => e.car)));
+            const solid = cupCollisionCups.has(this)
+              , e = C.get(this, wa, "f").getPosition()
+              , t = C.get(this, xa, "f").map((e => e.car)).filter((e => null != e)).concat(solid ? [] : Array.from(C.get(this, Ra, "f").values()).map((e => e.car)));
             for (const n of t) {
                 const t = n.getPosition().distanceTo(e)
                   , i = Math.max(0, Math.min(1, t / 5));
                 n.setOpacity(i)
             }
+            if (solid)
+                for (const n of C.get(this, Ra, "f").values())
+                    n.car.setOpacity(1)
         }
         ,
         es = function() {
@@ -44237,6 +44323,9 @@ window.__nswsTrackQuery = function(trackId) {
             }
         }
         ;
+        // Not So Weekly Shorts: race sessions in a collision cup, and the racers each one can hit now.
+        const cupCollisions = new WeakMap
+          , cupCollisionCups = new WeakSet;
         // PolyCup's NativeApi (polycup/src/game-types.ts) on this build. Names are the race
         // session's private fields: Sa multiplayer, wa car, ya keyboard, Ba free camera, ea HUD.
         const cupNative = (y, x, w, S) => {
@@ -44474,7 +44563,34 @@ window.__nswsTrackQuery = function(trackId) {
                     Qa = function() {
                         if (!check(this)) return original.call(this);
                     };
-                }
+                },
+                // Not So Weekly Shorts additions (polycup/src/game-types.ts).
+                inviteError: c => c instanceof Fn ? c.getInviteError() : null,
+                // The organizer replays a racer's run through the physics; null when it can't be checked.
+                verifyRun: (g, recording, frames) => {
+                    const sim = C.get(g, Rr, "f")
+                      , track = C.get(g, Yr, "f")
+                      , run = window.__clipRecordingClass?.deserialize?.(recording);
+                    if (!run)
+                        return Promise.resolve(!1);
+                    if (!sim || !track || !window.__clipTimeClass)
+                        return Promise.resolve(null);
+                    return Promise.race([sim.validate(track, run, new window.__clipTimeClass(frames)).then(ok => !!ok, () => null), new Promise(r => setTimeout(() => r(null), 15e3))]);
+                },
+                collisions: (g, ids, on = null != ids) => {
+                    const mp = C.get(g, Sa, "f")?.multiplayerConnection;
+                    on ? cupCollisionCups.add(g) : cupCollisionCups.delete(g);
+                    ids ? cupCollisions.set(g, ids) : cupCollisions.delete(g);
+                    // Other cars are drawn closer to live in a collision cup (0.6 s otherwise).
+                    mp && (on ? mp.remoteDelay !== .4 && (mp.remoteDelay = .4) : Object.hasOwn(mp, "remoteDelay") && delete mp.remoteDelay);
+                },
+                bumps: g => C.get(g, wa, "f")?.takeBumps?.() ?? [],
+                bump: (g, impulse) => C.get(g, wa, "f")?.applyImpulse?.(impulse),
+                sound: name => window.__nswsSfx?.(name),
+                saveClip: run => window.__nswsSaveClip?.(run) ?? Promise.resolve(!1),
+                carStyle: g => C.get(g, wa, "f")?.getCarStyle?.()?.serialize?.() ?? "",
+                freecamKeys: g => (settingsOf(g).getKeyBindings(KeyBind.ToggleSpectatorCamera) ?? []).filter(Boolean).map(formatClipKeyName),
+                restartKeys: g => (settingsOf(g).getKeyBindings(KeyBind.VehicleStartReset) ?? []).filter(Boolean).map(formatClipKeyName)
             };
         };
         const ts = class {
@@ -45190,6 +45306,38 @@ window.__nswsTrackQuery = function(trackId) {
                             e.time = e.car.getCarState().frames / 1e3 - remoteDelay
                         }
                         e.car.update(n)
+                    }
+                    // Not So Weekly Shorts: the cars this one can hit, as drawn now plus where they go next.
+                    const collide = cupCollisions.get(this);
+                    if (collide || this.__cupCollide) {
+                        const local = C.get(this, wa, "f")
+                          , cars = []
+                          , pose = (e, f) => ({
+                            f,
+                            p: [e.position.x, e.position.y, e.position.z],
+                            q: [e.quaternion.x, e.quaternion.y, e.quaternion.z, e.quaternion.w]
+                        });
+                        for (const id of collide ?? []) {
+                            const e = C.get(this, Ra, "f").get(id);
+                            if (null == e)
+                                continue;
+                            const t = e.car.getCarState();
+                            if (!t.hasStarted || null != t.finishFrames)
+                                continue;
+                            const i = [pose(t, Math.floor(1e3 * e.time))];
+                            for (const n of e.bufferedCarStates.slice(0, 3))
+                                i.push(pose(n, n.frames));
+                            cars.push({
+                                id,
+                                reset: e.resetCounter,
+                                keys: i
+                            })
+                        }
+                        local.setCollisionCars({
+                            frame: local.getTime().numberOfFrames,
+                            cars
+                        }),
+                        this.__cupCollide = !!collide
                     }
                     C.get(this, _r, "m", $a).call(this),
                     C.get(this, Ba, "f").update(e),
@@ -54004,25 +54152,77 @@ window.__nswsTrackQuery = function(trackId) {
             Fn.prototype.getInvite = function() {
                 return stateOf(this).invite;
             };
-            Fn.prototype.requestInvite = function() {
+            // A failure is kept for PolyCup's panel (inviteError). When the matchmaking socket of a
+            // working room drops, the same code is asked for again for up to a minute (proxy reclaim).
+            const INVITE_ERRORS = {
+                IpLimit: "Too many cups were opened from your network in the last 10 minutes. Try again later.",
+                TotalHostLimit: "Too many cups are open right now. Try again in a few minutes.",
+                ExpiredInvite: "The cup code expired.",
+                ServerUnavailable: "Competitions are offline right now. Try again later."
+            };
+            const inviteFailure = e => {
+                const reason = /server: (\w+)/.exec(e?.message ?? "")?.[1] ?? e?.serverError;
+                return INVITE_ERRORS[reason] ?? "Couldn't reach the Competitions server. Check your connection and try again.";
+            };
+            Fn.prototype.requestInvite = function(reclaim) {
                 const state = stateOf(this);
-                if (state.loading || state.invite) return;
-                state.loading = !0;
+                if (state.disposed || state.loading || state.invite && !reclaim) return;
+                state.loading = !reclaim;
+                state.error = null;
+                const ask = reclaim ?? null;
+                window.__nswsCupReclaim = ask;
+                const token = state.token = {};
                 this.createInvite(() => {
-                    state.invite = null;
+                    if (state.token !== token) return;
+                    const code = state.invite?.inviteCode;
                     state.loading = !1;
+                    if (!code) return;
+                    state.reclaimUntil ??= Date.now() + 60000;
+                    setTimeout(() => {
+                        if (state.token !== token) return;
+                        if (state.reclaimUntil > Date.now()) return this.requestInvite(code);
+                        state.invite = null;
+                        state.reclaimUntil = null;
+                        state.error = "The cup room lost its connection to the server. Retry makes a new code.";
+                    }, 1500);
                 }).then(r => {
+                    if (state.token !== token) return;
                     state.invite = { inviteCode: r.inviteCode, timeoutMilliseconds: r.timeoutMilliseconds, timeoutStart: r.timeoutStart.getTime() };
                     state.loading = !1;
-                }, () => {
+                    state.reclaimUntil = null;
+                }, e => {
+                    if (state.token !== token) return;
                     state.loading = !1;
+                    if (!ask) state.error = inviteFailure(e);
+                    else if (/ExpiredInvite|AlreadyHosted/.test(e?.message ?? "")) state.reclaimUntil = 0;
                 });
+                window.__nswsCupReclaim = null;
             };
             Fn.prototype.renewInvite = function() {
+                const state = stateOf(this);
+                state.token = null;
                 this.resetInvite();
-                stateOf(this).invite = null;
-                stateOf(this).loading = !1;
+                state.invite = null;
+                state.loading = !1;
+                state.reclaimUntil = null;
                 this.requestInvite();
+            };
+            const disposeHost = Fn.prototype.dispose;
+            Fn.prototype.dispose = function() {
+                const state = stateOf(this);
+                state.token = null;
+                state.disposed = !0;
+                return disposeHost.call(this);
+            };
+            Fn.prototype.getInviteError = function() {
+                return stateOf(this).error ?? null;
+            };
+            // The cup's status for the Competitions list (polycup/nsws/hub.ts), over the matchmaking socket.
+            Fn.prototype.reportCupStatus = function(status) {
+                const ws = C.get(this, on, "f");
+                if (ws?.readyState === WebSocket.OPEN) try {
+                    ws.send(JSON.stringify({ type: "nswsStatus", status }));
+                } catch (e) {}
             };
             for (const Client of [Dl]) {
                 Client.prototype.isInviteAllowed = () => !1;
@@ -58997,7 +59197,8 @@ window.__nswsTrackQuery = function(trackId) {
             createMultiplayerHostWebSocket() {
                 if (this.determinismState != Js.Ok)
                     throw new Error("WebSocket creation not allowed with non-deterministic physics");
-                return new WebSocket(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/host")
+                const reclaim = window.__nswsCupReclaim;
+                return new WebSocket(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/host" + (reclaim ? "?reclaim=" + reclaim : ""))
             }
             createMultiplayerJoinWebSocket() {
                 if (this.determinismState != Js.Ok)
@@ -60421,6 +60622,29 @@ window.__nswsTrackQuery = function(trackId) {
             l.load("record", ["audio/record.ogg", "audio/record.mp3"]),
             l.load("position_tick", ["audio/position_tick.ogg", "audio/position_tick.mp3"]),
             Kh.A.initResources(t);
+            // Not So Weekly Shorts: one-shot sounds for the cup layer, through the game's sound effects volume.
+            window.__nswsSfx = name => {
+                const [buffer, gain, rate] = {
+                    tick: ["position_tick", .03, 1],
+                    go: ["checkpoint", .05, 1.25],
+                    record: ["record", .05, 1.35],
+                    checkpoint: ["checkpoint", .03, 1],
+                    finish: ["position_tick", .04, .7]
+                }[name] ?? [];
+                const b = buffer && l.getBuffer(buffer);
+                if (null == b || null == l.context || null == l.destinationSfx)
+                    return;
+                try {
+                    const n = l.context.createBufferSource();
+                    n.buffer = b,
+                    n.playbackRate.value = rate;
+                    const i = l.context.createGain();
+                    i.gain.value = gain,
+                    n.connect(i),
+                    i.connect(l.destinationSfx),
+                    n.start(0)
+                } catch (e) {}
+            };
             const c = document.getElementById("screen");
             if (!(c instanceof HTMLCanvasElement))
                 throw new Error("Screen is not a canvas element");

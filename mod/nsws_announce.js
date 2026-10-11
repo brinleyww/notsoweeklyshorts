@@ -16,6 +16,7 @@
 #nsws-ann>.m::before{content:"";position:absolute;left:15px;top:11px;bottom:11px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
 #nsws-ann .nick{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
 #nsws-ann .note{margin-left:.5em;font-size:.6em;opacity:.5;}
+#nsws-ann .button.join{pointer-events:auto;margin:0 0 0 .7em;padding:4px 16px;font-size:.85em;vertical-align:middle;}
 `;
 
     function readSeen() {
@@ -99,6 +100,18 @@
         nick.className = "nick";
         nick.textContent = a.name || "Owner";
         m.append(nick, ": " + a.text);
+        // An official cup's announcement joins it in one click (polycup/nsws/hub.ts shows its card).
+        if (/^[A-HJ-NP-Z2-9]{5}$/.test(a.cup ?? "") && !window.__nswsCupApp?.inCup?.()) {
+            const join = document.createElement("button");
+            join.className = "button join";
+            join.type = "button";
+            join.textContent = "Join";
+            join.addEventListener("click", () => {
+                hide(false);
+                window.__nswsCompetitions?.join?.(a.cup);
+            });
+            m.appendChild(join);
+        }
         if (preview) {
             const note = document.createElement("span");
             note.className = "note";

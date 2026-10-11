@@ -2,7 +2,7 @@ import type { ScoredRound, Match } from './types.ts';
 import * as Cup from './cup.ts';
 import { validDraft } from './draft.ts';
 import { rulesFor, validPreset } from './presets.ts';
-import type { CupState, PublicCupState, RaceRecord } from './types.ts';
+import type { CupState, PublicCupState, RaceRecord, TrackVote } from './types.ts';
 export function validSnapshot(value: unknown): value is PublicCupState {
   const s = value as CupState;
   const obj = (o: unknown) => !!o && typeof o === 'object' && !Array.isArray(o);
@@ -70,7 +70,12 @@ export function validSnapshot(value: unknown): value is PublicCupState {
     (s.withdrawn !== undefined && !ids(s.withdrawn)) ||
     (s.pendingRacers !== undefined && !ids(s.pendingRacers)) ||
     (s.skipVote !== undefined &&
-      (!obj(s.skipVote) || !trackId(s.skipVote.trackId) || !ids(s.skipVote.ids))) ||
+      (!obj(s.skipVote) ||
+        !trackId(s.skipVote.trackId) ||
+        !ids(s.skipVote.ids) ||
+        (s.skipVote.passed !== undefined && typeof s.skipVote.passed !== 'boolean'))) ||
+    (s.nextRoundAt != null && !Number.isFinite(s.nextRoundAt)) ||
+    (s.trackVote != null && !validTrackVote(s.trackVote, ids)) ||
     s.pendingRacers?.some((id) => s.withdrawn?.includes(id)) ||
     ((!rulesFor(s).allowRacerChanges || s.phase === 'registration') &&
       (s.withdrawn?.length ?? 0) + (s.pendingRacers?.length ?? 0) > 0)
@@ -188,6 +193,20 @@ export function validSnapshot(value: unknown): value is PublicCupState {
         num(f.position) &&
         (f.checkpoint === null || num(f.checkpoint)),
     ) &&
+    (m.placings === undefined ||
+      (obj(m.placings) &&
+        Object.entries(m.placings).every(
+          ([id, counts]) =>
+            m.players.includes(Number(id)) &&
+            Array.isArray(counts) &&
+            counts.length === 8 &&
+            counts.every((n) => num(n)),
+        ))) &&
+    (m.knockedOut === undefined ||
+      (Array.isArray(m.knockedOut) &&
+        m.knockedOut.length <= 128 &&
+        m.knockedOut.every((k) => obj(k) && m.players.includes(k.id) && num(k.round)) &&
+        new Set(m.knockedOut.map((k) => k.id)).size === m.knockedOut.length)) &&
     Array.isArray(m.roundsLog) &&
     m.roundsLog.every(round);
   if (
@@ -260,7 +279,37 @@ export function validSnapshot(value: unknown): value is PublicCupState {
           ([id, n]) => ids([Number(id)]) && Number.isInteger(n) && Math.abs(n) <= 7,
         ))) &&
     (r.startsAt === null || Number.isFinite(r.startsAt)) &&
-    (r.deadline === null || Number.isFinite(r.deadline))
+    (r.deadline === null || Number.isFinite(r.deadline)) &&
+    (r.limitAt == null || Number.isFinite(r.limitAt)) &&
+    (r.verifying === undefined || ids(r.verifying))
+  );
+}
+// Not So Weekly Shorts: choosing the next random track (types.ts TrackVote).
+function validTrackVote(v: TrackVote, ids: (values: unknown) => boolean) {
+  return (
+    !!v &&
+    typeof v === 'object' &&
+    typeof v.id === 'string' &&
+    v.id.length <= 64 &&
+    ['vote', 'winner', 'last'].includes(v.mode) &&
+    (v.picker === null || ids([v.picker])) &&
+    Array.isArray(v.options) &&
+    v.options.length >= 1 &&
+    v.options.length <= 5 &&
+    v.options.every(
+      (t) =>
+        !!t &&
+        typeof t.id === 'string' &&
+        /^[a-f0-9]{64}$/i.test(t.id) &&
+        typeof t.name === 'string' &&
+        t.name.length <= 128,
+    ) &&
+    !!v.votes &&
+    typeof v.votes === 'object' &&
+    Object.entries(v.votes).every(
+      ([id, choice]) => ids([Number(id)]) && v.options.some((t) => t.id === choice),
+    ) &&
+    Number.isFinite(v.endsAt)
   );
 }
 export function validWR(value: unknown): value is RaceRecord {

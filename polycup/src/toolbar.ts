@@ -15,6 +15,9 @@ export class CupToolbar {
   #observer: MutationObserver;
   #resize: ResizeObserver;
   #open: boolean = false;
+  // Not So Weekly Shorts: the organizer's round controls, as native toolbar buttons next to Cup.
+  #actions: HTMLButtonElement[] = [];
+  #actionsKey = '';
 
   constructor({
     fallback,
@@ -25,11 +28,13 @@ export class CupToolbar {
     practiceHud,
     notice,
     roundTimer,
+    banner,
+    downtime,
     toggle,
   }: HudElements & { fallback: HTMLElement; toggle: () => void }) {
     this.#fallback = fallback;
 
-    this.#overlays = { hud, povHud, povRecordHud, inputHud, practiceHud, notice, roundTimer };
+    this.#overlays = { hud, povHud, povRecordHud, inputHud, practiceHud, notice, roundTimer, banner, downtime };
     this.#button = document.createElement('button');
     this.#button.type = 'button';
     this.#button.className = 'button polycup-toolbar-button';
@@ -46,11 +51,11 @@ export class CupToolbar {
       window.addEventListener(
         type,
         (e) => {
-          if (document.activeElement !== this.#button || !['Space', 'Enter'].includes(e.code))
-            return;
+          const focused = [this.#button, ...this.#actions].find((b) => b === document.activeElement);
+          if (!focused || !['Space', 'Enter'].includes(e.code)) return;
           e.preventDefault();
           e.stopImmediatePropagation();
-          if (type === 'keydown' && !e.repeat) this.#button.click();
+          if (type === 'keydown' && !e.repeat) focused.click();
         },
         { capture: true },
       );
@@ -103,11 +108,42 @@ export class CupToolbar {
     const container = toolbar?.querySelector(':scope > .button-container');
     if (container && this.#button.parentElement !== container) container.append(this.#button);
     if (!container) this.#button.remove();
+    let after: HTMLElement = this.#button;
+    for (const action of this.#actions) {
+      if (!container) action.remove();
+      else if (after.nextElementSibling !== action) after.after(action);
+      action.tabIndex = toolbar?.classList.contains('visible') ? 0 : -1;
+      after = action;
+    }
     // Not So Weekly Shorts: no version label over the site's menus.
     this.#fallback.hidden = true;
     this.#button.setAttribute('aria-expanded', String(!!this.#open));
     this.#button.tabIndex = toolbar?.classList.contains('visible') ? 0 : -1;
 
     layoutCupHud(this.#overlays);
+  }
+  // Not So Weekly Shorts: lay the overlays out again soon (at most every 200 ms).
+  relayout() {
+    this.#schedule();
+  }
+  setActions(actions: { label: string; icon: string; run: () => void }[]) {
+    const key = actions.map((a) => a.label).join('|');
+    if (key === this.#actionsKey) return;
+    this.#actionsKey = key;
+    for (const button of this.#actions) button.remove();
+    this.#actions = actions.map(({ label, icon, run }) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button polycup-toolbar-button';
+      const image = document.createElement('img');
+      image.className = 'button-icon';
+      image.src = new URL(`images/${icon}.svg`, document.baseURI).href;
+      image.alt = '';
+      image.draggable = false;
+      button.append(image, document.createTextNode(' ' + label));
+      button.addEventListener('click', run);
+      return button;
+    });
+    this.sync();
   }
 }

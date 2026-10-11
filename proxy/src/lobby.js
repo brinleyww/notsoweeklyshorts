@@ -61,14 +61,50 @@ function text(ws, data) {
     } catch {}
 }
 
+// A mux socket that drops keeps its links parked this long, so the page can reconnect and resume
+// them; frames for it wait in memory (up to MAX_PARKED_BYTES).
+const RESUME_MS = 20_000;
+const MAX_PARKED_BYTES = 1024 * 1024;
+const TOKEN = /^[0-9a-f]{24}$/;
+// An organizer whose matchmaking socket drops can take the same code back for this long.
+const RECLAIM_MS = 60_000;
+const STATUS_MIN_MS = 2_000;
+
+async function sha256Hex(text) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function ownerHashes(value) {
+    const list = Array.isArray(value) ? value : String(value ?? "").replace(/[[\]"\s]/g, "").split(",");
+    return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => /^[0-9a-f]{64}$/.test(h)));
+}
+
+// What an organizer's page reports about its cup (polycup/nsws/hub.ts reportStatus).
+function cleanStatus(value) {
+    const o = value && typeof value === "object" ? value : null;
+    if (!o || !["setup", "racing", "break", "done"].includes(o.phase)) return null;
+    const int = (n, max) => (Number.isSafeInteger(n) && n >= 0 && n <= max ? n : 0);
+    return {
+        phase: o.phase,
+        round: int(o.round, 100000),
+        racers: int(o.racers, 128),
+        canRace: o.canRace === true,
+        format: moderate(o.format, 24) || "Custom",
+    };
+}
+
 export class LobbyRoom extends DurableObject {
     constructor(ctx, env) {
         super(ctx, env);
         // link number -> [host mux socket, client mux socket]; rebuilt from attachments after a wake.
+        // A parked end is { parked: token } until its page resumes.
         this.links = null;
         this.nextLink = 1;
         this.rate = new Map();
         this.listedAt = 0;
+        this.parked = new Map();
+        this.reclaim = null;
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -80,6 +116,9 @@ export class LobbyRoom extends DurableObject {
         if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return new Response("Expected a WebSocket", { status: 426 });
         const code = request.headers.get("X-Cup-Code") || "";
         const role = request.headers.get("X-Cup-Role") || "";
+        const reclaiming = request.headers.get("X-Cup-Reclaim") === "1";
+        const params = new URL(request.url).searchParams;
+        const token = TOKEN.test(params.get("token") || "") ? params.get("token") : null;
         const pair = new WebSocketPair();
         const server = pair[1];
         const refuse = (error) => {
@@ -92,8 +131,14 @@ export class LobbyRoom extends DurableObject {
         if (this.ctx.getWebSockets().length >= MAX_SOCKETS) return refuse("SessionFull");
         if (role === "join" && !this.host()) return refuse("ExpiredInvite");
         if (role === "host" && this.sockets("host").length) return refuse("AlreadyHosted");
+        if (role === "host" && reclaiming && !(await this.reclaimRecord())) return refuse("ExpiredInvite");
         this.ctx.acceptWebSocket(server);
-        server.serializeAttachment({ role, code, pairs: {} });
+        if (role === "mux" && params.get("resume") === "1") {
+            const parked = token ? this.parked.get(token) : null;
+            server.serializeAttachment({ role, code, pairs: parked ? parked.pairs : {}, token });
+            if (parked) this.unpark(token, server, parked);
+            else text(server, { t: "resumed", ok: false });
+        } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming });
         return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -105,12 +150,12 @@ export class LobbyRoom extends DurableObject {
         return this.sockets("host").find((ws) => ws.deserializeAttachment().invited) ?? null;
     }
 
-    // For players about to join (worker.js /cup/info): the cup's name and map pool.
+    // For players about to join (worker.js /cup/info): the cup's name, map pool and what it is doing.
     info() {
         const host = this.host();
         if (!host) return null;
         const a = host.deserializeAttachment();
-        return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null) };
+        return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null), official: !!a.official, status: a.status ?? null };
     }
 
     // Called by the cup's chat room (chat.js) to recognise the organizer.
@@ -125,20 +170,49 @@ export class LobbyRoom extends DurableObject {
 
     // ---- Matchmaking: the same JSON the game speaks to Kodub's server. ----
 
-    hostMessage(ws, a, m) {
+    async hostMessage(ws, a, m) {
         if (m.type === "createInvite") {
             if (a.invited) return;
-            a.invited = true;
-            a.nick = moderate(m.nickname, MAX_NICK) || "Host";
             const o = m.nsws && typeof m.nsws === "object" ? m.nsws : {};
-            a.public = o.public === true;
-            a.max = Number.isSafeInteger(o.max) ? Math.min(16, Math.max(2, o.max)) : 8;
-            a.name = moderate(o.name, MAX_NAME) || a.nick + "'s cup";
-            a.pool = cleanPool(o.pool);
-            a.chatKey = typeof o.chat === "string" && /^[0-9a-f]{32}$/.test(o.chat) ? o.chat : null;
+            const key = typeof o.reclaim === "string" && /^[0-9a-f]{32}$/.test(o.reclaim) ? o.reclaim : null;
+            if (a.reclaiming) {
+                // The same organizer coming back: same code, same cup details.
+                const saved = await this.reclaimRecord();
+                if (!saved || !key || saved.key !== key) {
+                    text(ws, { type: "error", error: "ExpiredInvite" });
+                    try {
+                        ws.close(4000, "ExpiredInvite");
+                    } catch {}
+                    return;
+                }
+                Object.assign(a, saved.cup);
+                await this.clearReclaim();
+            } else {
+                a.nick = moderate(m.nickname, MAX_NICK) || "Host";
+                a.public = o.public === true;
+                a.max = Number.isSafeInteger(o.max) ? Math.min(16, Math.max(2, o.max)) : 8;
+                a.name = moderate(o.name, MAX_NAME) || a.nick + "'s cup";
+                a.pool = cleanPool(o.pool);
+                a.chatKey = typeof o.chat === "string" && /^[0-9a-f]{32}$/.test(o.chat) ? o.chat : null;
+                a.official =
+                    typeof o.ownerKey === "string" &&
+                    /^[0-9a-f]{64}$/.test(o.ownerKey) &&
+                    ownerHashes(this.env.OWNER_KEY_HASHES).has(await sha256Hex("nsws-owner:" + o.ownerKey));
+            }
+            a.invited = true;
+            a.reclaimKey = key;
             ws.serializeAttachment(a);
             text(ws, { type: "createInvite", inviteCode: a.code, key: randomHex(16), timeoutMilliseconds: null, censoredNickname: a.nick });
             this.listing(true);
+            if (a.official && !a.announced) await this.announceCup(ws, a);
+            return;
+        }
+        if (m.type === "nswsStatus") {
+            if (!a.invited || Date.now() - (a.statusAt ?? 0) < STATUS_MIN_MS) return;
+            a.status = cleanStatus(m.status);
+            a.statusAt = Date.now();
+            ws.serializeAttachment(a);
+            this.listing(false);
             return;
         }
         if (!a.invited || typeof m.session !== "string") return;
@@ -155,6 +229,72 @@ export class LobbyRoom extends DurableObject {
         } else if (m.type === "iceCandidate") {
             text(join, { type: "iceCandidate", candidate: null });
         }
+    }
+
+    // ---- Official cups (hosted with the owner key): announced to everyone online. ----
+
+    async announceCup(ws, a) {
+        if (!this.env.TRAFFIC) return;
+        try {
+            const stub = this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global"));
+            const result = await stub.announce({
+                name: "Competitions",
+                text: `${a.name} is open: join the official cup now!`,
+                color: "#ffd26b",
+                show: 15,
+                reach: 60,
+                cup: a.code,
+            });
+            a.announced = result?.current?.id ?? null;
+            ws.serializeAttachment(a);
+            if (result?.current && this.env.CHAT)
+                await this.env.CHAT.get(this.env.CHAT.idFromName("global")).announce({ t: "ann", a: result.current });
+        } catch (err) {
+            console.error("cup announce failed:", err && err.message);
+        }
+    }
+
+    async withdrawCup(id) {
+        if (id == null || !this.env.TRAFFIC) return;
+        try {
+            const result = await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).stopAnnouncement(id);
+            if (result?.stopped != null && this.env.CHAT)
+                await this.env.CHAT.get(this.env.CHAT.idFromName("global")).announce({ t: "ann-stop", id: result.stopped });
+        } catch {}
+    }
+
+    // ---- Reclaiming a code after the organizer's matchmaking socket dropped. ----
+
+    async reclaimRecord() {
+        const saved = this.reclaim ?? (await this.ctx.storage.get("reclaim")) ?? null;
+        return saved && saved.until > Date.now() ? saved : null;
+    }
+
+    async clearReclaim() {
+        this.reclaim = null;
+        clearTimeout(this.reclaimTimer);
+        await this.ctx.storage.delete("reclaim");
+    }
+
+    async hostGone(a, dropped) {
+        const live = this.sockets("mux").length > 0;
+        if (dropped && a.reclaimKey && live) {
+            const cup = { nick: a.nick, public: a.public, max: a.max, name: a.name, pool: a.pool, chatKey: a.chatKey, official: a.official, announced: a.announced, status: a.status };
+            this.reclaim = { key: a.reclaimKey, until: Date.now() + RECLAIM_MS, cup };
+            await this.ctx.storage.put("reclaim", this.reclaim);
+            // Hidden from the list but still reserved, so nobody else can get the code meanwhile.
+            this.directory?.update(a.code, { name: a.name, host: a.nick, players: 1, max: a.max, public: false }).catch(() => {});
+            clearTimeout(this.reclaimTimer);
+            this.reclaimTimer = setTimeout(() => {
+                if (this.host()) return;
+                this.directory?.remove(a.code).catch(() => {});
+                void this.withdrawCup(a.announced);
+                void this.clearReclaim();
+            }, RECLAIM_MS);
+            return;
+        }
+        this.directory?.remove(a.code).catch(() => {});
+        await this.withdrawCup(a.announced);
     }
 
     joinMessage(ws, a, m) {
@@ -196,6 +336,14 @@ export class LobbyRoom extends DurableObject {
                 this.links.set(p.link, entry);
             }
         }
+        for (const [token, parked] of this.parked) {
+            for (const p of Object.values(parked.pairs)) {
+                if (!p.link) continue;
+                const entry = this.links.get(p.link) || [null, null];
+                entry[p.side === "host" ? 0 : 1] = { parked: token };
+                this.links.set(p.link, entry);
+            }
+        }
     }
 
     muxControl(ws, a, m) {
@@ -231,15 +379,65 @@ export class LobbyRoom extends DurableObject {
         try {
             ws.serializeAttachment(a);
         } catch {}
+        this.downPair(id, ws);
+        if (this.links && p.link) this.links.delete(p.link);
+        this.listing(false);
+    }
+
+    // Tells the other end of a pair (live or parked) that it is gone.
+    downPair(id, except) {
         for (const other of this.sockets("mux")) {
-            if (other === ws) continue;
+            if (other === except) continue;
             const oa = other.deserializeAttachment();
             if (!oa.pairs?.[id]) continue;
             delete oa.pairs[id];
             other.serializeAttachment(oa);
             text(other, { t: "down", pair: id });
         }
-        if (this.links && p.link) this.links.delete(p.link);
+        for (const parked of this.parked.values()) delete parked.pairs[id];
+    }
+
+    park(ws, a) {
+        if (!this.links) this.rebuildLinks();
+        for (const p of Object.values(a.pairs)) {
+            if (!p.link) continue;
+            const entry = this.links.get(p.link) || [null, null];
+            entry[p.side === "host" ? 0 : 1] = { parked: a.token };
+            this.links.set(p.link, entry);
+        }
+        const parked = { pairs: a.pairs, frames: [], bytes: 0, timer: 0 };
+        parked.timer = setTimeout(() => this.expire(a.token), RESUME_MS);
+        this.parked.set(a.token, parked);
+    }
+
+    unpark(token, ws, parked) {
+        clearTimeout(parked.timer);
+        this.parked.delete(token);
+        if (!this.links) this.rebuildLinks();
+        for (const p of Object.values(parked.pairs)) {
+            if (!p.link) continue;
+            const entry = this.links.get(p.link) || [null, null];
+            entry[p.side === "host" ? 0 : 1] = ws;
+            this.links.set(p.link, entry);
+        }
+        text(ws, { t: "resumed", ok: true });
+        for (const frame of parked.frames) {
+            try {
+                ws.send(frame);
+            } catch {}
+        }
+        this.listing(false);
+    }
+
+    expire(token) {
+        const parked = this.parked.get(token);
+        if (!parked) return;
+        clearTimeout(parked.timer);
+        this.parked.delete(token);
+        for (const [id, p] of Object.entries(parked.pairs)) {
+            this.downPair(id, null);
+            if (this.links && p.link) this.links.delete(p.link);
+        }
         this.listing(false);
     }
 
@@ -265,8 +463,9 @@ export class LobbyRoom extends DurableObject {
             const ends = this.links.get(link);
             const to = ends && (ends[0] === ws ? ends[1] : ends[1] === ws ? ends[0] : null);
             if (to) {
-                let parts = out.get(to);
-                if (!parts) out.set(to, parts = []);
+                const key = to.parked ?? to;
+                let parts = out.get(key);
+                if (!parts) out.set(key, parts = []);
                 parts.push(data.subarray(at, end));
             }
             at = end;
@@ -281,6 +480,14 @@ export class LobbyRoom extends DurableObject {
                     o += p.length;
                 }
             }
+            if (typeof to === "string") {
+                const parked = this.parked.get(to);
+                if (!parked) continue;
+                parked.frames.push(frame.slice());
+                parked.bytes += frame.length;
+                if (parked.bytes > MAX_PARKED_BYTES) this.expire(to);
+                continue;
+            }
             try {
                 to.send(frame);
             } catch {}
@@ -288,7 +495,8 @@ export class LobbyRoom extends DurableObject {
         if (Date.now() - this.listedAt > LISTING_MS) this.listing(true);
     }
 
-    // Public rooms show in the Competitions list. Only the host's name and a player count leave here.
+    // Public rooms show in the Competitions list. Only the host's name, a player count and the cup's
+    // status leave here.
     listing(force) {
         const dir = this.directory;
         const host = this.host();
@@ -298,7 +506,7 @@ export class LobbyRoom extends DurableObject {
         for (const ws of this.sockets("mux")) {
             if (Object.values(ws.deserializeAttachment().pairs || {}).some((p) => p.side === "client" && p.link)) players++;
         }
-        const info = { name: a.name, host: a.nick, players, max: a.max, public: a.public };
+        const info = { name: a.name, host: a.nick, players, max: a.max, public: a.public, official: !!a.official, status: a.status ?? null };
         const key = JSON.stringify(info);
         if (!force && key === this.listed) return;
         this.listed = key;
@@ -321,29 +529,33 @@ export class LobbyRoom extends DurableObject {
             return;
         }
         if (!m || typeof m !== "object") return;
-        if (a.role === "host") this.hostMessage(ws, a, m);
+        if (a.role === "host") await this.hostMessage(ws, a, m);
         else if (a.role === "join") this.joinMessage(ws, a, m);
         else if (a.role === "mux") this.muxControl(ws, a, m);
     }
 
-    async webSocketClose(ws) {
+    // A page closing its socket itself sends 1000 or no code (1005); anything else is a dropped
+    // connection that may come back.
+    async webSocketClose(ws, code) {
         const a = ws.deserializeAttachment() || {};
+        const dropped = code !== 1000 && code !== 1005;
         try {
             ws.close();
         } catch {}
         this.rate.delete(ws);
         if (a.role === "mux") {
-            for (const id of Object.keys(a.pairs || {})) this.dropPair(ws, a, id);
+            if (dropped && a.token && Object.keys(a.pairs || {}).length) this.park(ws, a);
+            else for (const id of Object.keys(a.pairs || {})) this.dropPair(ws, a, id);
         } else if (a.role === "join" && a.session) {
             const host = this.host();
             if (host) text(host, { type: "joinDisconnect", session: a.session });
         } else if (a.role === "host" && a.invited) {
-            this.directory?.remove(a.code).catch(() => {});
+            await this.hostGone(a, dropped);
         }
     }
 
     async webSocketError(ws) {
-        await this.webSocketClose(ws);
+        await this.webSocketClose(ws, 1006);
     }
 }
 

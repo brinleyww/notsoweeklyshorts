@@ -70,6 +70,10 @@ export interface Round {
   checkpoints: Record<PlayerId, number>;
   splits?: Record<PlayerId, Split>;
   liveMovement?: Record<PlayerId, number>;
+  // Not So Weekly Shorts: when the round ends whatever happens (time limit or time-attack window).
+  limitAt?: number | null;
+  // Finishes the organizer is still replaying through the physics.
+  verifying?: PlayerId[];
 }
 export interface Finalist {
   round: number;
@@ -104,6 +108,9 @@ export interface Match {
   finalists: Record<PlayerId, Finalist>;
   roundsLog: ScoredRound[];
   ranking: PlayerId[];
+  // Not So Weekly Shorts: how often each racer took each place (countback), and knockout exits.
+  placings?: Record<PlayerId, number[]>;
+  knockedOut?: { id: PlayerId; round: number }[];
 }
 export interface CupState {
   removedTracks?: TrackId[];
@@ -129,8 +136,21 @@ export interface CupState {
   results: { id: PlayerId; place: number }[];
   disconnectPolicy: 'dnf' | 'void';
   draft?: Draft;
-  // Not So Weekly Shorts: vote-skip (cup.ts voteSkip).
-  skipVote?: { trackId: TrackId; ids: PlayerId[] };
+  // Not So Weekly Shorts: vote-skip (cup.ts voteSkip). A vote that passes after someone finished
+  // ends the track after the live round instead of voiding it.
+  skipVote?: { trackId: TrackId; ids: PlayerId[]; passed?: boolean };
+  // When the next round starts on its own (organizer clock), for every player's countdown.
+  nextRoundAt?: number | null;
+  // Choosing the next random track: everyone votes, or one racer picks.
+  trackVote?: TrackVote | null;
+}
+export interface TrackVote {
+  id: string;
+  mode: 'vote' | 'winner' | 'last';
+  picker: PlayerId | null;
+  options: Track[];
+  votes: Record<PlayerId, TrackId>;
+  endsAt: number;
 }
 export type PublicCupState = Omit<CupState, 'history'> & { history?: CupState['history'] };
 export type InputEvent = [frame: number, mask: number];

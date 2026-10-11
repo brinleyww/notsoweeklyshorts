@@ -47,11 +47,11 @@ export class CupInvite {
     this.#element.className = 'lobby-invite';
     const label = document.createElement('label');
     label.className = 'invite-label';
-    label.textContent = 'Lobby code';
+    label.textContent = 'Cup code';
     this.#input = document.createElement('input');
     this.#input.type = 'text';
     this.#input.readOnly = true;
-    this.#input.setAttribute('aria-label', 'Lobby invite code');
+    this.#input.setAttribute('aria-label', 'Cup invite code');
     this.#input.spellcheck = false;
     this.#input.addEventListener('click', () => this.#input.select());
     label.append(this.#input);
@@ -136,20 +136,23 @@ export class CupInvite {
     this.#button.setAttribute(
       'aria-label',
       ready
-        ? 'Copy lobby invite code'
+        ? 'Copy cup code'
         : state.status === 'expired'
-          ? 'Renew lobby invite code'
-          : 'Create lobby invite code',
+          ? 'Renew cup code'
+          : 'Create a new cup code',
     );
     const icon = ready || state.status === 'loading' ? 'copy' : 'refresh';
     const src = new URL(`images/${icon}.svg`, document.baseURI).href;
     if (this.#icon.src !== src) this.#icon.src = src;
+    // Not So Weekly Shorts: Renew / Retry make a new code, and links sent earlier stop working.
     const message =
       feedback === 'manual'
         ? 'Select code and press Ctrl+C'
         : state.status === 'ready' && state.expires !== Infinity
           ? `Expires in ${Math.max(1, Math.ceil((state.expires - Date.now()) / 60000))} min`
-          : '';
+          : ['expired', 'empty', 'error'].includes(state.status)
+            ? 'A new code replaces the old one'
+            : '';
     if (this.#status.textContent !== message) this.#status.textContent = message;
   }
   async copyLink() {

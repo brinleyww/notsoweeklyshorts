@@ -395,10 +395,36 @@ link). PolyCup sits on the game's own multiplayer, and every part of it goes thr
 there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` covers the page side.
 
 - **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), `GET /nsws/cup/info?code=`
-  (a cup's name and map pool, read before joining; `{cup: null}` if it isn't open), and three
-  WebSockets that stand in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup
-  code, reserved by `LobbyDirectory`, 10 per address per 10 minutes), `/nsws/cup/join?code=` and
-  `/nsws/cup/mux?code=`.
+  (a cup's name, map pool, official flag and status, read for the join card; `{cup: null}` if it
+  isn't open), `POST /nsws/cup/result` (owner key only, see below), and three WebSockets that stand
+  in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup code, reserved by
+  `LobbyDirectory`, 10 per address per 10 minutes; `?reclaim=CODE` asks for the organizer's own code
+  back), `/nsws/cup/join?code=` and `/nsws/cup/mux?code=&token=` (`&resume=1` to resume).
+- **Status:** the organizer's page sends `{type: "nswsStatus", status: {phase, round, racers,
+  canRace, format}}` on its matchmaking socket when the cup changes (at most every 2 s). The room
+  keeps it on the attachment and puts it in the list row and `/info`, so the list and the join card
+  say what a cup is doing and whether a newcomer can still race.
+- **Dropped connections:** each mux socket carries a random token. When one closes with anything but
+  1000/1005 (a page closing on purpose), its links are parked for 20 s instead of going down: the
+  other ends are not told, and frames for the parked end wait in memory (up to 1 MB). The page
+  reconnects with the same token and `resume=1`, gets `{t: "resumed", ok: true}` and the waiting
+  frames, and every link carries on. An unknown or expired token gets `ok: false` and the page tears
+  its links down as before. The parking timer keeps the room awake, so nothing is stored.
+- **Reclaiming the code:** the organizer's `createInvite` carries a random `reclaim` secret. If its
+  matchmaking socket drops (not a deliberate close) while the room still has mux sockets, the room
+  writes `{key, until, cup}` to its storage (the only thing it ever stores, deleted on reclaim), hides
+  the row from the list but keeps the code reserved, and for 60 s accepts `/cup/host?reclaim=CODE`
+  whose `createInvite` has the same secret: same code, same name, pool and status. The page retries
+  every 1.5 s for that minute (`Fn.prototype.requestInvite` in `main.bundle.js`).
+- **Official cups:** a `createInvite` whose `nsws.ownerKey` hashes to `OWNER_KEY_HASHES` marks the
+  cup official (a star in the list and on the join card). Its room announces it through
+  `TrafficStats.announce` with the cup's code (new `cup` column on `announcements`, added by
+  `ALTER TABLE` in `migrate()`), and the page's announcement shows a Join button. When the cup
+  closes, the room stops that announcement by id (`stopAnnouncement(id)` no longer ends someone
+  else's message). At the end of an official cup the organizer's page posts `{token, cupId, code,
+  name, results}` to `/nsws/cup/result`; `Accounts.recordCup` keeps each cup once (`cup_results`)
+  and grants the `cupchamp` tag (Cup Champion) to the account holding the winner's name, then the
+  chat is retagged.
 - **Set before the room opens** (the host's `createInvite` carries them as `nsws`): the cup's name,
   public or private, room size, the map pool (`{shorts, main: [Summer|Winter|Desert], community:
   [game versions]}`; only the weekly shorts are on by default) and a random secret for the cup chat.
@@ -414,8 +440,8 @@ there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` cove
   `declineJoin`, `iceCandidate`, `joinDisconnect`), censoring nicknames and cup names. It then
   relays data channels: each page's mux socket carries frames of records
   `[u32 link][u16 channel][u8 kind][u32 length][bytes]`, and the room forwards each record to the
-  other end of its link (one frame per destination). It never reads the game data and stores nothing;
-  socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
+  other end of its link (one frame per destination). It never reads the game data and stores nothing
+  but the short-lived reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
   are kept from the earlier lobbies, so no migration was needed).
 - **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
   it sends into at most one frame every 200 ms (measured 3-5 a second per page in a live round), so an
@@ -429,7 +455,9 @@ there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` cove
   the game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
   shows under "Hidden from the boards", where Allow puts it up). The recording is dropped after either.
   While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
-  Cup results themselves are not replayed.
+  A cup with player collisions never saves or uploads a time, so nothing from it reaches this queue.
+  Cup finishes are checked on the organizer's page instead: each racer's finish carries its replay,
+  which the organizer runs through the game's own physics (`polycup/README.md`).
 
 ## Name moderation
 

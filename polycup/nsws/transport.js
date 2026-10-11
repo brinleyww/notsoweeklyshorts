@@ -11,6 +11,10 @@ const FLUSH_MS = 200;
 const FLUSH_BYTES = 256 * 1024;
 const MAX_EARLY = 64;
 const IDLE_CLOSE_MS = 5000;
+// A dropped socket reconnects and resumes its links for this long (the proxy keeps them parked);
+// what is queued meanwhile is sent on resume, up to MAX_RESUME_BYTES.
+const RESUME_MS = 20000;
+const MAX_RESUME_BYTES = 4 * 1024 * 1024;
 const PAIR_SDP = /^nsws:([A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16})$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -44,17 +48,52 @@ class Mux {
         this.links = new Map();
         this.queue = [];
         this.bytes = 0;
+        this.queuedAt = 0;
         this.timer = 0;
         this.controls = [];
         this.closeTimer = 0;
-        this.ws = new WebSocket(socketBase() + "nsws/cup/mux?code=" + code);
-        this.ws.binaryType = "arraybuffer";
-        this.ws.addEventListener("open", () => {
-            for (const c of this.controls.splice(0)) this.ws.send(c);
+        this.token = randomHex(12);
+        this.dead = false;
+        this.idle = false;
+        this.resumeUntil = 0;
+        this.retries = 0;
+        this.connect(false);
+    }
+
+    connect(resume) {
+        const ws = new WebSocket(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1" : ""));
+        this.ws = ws;
+        ws.binaryType = "arraybuffer";
+        ws.addEventListener("open", () => {
+            if (resume) return;
+            for (const c of this.controls.splice(0)) ws.send(c);
             if (this.queue.length) this.flush();
         });
-        this.ws.addEventListener("message", (e) => this.receive(e.data));
-        this.ws.addEventListener("close", () => this.closed());
+        ws.addEventListener("message", (e) => this.receive(e.data));
+        ws.addEventListener("close", () => {
+            if (this.ws === ws) this.dropped();
+        });
+    }
+
+    // A socket that closes while links are in use reconnects and resumes them.
+    dropped() {
+        if (this.dead) return;
+        if (this.idle || !this.pcs.size) return this.closed();
+        const now = Date.now();
+        this.resumeUntil ||= now + RESUME_MS;
+        if (now >= this.resumeUntil || this.bytes > MAX_RESUME_BYTES) return this.closed();
+        const wait = Math.min(3000, 400 * 2 ** this.retries++);
+        setTimeout(() => {
+            if (!this.dead) this.connect(true);
+        }, wait);
+    }
+
+    resumed(ok) {
+        if (!ok) return this.closed();
+        this.resumeUntil = 0;
+        this.retries = 0;
+        for (const c of this.controls.splice(0)) this.ws.send(c);
+        if (this.queue.length) this.flush();
     }
 
     control(data) {
@@ -76,12 +115,16 @@ class Mux {
         this.control({ t: "close", pair: pc.pair });
         if (!this.pcs.size) {
             this.closeTimer = setTimeout(() => {
-                if (!this.pcs.size) this.ws.close();
+                if (this.pcs.size) return;
+                this.idle = true;
+                this.ws.close();
+                if (this.ws.readyState !== WebSocket.OPEN) this.closed();
             }, IDLE_CLOSE_MS);
         }
     }
 
     enqueue(link, channel, kind, bytes) {
+        if (!this.queue.length) this.queuedAt = performance.now();
         this.queue.push({ link, channel, kind, bytes });
         this.bytes += bytes.length + 11;
         if (this.bytes >= FLUSH_BYTES) this.flush();
@@ -118,6 +161,7 @@ class Mux {
             } catch {
                 return;
             }
+            if (m?.t === "resumed") return this.resumed(m.ok === true);
             const pc = this.pcs.get(m?.pair);
             if (!pc) return;
             if (m.t === "up") {
@@ -145,8 +189,10 @@ class Mux {
     }
 
     closed() {
+        if (this.dead) return;
+        this.dead = true;
         clearTimeout(this.timer);
-        muxes.delete(this.code);
+        if (muxes.get(this.code) === this) muxes.delete(this.code);
         for (const pc of [...this.pcs.values()]) pc._down();
         this.pcs.clear();
         this.links.clear();
@@ -155,8 +201,30 @@ class Mux {
 
 function muxFor(code) {
     let mux = muxes.get(code);
-    if (!mux || mux.ws.readyState > WebSocket.OPEN) muxes.set(code, mux = new Mux(code));
+    if (!mux || mux.dead || mux.idle) muxes.set(code, mux = new Mux(code));
     return mux;
+}
+
+// Timers in a hidden tab fire at most once a second (once a minute after a while), but a worker's
+// don't. The cup clock (src/controller.ts) and the flushes below use this.
+function createTicker() {
+    const handlers = new Map();
+    let next = 0, worker = null;
+    try {
+        const source = "const t=new Map();onmessage=e=>{const[id,ms]=e.data;t.set(id,setInterval(()=>postMessage(id),ms))}";
+        worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })));
+        worker.onmessage = (e) => handlers.get(e.data)?.();
+    } catch {
+        worker = null;
+    }
+    return {
+        every(ms, fn) {
+            const id = ++next;
+            handlers.set(id, fn);
+            if (worker) worker.postMessage([id, ms]);
+            else setInterval(fn, ms);
+        },
+    };
 }
 
 export class NswsDataChannel extends EventTarget {
@@ -343,4 +411,12 @@ export class NswsPeerConnection extends EventTarget {
 
 export function installTransport() {
     window.__nswsPeerConnection = NswsPeerConnection;
+    if (!window.__nswsTicker) {
+        window.__nswsTicker = createTicker();
+        window.__nswsTicker.every(100, () => {
+            if (document.visibilityState !== "hidden") return;
+            const now = performance.now();
+            for (const mux of muxes.values()) if (mux.queue.length && now - mux.queuedAt >= FLUSH_MS) mux.flush();
+        });
+    }
 }

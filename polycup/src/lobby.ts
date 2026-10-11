@@ -4,10 +4,38 @@ import { banTurn, banEntries } from './draft.ts';
 import { chosenTracks, picksComplete } from './cup.ts';
 import { rulesFor } from './presets.ts';
 import type { CupState } from './types.ts';
+import { inviteState } from './invite.ts';
 export function countryFlag(code: unknown) {
   return typeof code === 'string' && /^[a-z]{2}$/i.test(code)
     ? 'images/countries/' + code.toLowerCase() + '.svg'
     : null;
+}
+// Not So Weekly Shorts: while the organizer is alone, the code and link stay big and in view.
+function shareCard(ui: CupUI) {
+  const c = ui.c;
+  if (c.lobby.some((p) => !p.isSelf)) return null;
+  const state = inviteState(c.connection);
+  const card = h('section', undefined, 'share-card');
+  card.append(h('h2', 'Invite players'));
+  if (state.status !== 'ready') {
+    card.append(h('p', state.status === 'loading' ? 'Getting your cup code…' : 'The cup code isn’t available. Use Retry next to the code above.', 'muted'));
+    return card;
+  }
+  const code = state.code;
+  const big = h('strong', code, 'share-code');
+  const link = location.origin + location.pathname + '?cup=' + code;
+  const copy = (text: string, done: string) =>
+    navigator.clipboard.writeText(text).then(
+      () => ui.showNotice(done, 1800),
+      () => ui.showNotice('Copying was blocked. Select the code and press Ctrl+C.', 3000),
+    );
+  const row = h('div', undefined, 'controls');
+  row.append(
+    ui.button('Copy code', () => copy(code, 'Code copied'), 'primary', 'share:code'),
+    ui.button('Copy invite link', () => copy(link, 'Invite link copied'), 'quiet', 'share:link'),
+  );
+  card.append(big, row, h('p', 'Friends join from Competitions with the code, or open the link. You can set up the format while you wait.', 'muted'));
+  return card;
 }
 export function lobbyView(s: CupState, selfId: number, editing = false) {
   const stage = s.draft?.stage ?? 'picks',
@@ -96,7 +124,12 @@ export function lobbyPanel(ui: CupUI) {
     roster.append(row);
   }
   if (view.mode === 'join') {
-    const join = ui.button(view.joined ? 'Joined' : 'Join', () => c.action('join'), 'primary');
+    // Not So Weekly Shorts: Race / Watch, said plainly.
+    const join = ui.button(
+      view.joined ? 'You’re racing' : s.roster.length >= 8 ? 'Grid full' : 'Race',
+      () => c.action('join'),
+      'primary',
+    );
     join.disabled = view.joined || s.roster.length >= 8;
     roster.append(join);
   }
@@ -115,13 +148,8 @@ export function lobbyPanel(ui: CupUI) {
     more.append(row);
   }
   if (view.mode === 'join') {
-    const spectate = ui.button(
-      view.joined ? 'Spectate' : 'Spectating',
-      () => c.action('leave'),
-      'primary',
-    );
-    spectate.disabled = !view.joined;
-    more.append(spectate);
+    if (view.joined) more.append(ui.button('Watch instead', () => c.action('leave'), 'quiet'));
+    else more.append(h('p', 'You’re watching. Press Race to take a place on the grid.', 'muted'));
   }
   roster.append(more);
   const actionTitle = h('h2', view.title);
@@ -262,6 +290,8 @@ export function lobbyPanel(ui: CupUI) {
     ui.setLobbyStart(start);
   }
   if (view.mode === 'join') preset.classList.add('preset-at-top');
+  const share = c.isHost && view.mode === 'join' ? shareCard(ui) : null;
+  if (share) action.append(share);
   action.append(preset);
   const people = h('div', undefined, 'lobby-column');
   people.append(roster, h('div', undefined, 'lobby-chat-slot'));

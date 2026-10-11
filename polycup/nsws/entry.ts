@@ -83,6 +83,30 @@ site.__nswsLobbyTag = () => {
 site.__nswsCupRoom = () => hub.room();
 site.__nswsCupLeave = (message) => hub.leave(message);
 // The organizer leaves a moment after the others, so nobody sees the room drop first.
+// Official cups send their final standings (owner key), which gives the winner the Cup Champion tag.
+const posted = new Set<string>();
+window.setInterval(() => {
+  const s = controller.state;
+  if (!s || s.phase !== 'complete' || !hub.official || posted.has(s.id)) return;
+  posted.add(s.id);
+  const owner = (window as unknown as { __nswsOwner?: { token(): Promise<string | null> } }).__nswsOwner;
+  void owner?.token().then((token) => {
+    if (!token) return;
+    const m = s.matches[s.matchIndex];
+    const results = s.results.map((r) => ({
+      nickname: s.roster.find((p) => p.id === r.id)?.name ?? '',
+      place: r.place,
+      score: m?.scores[r.id] ?? 0,
+    }));
+    return fetch((window as unknown as { __nswsApiBase: string }).__nswsApiBase + 'nsws/cup/result', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ token, cupId: s.id, code: hub.activeCode(), name: s.name, results }),
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+  }).catch(() => posted.delete(s.id));
+}, 2000);
 controller.onCupEnded = (byMe) =>
   hub.leave(byMe ? 'You ended the cup.' : 'The organizer ended the cup.', byMe ? 2000 : 0);
 site.__nswsCupPoolLabel = () => poolLabel(site.__nswsCupPool ?? { shorts: true, main: [], community: [] });
@@ -91,4 +115,5 @@ site.__nswsCupApp = {
   open: () => hub.open(),
   join: (code: string) => hub.join(code),
   inCup: () => !!controller.state,
+  debug: () => controller.debugInfo(),
 };

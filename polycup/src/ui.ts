@@ -1,7 +1,9 @@
 import type { RaceRecord, SessionRecord } from './types.ts';
 import type { InputVisualizer, LibraryTrack } from './game-types.ts';
+import type { CupState } from './types.ts';
 import type { Controller } from './controller.ts';
-import { downtimeLabel, roundSeconds } from './race-status.ts';
+import { clock, downtimeLabel, roundClock } from './race-status.ts';
+import { ConfirmDialog } from './confirm.ts';
 import { roundStartCue } from './countdown.ts';
 import * as Cup from './cup.ts';
 import { element as h, uiScale } from './dom.ts';
@@ -24,7 +26,8 @@ import { formatGap, formatTime as time } from './time.ts';
 import { CupToolbar } from './toolbar.ts';
 import css from './world-cup.css';
 
-const PODIUM_MS = 20000;
+// Not So Weekly Shorts: long enough for the organizer to start a rematch from the podium.
+const PODIUM_MS = 30000;
 const HOST_LEAVES_AFTER_MS = 3000;
 
 // Not So Weekly Shorts: these keys are set in the game's Settings (Competitions) or the Keys list.
@@ -145,6 +148,14 @@ export class CupUI {
   #othersSeen = -1;
   #aloneNotice = false;
   #finishTimer: number = 0;
+  // Not So Weekly Shorts: in-page confirmations, cup moments (notes, finishes, records) and the
+  // organizer's race controls.
+  #confirm: ConfirmDialog;
+  #banner = h('div', undefined, 'finish-banner');
+  #bannerTimer = 0;
+  #moments = { cup: '', audit: '', finish: '', round: '', error: '', photo: '', cue: '', records: '' };
+  #matchPoint = new Set<string>();
+  #lastLeader: number | null | undefined;
 
   constructor(controller: Controller) {
     this.#c = controller;
@@ -161,7 +172,8 @@ export class CupUI {
     this.#viewerBadge.hidden = true;
     const menuVersion = h('div', `PolyCup ${Cup.VERSION}`, 'menu-version');
     this.#panel = h('section', undefined, 'panel');
-    this.#panel.setAttribute('aria-label', 'Simple Cup');
+    this.#panel.setAttribute('aria-label', 'Cup panel');
+    this.#panel.tabIndex = -1;
     this.#hud = h('aside', undefined, 'hud');
     this.#povHud = h('aside', undefined, 'pov-hud');
     this.#povRecordHud = h('aside', undefined, 'pov-record-hud');
@@ -218,9 +230,21 @@ export class CupUI {
       practiceHud: this.#practiceHud,
       notice: this.#notice,
       roundTimer: this.#roundTimer,
+      banner: this.#banner,
+      downtime: this.#downtime,
       toggle: () => this.togglePanel(),
     });
     this.#chatUI = new ChatUI(this, this.#shadow);
+    this.#confirm = new ConfirmDialog(this.#shadow);
+    this.#banner.hidden = true;
+    this.#banner.setAttribute('role', 'status');
+    this.#shadow.append(this.#banner);
+    this.#c.onRetireWarning = () =>
+      this.showNotice(
+        `Press ${this.#c.game ? (this.#c.native?.restartKeys?.(this.#c.game)?.join(' / ') ?? 'restart') : 'restart'} again to retire from this round`,
+        2000,
+        true,
+      );
     window.addEventListener(
       'keydown',
       (event) => {
@@ -232,8 +256,23 @@ export class CupUI {
           event.stopImmediatePropagation();
           return;
         }
-        if (this.#rulesDialog.open) {
+        if (this.#rulesDialog.open || this.#confirm.open) {
           event.stopImmediatePropagation();
+          return;
+        }
+        // Not So Weekly Shorts: Escape closes the cup panel instead of reaching the game.
+        if (
+          event.code === 'Escape' &&
+          this.#open &&
+          !isEditing(event) &&
+          !this.#chatUI.isOpen &&
+          !document.querySelector('dialog[open]')
+        ) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          this.#open = false;
+          this.#signature = '';
+          this.render();
           return;
         }
         // Not So Weekly Shorts: the cup panel key (Tab) opens the panel, and pressing it again closes it.
@@ -254,7 +293,8 @@ export class CupUI {
     window.addEventListener(
       'keyup',
       (event) => {
-        if (this.#rulesDialog.open || this.#playerMenu.open) event.stopImmediatePropagation();
+        if (this.#rulesDialog.open || this.#confirm.open || this.#playerMenu.open)
+          event.stopImmediatePropagation();
       },
       { capture: true },
     );
@@ -404,9 +444,13 @@ export class CupUI {
     event.preventDefault();
   }
   toggleGhosts() {
+    if (this.#c.state && rulesFor(this.#c.state).collisions) {
+      this.showNotice('Other cars always show in a collision cup', 1600);
+      return;
+    }
     this.#c.toggleGhosts();
     this.#ghostHintCup = this.#c.state?.id;
-    this.showNotice(this.#c.hideOtherGhosts ? 'Other ghosts hidden' : 'Other ghosts shown', 1600);
+    this.showNotice(this.#c.ghostsHidden ? 'Other ghosts hidden' : 'Other ghosts shown', 1600);
     this.#signature = '';
     this.render();
   }
@@ -414,6 +458,16 @@ export class CupUI {
     this.#open = !this.#open;
     this.#signature = '';
     this.render();
+    if (this.#open) this.#panel.focus({ preventScroll: true });
+  }
+  // Not So Weekly Shorts: confirmation inside the cup layer (never the page-blocking confirm()).
+  ask(text: string, ok: string, danger = false) {
+    return this.#confirm.ask(text, ok, danger);
+  }
+  confirmed(text: string, ok: string, action: () => unknown, danger = false) {
+    return async () => {
+      if (await this.ask(text, ok, danger)) await action();
+    };
   }
   showRules() {
     const state = this.#c.state;
@@ -462,7 +516,7 @@ export class CupUI {
       s = c.state;
     // Not So Weekly Shorts: tell the organizer when everyone else has left (once they are looking at
     // the tab); the room stays open.
-    const others = c.isHost && s ? c.lobby.filter((p) => !p.isSelf).length : -1;
+    const others = c.isHost && s && s.phase !== 'complete' ? c.lobby.filter((p) => !p.isSelf).length : -1;
     if (this.#othersSeen > 0 && others === 0) this.#aloneNotice = true;
     else if (others !== 0) this.#aloneNotice = false;
     this.#othersSeen = others;
@@ -478,6 +532,7 @@ export class CupUI {
       this.#noticeCupId = s?.id ?? null;
     }
     this.expireNotice();
+    this.moments();
     this.#restartHint.update(
       c.game ? c.native.hudElement(c.game) : null,
       s?.phase === 'racing' &&
@@ -689,14 +744,7 @@ export class CupUI {
             tools.prepend(
               this.button(
                 'End Cup',
-                () => {
-                  if (
-                    confirm(
-                      'End this Cup and send everyone back to the menu?',
-                    )
-                  )
-                    c.endCup();
-                },
+                this.confirmed('End this cup and send everyone back to the menu?', 'End cup', () => c.endCup(), true),
                 'quiet danger',
               ),
             );
@@ -773,30 +821,220 @@ export class CupUI {
       chatButton.textContent = this.#chatUI.unread ? `Chat (${this.#chatUI.unread})` : 'Chat';
     }
     this.updateInputOverlay();
-    const seconds = this.#open ? null : roundSeconds(s, c.now());
-    this.#roundTimer.classList.toggle('visible', seconds !== null);
-    this.#roundTimer.setAttribute('aria-hidden', String(seconds === null));
-    if (seconds !== null) this.#roundTimer.textContent = `${seconds}s`;
+    const timer = this.#open ? null : roundClock(s, c.now());
+    this.#roundTimer.classList.toggle('visible', timer !== null);
+    this.#roundTimer.classList.toggle('urgent', !!timer?.urgent);
+    this.#roundTimer.setAttribute('aria-hidden', String(timer === null));
+    if (timer) {
+      const text = `${timer.label}|${timer.text}`;
+      if (this.#roundTimer.dataset.text !== text) {
+        this.#roundTimer.dataset.text = text;
+        this.#roundTimer.replaceChildren(h('small', timer.label), h('span', timer.text));
+      }
+    }
+    const vote = s?.phase === 'between-rounds' ? s.trackVote : null;
+    const nextIn = s?.phase === 'between-rounds' && s.nextRoundAt ? Math.ceil((s.nextRoundAt - c.now()) / 1000) : null;
     const label = this.#open
       ? ''
-      : c.preparingRandom
-        ? 'Choosing next track…'
-        : c.reconnectPending
-          ? 'Reconnected · Racing next round'
-          : downtimeLabel(
-              s?.phase,
-              c.waitingForRacers(),
-              s?.runtime?.trackId === c.info?.trackData?.getId(),
-            );
+      : vote
+        ? `${vote.mode === 'vote' ? 'Vote for the next track' : `${this.name(vote.picker)} picks the next track`} · ${Math.max(0, Math.ceil((vote.endsAt - c.now()) / 1000))}s`
+        : c.preparingRandom
+          ? 'Choosing next track…'
+          : c.reconnectPending
+            ? 'Reconnected · Racing next round'
+            : s?.phase === 'between-rounds' && nextIn !== null && nextIn > 0 && !c.waitingForRacers()
+              ? `Next round in ${nextIn}s`
+              : downtimeLabel(
+                  s?.phase,
+                  c.waitingForRacers(),
+                  s?.runtime?.trackId === c.info?.trackData?.getId(),
+                );
+    const shown = !this.#downtime.hidden;
     this.#downtime.hidden = !label;
     if (this.#downtime.textContent !== label) this.#downtime.textContent = label;
+    if (!!label && !shown) this.#toolbar.sync();
+    else if (label || !this.#banner.hidden) this.#toolbar.relayout();
     this.#toolbar.sync(this.#open);
     this.refreshPendingButtons();
     for (const e of this.#shadow.querySelectorAll('[data-clock]')) {
       const run = s?.runtime;
       const target = s?.phase === 'racing' ? run?.deadline : run?.startsAt;
-      e.textContent = target ? `${Math.max(0, Math.ceil((target - c.now()) / 1000))}s` : '';
+      e.textContent = target ? clock(Math.max(0, Math.ceil((target - c.now()) / 1000))) : '';
     }
+    for (const e of this.#shadow.querySelectorAll<HTMLElement>('[data-vote-clock]'))
+      e.textContent = s?.trackVote ? `${Math.max(0, Math.ceil((s.trackVote.endsAt - c.now()) / 1000))}s` : '';
+    this.renderHostStrip();
+  }
+  // Not So Weekly Shorts: things worth saying during a cup, each said once: organizer notes (void,
+  // restart, skip, knockouts, failed physics checks), your finish, photo finishes, lead changes,
+  // match point and finalists, and errors while the panel is closed.
+  moments() {
+    const c = this.#c,
+      s = c.state,
+      me = c.localPlayerId;
+    const m = s ? Cup.currentMatch(s) : null;
+    if (!s) {
+      this.#moments.cup = '';
+      return;
+    }
+    if (this.#moments.cup !== s.id) {
+      this.#moments = { cup: s.id, audit: s.audit.at(-1)?.at ?? '', finish: '', round: String(m?.rounds ?? 0), error: c.error, photo: '', cue: '', records: '' };
+      this.#matchPoint.clear();
+      this.#lastLeader = undefined;
+      return;
+    }
+    const fresh = s.audit.filter((a) => a.at > this.#moments.audit);
+    if (fresh.length) {
+      this.#moments.audit = fresh.at(-1)!.at;
+      this.showNotice(fresh.at(-1)!.message, 3500);
+    }
+    if (c.takeAutoStopped())
+      this.showNotice('Automatic rounds stopped. Open the cup panel to start the next round.', 3500);
+    else if (c.error && c.error !== this.#moments.error && !this.#open) this.showNotice(c.error, 3500);
+    this.#moments.error = c.error;
+    const run = s.runtime;
+    if (run && s.phase === 'racing' && me !== null && me in run.finishes) {
+      const key = `${run.id}:${run.finishes[me]}`;
+      if (this.#moments.finish !== key) {
+        this.#moments.finish = key;
+        this.finishBanner();
+      }
+    }
+    if (run && s.phase === 'racing') {
+      const times = Object.values(run.finishes).sort((a, b) => a - b);
+      for (let i = 1; i < times.length; i++) {
+        const gap = times[i] - times[i - 1],
+          key = `${run.id}:${times[i - 1]}:${times[i]}`;
+        if (gap > 0 && gap < 50 && !this.#moments.photo.includes(key)) {
+          this.#moments.photo += key + ';';
+          const [a, b] = [times[i - 1], times[i]].map(
+            (t) => this.name(Number(Object.keys(run.finishes).find((id) => run.finishes[Number(id)] === t))),
+          );
+          this.showNotice(`Photo finish! ${a} beat ${b} by ${(gap / 1000).toFixed(3)} s`, 3500);
+        }
+      }
+      const award = me !== null ? run.recordAwards?.[me] : undefined;
+      const recordKey = award ? `${run.id}:${award}:${run.finishes[me!]}` : '';
+      if (award && this.#moments.records !== recordKey) {
+        this.#moments.records = recordKey;
+        if (award !== 'PB' || rulesFor(s).roundStyle !== 'time-attack') c.native?.sound?.('record');
+      }
+    }
+    const rounds = String(m?.rounds ?? 0);
+    if (m && rounds !== this.#moments.round && !run) {
+      this.#moments.round = rounds;
+      const rules = rulesFor(s);
+      const leader = rankingLeader(s);
+      if (leader !== null && this.#lastLeader !== undefined && leader !== this.#lastLeader && !m.winners.length && !rules.knockout)
+        this.showNotice(`${this.name(leader)} takes the lead!`, 3000);
+      this.#lastLeader = leader;
+      if (!rules.knockout && !m.winners.length)
+        for (const id of Cup.activeIds(s)) {
+          const finalist = id in m.finalists;
+          const point = !rules.finalist && m.scores[id] + rules.points[0] >= m.target;
+          const key = `${id}:${finalist ? 'f' : 'p'}`;
+          if ((finalist || point) && !this.#matchPoint.has(key)) {
+            this.#matchPoint.add(key);
+            this.showNotice(
+              finalist
+                ? `${this.name(id)} is a finalist: one round win takes the cup`
+                : `${this.name(id)} is on match point`,
+              3000,
+            );
+          }
+        }
+    }
+  }
+  finishBanner() {
+    const c = this.#c,
+      s = c.cup,
+      run = s.runtime!,
+      me = c.localPlayerId!;
+    const rows = standings(s),
+      row = rows.find((r) => r.id === me);
+    if (!row) return;
+    const best = Math.min(...Object.values(run.finishes));
+    const gap = run.finishes[me] - best;
+    const ta = rulesFor(s).roundStyle === 'time-attack';
+    const parts = [
+      `P${row.position}`,
+      rulesFor(s).knockout ? null : row.gain ? `+${row.gain} pts` : null,
+      gap > 0 ? formatGap(gap) : Object.keys(run.finishes).length > 1 ? 'Fastest' : null,
+      ta ? `Best ${time(run.finishes[me])}` : null,
+    ].filter(Boolean);
+    this.#banner.replaceChildren(h('strong', parts.shift()!), h('span', parts.join(' · ')));
+    this.#banner.hidden = false;
+    this.#toolbar.sync();
+    this.#banner.classList.remove('show');
+    void this.#banner.offsetWidth;
+    this.#banner.classList.add('show');
+    c.native?.sound?.('finish');
+    clearTimeout(this.#bannerTimer);
+    this.#bannerTimer = window.setTimeout(() => (this.#banner.hidden = true), 4000);
+  }
+  // The organizer's round controls while racing, as buttons in the game's own toolbar.
+  renderHostStrip() {
+    const c = this.#c,
+      s = c.state;
+    const live = !!s && c.isHost && !!s.runtime && ['loading', 'warmup', 'countdown', 'racing'].includes(s.phase);
+    const actions: { label: string; icon: string; run: () => void }[] = [];
+    if (live && s!.phase === 'racing')
+      actions.push({ label: 'End round', icon: 'checkmark', run: this.confirmed('Score the finishes so far and give everyone still racing a DNF?', 'End round', () => c.finishRound()) });
+    if (live)
+      actions.push(
+        { label: 'Restart', icon: 'reset', run: this.confirmed('Restart this round from the countdown? Nobody scores the current attempt.', 'Restart round', () => c.restartRound()) },
+        { label: 'Void', icon: 'cancel', run: this.confirmed('Stop this round without awarding points?', 'Void round', () => c.voidRound(), true) },
+      );
+    this.#toolbar.setActions(actions);
+  }
+  trackVoteControls() {
+    const c = this.#c,
+      s = c.cup,
+      v = s.trackVote;
+    if (!v || s.phase !== 'between-rounds') return null;
+    const me = c.localPlayerId;
+    const box = h('section', undefined, 'track-vote');
+    const title = h('div', undefined, 'track-vote-title');
+    title.append(
+      h('strong', v.mode === 'vote' ? 'Vote for the next track' : me === v.picker ? 'Pick the next track' : `${this.name(v.picker)} picks the next track`),
+    );
+    const timer = h('span');
+    timer.dataset.voteClock = '';
+    title.append(timer);
+    box.append(title);
+    const mayVote = me !== null && Cup.activeIds(s).includes(me) && (v.mode === 'vote' || me === v.picker);
+    const counts = new Map<string, number>();
+    for (const choice of Object.values(v.votes)) counts.set(choice, (counts.get(choice) ?? 0) + 1);
+    const list = h('div', undefined, 'track-vote-options');
+    let library: LibraryTrack[] = [];
+    try {
+      library = c.availableTracks();
+    } catch {}
+    for (const option of v.options) {
+      const mine = me !== null && v.votes[me] === option.id;
+      const b = this.button('', () => c.action('track-vote', option.id), `track-card${mine ? ' added' : ''}`, `vote:${option.id}`);
+      b.disabled = !mayVote;
+      b.setAttribute('aria-label', `${mine ? 'Voted for' : 'Vote for'} ${option.name}`);
+      const image = h('img');
+      image.alt = '';
+      const entry = library.find((t) => t.id === option.id);
+      if (entry)
+        Promise.resolve(entry.thumbnail)
+          .then((src) => {
+            if (src && image.isConnected) image.src = src;
+          })
+          .catch(() => {});
+      image.addEventListener('error', () => (image.hidden = true));
+      const text = h('span');
+      text.append(h('strong', option.name));
+      if (v.mode === 'vote') text.append(h('small', `${counts.get(option.id) ?? 0} vote${counts.get(option.id) === 1 ? '' : 's'}`, 'muted'));
+      else if (mine) text.append(h('small', 'Your pick', 'muted'));
+      b.append(image, text);
+      list.append(b);
+    }
+    box.append(list);
+    if (!mayVote && v.mode !== 'vote') box.append(h('small', 'A random one is chosen if no pick arrives in time.', 'muted'));
+    return box;
   }
   welcome() {
     const content = h('div', undefined, 'body');
@@ -844,6 +1082,7 @@ export class CupUI {
     this.#startCueValue = value;
     this.#startCue.replaceChildren();
     if (!value) return;
+    c.native?.sound?.(value === 'GO' ? 'go' : 'tick');
     const signal = h('div', undefined, `start-signal${value === 'GO' ? ' go' : ''}`);
     signal.append(h('span', value === 'GO' ? 'GO!' : value, 'start-number'));
     this.#startCue.append(signal);
@@ -852,7 +1091,17 @@ export class CupUI {
     const body = h('div', undefined, 'body');
     // Not So Weekly Shorts: the host's cup is created with the name picked before the room opened,
     // and an ended cup sends everyone back to the menu.
-    body.append(h('h2', this.#c.isHost ? 'Setting up the cup…' : 'Waiting for the organizer'));
+    const c = this.#c,
+      failed = c.isHost && c.connection ? c.native?.inviteError?.(c.connection) : null;
+    if (failed) {
+      body.append(h('h2', 'The cup room couldn’t open'), h('p', failed));
+      const controls = h('div', undefined, 'controls');
+      controls.append(
+        this.button('Try again', () => c.connection?.renewInvite(), 'primary'),
+        this.button('Back to the menu', () => (window as unknown as { __nswsCupLeave?: (m: string) => void }).__nswsCupLeave?.(''), 'quiet'),
+      );
+      body.append(controls);
+    } else body.append(h('h2', c.isHost ? 'Setting up the cup…' : 'Waiting for the organizer…'));
     this.#panel.append(body);
   }
   lobbyPeople() {
@@ -1222,8 +1471,15 @@ export class CupUI {
         this.#membershipControls = membership;
       }
       this.#body.append(this.scoreboard(true));
+      const vote = this.trackVoteControls();
+      if (vote) this.#body.append(vote);
       const skip = this.skipControl();
       if (skip) this.#body.append(skip);
+      if (!c.isHost && !rulesFor(s).collisions) {
+        const ghosts = this.button(c.ghostsHidden ? 'Show other cars' : 'Hide other cars', () => this.toggleGhosts(), 'quiet');
+        ghosts.setAttribute('aria-pressed', String(c.ghostsHidden));
+        this.#body.append(ghosts);
+      }
       if (s.runtime) {
         const roundBar = h('div', undefined, 'scoreboard-meta');
         const status = h(
@@ -1291,10 +1547,7 @@ export class CupUI {
       controls.append(
         this.button(
           'End round',
-          () => {
-            if (confirm('Score the current finishes and give every unfinished racer a DNF?'))
-              c.finishRound();
-          },
+          this.confirmed('Score the finishes so far and give everyone still racing a DNF?', 'End round', () => c.finishRound()),
           'quiet',
         ),
       );
@@ -1303,10 +1556,7 @@ export class CupUI {
       controls.append(
         this.button(
           'Restart round',
-          () => {
-            if (confirm('Restart this round from the countdown? Nobody scores the current attempt.'))
-              c.restartRound();
-          },
+          this.confirmed('Restart this round from the countdown? Nobody scores the current attempt.', 'Restart round', () => c.restartRound()),
           'quiet',
         ),
       );
@@ -1314,18 +1564,14 @@ export class CupUI {
       controls.append(
         this.button(
           'Void round',
-          () => {
-            if (confirm('Stop this round without awarding points?')) c.voidRound();
-          },
+          this.confirmed('Stop this round without awarding points?', 'Void round', () => c.voidRound(), true),
           'quiet',
         ),
       );
     if (['between-rounds', 'complete'].includes(s.phase)) {
       const undo = this.button(
         'Undo last scored round',
-        () => {
-          if (confirm('Undo the last scored round in this match?')) c.change(Cup.undoRound);
-        },
+        this.confirmed('Undo the last scored round? Its points are taken back.', 'Undo round', () => c.change(Cup.undoRound)),
         'quiet',
       );
       undo.disabled = s.history.at(-1)?.matchIndex !== s.matchIndex;
@@ -1335,14 +1581,12 @@ export class CupUI {
       controls.append(
         this.button(
           'Remove current track',
-          async () => {
-            if (
-              confirm(
-                'Remove this track for the rest of the Cup and undo every scored round from this visit? Earlier visits keep their scores.',
-              )
-            )
-              await c.removeTrack();
-          },
+          this.confirmed(
+            'Remove this track for the rest of the cup and undo every scored round from this visit? Earlier visits keep their scores.',
+            'Remove track',
+            () => c.removeTrack(),
+            true,
+          ),
           'quiet',
         ),
       );
@@ -1350,13 +1594,15 @@ export class CupUI {
       const section = h('section', undefined, 'host-round-controls');
       const heading = h('div', undefined, 'section-heading');
       heading.append(h('h3', 'Round controls'));
-      const ghosts = this.button(
-        c.hideOtherGhosts ? 'Show ghosts' : 'Hide ghosts',
-        () => this.toggleGhosts(),
-        'quiet',
-      );
-      ghosts.setAttribute('aria-pressed', String(c.hideOtherGhosts));
-      heading.append(ghosts);
+      if (!rulesFor(s).collisions) {
+        const ghosts = this.button(
+          c.ghostsHidden ? 'Show other cars' : 'Hide other cars',
+          () => this.toggleGhosts(),
+          'quiet',
+        );
+        ghosts.setAttribute('aria-pressed', String(c.ghostsHidden));
+        heading.append(ghosts);
+      }
       section.append(heading, controls);
       this.#body.append(section);
     }
@@ -1383,13 +1629,26 @@ export class CupUI {
       board.append(podium);
     }
     const heading = h('div', undefined, 'ranking-heading');
+    const rules = rulesFor(s);
     heading.append(h('strong', s.phase === 'racing' ? 'ROUND RANKING' : 'CUP STANDINGS'));
+    // Not So Weekly Shorts: what it takes to win, always in view.
+    heading.append(
+      h(
+        'small',
+        rules.knockout
+          ? `Knockout · ${Cup.activeIds(s).length} left`
+          : rules.finalist
+            ? `Finalist at ${match.target} · win a round`
+            : `First to ${match.target}`,
+        'ranking-goal',
+      ),
+    );
     board.append(heading);
     for (const [i, r] of racers.entries()) {
       const row = h(
         'div',
         undefined,
-        `score-row${r.id === this.#c.localPlayerId ? ' highlighted' : ''}${r.finalist ? ' finalist' : ''}${r.id === this.#c.localPlayerId ? ' self' : ''}`,
+        `score-row${r.id === this.#c.localPlayerId ? ' highlighted self' : ''}${r.finalist ? ' finalist' : ''}${r.out ? ' out' : ''}${r.verifying ? ' verifying' : ''}`,
       );
       const name = this.racerName(r.id, this.name(r.id), false, personalBests);
       name.title = this.name(r.id);
@@ -1403,10 +1662,14 @@ export class CupUI {
           ? 'Places gained or lost at the latest race update'
           : 'Places gained or lost in Cup standings this round';
       const points = h('span', undefined, 'points');
-      const total = h('strong', r.finalist ? 'F' : String(r.score));
-      total.title = r.finalist
-        ? 'Finalist: win an outright round to take the Cup'
-        : `${r.score} of ${Cup.currentMatch(s).target} points`;
+      const total = h('strong', r.out ? 'OUT' : rules.knockout ? 'IN' : r.finalist ? 'F' : String(r.score));
+      total.title = r.out
+        ? 'Knocked out'
+        : rules.knockout
+          ? 'Still in the cup'
+          : r.finalist
+            ? 'Finalist: win an outright round to take the cup'
+            : `${r.score} of ${Cup.currentMatch(s).target} points`;
       const gain = h(
         'small',
         r.gain ? `+${r.gain}` : '',
@@ -1426,8 +1689,10 @@ export class CupUI {
           : showGap
             ? formatGap(r.delta ?? 0)
             : time(reading);
-      const timing = h('span', result, 'time');
-      timing.title = r.dnf
+      const timing = h('span', r.verifying ? `${result} …` : result, 'time');
+      timing.title = r.verifying
+        ? 'The organizer is checking this finish'
+        : r.dnf
         ? 'Retired this round'
         : r.frames !== undefined
           ? `Finish: ${time(r.frames)}`
@@ -1531,12 +1796,16 @@ export class CupUI {
       track = s.tracks.find((t) => t.id === id);
     const title = h('div', undefined, 'hud-track');
     title.append(h('strong', track?.name ?? s.name));
-    const sub = h('div', undefined, 'hud-meta'),
-      round = s.runtime?.round ?? Math.max(1, m.rounds);
-    const visit = Cup.trackProgress(s, round - 1);
-    if (!visit || !id) return;
+    const sub = h('div', undefined, 'hud-meta');
+    // Not So Weekly Shorts: between tracks the finished block no longer has a schedule; show the
+    // scoreboard anyway with what comes next.
+    const visit = s.runtime
+      ? Cup.trackProgress(s, m.rounds)
+      : m.rounds
+        ? Cup.trackProgress(s, m.rounds - 1)
+        : Cup.trackProgress(s, 0);
     const picked = s.roster
-      .filter((p) => Cup.chosenTracks(s, p.id).includes(id))
+      .filter((p) => Cup.chosenTracks(s, p.id).includes(id ?? ''))
       .map((p) => p.name)
       .join(', ');
     const picker = h(
@@ -1544,13 +1813,25 @@ export class CupUI {
       rulesFor(s).selection === 'random' ? 'Random track' : 'Picked by ',
       'track-pickers',
     );
-    for (const player of s.roster.filter((p) => Cup.chosenTracks(s, p.id).includes(id))) {
+    for (const player of s.roster.filter((p) => Cup.chosenTracks(s, p.id).includes(id ?? ''))) {
       if (picker.childNodes.length > 1) picker.append(', ');
       picker.append(this.playerLabel(player.id));
     }
     picker.title = picked;
-    sub.append(picker, h('strong', `ROUND ${visit.round}/${visit.rounds}`));
+    const roundNumber = (s.runtime?.round ?? m.rounds) || 1;
+    sub.append(
+      picker,
+      h(
+        'strong',
+        visit && (s.runtime || visit.trackId === id)
+          ? `ROUND ${roundNumber} · ${visit.round}/${visit.rounds} ON TRACK`
+          : `ROUND ${roundNumber}`,
+      ),
+    );
     title.append(sub);
+    const upcoming = !s.runtime ? Cup.nextTrack(s) : null;
+    if (upcoming && upcoming !== id)
+      title.append(h('div', `Next: ${s.tracks.find((t) => t.id === upcoming)?.name ?? 'new track'}`, 'hud-next'));
     const status = h('div', undefined, 'hud-phase');
     status.append(
       h(
@@ -1559,17 +1840,20 @@ export class CupUI {
       ),
     );
     title.append(status);
-    const records = s.records[id],
-      tr = sessionRecord(s, id);
+    const records = id ? s.records[id] : undefined,
+      tr = id ? sessionRecord(s, id) : null;
     const summary = h('div', undefined, 'hud-summary');
+    summary.append(title);
+    if (!rulesFor(s).collisions)
+      summary.append(
+        this.recordStrip(
+          'WR',
+          records?.wr,
+          records?.wr?.name,
+          'Overall leaderboard record. Official/community tracks use verified records; custom tracks use their public leaderboard.',
+        ),
+      );
     summary.append(
-      title,
-      this.recordStrip(
-        'WR',
-        records?.wr,
-        records?.wr?.name,
-        'Overall leaderboard record. Official/community tracks use verified records; custom tracks use their public leaderboard.',
-      ),
       this.recordStrip(
         'TR',
         tr ?? { status: 'missing' },
@@ -1578,6 +1862,11 @@ export class CupUI {
       ),
     );
     this.#hud.append(summary, this.scoreboard());
+    const vote = this.trackVoteControls();
+    if (vote) {
+      this.#practiceHud.hidden = false;
+      this.#practiceHud.append(vote);
+    }
     const skip = this.skipControl();
     if (skip) {
       this.#practiceHud.hidden = false;
@@ -1633,6 +1922,15 @@ export class CupUI {
     name.append(selected);
     main.append(name);
     box.append(previous, main, next);
+    // Not So Weekly Shorts: the spectator keys, on screen.
+    const game = c.game,
+      hints = [`${keyLabel('spectatePrevious')} / ${keyLabel('spectateNext')} switch racer`];
+    const freecam = game ? c.native?.freecamKeys?.(game) : null;
+    if (freecam?.length && rulesFor(c.cup).allowSpectatorFreecam !== false) hints.push(`${freecam.join(' / ')} free camera`);
+    const ghosts = game ? c.native?.ghostKeys?.(game) : null;
+    if (ghosts?.length && !rulesFor(c.cup).collisions) hints.push(`${ghosts.join(' / ')} other cars`);
+    const hint = h('small', hints.join(' · '), 'pov-keys');
+    box.append(hint);
     return box;
   }
   spectatorRecord() {
@@ -1661,8 +1959,8 @@ export class CupUI {
       board.append(h('h2', 'Final standings'));
       for (const r of resultRows(s)) {
         const row = h('div', undefined, `final-row${r.winner ? ' champion' : ''}`);
-        const score = h('span', r.score, 'final-score');
-        score.title = 'Cup points';
+        const score = h('span', rulesFor(s).knockout ? (r.winner ? 'Winner' : `Out R${Cup.currentMatch(s).knockedOut?.find((k) => k.id === r.id)?.round ?? '?'}`) : r.score, 'final-score');
+        score.title = rulesFor(s).knockout ? 'Knockout result' : 'Cup points';
         row.append(h('strong', r.place), this.racerName(r.id, r.name, false, true));
         if (r.winner) row.append(h('span', 'Winner', 'winner-label'));
         row.append(score);
@@ -1772,7 +2070,10 @@ export class CupUI {
     const tick = () => {
       if (this.#finishKey !== key) return clearInterval(this.#finishTimer);
       const left = leaveAt - Date.now();
-      countdown.textContent = `Leaving the cup in ${Math.max(0, Math.ceil(left / 1000))}s`;
+      const seconds = Math.max(0, Math.ceil(left / 1000));
+      countdown.textContent = this.#c.isHost
+        ? `Everyone leaves in ${seconds}s unless you race again`
+        : `Leaving in ${seconds}s unless the organizer starts a rematch`;
       if (left <= 0) leave();
     };
     clearInterval(this.#finishTimer);
@@ -1799,7 +2100,7 @@ export class CupUI {
         this.thumbnail(r.id).then((url) => {
           if (url && car.isConnected) car.src = url;
         });
-        slot.append(car, h('strong', r.name, 'podium-name'), h('span', `${r.score ?? 0} pts`, 'podium-points'));
+        slot.append(car, h('strong', r.name, 'podium-name'), h('span', this.podiumScore(r), 'podium-points'));
       }
       if (!r) slot.classList.add('empty');
       const block = h('div', undefined, 'podium-block');
@@ -1813,18 +2114,43 @@ export class CupUI {
       rest.start = 4;
       for (const r of rows.slice(3)) {
         const item = h('li');
-        item.append(h('span', `${r.place}. ${r.name}`), h('span', `${r.score ?? 0} pts`, 'podium-points'));
+        item.append(h('span', `${r.place}. ${r.name}`), h('span', this.podiumScore(r), 'podium-points'));
         rest.append(item);
       }
       box.append(rest);
     }
     const controls = h('div', undefined, 'controls podium-controls');
+    // Not So Weekly Shorts: the organizer can go again straight from the podium (which keeps
+    // everyone in the room), and anyone can save their best run of the cup as a clip.
+    if (this.#c.isHost)
+      controls.append(
+        this.button('Race again', () => this.#c.rematch(), 'primary'),
+        this.button('New tracks', () => this.#c.rematch(true), 'quiet'),
+      );
+    const best = this.#c.bestRun;
+    if (best && this.#c.native?.saveClip) {
+      const track = this.#c.cup.tracks.find((t) => t.id === best.trackId)?.name ?? 'track';
+      const clip = this.button(`Clip my best run (P${best.place} · ${track})`, async () => {
+        const saved = await this.#c.saveBestRun();
+        clip.textContent = saved === 'duplicate' ? 'Already in your clips' : saved ? 'Saved to your clips' : 'Couldn’t save the clip';
+        clip.disabled = true;
+      }, 'quiet');
+      controls.append(clip);
+    }
     controls.append(
       this.button('Save results image', () => this.downloadImage(), 'quiet'),
-      this.button('Leave now', leave, 'primary'),
+      this.button('Leave now', leave, this.#c.isHost ? 'quiet' : 'primary'),
     );
     box.append(controls, countdown);
     return box;
+  }
+  // Not So Weekly Shorts: a knockout cup has no points; say when each racer went out.
+  podiumScore(r: { id: number; score?: number; winner: boolean }) {
+    const s = this.#c.cup;
+    if (!rulesFor(s).knockout) return `${r.score ?? 0} pts`;
+    if (r.winner) return 'Winner';
+    const out = Cup.currentMatch(s).knockedOut?.find((k) => k.id === r.id);
+    return out ? `Out in round ${out.round}` : 'Still in';
   }
   async downloadImage() {
     const state = structuredClone(this.#c.cup),
@@ -1836,4 +2162,14 @@ export class CupUI {
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+}
+
+// Not So Weekly Shorts: the cup leader (by the cup's own ranking), for lead-change notices.
+function rankingLeader(s: CupState) {
+  const m = Cup.currentMatch(s);
+  if (!m) return null;
+  const ranking = Cup.rankMatch(s, m).filter((id) => Cup.activeIds(s).includes(id));
+  const first = ranking[0];
+  if (first === undefined || !m.scores[first]) return null;
+  return ranking[1] !== undefined && m.scores[ranking[1]] === m.scores[first] ? null : first;
 }

@@ -164,12 +164,16 @@ export class PlayerMenu {
     }
     if (peer && id !== c.selfId)
       action(
-        'Kick from lobby',
-        () => {
+        'Kick from the cup',
+        async () => {
           const draft = s.phase === 'registration' && !rosterOpen(s);
+          // Not So Weekly Shorts: an in-page confirmation (confirm() blocks the organizer's clock).
+          this.close();
           if (
-            confirm(
+            await ui.ask(
               `Kick ${name} from the cup room?${draft ? ' This restarts the draft for the remaining racers.' : ''}`,
+              'Kick',
+              true,
             )
           )
             c.kickPlayer(id);

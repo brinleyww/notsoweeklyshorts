@@ -14,6 +14,7 @@ export interface NativeCar {
   getTime(): { numberOfFrames: number };
   getFinishTime(): { numberOfFrames: number } | null;
   getNextCheckpointIndex(): number;
+  getRecording?(): { serialize(): string } | null;
   addCheckpointCallback(callback: (index: number) => void): void;
   addFinishCallback(callback: () => void): void;
   start(): void;
@@ -143,6 +144,17 @@ export interface NativeApi {
   clearRecords(connection: NativeConnection): void;
   guard(fn: (game: NativeGame) => boolean): void;
   guardRestart(fn: (game: NativeGame) => boolean): void;
+  // Not So Weekly Shorts additions (main.bundle.js cupNative).
+  verifyRun?(game: NativeGame, recording: string, frames: number): Promise<boolean | null>;
+  collisions?(game: NativeGame, racers: number[] | null): void;
+  bumps?(game: NativeGame): { id: number; impulse: number[] }[];
+  bump?(game: NativeGame, impulse: number[]): void;
+  sound?(name: 'tick' | 'go' | 'record' | 'checkpoint' | 'finish'): void;
+  inviteError?(connection: NativeConnection): string | null;
+  saveClip?(run: { recording: string; frames: number; trackId: string; carStyle: string; nickname: string; name: string }): Promise<boolean | 'duplicate'>;
+  carStyle?(game: NativeGame): string;
+  freecamKeys?(game: NativeGame): string[];
+  restartKeys?(game: NativeGame): string[];
   personalBest(game: NativeGame, id: string): Promise<RaceRecord>;
   worldRecord(game: NativeGame, id: string): Promise<RaceRecord>;
   records(game: NativeGame): {

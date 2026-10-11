@@ -1,5 +1,5 @@
 import { recordAward, recordBaselines } from './record-awards.ts';
-import type { CupState, Match, RaceRecord, Track } from './types.ts';
+import type { CupState, Match, RaceRecord, Round, Track } from './types.ts';
 // Competition state is owned by the native multiplayer host. No game internals here.
 import { isBanned, picksOpen, resetDraft, rosterOpen } from './draft.ts';
 import {
@@ -60,10 +60,18 @@ export function activeIds(state: CupState | null) {
     ? m.players.filter(
         (id) =>
           !m.winners.includes(id) &&
+          !knockedOut(m, id) &&
           !state?.withdrawn?.includes(id) &&
           !state?.pendingRacers?.includes(id),
       )
     : [];
+}
+export function knockedOut(m: Match | null | undefined, id: number) {
+  return !!m?.knockedOut?.some((k) => k.id === id);
+}
+// Not So Weekly Shorts: in a time-attack round racers keep improving until the window closes.
+export function timeAttack(state: CupState | null) {
+  return rulesFor(state).roundStyle === 'time-attack';
 }
 export function occupiedSlots(state: CupState) {
   return state.phase === 'registration'
@@ -73,6 +81,7 @@ export function occupiedSlots(state: CupState) {
 export function enterRunningCup(state: CupState, id: number, name: string) {
   requireThat(
     rulesFor(state).allowRacerChanges &&
+      !rulesFor(state).knockout &&
       state.phase !== 'registration' &&
       state.phase !== 'complete',
     'This preset locks the racer roster during the Cup.',
@@ -142,7 +151,8 @@ export function roundDone(state: CupState | null, id: number | null) {
   return (
     state?.phase === 'racing' &&
     !!state.runtime &&
-    ((id !== null && id in state.runtime.finishes) || state.runtime.dnfs.includes(id!))
+    ((id !== null && id in state.runtime.finishes && !timeAttack(state)) ||
+      state.runtime.dnfs.includes(id!))
   );
 }
 export function mayWatch(state: CupState | null, id: number | null) {
@@ -194,7 +204,9 @@ export function removePick(state: CupState, actor: number, trackId: string) {
   touch(state);
 }
 export function note(state: CupState, message: string) {
-  state.audit.push({ at: new Date().toISOString(), message: safeName(message) });
+  // Not So Weekly Shorts: notes are shown to players, so they get the snapshot's full 128 characters.
+  const text = String(message ?? '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 128);
+  state.audit.push({ at: new Date().toISOString(), message: text });
   state.audit = state.audit.slice(-500);
 }
 export function touch(state: CupState) {
@@ -373,6 +385,8 @@ export function scheduleRandomTrack(state: CupState, track: Track, wr: RaceRecor
   (m.trackRounds ??= {})[track.id] = rules.roundsPerTrack;
   (m.trackWarmups ??= {})[track.id] = practiceForRecord(wr, rules);
   m.randomTrack = { id: track.id, fromRound: m.rounds, rounds: rules.roundsPerTrack };
+  delete state.skipVote;
+  state.trackVote = null;
   touch(state);
 }
 export function beginRound(state: CupState) {
@@ -381,6 +395,7 @@ export function beginRound(state: CupState) {
   const visit = trackProgress(state);
   requireThat(visit, 'No track scheduled.');
   m.currentVisit = { trackId: visit.trackId, fromRound: m.rounds - visit.round + 1 };
+  state.nextRoundAt = null;
   const firstVisit = !m.roundsLog.some((r) => r.trackId === visit.trackId);
   state.runtime = {
     racers: activeIds(state),
@@ -410,29 +425,82 @@ export function startRace(state: CupState, now: number) {
   requireThat(state.runtime, 'No active round.');
   state.runtime.recordBaselines = recordBaselines(state.records[state.runtime.trackId]);
   state.runtime.startsAt = now;
+  const limit = roundLimit(state, state.runtime.trackId);
+  state.runtime.limitAt = limit === null ? null : now + limit;
+  state.runtime.deadline = state.runtime.limitAt;
   state.phase = 'racing';
   touch(state);
 }
+// Not So Weekly Shorts: how long a round may last (ms), so a round nobody can finish still ends.
+// "auto" allows three times the best known time, between one and ten minutes.
+export function roundLimit(state: CupState, trackId: string): number | null {
+  const rules = rulesFor(state);
+  if (rules.roundStyle === 'time-attack') return rules.timeAttackSeconds * 1000;
+  if (rules.roundTimeLimit === 'off') return null;
+  if (rules.roundTimeLimit === 'fixed') return rules.roundTimeSeconds * 1000;
+  const records = state.records[trackId];
+  const known = [
+    records?.wr?.status === 'ready' ? records.wr.frames : undefined,
+    records?.tr?.frames,
+  ].filter((n): n is number => typeof n === 'number' && n > 0);
+  return known.length
+    ? Math.min(600000, Math.max(60000, Math.ceil(Math.min(...known) * 3)))
+    : 240000;
+}
+// Finishes reach the organizer a moment after they happen (batched relay, clock sync). A claimed
+// time far shorter than the time since GO cannot be real.
+export const FINISH_SLACK_MS = 5000;
 export function recordFinish(state: CupState, id: number, frames: number, now: number) {
   if (state.phase !== 'racing' || !activeIds(state).includes(id)) return false;
   const run = state.runtime;
   if (!run || run.startsAt === null) return false;
-  if (id in run.finishes || run.dnfs.includes(id)) return false;
+  if (run.dnfs.includes(id)) return false;
   if (!Number.isSafeInteger(frames) || frames <= 0 || frames > 3600000) return false;
   // PolyTrack uses 1000 physics frames per second. Do not accept a finish from a prior run.
   if (frames > now - run.startsAt + 2000) return false;
-  if (run.deadline !== null && (now > run.deadline + 1500 || frames > run.deadline - run.startsAt))
-    return false;
-  const award = recordAward(run, id, frames);
+  if (timeAttack(state)) {
+    // Not So Weekly Shorts: any number of attempts; the best one counts if it ends before the bell.
+    if (run.deadline !== null && now > run.deadline + 1500) return false;
+    if (id in run.finishes && run.finishes[id] <= frames) return false;
+  } else {
+    if (id in run.finishes) return false;
+    if (now - run.startsAt - frames > FINISH_SLACK_MS) return false;
+    if (run.deadline !== null && (now > run.deadline + 1500 || frames > run.deadline - run.startsAt))
+      return false;
+  }
+  // Not So Weekly Shorts: a collision cup's times never count as personal bests or world records.
+  const found = recordAward(run, id, frames),
+    award = rulesFor(state).collisions && found !== 'TR' ? null : found;
   if (award) (run.recordAwards ??= {})[id] = award;
+  else if (run.recordAwards) delete run.recordAwards[id];
   run.finishes[id] = frames;
-  const finishAt = run.startsAt + frames;
-  run.deadline = Math.min(
-    run.deadline ?? Infinity,
-    finishAt + rulesFor(state).finishTimeoutSeconds * 1000,
-  );
+  if (!timeAttack(state)) {
+    const finishAt = run.startsAt + frames;
+    run.deadline = Math.min(
+      run.deadline ?? Infinity,
+      finishAt + rulesFor(state).finishTimeoutSeconds * 1000,
+    );
+  }
   touch(state);
   return true;
+}
+// Not So Weekly Shorts: a finish that failed the organizer's physics replay. A time-attack racer
+// falls back to their previous best; in a single-attempt round it becomes a DNF.
+export function rejectFinish(state: CupState, id: number, previous: number | null) {
+  const run = state.runtime;
+  if (!run || !(id in run.finishes)) return;
+  delete run.finishes[id];
+  if (run.recordAwards) delete run.recordAwards[id];
+  if (timeAttack(state) && previous !== null) run.finishes[id] = previous;
+  else if (!run.dnfs.includes(id)) run.dnfs.push(id);
+  if (!timeAttack(state)) {
+    const window = rulesFor(state).finishTimeoutSeconds * 1000;
+    const finishes = Object.values(run.finishes);
+    run.deadline = finishes.length
+      ? Math.min(run.limitAt ?? Infinity, run.startsAt! + Math.min(...finishes) + window)
+      : (run.limitAt ?? null);
+  }
+  touch(state);
 }
 export function markDNF(state: CupState, id: number) {
   requireThat(state.phase === 'racing', 'There is no live round.');
@@ -446,6 +514,7 @@ export function markDNF(state: CupState, id: number) {
 export function allFinished(state: CupState) {
   if (!state.runtime) return false;
   const run = state.runtime;
+  if (timeAttack(state)) return activeIds(state).every((id) => run.dnfs.includes(id));
   return activeIds(state).every((id) => id in run.finishes || run.dnfs.includes(id));
 }
 export function completeRound(state: CupState) {
@@ -473,8 +542,13 @@ export function completeRound(state: CupState) {
     firstIsTied = order.length > 1 && run.finishes[first] === run.finishes[order[1]];
   if (rules.finalist && first !== undefined && !firstIsTied && first in m.finalists)
     m.winners.push(first);
-  const points: Record<number, number> = {};
   for (const id of order) {
+    const counts = ((m.placings ??= {})[id] ??= [0, 0, 0, 0, 0, 0, 0, 0]);
+    counts[placements[id] - 1]++;
+  }
+  const points: Record<number, number> = {};
+  if (rules.knockout) knockOut(state, m, run, ids, order);
+  else for (const id of order) {
     points[id] =
       id in m.finalists
         ? 0
@@ -493,7 +567,7 @@ export function completeRound(state: CupState) {
         };
     }
   }
-  if (!rules.finalist) {
+  if (!rules.finalist && !rules.knockout) {
     const eligible = m.players.filter((id) => !state.withdrawn?.includes(id) || id in run.finishes),
       best = Math.max(...eligible.map((id) => m.scores[id])),
       leaders = eligible.filter((id) => m.scores[id] === best);
@@ -515,13 +589,87 @@ export function completeRound(state: CupState) {
   state.runtime = null;
   if (m.winners.length) {
     m.ranking = rankMatch(state, m);
-    state.results = m.ranking.map((id, i) => ({ id, place: i + 1 }));
+    state.results = places(m, m.ranking);
     state.phase = 'complete';
   } else state.phase = 'between-rounds';
   refreshSessionRecords(state);
   touch(state);
 }
+// Not So Weekly Shorts: the slowest racers of a knockout round leave the grid (anyone without a
+// finish goes first, by how far they got). Exact ties at the cut both stay. When one racer is left,
+// they win; a round nobody finishes knocks out only racers who left.
+function knockOut(state: CupState, m: Match, run: Round, ids: number[], order: number[]) {
+  const rules = rulesFor(state);
+  const left = ids.filter((id) => state.withdrawn?.includes(id) && !(id in run.finishes));
+  const stayed = ids.filter((id) => !left.includes(id));
+  const splits = run.splits ?? {};
+  const unfinished = stayed
+    .filter((id) => !(id in run.finishes))
+    .sort(
+      (a, b) =>
+        (splits[b]?.index ?? -1) - (splits[a]?.index ?? -1) ||
+        (splits[a]?.frames ?? Infinity) - (splits[b]?.frames ?? Infinity),
+    );
+  let out: number[] = [];
+  if (order.length) {
+    const ranked = [...order.filter((id) => stayed.includes(id)), ...unfinished];
+    const cut = Math.min(Math.max(rules.knockout, unfinished.length), ranked.length - 1);
+    out = cut > 0 ? ranked.slice(ranked.length - cut) : [];
+    const safe = ranked[ranked.length - cut - 1];
+    if (safe !== undefined && safe in run.finishes)
+      out = out.filter((id) => !(id in run.finishes) || run.finishes[id] !== run.finishes[safe]);
+  }
+  const gone = [...out, ...left];
+  if (gone.length) {
+    (m.knockedOut ??= []).push(...gone.map((id) => ({ id, round: run.round })));
+    note(state, `Knocked out: ${gone.map((id) => player(state, id)?.name ?? 'Racer').join(', ')}.`);
+  }
+  const remaining = m.players.filter(
+    (id) => !knockedOut(m, id) && !state.withdrawn?.includes(id) && !state.pendingRacers?.includes(id),
+  );
+  if (remaining.length === 1) m.winners.push(remaining[0]);
+  else if (!remaining.length && order[0] !== undefined) m.winners.push(order[0]);
+}
+// Exact ties (same points and the same countback, or the same knockout exit) share a place.
+export function places(m: Match, ranking: number[]) {
+  const key = (id: number) =>
+    m.winners.includes(id)
+      ? `w${m.winners.indexOf(id)}`
+      : JSON.stringify([m.scores[id], m.placings?.[id] ?? [], m.knockedOut?.findIndex((k) => k.id === id) ?? -1]);
+  const results: { id: number; place: number }[] = [];
+  ranking.forEach((id, i) => {
+    const previous = results[i - 1];
+    const tied = previous && key(ranking[i - 1]) === key(id) && !m.knockedOut?.length;
+    results.push({ id, place: tied ? previous.place : i + 1 });
+  });
+  return results;
+}
+function countback(m: Match, a: number, b: number) {
+  const x = m.placings?.[a] ?? [],
+    y = m.placings?.[b] ?? [];
+  for (let i = 0; i < 8; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (y[i] ?? 0) - (x[i] ?? 0);
+  return 0;
+}
 export function rankMatch(_state: CupState, m: Match) {
+  if (m.knockedOut?.length || rulesFor(_state).knockout) {
+    // Not So Weekly Shorts: knockout order. Racers still in, by the latest round; then the
+    // knocked-out racers, latest exit first.
+    const last = m.roundsLog.at(-1);
+    const lastOrder = last
+      ? Object.keys(last.finishes)
+          .map(Number)
+          .sort((a, b) => last.finishes[a] - last.finishes[b])
+      : [];
+    const position = (id: number) => (lastOrder.includes(id) ? lastOrder.indexOf(id) : Infinity);
+    const inRace = m.players
+      .filter((id) => !m.winners.includes(id) && !knockedOut(m, id))
+      .sort((a, b) => position(a) - position(b));
+    const out = [...(m.knockedOut ?? [])]
+      .map((k, i) => ({ ...k, i }))
+      .sort((a, b) => b.round - a.round || a.i - b.i)
+      .map((k) => k.id);
+    return [...m.winners, ...inRace, ...out];
+  }
   return [
     ...m.winners,
     ...m.players
@@ -536,7 +684,8 @@ export function rankMatch(_state: CupState, m: Match) {
           if (x.checkpoint !== null && y.checkpoint !== null && x.checkpoint !== y.checkpoint)
             return x.checkpoint - y.checkpoint;
         }
-        return 0; // Stable join order for display only; exact race ties always share points.
+        // Not So Weekly Shorts: equal points go to the racer with more wins, then more 2nds, ...
+        return countback(m, a, b);
       }),
   ];
 }
@@ -563,7 +712,7 @@ export function voidRound(state: CupState) {
   );
   state.runtime = null;
   state.phase = 'between-rounds';
-  note(state, 'Organizer voided the current round.');
+  note(state, 'The organizer voided the round. Nobody scored it.');
   touch(state);
 }
 export function undoRound(state: CupState) {
@@ -588,7 +737,7 @@ export function undoRound(state: CupState) {
   refreshSessionRecords(state);
   state.results = [];
   state.phase = 'between-rounds';
-  note(state, 'Organizer undid the last scored round.');
+  note(state, 'The organizer undid the last scored round.');
   touch(state);
 }
 export function currentTrackVisit(state: CupState) {
@@ -751,6 +900,7 @@ export function publicState(state: CupState) {
 // Not So Weekly Shorts: racers vote to skip a random track; more than half of them skips it.
 export function skipTarget(state: CupState | null) {
   if (!state || rulesFor(state).selection !== 'random' || !currentMatch(state)) return null;
+  if (state.skipVote?.passed) return null;
   if (state.runtime && ['loading', 'warmup', 'countdown', 'racing'].includes(state.phase))
     return state.runtime.trackId;
   return state.phase === 'between-rounds' ? nextTrack(state) : null;

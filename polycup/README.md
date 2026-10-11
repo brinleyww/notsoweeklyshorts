@@ -90,6 +90,106 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `controller.ts`: the lobby list is read four times a second instead of every frame.
 - `spectator.ts`: a longer spectator buffer, since camera poses arrive in batches.
 
+### Formats, rules and robustness (after v9.30)
+
+- `presets.ts`: optional rules (old saved presets still load, `fullRules` fills them): `roundTimeLimit`
+  (`auto` = 3x the best known time, 1-10 min, 4 min without one; `fixed`; `off`), `roundTimeSeconds`,
+  `nextTrack` (`random` / `vote` / `winner` / `last`, random selection only), `knockout` (racers out
+  per round), `roundStyle` (`single` / `time-attack`), `timeAttackSeconds`, `collisions`. Validation
+  is `presetProblems` (one message per field, shown on that field). Bundled presets: Quickplay,
+  Sprint, Formula, Cup Finals, Knockout, Time Attack, Bumper Cars, Standard.
+- `cup.ts`:
+  - round limit (`Round.limitAt`; the finish window still counts from the first finish);
+  - time-attack rounds (any number of attempts, the best counts, ends at the bell);
+  - knockout (`Match.knockedOut`; anyone without a finish goes first, by progress; exact ties at
+    the cut stay; the last racer in wins);
+  - countback on equal points (`Match.placings`) and shared places for exact ties;
+  - a finish claimed more than 5 s shorter than the time since GO is refused (`FINISH_SLACK_MS`);
+  - `rejectFinish` for a failed physics check;
+  - a skip vote clears when its track changes and can't void a round someone finished;
+  - collision cups never award PB/WR badges.
+- `controller.ts`:
+  - the organizer replays every racer's finish through the game's non-realtime physics
+    (`verifyRun`; the finish message carries the replay); a mismatch is a DNF, or the previous best
+    in time attack, with a note to everyone; the round waits up to 10 s for checks to finish;
+  - track votes and picks (`CupState.trackVote`, `track-vote` action, 12 s);
+  - `nextRoundAt` for everyone's "Next round in" clock;
+  - actions no longer push the break back;
+  - a passed skip vote after a finish ends the track after the round;
+  - a pending track load starts the round when it is ready;
+  - a newer session is adopted while loading;
+  - restart needs a second press within 2 s to retire;
+  - time-attack restarts give a fresh attempt;
+  - the organizer starts on the grid;
+  - hello every 5 s once settled, and identity proof only until the racer is on the roster;
+  - the clock runs on a worker ticker (`window.__nswsTicker`, transport.js) so a hidden organizer
+    tab keeps time;
+  - collision cups: `native.collisions` each frame, hits relayed as `bump` messages through the
+    organizer, uploads forced off;
+  - errors stay readable for 6 s;
+  - `bestRun` / `saveBestRun` for "Clip my best run";
+  - `debugInfo()` (`__nswsCupApp.debug()` in the console).
+- `validation.ts`: the new state fields (`placings`, `knockedOut`, `limitAt`, `verifying`,
+  `trackVote`, `nextRoundAt`, `skipVote.passed`).
+- `ui.ts`, `confirm.ts`, `race-status.ts`, `standings.ts`, `hud-layout.ts`, `toolbar.ts`, `lobby.ts`,
+  `invite.ts`, `preset-ui.ts`, `preset-summary.ts`, `results.ts`, `player-menu.ts`, `world-cup.css`:
+  - in-page confirmations instead of `confirm()` (which froze the organizer's clock);
+  - the HUD keeps the scoreboard between tracks;
+  - "First to N" / "Knockout · N left";
+  - labelled clocks: "Finish in", "Time limit" (last minute), "Time attack";
+  - "Next round in" and the vote countdown;
+  - notes as notices, and errors as notices when the panel is closed;
+  - the finish banner;
+  - photo finish, lead change, match point and finalist notices; sounds through `__nswsSfx`;
+  - the organizer's End round / Restart / Void as native toolbar buttons;
+  - vote cards;
+  - spectator key hints, and a ghost toggle for racers (none in collision cups);
+  - Escape closes the panel;
+  - minimum text sizes;
+  - "Invite players" card while the organizer is alone; Race / Watch wording;
+  - the preset editor with visible hints, per-field errors and labelled tools;
+  - podium: Race again / New tracks for the organizer, "Clip my best run", knockout labels,
+    30 s before everyone leaves.
+  - The finish banner and between-rounds label are stacked clear of the native hint and finish
+    announcer (`freeTop`).
+
+### Site adapter (`nsws/`)
+
+- `hub.ts`:
+  - intro text;
+  - the code box takes links and any case;
+  - a join card (organizer, maps, format, what the cup is doing) with Race / Watch;
+  - cancel and a 20 s timeout;
+  - readable proxy errors;
+  - list rows updated in place, with status, and clickable;
+  - room size explained;
+  - an owner-only "Official cup" option;
+  - status reports (`reportCupStatus`);
+  - auto-join after the organizer's hello (3 tries).
+- `transport.js`: mux sockets carry a token and resume after a drop (20 s, queue kept); the worker
+  ticker; hidden-tab flushes.
+- `entry.ts`: official cups post their results (`/nsws/cup/result`) for the Cup Champion tag.
+
+### Game bundle (`main.bundle.js`, `simulation_worker.bundle.js`)
+
+- `cupNative`: `verifyRun` (non-realtime simulation `Rr`, 15 s timeout), `collisions`, `bumps`,
+  `bump`, `sound`, `saveClip`, `carStyle`, `freecamKeys`, `restartKeys`, `inviteError`.
+- Collisions:
+  - `$a` keeps other racers solid;
+  - the own-record replay is skipped so a collided run doesn't show "Invalid replay";
+  - `remoteDelay` drops to 0.4 s;
+  - the race update sends the other racers' drawn poses and next keyframes to the realtime simulation
+    (`VisualCar.setCollisionCars`, Simulation message 11);
+  - the worker's `__collideStep` runs after every physics frame of the local car: box-vs-box, push-out,
+    a yaw-only bounce with half the impulse (equal masses), and the other half reported (message 12)
+    and applied on the other racer's car (message 13);
+  - pairs pass through each other after a spawn, reset, respawn or hit until they separate.
+- `Fn` invites: failures kept for the panel (`getInviteError`), the code reclaimed after a dropped
+  matchmaking socket (`?reclaim=`), `reportCupStatus`; the host's car relay also runs on the worker
+  ticker when its tab is hidden.
+- `window.__nswsSaveClip`, `window.__nswsSfx`, `__nswsCompetitions.join(code)`, and a message for a
+  bad `?cup=` link.
+
 ## Build
 
 ```sh

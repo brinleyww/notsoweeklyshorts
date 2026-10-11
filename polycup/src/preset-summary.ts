@@ -1,5 +1,5 @@
 import { element as h } from './dom.ts';
-import type { CupRules } from './presets.ts';
+import { fullRules, type CupRules } from './presets.ts';
 
 export function presetSummary(rules: CupRules) {
   const summary = h('div', undefined, 'preset-overview');
@@ -16,12 +16,20 @@ export function presetSummary(rules: CupRules) {
     section.append(list);
     summary.append(section);
   };
+  // Not So Weekly Shorts: knockout, time attack, time limits, track votes and collisions.
+  const r = fullRules(rules);
   group('Race', [
-    ['Rounds per track', String(rules.roundsPerTrack)],
-    [rules.finalist ? 'Finalist target' : 'Points to win', String(rules.pointsToWin)],
-    ['Finalist', rules.finalist ? 'Enabled' : 'Disabled'],
-    ['To win', rules.finalist ? 'Win as a finalist' : 'Lead at the target'],
-    ['Leaderboard uploads', rules.uploadLeaderboardTimes ? 'On · Casual' : 'Off · Competitive'],
+    ['Rounds per track', String(r.roundsPerTrack)],
+    ...(r.knockout
+      ? ([['Knockout', `${r.knockout} out per round`], ['To win', 'Be the last racer in']] as [string, string][])
+      : ([
+          [r.finalist ? 'Finalist target' : 'Points to win', String(r.pointsToWin)],
+          ['To win', r.finalist ? 'Reach the target, then win a round' : 'Lead at the target'],
+        ] as [string, string][])),
+    ['Rounds', r.roundStyle === 'time-attack' ? `Time attack, ${r.timeAttackSeconds}s, best run counts` : 'One run each'],
+    ['Time limit', r.roundStyle === 'time-attack' ? '—' : r.roundTimeLimit === 'off' ? 'None' : r.roundTimeLimit === 'fixed' ? `${r.roundTimeSeconds}s` : 'Auto'],
+    ['Collisions', r.collisions ? 'On · times don’t count anywhere' : 'Off'],
+    ['Leaderboard uploads', r.collisions ? 'Off' : r.uploadLeaderboardTimes ? 'On · reviewed by Race Control' : 'Off · cup only'],
   ]);
   const tracks: [string, string][] = [
     ['Selection', rules.selection === 'random' ? 'Random rotation' : 'Racer draft'],
@@ -38,7 +46,11 @@ export function presetSummary(rules: CupRules) {
       ['Bans per racer', String(rules.bansPerRacer)],
       ['Picks per racer', String(rules.picksPerRacer)],
     );
-  else tracks.push(['Bans / picks', 'None']);
+  else
+    tracks.push([
+      'Next track',
+      { random: 'Random', vote: 'Racers vote', winner: 'Round winner picks', last: 'Last place picks' }[r.nextTrack],
+    ]);
   group('Tracks', tracks);
   const timing: [string, string][] = [
     [
@@ -77,6 +89,7 @@ export function presetSummary(rules: CupRules) {
   ]);
   group('Racers', racers);
 
+  if (r.knockout) return summary;
   const scoring = h('table', undefined, 'rule-points');
   scoring.append(h('caption', 'Points by finishing position'));
   const head = h('thead'),

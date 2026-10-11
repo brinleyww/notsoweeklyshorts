@@ -21,14 +21,23 @@ export interface CupRules {
   readyEndsWarmup: boolean;
   finishTimeoutSeconds: number;
   roundBreakSeconds: number;
+  // Not So Weekly Shorts: the options below are optional so presets saved before them still load.
+  roundTimeLimit?: 'auto' | 'off' | 'fixed';
+  roundTimeSeconds?: number;
+  nextTrack?: 'random' | 'vote' | 'winner' | 'last';
+  knockout?: number;
+  roundStyle?: 'single' | 'time-attack';
+  timeAttackSeconds?: number;
+  collisions?: boolean;
 }
+export type FullRules = Required<CupRules>;
 export interface CupPreset {
   format: 'polycup-preset';
   schema: 1;
   name: string;
   rules: CupRules;
 }
-const standard: CupRules = {
+const standard: FullRules = {
   allowRacerChanges: false,
   allowSpectatorFreecam: true,
   uploadLeaderboardTimes: false,
@@ -48,100 +57,188 @@ const standard: CupRules = {
   readyEndsWarmup: true,
   finishTimeoutSeconds: 10,
   roundBreakSeconds: 5,
+  roundTimeLimit: 'auto',
+  roundTimeSeconds: 180,
+  nextTrack: 'random',
+  knockout: 0,
+  roundStyle: 'single',
+  timeAttackSeconds: 180,
+  collisions: false,
 };
+const OPTIONAL: Partial<FullRules> = {
+  allowSpectatorFreecam: true,
+  uploadLeaderboardTimes: false,
+  roundTimeLimit: 'auto',
+  roundTimeSeconds: 180,
+  nextTrack: 'random',
+  knockout: 0,
+  roundStyle: 'single',
+  timeAttackSeconds: 180,
+  collisions: false,
+};
+const preset = (name: string, rules: Partial<FullRules>): CupPreset => ({
+  format: 'polycup-preset',
+  schema: 1,
+  name,
+  rules: { ...structuredClone(standard), ...structuredClone(rules) },
+});
 export function standardPreset(): CupPreset {
-  return {
-    format: 'polycup-preset',
-    schema: 1,
-    name: 'Standard',
-    rules: structuredClone(standard),
-  };
+  return preset('Standard', {});
 }
+const random = {
+  allowRacerChanges: true,
+  finalist: false,
+  selection: 'random',
+  bansPerRacer: 0,
+  picksPerRacer: 0,
+  warmup: 'off',
+} as const;
 export function quickplayPreset(): CupPreset {
-  const preset = standardPreset();
-  preset.name = 'Quickplay';
-  Object.assign(preset.rules, {
-    allowRacerChanges: true,
-    roundsPerTrack: 3,
-    pointsToWin: 100,
-    finalist: false,
-    selection: 'random',
-    bansPerRacer: 0,
-    picksPerRacer: 0,
-    warmup: 'off',
-  });
-  return preset;
+  return preset('Quickplay', { ...random, roundsPerTrack: 3, pointsToWin: 100 });
 }
-export function rulesFor(state: CupState | null): CupRules {
+// Not So Weekly Shorts: more ready-made formats. Each one is only a set of rules.
+export function bundledPresets(): CupPreset[] {
+  return [
+    quickplayPreset(),
+    preset('Sprint', { ...random, roundsPerTrack: 1, pointsToWin: 60, nextTrack: 'vote' }),
+    preset('Formula', {
+      ...random,
+      roundsPerTrack: 2,
+      pointsToWin: 150,
+      points: [25, 18, 15, 12, 10, 8, 6, 4],
+    }),
+    preset('Cup Finals', { ...random, roundsPerTrack: 3, pointsToWin: 60, finalist: true }),
+    preset('Knockout', {
+      ...random,
+      allowRacerChanges: false,
+      roundsPerTrack: 2,
+      knockout: 1,
+      nextTrack: 'last',
+    }),
+    preset('Time Attack', {
+      ...random,
+      roundsPerTrack: 1,
+      pointsToWin: 50,
+      roundStyle: 'time-attack',
+      timeAttackSeconds: 180,
+      nextTrack: 'vote',
+    }),
+    preset('Bumper Cars', { ...random, roundsPerTrack: 3, pointsToWin: 60, collisions: true }),
+    standardPreset(),
+  ];
+}
+const BUNDLED = ['standard', 'quickplay', 'sprint', 'formula', 'cup finals', 'knockout', 'time attack', 'bumper cars'];
+export function rulesFor(state: CupState | null): FullRules {
   // Pre-draft saves have no bans; existing draft saves use the curated pool.
-  return (
-    state?.preset?.rules ?? {
-      ...standard,
-      bansPerRacer: state?.draft ? 1 : 0,
-      pool: state?.draft ? ['official', 'community'] : ['official', 'community', 'custom'],
-    }
-  );
+  const rules = state?.preset?.rules ?? {
+    ...standard,
+    bansPerRacer: state?.draft ? 1 : 0,
+    pool: state?.draft ? (['official', 'community'] as TrackCategory[]) : (['official', 'community', 'custom'] as TrackCategory[]),
+  };
+  return fullRules(rules);
+}
+export function fullRules(rules: CupRules): FullRules {
+  return { ...(OPTIONAL as FullRules), ...rules } as FullRules;
 }
 // Not So Weekly Shorts: the host picks the map pool before the room opens (polycup/nsws/hub.ts), and
 // the game only lists those maps, so a preset's pool only decides whether custom tracks are allowed.
 export function poolAllows(rules: CupRules, category: string) {
   return category !== 'custom' || rules.pool.includes('custom');
 }
-export function validPreset(value: unknown): value is CupPreset {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+export type RuleProblem = { field: keyof FullRules | `points-${number}` | 'name'; message: string };
+const integer = (n: unknown, min: number, max: number) =>
+  Number.isSafeInteger(n) && Number(n) >= min && Number(n) <= max;
+// Every reason a preset is invalid, tied to the field it is about, for the preset editor.
+export function presetProblems(value: unknown): RuleProblem[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return [{ field: 'name', message: 'This is not a Cup preset.' }];
   const p = value as CupPreset,
-    r = p.rules;
-  const integer = (n: unknown, min: number, max: number) =>
-    Number.isSafeInteger(n) && Number(n) >= min && Number(n) <= max;
-  return (
-    p.format === 'polycup-preset' &&
-    p.schema === 1 &&
-    typeof p.name === 'string' &&
-    p.name.trim().length > 0 &&
-    p.name.length <= 64 &&
-    !/[\u0000-\u001f\u007f]/.test(p.name) &&
-    !!r &&
-    typeof r === 'object' &&
-    !Array.isArray(r) &&
-    Object.keys(p).every((k) => ['format', 'schema', 'name', 'rules'].includes(k)) &&
-    Object.keys(r).length ===
-      Object.keys(standard).length -
-        (r.uploadLeaderboardTimes === undefined ? 1 : 0) -
-        (r.allowSpectatorFreecam === undefined ? 1 : 0) &&
-    Object.keys(r).every((k) => k in standard) &&
-    integer(r.roundsPerTrack, 1, 30) &&
-    integer(r.pointsToWin, 1, 10000) &&
-    typeof r.finalist === 'boolean' &&
-    typeof r.allowRacerChanges === 'boolean' &&
-    (r.allowSpectatorFreecam === undefined || typeof r.allowSpectatorFreecam === 'boolean') &&
-    (r.uploadLeaderboardTimes === undefined || typeof r.uploadLeaderboardTimes === 'boolean') &&
-    Array.isArray(r.points) &&
-    r.points.length === 8 &&
-    r.points[0] > 0 &&
-    r.points.every((n, i) => integer(n, 0, 1000) && (!i || n <= r.points[i - 1])) &&
-    ['draft', 'random'].includes(r.selection) &&
-    integer(r.bansPerRacer, 0, 3) &&
-    integer(r.picksPerRacer, 0, 3) &&
-    Array.isArray(r.pool) &&
-    r.pool.length > 0 &&
-    new Set(r.pool).size === r.pool.length &&
-    r.pool.every((k) => ['official', 'community', 'custom'].includes(k)) &&
-    (r.bansPerRacer === 0 || !r.pool.includes('custom')) &&
-    (r.selection === 'random'
-      ? r.bansPerRacer === 0 && r.picksPerRacer === 0
-      : r.picksPerRacer >= 1 && (!r.bansPerRacer || r.pool.some((k) => k !== 'custom'))) &&
-    ['off', 'first-visit', 'every-visit'].includes(r.warmup) &&
-    ['wr', 'fixed'].includes(r.warmupTiming) &&
-    integer(r.warmupSeconds, 10, 600) &&
-    integer(r.warmupMinimumSeconds, 10, 300) &&
-    typeof r.warmupMultiplier === 'number' &&
-    Number.isFinite(r.warmupMultiplier) &&
-    r.warmupMultiplier >= 0.5 &&
-    r.warmupMultiplier <= 5 &&
-    typeof r.readyEndsWarmup === 'boolean' &&
-    integer(r.finishTimeoutSeconds, 5, 120) &&
-    integer(r.roundBreakSeconds, 3, 60)
-  );
+    r = p.rules as CupRules | undefined;
+  const problems: RuleProblem[] = [];
+  const bad = (field: RuleProblem['field'], message: string) => problems.push({ field, message });
+  if (
+    p.format !== 'polycup-preset' ||
+    p.schema !== 1 ||
+    !Object.keys(p).every((k) => ['format', 'schema', 'name', 'rules'].includes(k))
+  )
+    bad('name', 'Unsupported preset format.');
+  if (
+    typeof p.name !== 'string' ||
+    !p.name.trim().length ||
+    p.name.length > 64 ||
+    /[\u0000-\u001f\u007f]/.test(p.name)
+  )
+    bad('name', 'Give the preset a name of up to 64 characters.');
+  if (!r || typeof r !== 'object' || Array.isArray(r)) {
+    bad('name', 'The preset has no rules.');
+    return problems;
+  }
+  const keys = Object.keys(r);
+  if (!keys.every((k) => k in standard)) bad('name', 'The preset has rules this version does not know.');
+  for (const k of Object.keys(standard) as (keyof FullRules)[])
+    if (!(k in OPTIONAL) && !(k in r)) bad(k, 'This rule is missing.');
+  const f = fullRules(r);
+  if (!integer(f.roundsPerTrack, 1, 30)) bad('roundsPerTrack', 'Use 1 to 30 rounds per track.');
+  if (!integer(f.pointsToWin, 1, 10000)) bad('pointsToWin', 'Use 1 to 10000 points.');
+  for (const k of ['finalist', 'allowRacerChanges', 'readyEndsWarmup'] as const)
+    if (typeof f[k] !== 'boolean') bad(k, 'Turn this on or off.');
+  for (const k of ['allowSpectatorFreecam', 'uploadLeaderboardTimes', 'collisions'] as const)
+    if (typeof f[k] !== 'boolean') bad(k, 'Turn this on or off.');
+  if (!Array.isArray(f.points) || f.points.length !== 8) bad('points-0', 'Give points for all eight places.');
+  else
+    f.points.forEach((n, i) => {
+      if (!integer(n, 0, 1000)) bad(`points-${i}`, 'Use 0 to 1000 points.');
+      else if (i && n > f.points[i - 1]) bad(`points-${i}`, 'A place can’t earn more than the place above it.');
+      else if (!i && n <= 0) bad('points-0', 'First place needs at least 1 point.');
+    });
+  if (!['draft', 'random'].includes(f.selection)) bad('selection', 'Choose how tracks are picked.');
+  if (!integer(f.bansPerRacer, 0, 3)) bad('bansPerRacer', 'Use 0 to 3 bans.');
+  if (!integer(f.picksPerRacer, 0, 3)) bad('picksPerRacer', 'Use 1 to 3 picks.');
+  if (
+    !Array.isArray(f.pool) ||
+    !f.pool.length ||
+    new Set(f.pool).size !== f.pool.length ||
+    !f.pool.every((k) => ['official', 'community', 'custom'].includes(k))
+  )
+    bad('selection', 'The track pool is invalid.');
+  else if (f.bansPerRacer > 0 && f.pool.includes('custom'))
+    bad('bansPerRacer', 'Custom tracks need zero bans.');
+  if (f.selection === 'random') {
+    if (f.bansPerRacer !== 0) bad('bansPerRacer', 'Random tracks have no bans.');
+    if (f.picksPerRacer !== 0) bad('picksPerRacer', 'Random tracks have no picks.');
+  } else {
+    if (f.picksPerRacer < 1) bad('picksPerRacer', 'Each racer needs at least one pick.');
+    if (f.bansPerRacer && !f.pool.some((k) => k !== 'custom')) bad('bansPerRacer', 'Bans need official or community tracks.');
+    if (f.nextTrack !== 'random') bad('nextTrack', 'Track votes and picks need random tracks.');
+  }
+  if (!['off', 'first-visit', 'every-visit'].includes(f.warmup)) bad('warmup', 'Choose a warmup.');
+  if (!['wr', 'fixed'].includes(f.warmupTiming)) bad('warmupTiming', 'Choose a warmup length.');
+  if (!integer(f.warmupSeconds, 10, 600)) bad('warmupSeconds', 'Use 10 to 600 seconds.');
+  if (!integer(f.warmupMinimumSeconds, 10, 300)) bad('warmupMinimumSeconds', 'Use 10 to 300 seconds.');
+  if (
+    typeof f.warmupMultiplier !== 'number' ||
+    !Number.isFinite(f.warmupMultiplier) ||
+    f.warmupMultiplier < 0.5 ||
+    f.warmupMultiplier > 5
+  )
+    bad('warmupMultiplier', 'Use 0.5 to 5.');
+  if (!integer(f.finishTimeoutSeconds, 5, 120)) bad('finishTimeoutSeconds', 'Use 5 to 120 seconds.');
+  if (!integer(f.roundBreakSeconds, 3, 60)) bad('roundBreakSeconds', 'Use 3 to 60 seconds.');
+  if (!['auto', 'off', 'fixed'].includes(f.roundTimeLimit)) bad('roundTimeLimit', 'Choose a time limit.');
+  if (!integer(f.roundTimeSeconds, 30, 1800)) bad('roundTimeSeconds', 'Use 30 to 1800 seconds.');
+  if (!['random', 'vote', 'winner', 'last'].includes(f.nextTrack)) bad('nextTrack', 'Choose how the next track is picked.');
+  if (!integer(f.knockout, 0, 7)) bad('knockout', 'Knock out 0 to 7 racers a round.');
+  else if (f.knockout > 0) {
+    if (f.finalist) bad('finalist', 'Knockout cups have no finalists.');
+    if (f.allowRacerChanges) bad('allowRacerChanges', 'Knockout cups lock the grid once they start.');
+  }
+  if (!['single', 'time-attack'].includes(f.roundStyle)) bad('roundStyle', 'Choose a round style.');
+  if (!integer(f.timeAttackSeconds, 30, 1800)) bad('timeAttackSeconds', 'Use 30 to 1800 seconds.');
+  if (f.collisions && f.uploadLeaderboardTimes) bad('uploadLeaderboardTimes', 'Times can’t upload with collisions on.');
+  return problems;
+}
+export function validPreset(value: unknown): value is CupPreset {
+  return presetProblems(value).length === 0;
 }
 export function parsePreset(text: string): CupPreset {
   if (text.length > 32000) throw new Error('Preset files must be smaller than 32 KB.');
@@ -151,37 +248,24 @@ export function parsePreset(text: string): CupPreset {
   } catch {
     throw new Error('This is not a valid preset JSON file.');
   }
-  const rules = (value as { rules?: Partial<CupRules> } | null)?.rules;
-  if (
-    typeof rules?.bansPerRacer === 'number' &&
-    rules.bansPerRacer > 0 &&
-    Array.isArray(rules.pool) &&
-    rules.pool.includes('custom')
-  )
-    throw new Error(
-      'Custom tracks require zero bans per racer. Update the preset before importing it.',
-    );
-  if (!validPreset(value))
-    throw new Error('Unsupported or invalid preset. Check its rules and preset format.');
-  return {
-    ...structuredClone(value),
-    rules: { allowSpectatorFreecam: true, uploadLeaderboardTimes: false, ...value.rules },
-  };
+  const problems = presetProblems(value);
+  if (problems.length) throw new Error(`This preset can’t be used: ${problems[0].message}`);
+  const p = value as CupPreset;
+  return { ...structuredClone(p), rules: fullRules(p.rules) };
 }
 export function presetText(preset: CupPreset) {
   if (!validPreset(preset)) throw new Error('Fix the preset rules before exporting.');
   return JSON.stringify(preset, null, 2) + '\n';
 }
 export function presetKey(preset: CupPreset) {
-  const rules = {
-    ...preset.rules,
-    allowSpectatorFreecam: preset.rules.allowSpectatorFreecam !== false,
-    uploadLeaderboardTimes: preset.rules.uploadLeaderboardTimes === true,
-  };
+  const rules = fullRules(preset.rules);
   return JSON.stringify({
     name: preset.name,
     rules: Object.fromEntries(Object.entries(rules).sort(([a], [b]) => a.localeCompare(b))),
   });
+}
+export function isBundledName(name: string) {
+  return BUNDLED.includes(name.trim().toLowerCase());
 }
 export class PresetLibrary {
   #storage: Pick<Storage, 'getItem' | 'setItem'>;
@@ -195,14 +279,7 @@ export class PresetLibrary {
         ? values
             .filter(validPreset)
             .slice(0, 30)
-            .map((preset) => ({
-              ...preset,
-              rules: {
-                allowSpectatorFreecam: true,
-                uploadLeaderboardTimes: false,
-                ...preset.rules,
-              },
-            }))
+            .map((preset) => ({ ...preset, rules: fullRules(preset.rules) }))
         : [];
     } catch {
       return [];
@@ -210,7 +287,7 @@ export class PresetLibrary {
   }
   save(preset: CupPreset) {
     if (!validPreset(preset)) throw new Error('Fix the preset rules before saving.');
-    if (['standard', 'quickplay'].includes(preset.name.trim().toLowerCase()))
+    if (isBundledName(preset.name))
       throw new Error(
         'Choose a new name for your custom preset. Bundled presets are kept unchanged.',
       );

@@ -14,7 +14,8 @@ export type ActionType =
   | 'dnf'
   | 'practice-ready'
   | 'remove-pick'
-  | 'skip-vote';
+  | 'skip-vote'
+  | 'track-vote';
 export interface ActionMessage {
   type: ActionType;
   requestId?: string;
@@ -27,6 +28,9 @@ export interface FinishMessage {
   sessionId: number | null;
   frames: number;
   checkpoint: number | null;
+  // Not So Weekly Shorts: the run's replay and its own length, for the organizer's physics check.
+  recording?: string;
+  attempt?: number;
 }
 export interface CheckpointMessage {
   type: 'checkpoint';
@@ -76,5 +80,7 @@ export type Message =
   | { type: 'track-ack'; transferId: string; error?: string }
   | { type: 'state'; sequence: number; state: PublicCupState | null }
   | { type: 'error'; message: string }
-  | { type: 'camera'; pose: CameraPose; racerId?: number };
+  | { type: 'camera'; pose: CameraPose; racerId?: number }
+  // Not So Weekly Shorts: collision cups pass each hit on to the car that was hit.
+  | { type: 'bump'; cupId: string; roundId: string; to?: number; from?: number; impulse: number[] };
 export type StateMutation = (state: CupState) => void;

@@ -16,7 +16,8 @@ export function standings(s: CupState) {
     .filter((id) => id in finishes)
     .sort((a, b) => finishes[a] - finishes[b]);
   const splits = live ? (s.runtime!.splits ?? {}) : {};
-  const pending = ranking.filter((id) => !finishOrder.includes(id));
+  const out = (id: number) => Cup.knockedOut(m, id);
+  const pending = ranking.filter((id) => !finishOrder.includes(id) && !(live && out(id)));
   if (live)
     pending.sort(
       (a, b) =>
@@ -24,7 +25,7 @@ export function standings(s: CupState) {
         (splits[b]?.index ?? -1) - (splits[a]?.index ?? -1) ||
         (splits[a]?.frames ?? Infinity) - (splits[b]?.frames ?? Infinity),
     );
-  const order = live ? [...finishOrder, ...pending] : ranking;
+  const order = live ? [...finishOrder, ...pending, ...ranking.filter((id) => out(id) && !finishOrder.includes(id))] : ranking;
   const best = finishOrder.length ? finishes[finishOrder[0]] : null;
   return order.map((id) => {
     const finishPlace = finishOrder.findIndex((other) => finishes[other] === finishes[id]) + 1;
@@ -59,6 +60,9 @@ export function standings(s: CupState) {
             ? splits[id].frames - splits[id].bestFrames
             : null,
       dnf: (live ? s.runtime!.dnfs : scored ? last.dnfs : []).includes(id),
+      // Not So Weekly Shorts: knocked out of a knockout cup; finish still being replayed.
+      out: out(id),
+      verifying: !!s.runtime?.verifying?.includes(id),
     };
   });
 }

@@ -1,4 +1,5 @@
 import { currentMatch, player } from './cup.ts';
+import { rulesFor } from './presets.ts';
 import type { CupState } from './types.ts';
 
 export function resultRows(state: CupState) {
@@ -86,7 +87,10 @@ export async function resultsImage(
     text(r.name, 225, y + 44, 32, ink, 'left', 610);
     if (r.winner) text('WINNER', 840, y + 44, 25, ink);
     shape(992, y + 8, 146, 52, '#e9f1f8', 10);
-    text(r.score, 1065, y + 43, 32, '#192042', 'center');
+    // Not So Weekly Shorts: a knockout cup shows when each racer went out instead of points.
+    const out = currentMatch(state)?.knockedOut?.find((k) => k.id === r.id);
+    const value = rulesFor(state).knockout ? (r.winner ? 'WIN' : out ? `OUT R${out.round}` : 'IN') : r.score;
+    text(value, 1065, y + 43, rulesFor(state).knockout ? 24 : 32, '#192042', 'center');
   });
   const maps = state.tracks.map((t) => t.name).join(' / ');
   text(maps, 52, canvas.height - 28, 24, '#b3c7df', 'left', 1090);

@@ -40,6 +40,7 @@ const MIN_SALT_LENGTH = 16;
 const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
+const MAX_CUP_RESULT_BODY = 16 * 1024;
 const MAX_CHAT_BODY = 4096;
 // Big tracks reach ~470 KB; the stored payload must stay under Durable Object SQLite's 2 MB value limit.
 const MAX_TRACK_SYNC_BODY = 1_500_000;
@@ -1058,8 +1059,24 @@ function socketRefusal(error) {
 // Competitions (src/lobby.js). /cup/list is the public cup list. The sockets stand in for Kodub's
 // matchmaking server and for WebRTC: /cup/host (a new cup code), /cup/join?code= and /cup/mux?code=
 // (the relayed data channels). Only the site can use them.
-async function handleCup(request, url, env, fromSite, origin) {
+async function handleCup(request, url, env, fromSite, origin, cfg) {
     if (!fromSite) return forbidden();
+    // An official cup's results (owner key): stored once, and its winner gets the Cup Champion tag.
+    if (url.pathname === TRAFFIC_PREFIX + "cup/result") {
+        if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+        if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+        const stub = accounts(env);
+        if (!stub) return plain(503, "Competitions are off", origin);
+        const text = await readSmallBody(request, MAX_CUP_RESULT_BODY);
+        let body = null;
+        try {
+            body = JSON.parse(text ?? "");
+        } catch {}
+        if (!body || !(await isOwner(body.token, cfg))) return plain(403, "Forbidden", origin);
+        const result = await stub.recordCup(body);
+        if (result?.retag) await chatRetag(env, result.retag);
+        return json({ ok: !!result?.ok, duplicate: !!result?.duplicate, champion: result?.champion ?? null }, origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "cup/list") {
         if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
         if (!env.LOBBY_DIR) return plain(503, "Competitions are off", origin);
@@ -1078,7 +1095,11 @@ async function handleCup(request, url, env, fromSite, origin) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
     if (!env.LOBBY || !env.LOBBY_DIR) return socketRefusal("ServerUnavailable");
     let code = String(url.searchParams.get("code") || "").trim().toUpperCase();
-    if (role === "host") {
+    // An organizer whose matchmaking socket dropped asks for its own code back (lobby.js reclaim).
+    const reclaim = role === "host" ? String(url.searchParams.get("reclaim") || "").trim().toUpperCase() : "";
+    if (role === "host" && LOBBY_CODE.test(reclaim)) {
+        code = reclaim;
+    } else if (role === "host") {
         const ip = (await sha256Hex("nsws-lobby-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
         code = await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).reserve(ip);
         if (!code) return socketRefusal("IpLimit");
@@ -1088,6 +1109,7 @@ async function handleCup(request, url, env, fromSite, origin) {
     const headers = new Headers(request.headers);
     headers.set("X-Cup-Code", code);
     headers.set("X-Cup-Role", role);
+    if (role === "host" && reclaim === code) headers.set("X-Cup-Reclaim", "1");
     return env.LOBBY.get(env.LOBBY.idFromName(code)).fetch(new Request(request, { headers }));
 }
 
@@ -1106,7 +1128,7 @@ export default {
             }
             if (url.pathname.startsWith(TRAFFIC_PREFIX + "cup/")) {
                 try {
-                    return await handleCup(request, url, env, fromSite, requestOrigin);
+                    return await handleCup(request, url, env, fromSite, requestOrigin, cfg);
                 } catch (err) {
                     console.error("cup error:", err && err.message);
                     return plain(500, "Competitions failed", requestOrigin);

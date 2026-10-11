@@ -13253,6 +13253,12 @@
                             }
                     }(s);
                     break;
+                case 11:
+                    __collideSet(s);
+                    break;
+                case 13:
+                    __collideImpulse(s);
+                    break;
                 case Ki.PauseCar:
                     !function(t) {
                         const i = t.carId;
@@ -13379,6 +13385,186 @@
                 F.set(spawn.q, o + 4),
                 new Int32Array(t.HEAPU8.buffer)[o + 8] = passed
             }
+            // Not So Weekly Shorts: cup collisions. The main thread sends the other racers' cars as it
+            // draws them (keyframes on their own clock), and after every physics frame of the local car
+            // its hull box is pushed out of theirs with a bounce (yaw only, never pitch or roll). Cars
+            // that overlap after a spawn, restart or respawn pass through each other until they have
+            // separated. Each hit is passed on to the other car (equal masses) through PolyCup.
+            const __collide = new Map();
+            const __HALF = [.7732, .3822, 1.8431]
+              , __CENTER = [0, .6162, -.1532];
+            function __collideSet(m) {
+                let c = __collide.get(m.carId);
+                c || __collide.set(m.carId, c = { ghosts: new Map, lastHit: new Map, owed: new Map, impulses: [], origin: null });
+                c.frame = Number.isFinite(m.frame) ? m.frame : 0;
+                c.cars = Array.isArray(m.cars) ? m.cars : [];
+            }
+            function __collideImpulse(m) {
+                const c = __collide.get(m.carId);
+                c && Array.isArray(m.impulse) && 3 == m.impulse.length && m.impulse.every(Number.isFinite) && c.impulses.length < 20 && c.impulses.push(m.impulse);
+            }
+            const __dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+              , __sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+              , __add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+              , __mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k]
+              , __cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+              , __len = a => Math.hypot(a[0], a[1], a[2]);
+            function __axes(q) {
+                const [x, y, z, w] = q;
+                return [[1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)], [2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)], [2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)]]
+            }
+            function __box(p, u) {
+                return { c: __add(p, __add(__add(__mul(u[0], __CENTER[0]), __mul(u[1], __CENTER[1])), __mul(u[2], __CENTER[2]))), u, h: __HALF }
+            }
+            // Separating axis test on 15 axes: depth and normal (from B to A), or null.
+            function __obb(A, B) {
+                const d = __sub(A.c, B.c);
+                let best = 1 / 0, bn = null;
+                const test = ax => {
+                    const L = __len(ax);
+                    if (L < 1e-6)
+                        return !0;
+                    const n = __mul(ax, 1 / L)
+                      , ra = A.h[0] * Math.abs(__dot(A.u[0], n)) + A.h[1] * Math.abs(__dot(A.u[1], n)) + A.h[2] * Math.abs(__dot(A.u[2], n))
+                      , rb = B.h[0] * Math.abs(__dot(B.u[0], n)) + B.h[1] * Math.abs(__dot(B.u[1], n)) + B.h[2] * Math.abs(__dot(B.u[2], n))
+                      , dist = __dot(d, n)
+                      , o = ra + rb - Math.abs(dist);
+                    return !(o <= 0) && (o < best * (1 === L ? 1 : .95) && (best = o, bn = dist < 0 ? __mul(n, -1) : n), !0)
+                };
+                for (let i = 0; i < 3; i++)
+                    if (!test(A.u[i])) return null;
+                for (let i = 0; i < 3; i++)
+                    if (!test(B.u[i])) return null;
+                for (let i = 0; i < 3; i++)
+                    for (let j = 0; j < 3; j++)
+                        if (!test(__cross(A.u[i], B.u[j]))) return null;
+                return { depth: best, n: bn }
+            }
+            function __closest(B, p) {
+                const d = __sub(p, B.c);
+                let r = B.c;
+                for (let k = 0; k < 3; k++)
+                    r = __add(r, __mul(B.u[k], Math.max(-B.h[k], Math.min(B.h[k], __dot(d, B.u[k])))));
+                return r
+            }
+            // Where a remote car is at its own clock T: interpolated between keyframes, carried on for at
+            // most 100 ms past the last one.
+            function __remotePose(keys, T) {
+                if (1 == keys.length)
+                    return { p: keys[0].p, q: keys[0].q, v: [0, 0, 0] };
+                let i = 0;
+                for (; i < keys.length - 2 && T >= keys[i + 1].f; )
+                    i++;
+                const a = keys[i], b = keys[i + 1], span = Math.max(1, b.f - a.f), v = __mul(__sub(b.p, a.p), 1e3 / span);
+                if (T > b.f) {
+                    const over = Math.min(100, T - b.f);
+                    return { p: __add(b.p, __mul(v, over / 1e3)), q: b.q, v: T - b.f > 100 ? [0, 0, 0] : v }
+                }
+                const k = Math.max(0, Math.min(1, (T - a.f) / span))
+                  , dq = __dot(a.q, b.q) < 0 ? -1 : 1
+                  , q = [0, 1, 2, 3].map((j => a.q[j] + (b.q[j] * dq - a.q[j]) * k))
+                  , ql = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+                return { p: __add(a.p, __mul(__sub(b.p, a.p), k)), q: q.map((x => x / ql)), v }
+            }
+            function __collideStep(car) {
+                if (null == car.userControls)
+                    return;
+                const c = __collide.get(car.id);
+                if (!c)
+                    return;
+                const ptr = __royaleCarPointer(car.id);
+                if (0 == ptr)
+                    return;
+                const R = new Uint32Array(t.HEAPU8.buffer)[ptr + 36 >> 2];
+                if (0 == R)
+                    return;
+                const F = t.HEAPF32
+                  , r4 = R >> 2
+                  , frame = new DataView(t.HEAPU8.buffer, n, s).getUint32(4, !0) & 16777215;
+                for (const impulse of c.impulses.splice(0)) {
+                    const L = __len(impulse), k = L > 30 ? 30 / L : 1;
+                    for (let j = 0; j < 3; j++)
+                        F[(R + 312 >> 2) + j] += impulse[j] * k
+                }
+                const origin = [F[r4 + 13], F[r4 + 14], F[r4 + 15]];
+                // A respawn moves the car in one frame: everything it now overlaps passes through for a moment.
+                if (c.origin && __len(__sub(origin, c.origin)) > 5)
+                    for (const g of c.ghosts.values())
+                        g.ghost = !0;
+                c.origin = origin;
+                if (!c.cars.length)
+                    return;
+                const rows = [0, 1, 2].map((i => [F[r4 + 1 + 4 * i], F[r4 + 2 + 4 * i], F[r4 + 3 + 4 * i]]))
+                  , axes = [0, 1, 2].map((k => [rows[0][k], rows[1][k], rows[2][k]]))
+                  , A = __box(origin, axes)
+                  , invM = F[R + 344 >> 2]
+                  , Ii = i => [F[(R + 264 + 16 * i) >> 2], F[(R + 268 + 16 * i) >> 2], F[(R + 272 + 16 * i) >> 2]]
+                  , Iinv = [Ii(0), Ii(1), Ii(2)]
+                  , Imul = a => [__dot(Iinv[0], a), __dot(Iinv[1], a), __dot(Iinv[2], a)];
+                for (const other of c.cars) {
+                    const keys = Array.isArray(other.keys) ? other.keys.filter((k => k && Number.isFinite(k.f) && Array.isArray(k.p) && Array.isArray(k.q))) : [];
+                    if (!keys.length)
+                        continue;
+                    let g = c.ghosts.get(other.id);
+                    g || c.ghosts.set(other.id, g = { ghost: !0, reset: other.reset });
+                    if (g.reset !== other.reset)
+                        g.ghost = !0,
+                        g.reset = other.reset;
+                    for (let i = 1; i < keys.length; i++)
+                        __len(__sub(keys[i].p, keys[i - 1].p)) > 5 && (g.ghost = !0);
+                    const pose = __remotePose(keys, keys[0].f + (frame - c.frame))
+                      , B = __box(pose.p, __axes(pose.q))
+                      , hit = __obb(A, B);
+                    if (!hit) {
+                        g.ghost = !1;
+                        continue
+                    }
+                    if (g.ghost)
+                        continue;
+                    const corr = .2 * Math.max(0, hit.depth - .005);
+                    for (const o of [52, 116])
+                        for (let j = 0; j < 3; j++)
+                            F[(R + o >> 2) + j] += hit.n[j] * corr;
+                    let rr = __sub(__mul(__add(__closest(A, B.c), __closest(B, A.c)), .5), origin);
+                    rr = __sub(rr, __mul(axes[1], __dot(rr, axes[1])));
+                    const v = [F[R + 312 >> 2], F[R + 316 >> 2], F[R + 320 >> 2]]
+                      , w = [F[R + 328 >> 2], F[R + 332 >> 2], F[R + 336 >> 2]]
+                      , vrel = __sub(__add(v, __cross(w, rr)), pose.v)
+                      , vn = __dot(vrel, hit.n);
+                    if (vn >= 0)
+                        continue;
+                    // Equal masses: this car takes half the impulse, the other car is sent the other half.
+                    const kN = invM + .5 * __dot(__cross(Imul(__cross(rr, hit.n)), rr), hit.n)
+                      , jn = -1.25 * vn / kN * .5;
+                    let J = __mul(hit.n, jn);
+                    const vt = __sub(vrel, __mul(hit.n, vn)), vtl = __len(vt);
+                    if (vtl > 1e-4) {
+                        const tn = __mul(vt, 1 / vtl)
+                          , kT = invM + .5 * __dot(__cross(Imul(__cross(rr, tn)), rr), tn)
+                          , jt = Math.min(vtl / kT * .5, .3 * jn);
+                        J = __sub(J, __mul(tn, jt))
+                    }
+                    for (let j = 0; j < 3; j++)
+                        F[(R + 312 >> 2) + j] += J[j] * invM;
+                    const dw = Imul(__cross(rr, J));
+                    for (let j = 0; j < 3; j++)
+                        F[(R + 328 >> 2) + j] += .5 * dw[j];
+                    c.owed.set(other.id, __add(c.owed.get(other.id) ?? [0, 0, 0], __mul(J, -invM)));
+                    // The other car is drawn where it was a moment ago; it has really been pushed away
+                    // already, so the pair passes through until it separates instead of hitting again.
+                    g.ghost = !0
+                }
+                // Hits on each car are sent at most every 150 ms.
+                const hits = [];
+                for (const [id, impulse] of c.owed) {
+                    if (frame - (c.lastHit.get(id) ?? -1 / 0) < 150)
+                        continue;
+                    c.owed.delete(id);
+                    c.lastHit.set(id, frame);
+                    __len(impulse) > .05 && hits.push({ id, impulse });
+                }
+                hits.length && postMessage({ messageType: 12, carId: car.id, hits })
+            }
             jo.length = 0,
             onmessage = i;
             const s = 227
@@ -13391,7 +13577,8 @@
             )();
             function a(e, i) {
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
-                __royaleStep(e.id);
+                __royaleStep(e.id),
+                __collideStep(e);
                 return new Uint8Array(t.HEAPU8.buffer,n,s).slice().buffer
             }
             let o = performance.now()
