@@ -153,6 +153,13 @@ Each is marked "Not So Weekly Shorts" in the file:
   - The finish banner and between-rounds label are stacked clear of the native hint and finish
     announcer (`freeTop`).
 
+### Up to 25 racers
+
+- **Limit:** `Cup.MAX_RACERS` (25) replaces every 8-racer limit in `cup.ts`, `controller.ts`, `validation.ts`, `lobby.ts` and `ui.ts`. The room's size (2-25 on the Competitions screen; the proxy clamps it the same way) decides how many people fit, and each one races or watches.
+- **Points:** the points table keeps 8 places; places after 8th score 0 (`placePoints`). Countback counts the first 8 places.
+- **Race HUD:** with more than 10 racers it shows the top 8 plus your own row, then "+N more". The panel lists everyone.
+- **Proxy:** `MAX_SOCKETS` 64 and `MAX_PAIRS_PER_SOCKET` 40.
+
 ### Site adapter (`nsws/`)
 
 - `hub.ts`:

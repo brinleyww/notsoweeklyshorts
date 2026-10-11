@@ -357,7 +357,7 @@ export class PresetEditor {
         row.append(input);
         scoring.append(row);
       });
-      scoring.append(h('small', '', 'rule-error points-error'));
+      scoring.append(h('small', 'Places after 8th score 0 points.', 'rule-hint'), h('small', '', 'rule-error points-error'));
       overview.append(scoring);
     }
     return overview;

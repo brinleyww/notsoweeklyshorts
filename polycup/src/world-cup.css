@@ -716,3 +716,4 @@ button.danger { --button-bg:#7a2e45; --button-hover:#9a3c57; }
 .practice-hud button { --button-bg:var(--button-color,#112052); --button-hover:var(--button-hover-color,#334b77); --button-active:var(--button-active-color,#151f41); font-size:22px; padding:8px 18px; }
 .practice-hud button.primary { --button-bg:var(--gold); --button-hover:#ffe09a; --button-active:#efbd50; }
 .practice-hud .track-card { font-size:20px; }
+.ranking-more { display:block; margin-top:4px; padding:4px 18px; color:var(--muted); font-size:16px; background:#192042cc; clip-path:var(--hud-strip-cut,var(--cut)); }

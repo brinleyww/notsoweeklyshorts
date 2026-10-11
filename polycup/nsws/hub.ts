@@ -138,7 +138,7 @@ const PHASES: Record<CupStatus['phase'], string> = {
 export function statusLine(status: CupStatus | null | undefined) {
   if (!status) return '';
   const round = status.phase === 'setup' ? '' : ` · round ${status.round}`;
-  return `${status.format} · ${PHASES[status.phase]}${round} · ${status.racers}/8 racing`;
+  return `${status.format} · ${PHASES[status.phase]}${round} · ${status.racers} racing`;
 }
 
 const CSS = `
@@ -428,10 +428,10 @@ export class CompetitionsHub {
     const max = el('input');
     max.type = 'range';
     max.min = '2';
-    max.max = '16';
+    max.max = '25';
     max.value = String(settings.max);
     max.setAttribute('aria-label', 'Room size');
-    const roomText = (n: number) => `${n} · ${Math.min(8, n)} can race${n > 8 ? `, ${n - 8} watch` : ''}`;
+    const roomText = (n: number) => `${n} players`;
     const maxValue = el('span', undefined, roomText(settings.max));
     max.addEventListener('input', () => {
       settings.max = Number(max.value);
@@ -464,7 +464,7 @@ export class CompetitionsHub {
       el(
         'div',
         'hint',
-        'Everyone in the room counts towards its size, you included: up to 8 race and the rest watch. You start on the grid and pick the format (points, knockout, time attack, collisions…) once the room is open. Keys (top right) lists every key a cup uses.',
+        'Everyone in the room counts towards its size, you included, and each player chooses to race or watch. You start on the grid and pick the format (points, knockout, time attack, collisions…) once the room is open. Keys (top right) lists every key a cup uses.',
       ),
       button('Host', () => {
         settings.name = name.value.trim();
@@ -721,7 +721,7 @@ export class CompetitionsHub {
     fact('Maps', poolLabel(info.pool));
     if (status) {
       fact('Format', status.format);
-      fact('Now', `${PHASES[status.phase]}${status.phase === 'setup' ? '' : ` · round ${status.round}`} · ${status.racers}/8 racing`);
+      fact('Now', `${PHASES[status.phase]}${status.phase === 'setup' ? '' : ` · round ${status.round}`} · ${status.racers} racing`);
     }
     const canRace = !status || status.canRace;
     const note = canRace
@@ -860,7 +860,7 @@ export class CompetitionsHub {
       phase: s.phase === 'registration' ? 'setup' : s.phase === 'complete' ? 'done' : s.phase === 'between-rounds' ? 'break' : 'racing',
       round: m ? m.rounds + (s.runtime ? 1 : 0) : 0,
       racers,
-      canRace: racers < 8 && (rosterOpen(s) || (rules.allowRacerChanges && !rules.knockout && s.phase !== 'complete')),
+      canRace: racers < Cup.MAX_RACERS && (rosterOpen(s) || (rules.allowRacerChanges && !rules.knockout && s.phase !== 'complete')),
       format: (s.preset?.name ?? 'Custom').slice(0, 24),
     };
     const key = JSON.stringify(status);

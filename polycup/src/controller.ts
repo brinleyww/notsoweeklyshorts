@@ -2030,7 +2030,7 @@ export class Controller {
       key &&
       this.#setupDepartures.get(key) === s.id &&
       !Cup.player(s, id) &&
-      s.roster.length < 8 &&
+      s.roster.length < Cup.MAX_RACERS &&
       !s.roster.some((p) => this.#reconnect.key(p.id) === key)
     ) {
       const peer = this.#lobby.find((p) => p.id === id);
@@ -2144,7 +2144,7 @@ export class Controller {
       if (
         this.#resumeRacers.delete(owner) &&
         this.cup.withdrawn?.includes(id) &&
-        Cup.occupiedSlots(this.cup) < 8
+        Cup.occupiedSlots(this.cup) < Cup.MAX_RACERS
       )
         Cup.enterRunningCup(this.cup, id, name);
       this.#pendingReconnects.delete(id);
@@ -2273,8 +2273,8 @@ export class Controller {
     if (owner !== null && owner !== id && Cup.player(state, owner)) {
       if (this.#lobby.some((p) => p.id === owner))
         throw new Error('This profile is already connected to the Cup.');
-      if (state.withdrawn?.includes(owner) && Cup.occupiedSlots(state) >= 8)
-        throw new Error('All eight racer places are filled.');
+      if (state.withdrawn?.includes(owner) && Cup.occupiedSlots(state) >= Cup.MAX_RACERS)
+        throw new Error(`All ${Cup.MAX_RACERS} racer places are filled.`);
       this.#resumeRacers.add(owner);
       this.restoreRacer(id);
     } else this.handleAction(id, action);
@@ -2552,7 +2552,7 @@ export class Controller {
     // Validate before any requests, then again after they settle in case a racer left.
     const random = rulesFor(state).selection === 'random';
     if (!random) Cup.lockRegistration(structuredClone(state));
-    else if (state.roster.length < 2) throw new Error('Two to eight racers can start a Cup.');
+    else if (state.roster.length < 2) throw new Error(`Two to ${Cup.MAX_RACERS} racers can start a Cup.`);
     this.requireStartRacers();
     const request = {};
     this.#startingCup = request;
@@ -2868,7 +2868,7 @@ export class Controller {
     this.updateAvailability();
     if (s && rulesFor(s).allowRacerChanges && !['registration', 'complete'].includes(s.phase)) {
       for (const id of this.#resumeRacers) {
-        if (s.withdrawn?.includes(id) && this.racerAvailable(id) && Cup.occupiedSlots(s) < 8) {
+        if (s.withdrawn?.includes(id) && this.racerAvailable(id) && Cup.occupiedSlots(s) < Cup.MAX_RACERS) {
           Cup.enterRunningCup(s, id, Cup.player(s, id)!.name);
           this.#resumeRacers.delete(id);
         }

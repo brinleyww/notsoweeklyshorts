@@ -233,6 +233,7 @@ export class CupUI {
       banner: this.#banner,
       downtime: this.#downtime,
       toggle: () => this.togglePanel(),
+      inCup: () => !!this.#c.connection,
     });
     this.#chatUI = new ChatUI(this, this.#shadow);
     this.#confirm = new ConfirmDialog(this.#shadow);
@@ -1236,7 +1237,7 @@ export class CupUI {
       box = h('div', undefined, 'controls'),
       joined = !!Cup.player(s, this.#c.localPlayerId);
     if (!rosterOpen(s)) return box;
-    const full = !joined && s.roster.length >= 8;
+    const full = !joined && s.roster.length >= Cup.MAX_RACERS;
     const join = this.button(
       joined ? 'Switch to spectator' : full ? 'Grid full · spectating' : 'Join as racer',
       () => this.#c.action(joined ? 'leave' : 'join'),
@@ -1460,7 +1461,7 @@ export class CupUI {
           () => c.action(queued || joined ? 'leave' : 'join'),
           'primary',
         );
-        button.disabled = !joined && !queued && Cup.occupiedSlots(s) >= 8;
+        button.disabled = !joined && !queued && Cup.occupiedSlots(s) >= Cup.MAX_RACERS;
         button.title = queued
           ? 'Cancel joining the next round'
           : joined
@@ -1644,7 +1645,15 @@ export class CupUI {
       ),
     );
     board.append(heading);
+    // Not So Weekly Shorts: a big field shows the top 8 and your own row on the race HUD (the panel
+    // has everyone).
+    const compact = !personalBests && racers.length > 10;
+    let hiddenRows = 0;
     for (const [i, r] of racers.entries()) {
+      if (compact && i >= 8 && r.id !== this.#c.localPlayerId) {
+        hiddenRows++;
+        continue;
+      }
       const row = h(
         'div',
         undefined,
@@ -1747,6 +1756,7 @@ export class CupUI {
       }
       board.append(entry);
     }
+    if (hiddenRows) board.append(h('small', `+${hiddenRows} more · ${keyLabel('scoreboard')} for the full standings`, 'ranking-more'));
     return board;
   }
   recordStrip(

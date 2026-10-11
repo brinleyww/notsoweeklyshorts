@@ -91,7 +91,7 @@ export function presetSummary(rules: CupRules) {
 
   if (r.knockout) return summary;
   const scoring = h('table', undefined, 'rule-points');
-  scoring.append(h('caption', 'Points by finishing position'));
+  scoring.append(h('caption', 'Points by finishing position (after 8th: 0)'));
   const head = h('thead'),
     places = h('tr'),
     body = h('tbody'),

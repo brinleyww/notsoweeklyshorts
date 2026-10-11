@@ -6,6 +6,8 @@ import css from './toolbar.css';
 // animation and auto-hide then apply without copying any game UI implementation.
 export class CupToolbar {
   #fallback: HTMLElement;
+  // Not So Weekly Shorts: the Cup button only shows in a cup, not on every race once Competitions has loaded.
+  #inCup: () => boolean;
 
   #toolbar: HTMLElement | null = null;
   #overlays: HudElements;
@@ -31,8 +33,10 @@ export class CupToolbar {
     banner,
     downtime,
     toggle,
-  }: HudElements & { fallback: HTMLElement; toggle: () => void }) {
+    inCup,
+  }: HudElements & { fallback: HTMLElement; toggle: () => void; inCup: () => boolean }) {
     this.#fallback = fallback;
+    this.#inCup = inCup;
 
     this.#overlays = { hud, povHud, povRecordHud, inputHud, practiceHud, notice, roundTimer, banner, downtime };
     this.#button = document.createElement('button');
@@ -106,11 +110,12 @@ export class CupToolbar {
       }
     }
     const container = toolbar?.querySelector(':scope > .button-container');
-    if (container && this.#button.parentElement !== container) container.append(this.#button);
-    if (!container) this.#button.remove();
+    const show = !!container && this.#inCup();
+    if (show && this.#button.parentElement !== container) container!.append(this.#button);
+    if (!show) this.#button.remove();
     let after: HTMLElement = this.#button;
     for (const action of this.#actions) {
-      if (!container) action.remove();
+      if (!show) action.remove();
       else if (after.nextElementSibling !== action) after.after(action);
       action.tabIndex = toolbar?.classList.contains('visible') ? 0 : -1;
       after = action;

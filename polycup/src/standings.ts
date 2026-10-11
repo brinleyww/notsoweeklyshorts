@@ -32,8 +32,8 @@ export function standings(s: CupState) {
     const gain =
       live && finishPlace > 0 && !(id in m.finalists)
         ? rulesFor(s).finalist
-          ? Math.min(m.target - m.scores[id], rulesFor(s).points[finishPlace - 1])
-          : rulesFor(s).points[finishPlace - 1]
+          ? Math.min(m.target - m.scores[id], Cup.placePoints(rulesFor(s), finishPlace))
+          : Cup.placePoints(rulesFor(s), finishPlace)
         : scored
           ? (last.points[id] ?? 0)
           : 0;

@@ -29,7 +29,7 @@ export function validSnapshot(value: unknown): value is PublicCupState {
     ].includes(s.phase) ||
     !['dnf', 'void'].includes(s.disconnectPolicy) ||
     !Array.isArray(s.roster) ||
-    s.roster.length > (rulesFor(s).allowRacerChanges ? 128 : 8) ||
+    s.roster.length > (rulesFor(s).allowRacerChanges ? 128 : Cup.MAX_RACERS) ||
     !s.roster.every(
       (p) =>
         obj(p) &&
@@ -114,7 +114,7 @@ export function validSnapshot(value: unknown): value is PublicCupState {
   const awards = (value: unknown, finishes: Record<number, number>) =>
     value === undefined ||
     (obj(value) &&
-      Object.keys(value as object).length <= 8 &&
+      Object.keys(value as object).length <= Cup.MAX_RACERS &&
       Object.entries(value as Record<string, unknown>).every(
         ([id, award]) =>
           ids([Number(id)]) && id in finishes && ['PB', 'TR', 'WR'].includes(award as string),
@@ -227,7 +227,7 @@ export function validSnapshot(value: unknown): value is PublicCupState {
         !s.history.every((h) => obj(h) && h.matchIndex === 0 && match(h.before))))
   )
     return false;
-  if (Cup.occupiedSlots(s) > 8) return false;
+  if (Cup.occupiedSlots(s) > Cup.MAX_RACERS) return false;
   const r = s.runtime;
   if (!['loading', 'warmup', 'countdown', 'racing'].includes(s.phase)) return r === null;
   return (
@@ -238,7 +238,7 @@ export function validSnapshot(value: unknown): value is PublicCupState {
     trackId(r.trackId) &&
     (r.sessionId === null || num(r.sessionId)) &&
     typeof r.warmup === 'boolean' &&
-    (r.racers === undefined || (ids(r.racers) && r.racers.length <= 8)) &&
+    (r.racers === undefined || (ids(r.racers) && r.racers.length <= Cup.MAX_RACERS)) &&
     ids(r.ready) &&
     (r.practiceReady === undefined || ids(r.practiceReady)) &&
     ids(r.dnfs) &&
@@ -259,7 +259,7 @@ export function validSnapshot(value: unknown): value is PublicCupState {
         ))) &&
     (r.splits === undefined ||
       (obj(r.splits) &&
-        Object.keys(r.splits).length <= 8 &&
+        Object.keys(r.splits).length <= Cup.MAX_RACERS &&
         Object.entries(r.splits).every(
           ([id, p]) =>
             ids([Number(id)]) &&
@@ -274,9 +274,9 @@ export function validSnapshot(value: unknown): value is PublicCupState {
         ))) &&
     (r.liveMovement === undefined ||
       (obj(r.liveMovement) &&
-        Object.keys(r.liveMovement).length <= 8 &&
+        Object.keys(r.liveMovement).length <= Cup.MAX_RACERS &&
         Object.entries(r.liveMovement).every(
-          ([id, n]) => ids([Number(id)]) && Number.isInteger(n) && Math.abs(n) <= 7,
+          ([id, n]) => ids([Number(id)]) && Number.isInteger(n) && Math.abs(n) < Cup.MAX_RACERS,
         ))) &&
     (r.startsAt === null || Number.isFinite(r.startsAt)) &&
     (r.deadline === null || Number.isFinite(r.deadline)) &&

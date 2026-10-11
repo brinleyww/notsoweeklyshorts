@@ -11,6 +11,10 @@ import {
   type CupRules,
 } from './presets.ts';
 export const VERSION = '0.3.1';
+// Not So Weekly Shorts: up to 25 racers (the room's size decides how many fit). Places after the
+// points table (8 places) score 0.
+export const MAX_RACERS = 25;
+export const placePoints = (rules: { points: number[] }, place: number) => rules.points[place - 1] ?? 0;
 export const RULES = Object.freeze({
   points: [10, 8, 6, 5, 4, 3, 2, 1],
   target: 140,
@@ -91,7 +95,7 @@ export function enterRunningCup(state: CupState, id: number, name: string) {
     !activeIds(state).includes(id) && !state.pendingRacers?.includes(id),
     'You already have a racer slot.',
   );
-  requireThat(occupiedSlots(state) < 8, 'All eight racer places are filled.');
+  requireThat(occupiedSlots(state) < MAX_RACERS, `All ${MAX_RACERS} racer places are filled.`);
   const match = currentMatch(state);
   if (!player(state, id)) {
     requireThat(
@@ -215,7 +219,7 @@ export function touch(state: CupState) {
 export function addPlayer(state: CupState, id: number, name: string) {
   requireThat(rosterOpen(state), 'Roster is locked for the draft. Ask the organizer to reopen it.');
   requireThat(Number.isSafeInteger(id) && id > 0, 'Invalid lobby player.');
-  requireThat(state.roster.length < 8, 'All eight racer places are filled.');
+  requireThat(state.roster.length < MAX_RACERS, `All ${MAX_RACERS} racer places are filled.`);
   requireThat(!player(state, id), 'This player is already registered.');
   state.roster.push({ id, name: safeName(name) });
   touch(state);
@@ -268,8 +272,8 @@ export function lockRegistration(state: CupState, random = Math.random) {
     'Finish the bans before starting the Cup.',
   );
   requireThat(
-    state.roster.length >= 2 && state.roster.length <= 8,
-    'Two to eight racers can start a Cup.',
+    state.roster.length >= 2 && state.roster.length <= MAX_RACERS,
+    `Two to ${MAX_RACERS} racers can start a Cup.`,
   );
   requireThat(
     rules.selection === 'random'
@@ -543,6 +547,7 @@ export function completeRound(state: CupState) {
   if (rules.finalist && first !== undefined && !firstIsTied && first in m.finalists)
     m.winners.push(first);
   for (const id of order) {
+    if (placements[id] > 8) continue;
     const counts = ((m.placings ??= {})[id] ??= [0, 0, 0, 0, 0, 0, 0, 0]);
     counts[placements[id] - 1]++;
   }
@@ -553,8 +558,8 @@ export function completeRound(state: CupState) {
       id in m.finalists
         ? 0
         : rules.finalist
-          ? Math.min(m.target - m.scores[id], rules.points[placements[id] - 1])
-          : rules.points[placements[id] - 1];
+          ? Math.min(m.target - m.scores[id], placePoints(rules, placements[id]))
+          : placePoints(rules, placements[id]);
     if (!(id in m.finalists)) {
       m.scores[id] = rules.finalist
         ? Math.min(m.target, m.scores[id] + points[id])

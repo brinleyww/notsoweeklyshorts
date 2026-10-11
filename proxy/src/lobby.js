@@ -19,8 +19,9 @@ const MAX_NICK = 32;
 const MAX_NAME = 40;
 const MAX_SIGNAL = 16 * 1024;
 const MAX_FRAME = 1024 * 1024;
-const MAX_SOCKETS = 48;
-const MAX_PAIRS_PER_SOCKET = 32;
+// A 25-player room: two sockets a page while joining, plus reconnects.
+const MAX_SOCKETS = 64;
+const MAX_PAIRS_PER_SOCKET = 40;
 const PAIR_ID = /^[A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16}$/;
 // A page flushes about 5 times a second; far more than this is a broken or hostile client.
 const FRAMES_PER_SEC = 60;
@@ -190,7 +191,7 @@ export class LobbyRoom extends DurableObject {
             } else {
                 a.nick = moderate(m.nickname, MAX_NICK) || "Host";
                 a.public = o.public === true;
-                a.max = Number.isSafeInteger(o.max) ? Math.min(16, Math.max(2, o.max)) : 8;
+                a.max = Number.isSafeInteger(o.max) ? Math.min(25, Math.max(2, o.max)) : 8;
                 a.name = moderate(o.name, MAX_NAME) || a.nick + "'s cup";
                 a.pool = cleanPool(o.pool);
                 a.chatKey = typeof o.chat === "string" && /^[0-9a-f]{32}$/.test(o.chat) ? o.chat : null;

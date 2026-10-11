@@ -1,7 +1,7 @@
 import type { CupUI } from './ui.ts';
 import { element as h } from './dom.ts';
 import { banTurn, banEntries } from './draft.ts';
-import { chosenTracks, picksComplete } from './cup.ts';
+import { chosenTracks, MAX_RACERS, picksComplete } from './cup.ts';
 import { rulesFor } from './presets.ts';
 import type { CupState } from './types.ts';
 import { inviteState } from './invite.ts';
@@ -90,7 +90,7 @@ export function lobbyPanel(ui: CupUI) {
   const preset = ui.presetPanel(),
     rules = rulesFor(s);
   const heading = h('div', undefined, 'lobby-roster-heading');
-  heading.append(h('h2', `Racers · ${s.roster.length}/8`));
+  heading.append(h('h2', `Racers · ${s.roster.length}/${MAX_RACERS}`));
   roster.append(heading);
   const order = s.draft?.order.length ? s.draft.order : s.roster.map((p) => p.id);
   if (!order.length) roster.append(h('p', 'No racers yet.', 'muted'));
@@ -126,11 +126,11 @@ export function lobbyPanel(ui: CupUI) {
   if (view.mode === 'join') {
     // Not So Weekly Shorts: Race / Watch, said plainly.
     const join = ui.button(
-      view.joined ? 'You’re racing' : s.roster.length >= 8 ? 'Grid full' : 'Race',
+      view.joined ? 'You’re racing' : s.roster.length >= MAX_RACERS ? 'Grid full' : 'Race',
       () => c.action('join'),
       'primary',
     );
-    join.disabled = view.joined || s.roster.length >= 8;
+    join.disabled = view.joined || s.roster.length >= MAX_RACERS;
     roster.append(join);
   }
   const spectators = c.lobby.filter((p) => !s.roster.some((r) => r.id === p.id));
