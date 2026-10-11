@@ -1,4 +1,9 @@
 :host { --deep:#192042; --blue:#28346a; --ice:#fff; --muted:#b3c7df; --gold:#ffd26b; --red:#ff9c9c; --cut:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%); color:var(--ice); font:italic 22px/1 ForcedSquare,Arial,sans-serif; }
+/* Not So Weekly Shorts: scale with the window like the game's UI (main.bundle.js sets --ui-scale-factor).
+   The layer is laid out at the game's size and scaled down; build.mjs converts viewport units to --vw/--vh.
+   Top-layer popups (dialog, popover) ignore the layer's transform, so they scale themselves. */
+:host { --s:var(--ui-scale-factor,1); position:fixed; left:0; top:0; z-index:100100; width:calc(100% / var(--s)); height:calc(100% / var(--s)); transform:scale(var(--s)); transform-origin:0 0; pointer-events:none; }
+.panel,.practice-hud,.finish-cue,.rules-dialog,.player-menu { pointer-events:auto; }
 * { box-sizing:border-box; font-style:italic; font-kerning:auto; letter-spacing:normal; word-spacing:normal; } [hidden] { display:none!important; }
 .panel,.hud,.pov-hud { font:italic 22px/1 ForcedSquare,Arial,sans-serif; }
 button,input,textarea,select { font:inherit; }
@@ -653,3 +658,5 @@ button.danger { color:var(--red); }
 
 .preset-panel .rule-edit > strong,.rule-group h3,.rule-pair dt,.rule-points caption,.preset-scoring label,.preset-editable .rule-points-editor legend { font-weight:400; }
 .player-menu-heading { margin-bottom:10px; }
+.player-menu { transform:scale(var(--s)); transform-origin:0 0; }
+.rules-dialog { transform:scale(var(--s)); }

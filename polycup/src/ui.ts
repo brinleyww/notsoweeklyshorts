@@ -4,7 +4,7 @@ import type { Controller } from './controller.ts';
 import { downtimeLabel, roundSeconds } from './race-status.ts';
 import { roundStartCue } from './countdown.ts';
 import * as Cup from './cup.ts';
-import { element as h } from './dom.ts';
+import { element as h, uiScale } from './dom.ts';
 import { banTurn, banEntries, isBanned, picksOpen, rosterOpen } from './draft.ts';
 import { isEditing } from './held-inputs.ts';
 import { presetSummary } from './preset-summary.ts';
@@ -760,7 +760,7 @@ export class CupUI {
     const chatSlot =
       this.#open && s
         ? this.#shadow.querySelector<HTMLElement>(
-            s.phase === 'registration' && innerWidth > 950
+            s.phase === 'registration' && innerWidth / uiScale() > 950
               ? '.lobby-chat-slot'
               : '.panel-chat-slot',
           )
@@ -1294,6 +1294,18 @@ export class CupUI {
           () => {
             if (confirm('Score the current finishes and give every unfinished racer a DNF?'))
               c.finishRound();
+          },
+          'quiet',
+        ),
+      );
+    // Not So Weekly Shorts: replay the current round from the start; nobody scores the stopped attempt.
+    if (s.runtime)
+      controls.append(
+        this.button(
+          'Restart round',
+          () => {
+            if (confirm('Restart this round from the countdown? Nobody scores the current attempt.'))
+              c.restartRound();
           },
           'quiet',
         ),

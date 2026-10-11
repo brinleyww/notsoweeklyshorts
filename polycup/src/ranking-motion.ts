@@ -1,3 +1,4 @@
+import { uiScale } from './dom.ts';
 export interface RankingPosition {
   top: number;
   order: number;
@@ -25,7 +26,7 @@ export function animateRanking(root: ShadowRoot, before: Map<string, RankingPosi
       (old.order === Number(row.dataset.rankingOrder) && !old.moving)
     )
       continue;
-    const delta = old.top - row.getBoundingClientRect().top;
+    const delta = (old.top - row.getBoundingClientRect().top) / uiScale();
     if (Math.abs(delta) < 1) continue;
     row.animate([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], {
       duration: 260,

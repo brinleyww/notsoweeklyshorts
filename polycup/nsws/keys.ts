@@ -22,9 +22,9 @@ const site = window as unknown as {
 };
 
 const CSS = `
-.nsws-keys{position:fixed;inset:0;z-index:100300;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);color:var(--text-color);font-family:inherit}
+.nsws-keys{--s:var(--ui-scale-factor,1);position:fixed;left:0;top:0;width:calc(100% / var(--s));height:calc(100% / var(--s));transform:scale(var(--s));transform-origin:0 0;z-index:100300;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);color:var(--text-color);font-family:inherit}
 .nsws-keys.open{display:flex}
-.nsws-keys .panel{width:min(640px,94vw);max-height:90vh;display:flex;flex-direction:column;background:var(--surface-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
+.nsws-keys .panel{width:min(640px,calc(94vw / var(--s)));max-height:calc(90vh / var(--s));display:flex;flex-direction:column;background:var(--surface-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
 .nsws-keys .head{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--surface-secondary-color)}
 .nsws-keys h2{margin:0;font-size:30px;font-weight:400;flex:1}
 .nsws-keys .body{overflow-y:auto;padding:8px 18px 16px}

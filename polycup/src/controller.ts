@@ -1347,6 +1347,16 @@ export class Controller {
           )
             this.finishRound();
         }
+        this.watchLoading();
+        if (
+          this.#startSoon &&
+          this.cup.phase === 'between-rounds' &&
+          !this.#removingTrack &&
+          this.canStartRound()
+        ) {
+          this.#startSoon = false;
+          this.runRound()?.catch((error) => this.fail(error));
+        }
         if (
           this.#auto &&
           this.cup.phase === 'between-rounds' &&
@@ -2471,7 +2481,12 @@ export class Controller {
       this.#removingTrack = false;
       this.#onChange();
     }
-    return this.runRound();
+    // Not So Weekly Shorts: if the game isn't ready to start yet, the next round starts as soon as it is.
+    try {
+      return await this.runRound();
+    } catch {
+      this.#startSoon = true;
+    }
   }
   runRound(): void | Promise<void> {
     if (this.#removingTrack) return;
@@ -2486,8 +2501,12 @@ export class Controller {
     this.updateAvailability();
     this.applyReconnects();
     this.admitRacers();
-    if (!this.canStartRound())
-      throw new Error('Waiting for racers to reconnect or finish loading PolyCup.');
+    if (!this.canStartRound()) {
+      // Not So Weekly Shorts: start as soon as everyone (and the game) is ready, instead of failing.
+      this.#startSoon = true;
+      this.#onChange();
+      return;
+    }
     if (rulesFor(this.cup).selection === 'random' && !Cup.nextTrack(this.cup)) {
       const state = this.cup,
         connection = this.#connection;
@@ -2525,7 +2544,33 @@ export class Controller {
     this.#loadingSession = this.gameInfo.sessionId;
     this.broadcast();
     const mode = rulesFor(this.cup).uploadLeaderboardTimes === true ? 0 : 1;
+    this.#loadingStart = { at: Date.now(), roundId: this.cup.runtime!.id, mode, track };
     this.#connection!.startNewSession(mode, track.trackMetadata, track.trackData);
+  }
+  // Not So Weekly Shorts: if the game's new session never arrives (the round would sit on "Preparing
+  // next round..."), ask for it again.
+  #loadingStart: { at: number; roundId: string; mode: number; track: LoadedTrack } | null = null;
+  watchLoading() {
+    const run = this.cup.runtime,
+      start = this.#loadingStart;
+    if (!start || !run || this.cup.phase !== 'loading' || run.id !== start.roundId || run.sessionId !== null)
+      return;
+    if (Date.now() - start.at < 8000) return;
+    start.at = Date.now();
+    this.#loadingSession = this.gameInfo.sessionId;
+    this.#connection?.startNewSession(start.mode, start.track.trackMetadata, start.track.trackData);
+  }
+  // Not So Weekly Shorts: start the next round as soon as the game allows (after a restart, or
+  // when the organizer has automatic rounds off).
+  #startSoon = false;
+  restartRound() {
+    this.requireHost();
+    if (!this.cup.runtime) return;
+    this.voidRound();
+    Cup.note(this.cup, 'Organizer restarted the round.');
+    Cup.touch(this.cup);
+    this.#nextAuto = null;
+    this.#startSoon = true;
   }
   racerAvailable(id: number) {
     return (
@@ -2732,7 +2777,9 @@ export class Controller {
   voidRound() {
     this.change(Cup.voidRound);
     this.#loadingSession = undefined;
-    this.#nextAuto = null;
+    this.#loadingStart = null;
+    // Not So Weekly Shorts: automatic rounds carry on after a void.
+    this.#nextAuto = this.#auto ? Date.now() + rulesFor(this.cup).roundBreakSeconds * 1000 : null;
   }
   // Not So Weekly Shorts: the next random track loads during the break between rounds, not after it.
   prepareNextRandomTrack() {

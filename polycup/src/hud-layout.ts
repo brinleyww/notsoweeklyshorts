@@ -1,3 +1,4 @@
+import { uiScale } from './dom.ts';
 export interface HudElements {
   hud: HTMLElement;
   povHud: HTMLElement;
@@ -74,7 +75,10 @@ export function layoutCupHud({
   const native = [...document.querySelectorAll(nativeParts)]
     .map((e) => visibleHudRect(e))
     .filter((rect): rect is DOMRect => rect !== null);
-  const set = (element: HTMLElement, property: string, value: number) => {
+  // Measurements are in window pixels; the scaled layer wants its own (the input HUD is outside it).
+  const scale = uiScale();
+  const set = (element: HTMLElement, property: string, measured: number) => {
+    const value = element === inputHud ? measured : Math.round(measured / scale);
     if (element.style.getPropertyValue(property) !== `${value}px`)
       element.style.setProperty(property, `${value}px`);
   };
@@ -99,7 +103,7 @@ export function layoutCupHud({
     innerHeight,
   );
   const oldTop = parseFloat(hud.style.getPropertyValue('--pwc-hud-top')) || 0;
-  hud.classList.toggle('settling', clearance.top < oldTop);
+  hud.classList.toggle('settling', Math.round(clearance.top / scale) < oldTop);
   set(hud, '--pwc-hud-top', clearance.top);
   set(hud, '--pwc-hud-bottom', Math.max(60, clearance.bottom));
 }

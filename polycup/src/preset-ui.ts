@@ -81,7 +81,7 @@ export class PresetEditor {
     const r = this.#draft.rules;
     const select = h('select');
     select.setAttribute('aria-label', 'Choose a preset');
-    const presets = [standardPreset(), quickplayPreset(), ...this.#library.list()];
+    const presets = [quickplayPreset(), standardPreset(), ...this.#library.list()];
     const selected = presets.findIndex((p) => presetKey(p) === presetKey(this.#draft));
     {
       const option = h('option', selected < 0 ? this.#draft.name || 'Custom' : 'Custom');
@@ -172,9 +172,9 @@ export class PresetEditor {
     const remove = icon('delete', 'Delete saved preset', () => {
       if (!this.#library.list().some((p) => p.name === this.#draft.name)) return;
       this.#library.remove(this.#draft.name);
-      this.#draft = standardPreset();
+      this.#draft = quickplayPreset();
       this.applyDraft();
-      ui.showNotice('Preset deleted. Standard rules applied.', 3000);
+      ui.showNotice('Preset deleted. Quickplay rules applied.', 3000);
     });
     remove.dataset.deletePreset = '';
     remove.disabled = !this.#library.list().some((p) => p.name === this.#draft.name);

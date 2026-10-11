@@ -1,4 +1,4 @@
-import { element as h } from './dom.ts';
+import { element as h, uiScale } from './dom.ts';
 import { CHAT_LIMIT, type ChatLine, type ChatTab } from './chat.ts';
 import { isEditing } from './held-inputs.ts';
 import type { CupUI } from './ui.ts';
@@ -416,7 +416,8 @@ export class ChatUI {
     this.#personMenu.hidden = false;
     const panel = this.#panel.getBoundingClientRect(),
       rect = anchor.getBoundingClientRect();
-    this.#personMenu.style.top = `${Math.max(42, Math.min(rect.bottom - panel.top + 4, panel.height - this.#personMenu.offsetHeight - 12))}px`;
+    const scale = uiScale();
+    this.#personMenu.style.top = `${Math.max(42, Math.min((rect.bottom - panel.top + 4) / scale, panel.height / scale - this.#personMenu.offsetHeight - 12))}px`;
     button.focus();
   }
 }

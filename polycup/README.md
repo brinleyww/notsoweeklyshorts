@@ -74,6 +74,16 @@ Each is marked "Not So Weekly Shorts" in the file:
   starts a new multiplayer session after 1 s instead of the stock 5 s.
 - `ui.ts`: the cup panel key (Tab) opens the panel and closes it on the next press (it used to be a
   hold-to-peek at the standings).
+- `cup.ts`, `preset-ui.ts`: new cups start on Quickplay (random rotation, no draft); Standard is still
+  in the preset list.
+- `world-cup.css`, `dom.ts` (`uiScale`), `hud-layout.ts`, `chat-ui.ts`, `ranking-motion.ts`, `ui.ts`: the
+  cup layer scales with the window like the game's UI (`--ui-scale-factor`). `build.mjs` converts the
+  stylesheet's viewport units and drops media queries that can't match at the game's layout size. The
+  Competitions screen and Keys list scale the same way.
+- `controller.ts`, `ui.ts`: automatic rounds carry on after a void; Remove current track and Start next
+  round wait for the game to be ready instead of failing; a round whose new game session never arrives
+  asks for it again after 8 s; and the organizer has a Restart round button (same track, from the
+  countdown, nobody scores the stopped attempt).
 - `invite.ts`: a Link button that copies `?cup=CODE`.
 - `ui.ts`, `toolbar.ts`: no F8 shortcut (the menu button and the race toolbar open the panel), no
   version label over the menus, and the HUD layout pass is throttled and only watches the game UI.

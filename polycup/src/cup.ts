@@ -2,7 +2,14 @@ import { recordAward, recordBaselines } from './record-awards.ts';
 import type { CupState, Match, RaceRecord, Track } from './types.ts';
 // Competition state is owned by the native multiplayer host. No game internals here.
 import { isBanned, picksOpen, resetDraft, rosterOpen } from './draft.ts';
-import { rulesFor, standardPreset, validPreset, type CupPreset, type CupRules } from './presets.ts';
+import {
+  quickplayPreset,
+  rulesFor,
+  standardPreset,
+  validPreset,
+  type CupPreset,
+  type CupRules,
+} from './presets.ts';
 export const VERSION = '0.3.1';
 export const RULES = Object.freeze({
   points: [10, 8, 6, 5, 4, 3, 2, 1],
@@ -20,7 +27,8 @@ const safeName = (value: unknown) =>
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .slice(0, 64);
 
-export function newCup(name = 'Simple Cup', preset = standardPreset()): CupState {
+// Not So Weekly Shorts: cups start on Quickplay (random rotation, no draft); Standard is one click away.
+export function newCup(name = 'Simple Cup', preset = quickplayPreset()): CupState {
   requireThat(validPreset(preset), 'Invalid Cup preset.');
   return {
     preset: copy(preset),

@@ -82,9 +82,9 @@ const JOIN_ERRORS: Record<string, string> = {
 };
 
 const CSS = `
-.nsws-cup{position:fixed;inset:0;z-index:9998;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:var(--text-color);font-family:inherit}
+.nsws-cup{--s:var(--ui-scale-factor,1);position:fixed;left:0;top:0;width:calc(100% / var(--s));height:calc(100% / var(--s));transform:scale(var(--s));transform-origin:0 0;z-index:9998;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.72);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);color:var(--text-color);font-family:inherit}
 .nsws-cup.open{display:flex}
-.nsws-cup .panel{width:min(1000px,96vw);max-height:92vh;display:flex;flex-direction:column;background:var(--surface-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
+.nsws-cup .panel{width:min(1000px,calc(96vw / var(--s)));max-height:calc(92vh / var(--s));display:flex;flex-direction:column;background:var(--surface-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
 .nsws-cup .head{display:flex;align-items:center;gap:14px;padding:14px 22px;background:var(--surface-secondary-color)}
 .nsws-cup h2{margin:0;font-size:32px;font-weight:400;flex:1}
 .nsws-cup .body{display:flex;gap:14px;padding:14px;min-height:0;flex-wrap:wrap}
@@ -109,10 +109,10 @@ const CSS = `
 .nsws-cup input[type=range]::-moz-range-thumb{width:8px;height:14px;border-width:3px;outline-width:1px}
 .nsws-cup .hint{font-size:15px;opacity:.65}
 .nsws-cup .error{color:#ff9a9a;font-size:17px;min-height:20px}
-.nsws-cup .list{display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:46vh}
+.nsws-cup .list{display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:calc(46vh / var(--s))}
 .nsws-cup .foot{padding:8px 16px;font-size:14px;opacity:.55;background:var(--surface-secondary-color)}
 .nsws-cup .maps{display:flex;flex-wrap:wrap;gap:6px;flex:1}
-.nsws-cup .flyout{position:fixed;z-index:9999;display:none;flex-direction:column;gap:6px;min-width:220px;max-height:70vh;overflow-y:auto;padding:10px 12px;background:var(--surface-secondary-color);box-shadow:0 6px 24px rgba(0,0,0,.5);clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%)}
+.nsws-cup .flyout{position:fixed;z-index:9999;display:none;flex-direction:column;gap:6px;min-width:220px;max-height:calc(70vh / var(--s));overflow-y:auto;padding:10px 12px;background:var(--surface-secondary-color);box-shadow:0 6px 24px rgba(0,0,0,.5);clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%)}
 .nsws-cup .flyout.open{display:flex}
 .nsws-cup .flyout .button{text-align:left}
 `;
@@ -393,11 +393,13 @@ export class CompetitionsHub {
       );
       this.#flyout.replaceChildren(el('h3', undefined, 'Community tracks'), ...rows, all);
       this.#flyout.classList.add('open');
+      // Measured in window pixels; the screen is scaled like the game's UI.
+      const scale = parseFloat(document.documentElement.style.getPropertyValue('--ui-scale-factor')) || 1;
       const at = community.getBoundingClientRect(),
         box = this.#flyout.getBoundingClientRect();
       const right = at.right + 8 + box.width <= window.innerWidth;
-      this.#flyout.style.left = Math.max(8, right ? at.right + 8 : at.left - 8 - box.width) + 'px';
-      this.#flyout.style.top = Math.max(8, Math.min(at.top, window.innerHeight - box.height - 8)) + 'px';
+      this.#flyout.style.left = Math.max(8, right ? at.right + 8 : at.left - 8 - box.width) / scale + 'px';
+      this.#flyout.style.top = Math.max(8, Math.min(at.top, window.innerHeight - box.height - 8)) / scale + 'px';
     };
     this.#closeFlyout = () => this.#flyout.classList.remove('open');
     maps.append(community);
