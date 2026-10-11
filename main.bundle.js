@@ -385,7 +385,7 @@ window.__nswsTrackQuery = function(trackId) {
         } catch (e) {}
     }
     // The cup's other keys: hold to see the standings, and the racer to watch while spectating.
-    const CUP_KEYS = [["scoreboard", "Show the cup standings (hold)", "_cupScoreboardKeyBind", "Tab"], ["spectatePrevious", "Watch the previous racer", "_cupSpectatePrevKeyBind", "BracketLeft"], ["spectateNext", "Watch the next racer", "_cupSpectateNextKeyBind", "BracketRight"]].map(([id, label, storageKey, fallback]) => ({
+    const CUP_KEYS = [["scoreboard", "Open / close the cup panel", "_cupScoreboardKeyBind", "Tab"], ["spectatePrevious", "Watch the previous racer", "_cupSpectatePrevKeyBind", "BracketLeft"], ["spectateNext", "Watch the next racer", "_cupSpectateNextKeyBind", "BracketRight"]].map(([id, label, storageKey, fallback]) => ({
         id,
         label,
         get() {
@@ -42337,10 +42337,11 @@ window.__nswsTrackQuery = function(trackId) {
                         trackMetadata: t,
                         trackData: n
                     },
+                    // Was 5 s; the track already went out ahead of the start on the same ordered channel.
                     timeout: setTimeout(( () => {
                         this.startNewSessionImmediate(e, t, n)
                     }
-                    ), 5e3)
+                    ), 1e3)
                 }, "f")
             }
             resetInvite() {

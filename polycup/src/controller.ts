@@ -1335,6 +1335,7 @@ export class Controller {
           }
         }
         this.checkDisconnects();
+        this.prepareNextRandomTrack();
         this.applyReconnects();
         this.admitRacers();
         this.advanceClock();
@@ -2475,6 +2476,10 @@ export class Controller {
   runRound(): void | Promise<void> {
     if (this.#removingTrack) return;
     this.requireHost();
+    if (this.#preparingRandom === this.#prefetch && this.#prefetch)
+      return this.#prefetch.then(() => {
+        if (this.#state?.phase === 'between-rounds' && !this.#preparingRandom) return this.runRound();
+      });
     if (this.#preparingRandom) return this.#preparingRandom;
     if (this.cup.roster.some((p) => this.#needsRebind?.has(p.id)))
       throw new Error('Confirm every saved racer’s lobby identity in Racers before resuming.');
@@ -2626,7 +2631,7 @@ export class Controller {
       run = s.runtime;
     if (s.phase !== 'loading' || !run || this.gameInfo.trackData.getId() !== run.trackId) return;
     if (this.#isHost && run.sessionId === null) {
-      // startNewSession takes five seconds. Wait for the new native game instance/session.
+      // startNewSession takes a moment (1 s on this site). Wait for the new native game instance/session.
       if (this.#loadingSession === undefined) {
         this.#loadingSession = this.gameInfo.sessionId;
         return;
@@ -2729,6 +2734,42 @@ export class Controller {
     this.#loadingSession = undefined;
     this.#nextAuto = null;
   }
+  // Not So Weekly Shorts: the next random track loads during the break between rounds, not after it.
+  prepareNextRandomTrack() {
+    const state = this.#state,
+      connection = this.#connection;
+    if (
+      !state ||
+      !this.#isHost ||
+      this.#preparingRandom ||
+      this.#removingTrack ||
+      state.phase !== 'between-rounds' ||
+      rulesFor(state).selection !== 'random' ||
+      Cup.nextTrack(state)
+    )
+      return;
+    const request = this.loadRandomTrack(state)
+      .then(({ entry, track, wr }) => {
+        if (
+          this.#state !== state ||
+          this.#connection !== connection ||
+          state.phase !== 'between-rounds' ||
+          Cup.nextTrack(state)
+        )
+          return;
+        this.#tracks.set(entry.id, track);
+        Cup.scheduleRandomTrack(state, { id: entry.id, name: entry.name }, wr);
+        this.broadcast();
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (this.#preparingRandom === request) this.#preparingRandom = null;
+        if (this.#prefetch === request) this.#prefetch = null;
+        this.#onChange();
+      });
+    this.#preparingRandom = this.#prefetch = request;
+  }
+  #prefetch: Promise<void> | null = null;
   // Not So Weekly Shorts: a passed skip vote ends the track's block and draws another track.
   skipTrack() {
     const state = this.cup,

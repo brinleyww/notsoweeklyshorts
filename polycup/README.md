@@ -61,7 +61,7 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `main.ts` and `version-check.ts` (PolyModLoader only) are removed.
 - `controller.ts`: physics reports and spectator counts are sent only when they change (or every
   30 s / 10 s), not every 3 s / 1 s.
-- `ui.ts`: the standings peek (Tab) and the spectator keys ([ and ]) are rebindable, and a Keys button
+- `ui.ts`: the cup panel key (Tab) and the spectator keys ([ and ]) are rebindable, and a Keys button
   in the header opens `nsws/keys.ts`, the list of every key a cup uses (also on the Competitions
   screen). Its game keys are saved the same way as Settings -> Controls.
 - `ui.ts`, `controller.ts`: a finished cup shows a final podium (each racer's car on their step, like
@@ -70,6 +70,10 @@ Each is marked "Not So Weekly Shorts" in the file:
 - `controller.ts`, `ui.ts`: a racer who leaves mid-round gets a DNF at once (one whose connection only
   stutters gets the usual grace period) and the round goes on; the "void the round" disconnect rule
   is gone. When everyone else leaves, the organizer gets a notice and the room stays open.
+- `controller.ts`: the next random track loads during the break between rounds, and `main.bundle.js`
+  starts a new multiplayer session after 1 s instead of the stock 5 s.
+- `ui.ts`: the cup panel key (Tab) opens the panel and closes it on the next press (it used to be a
+  hold-to-peek at the standings).
 - `invite.ts`: a Link button that copies `?cup=CODE`.
 - `ui.ts`, `toolbar.ts`: no F8 shortcut (the menu button and the race toolbar open the panel), no
   version label over the menus, and the HUD layout pass is throttled and only watches the game UI.

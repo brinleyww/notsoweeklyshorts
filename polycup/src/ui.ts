@@ -137,7 +137,6 @@ export class CupUI {
   #renderedView = '';
   #playerMenu: PlayerMenu;
   #membershipControls: HTMLElement | null = null;
-  #peekCup: string | null = null;
   #rulesDialog = h('dialog', undefined, 'rules-dialog');
   #resultControls: HTMLElement | null = null;
   #body: HTMLElement = h('div');
@@ -237,47 +236,29 @@ export class CupUI {
           event.stopImmediatePropagation();
           return;
         }
+        // Not So Weekly Shorts: the cup panel key (Tab) opens the panel, and pressing it again closes it.
         if (!keyIs(event, 'scoreboard')) return;
-        if (this.#peekCup) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          return;
-        }
-        const state = this.#c.state;
         if (
-          this.#open ||
-          !state ||
-          state.phase === 'registration' ||
+          !this.#c.state ||
+          event.repeat ||
           isEditing(event) ||
           document.querySelector('dialog[open]')
         )
           return;
         event.preventDefault();
         event.stopImmediatePropagation();
-        this.#peekCup = state.id;
-
-        this.#open = true;
-        this.redraw();
+        this.togglePanel();
       },
       { capture: true },
     );
     window.addEventListener(
       'keyup',
       (event) => {
-        if (event.code === siteKey('scoreboard').split('+').pop() && this.#peekCup) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          this.endScoreboardPeek();
-        } else if (this.#rulesDialog.open || this.#playerMenu.open)
-          event.stopImmediatePropagation();
+        if (this.#rulesDialog.open || this.#playerMenu.open) event.stopImmediatePropagation();
       },
       { capture: true },
     );
-    window.addEventListener('blur', () => this.endScoreboardPeek());
-    document.addEventListener('visibilitychange', () => {
-      this.expireNotice();
-      if (document.hidden) this.endScoreboardPeek();
-    });
+    document.addEventListener('visibilitychange', () => this.expireNotice());
     window.addEventListener('focus', () => this.expireNotice());
     for (const type of ['keydown', 'keyup', 'keypress'] as const)
       this.#panel.addEventListener(type, (e) => {
@@ -430,16 +411,9 @@ export class CupUI {
     this.render();
   }
   togglePanel() {
-    this.#peekCup = null;
     this.#open = !this.#open;
     this.#signature = '';
     this.render();
-  }
-  endScoreboardPeek() {
-    if (!this.#peekCup) return;
-    this.#peekCup = null;
-    this.#open = false;
-    this.redraw();
   }
   showRules() {
     const state = this.#c.state;
@@ -514,17 +488,12 @@ export class CupUI {
     if (c.panelRequest.revision !== this.#seenPanelRequest) {
       this.#seenPanelRequest = c.panelRequest.revision;
       if (c.panelRequest.revision > 0) {
-        this.#peekCup = null;
         this.#open = c.panelRequest.open;
         if (this.#open) {
           if (c.game && !c.info?.disposed) c.native?.clearInput?.(c.game);
         } else (this.#shadow.activeElement as HTMLElement | null)?.blur();
         if (c.panelRequest.message) this.showNotice(c.panelRequest.message, 2500);
       }
-    }
-    if (this.#peekCup && (!s || s.id !== this.#peekCup || s.phase === 'registration')) {
-      this.#peekCup = null;
-      this.#open = false;
     }
     if (!this.#open && this.#rulesDialog.open) this.#rulesDialog.close();
     this.renderCompletion();
