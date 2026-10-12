@@ -183,7 +183,7 @@ export class Panel {
             'div',
             { class: 'grow' },
             h('div', { class: 'big' }, app.isHost ? (count < 2 ? 'Invite some racers' : `${count} racers on the grid`) : 'Waiting for the organizer'),
-            h('p', null, app.isHost ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practise on this track until you start.` : 'Practise on this track while you wait. The cup starts when the organizer is ready.'),
+            h('p', null, app.isHost ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practice on this track until you start.` : 'Practice on this track while you wait. The cup starts when the organizer is ready.'),
           ),
           app.isHost && app.code ? btn([icon('link'), 'Copy invite link'], () => this.#copy(this.#link(), 'Invite link copied'), 'primary') : null,
           app.isHost && !app.code && app.connection
@@ -781,48 +781,56 @@ export class Panel {
 
   // ---- Chat ----
 
-  // One stream: the cup's chat and, when the player has the main chat on, everyone else's. The box
-  // and its buttons are built once, so typing (and a phone's keyboard) survives new messages.
+  // Two tabs: the cup's own chat and everyone online. The box and its buttons are built once, so
+  // typing (and a phone's keyboard) survives new messages.
   #renderChat() {
     const app = this.app,
       chat = app.chat,
       cup = chat.cup;
     const ui = (this.#chatUi ??= this.#buildChat());
     if (ui.box.parentElement !== this.#side) fill(this.#side, ui.box);
-    const muted = chat.target === 'cup' && cup.muted;
-    toggle(ui.cupBtn, 'on', chat.target === 'cup');
-    toggle(ui.allBtn, 'on', chat.target === 'all');
-    ui.allBtn.disabled = !chat.mainOn;
-    ui.allBtn.title = chat.mainOn ? '' : 'Turn Chat on in the main menu to talk to everyone';
-    ui.input.disabled = muted;
-    ui.input.placeholder = muted ? 'The organizer muted you' : chat.target === 'cup' ? 'Message the cup' : 'Message everyone online';
+    const onCup = chat.target === 'cup';
+    // What's on screen counts as read.
+    if (onCup) cup.unread = 0;
+    else chat.unreadAll = 0;
+    const off = !onCup && !chat.mainOn;
+    const muted = onCup && cup.muted;
+    ui.input.disabled = muted || off;
+    ui.input.placeholder = muted ? 'The organizer muted you' : off ? 'The main chat is off' : onCup ? 'Message the cup' : 'Message everyone online';
     const lines = chat.lines();
-    const key = JSON.stringify([chat.isHost, cup.status, lines.length, lines.at(-1)?.key, [...cup.mutes]]);
+    const key = JSON.stringify([chat.target, chat.mainOn, chat.isHost, cup.status, lines.length, lines.at(-1)?.key, [...cup.mutes], cup.unread, chat.unreadAll]);
     if (key === this.#chatKey) return;
     this.#chatKey = key;
+    const tab = (el: HTMLElement, label: string, on: boolean, unread: number) => {
+      toggle(el, 'on', on);
+      fill(el, label, unread && !on ? h('span', { class: 'count' }, String(unread)) : null);
+    };
+    tab(ui.cupTab, 'Cup chat', onCup, cup.unread);
+    tab(ui.allTab, 'Everyone', !onCup, chat.unreadAll);
     const msgs = ui.msgs;
     const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
     fill(
       msgs,
-      lines.length
-        ? lines.map(({ room, m }) =>
-            h(
-              'div',
-              { class: 'msg' + (room === 'all' ? ' all' : '') },
-              room === 'cup' && chat.isHost && m.uid !== cup.uid
-                ? h('button', { class: 'mute', onclick: click(() => cup.mute(m.uid, !cup.mutes.has(m.uid))) }, cup.mutes.has(m.uid) ? 'unmute' : 'mute')
-                : null,
-              h('b', { style: `color:${nameColor(m.uid)}` }, room === 'all' ? h('span', { class: 'room' }, 'Everyone') : null, m.nick, room === 'cup' && cup.mutes.has(m.uid) ? ' (muted)' : ''),
-              m.text,
-            ),
-          )
-        : h('div', { class: 'empty' }, cup.status === 'on' ? 'No messages yet. Say hi!' : 'Connecting to chat…'),
+      off
+        ? h('div', { class: 'empty' }, h('p', null, 'The main chat is off. Turn it on to talk to everyone online.'), btn('Turn it on', () => chat.turnMainOn(), 'small'))
+        : lines.length
+          ? lines.map(({ m }) =>
+              h(
+                'div',
+                { class: 'msg' },
+                onCup && chat.isHost && m.uid !== cup.uid
+                  ? h('button', { class: 'mute', onclick: click(() => cup.mute(m.uid, !cup.mutes.has(m.uid))) }, cup.mutes.has(m.uid) ? 'unmute' : 'mute')
+                  : null,
+                h('b', { style: `color:${nameColor(m.uid)}` }, m.nick, onCup && cup.mutes.has(m.uid) ? ' (muted)' : ''),
+                m.text,
+              ),
+            )
+          : h('div', { class: 'empty' }, !onCup || cup.status === 'on' ? 'No messages yet. Say hi!' : 'Connecting to chat…'),
     );
-    chat.unreadAll = 0;
     if (atBottom) msgs.scrollTop = msgs.scrollHeight;
   }
 
-  #chatUi: { box: HTMLElement; msgs: HTMLElement; input: HTMLInputElement; cupBtn: HTMLButtonElement; allBtn: HTMLButtonElement } | null = null;
+  #chatUi: { box: HTMLElement; msgs: HTMLElement; input: HTMLInputElement; cupTab: HTMLButtonElement; allTab: HTMLButtonElement } | null = null;
   #buildChat() {
     const app = this.app,
       chat = app.chat;
@@ -853,12 +861,10 @@ export class Panel {
       input,
       h('button', { class: 'btn small', type: 'submit', onmousedown: keep }, 'Send'),
     );
-    const cupBtn = h('button', { type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('cup')) }, 'Cup') as HTMLButtonElement;
-    const allBtn = h('button', { type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('all')) }, 'Everyone') as HTMLButtonElement;
-    // Who a message goes to; "Everyone" needs the main chat switched on in the menu.
-    const target = h('div', { class: 'ctabs' }, h('span', { class: 'dim', style: 'font-size:14px;align-self:center;margin-right:4px' }, 'Send to'), h('div', { class: 'seg' }, cupBtn, allBtn));
-    const box = h('div', { class: 'chat' }, h('div', { class: 'chathead' }, 'Chat'), msgs, target, form);
-    return { box, msgs, input, cupBtn, allBtn };
+    const cupTab = h('button', { class: 'tab', type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('cup')) }) as HTMLButtonElement;
+    const allTab = h('button', { class: 'tab', type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('all')) }) as HTMLButtonElement;
+    const box = h('div', { class: 'chat' }, h('div', { class: 'ctabs' }, cupTab, allTab), msgs, form);
+    return { box, msgs, input, cupTab, allTab };
   }
 
   #link() {

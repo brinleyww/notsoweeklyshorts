@@ -162,7 +162,7 @@ interface MainFeed {
   subscribe(fn: (m: ChatMessage) => void): () => void;
   post(text: string): Promise<void>;
 }
-const mainChat = () => (window as unknown as { __nswsChat?: { feed?: MainFeed; setTucked?(on: boolean): void } }).__nswsChat;
+const mainChat = () => (window as unknown as { __nswsChat?: { feed?: MainFeed; setTucked?(on: boolean): void; setEnabled?(on: boolean): void } }).__nswsChat;
 
 export type ChatTarget = 'cup' | 'all';
 export interface ChatLine {
@@ -171,12 +171,11 @@ export interface ChatLine {
   m: ChatMessage;
 }
 
-// One stream in a cup: the cup room plus the main chat (when the player has it on). The main chat's
-// window steps aside meanwhile, so there is only one chat on screen.
+// Two tabs in a cup: the cup's own room, and everyone online through the main chat (its messages and
+// its connection, when the player has it on). The main chat's window steps aside meanwhile.
 export class CupChat {
   cup: Room;
   target: ChatTarget = 'cup';
-  #all: ChatMessage[] = [];
   #unsubscribe: (() => void) | null = null;
   unreadAll = 0;
   constructor(private o: { context: () => { cupId: string; host: boolean } | null; changed: () => void }) {
@@ -188,22 +187,29 @@ export class CupChat {
   get mainOn() {
     return !!mainChat()?.feed?.active();
   }
-  get myAllUid() {
-    return mainChat()?.feed?.uid() ?? null;
+  turnMainOn() {
+    mainChat()?.setEnabled?.(true);
+    this.o.changed();
   }
+  messages(room: ChatTarget): ChatMessage[] {
+    if (room === 'cup') return this.cup.messages;
+    return this.mainOn ? (mainChat()?.feed?.recent() ?? []) : [];
+  }
+  // The open tab's messages.
   lines(limit = 300): ChatLine[] {
-    const out: ChatLine[] = this.cup.messages.map((m) => ({ key: 'c' + m.id, room: 'cup' as const, m }));
-    if (this.mainOn) for (const m of this.#all) out.push({ key: 'a' + m.id, room: 'all', m });
-    out.sort((x, y) => (x.m.at ?? 0) - (y.m.at ?? 0));
-    return out.slice(-limit);
+    const room = this.target;
+    return this.messages(room)
+      .slice(-limit)
+      .map((m) => ({ key: room + m.id, room, m }));
   }
   setTarget(target: ChatTarget) {
-    this.target = target === 'all' && this.mainOn ? 'all' : 'cup';
+    this.target = target;
     this.o.changed();
   }
   post(text: string) {
-    if (this.target === 'all' && this.mainOn) return mainChat()!.feed!.post(text);
-    return this.cup.post(text);
+    if (this.target === 'cup') return this.cup.post(text);
+    if (!this.mainOn) return Promise.reject(new Error('Turn the main chat on to talk to everyone.'));
+    return mainChat()!.feed!.post(text);
   }
   tick() {
     const context = this.o.context();
@@ -211,10 +217,7 @@ export class CupChat {
     this.cup.sync(room ? room.code : '', room ? '?cup=' + encodeURIComponent(room.code) : '', room?.secret ?? null);
     const feed = mainChat()?.feed;
     if (room && feed && !this.#unsubscribe) {
-      this.#all = feed.recent().slice(-40);
       this.#unsubscribe = feed.subscribe((m) => {
-        this.#all.push(m);
-        if (this.#all.length > 300) this.#all.splice(0, this.#all.length - 300);
         if (m.uid !== feed.uid()) this.unreadAll++;
         this.o.changed();
       });
@@ -223,7 +226,6 @@ export class CupChat {
     } else if (!room && this.#unsubscribe) {
       this.#unsubscribe();
       this.#unsubscribe = null;
-      this.#all = [];
       this.target = 'cup';
       mainChat()?.setTucked?.(false);
     }

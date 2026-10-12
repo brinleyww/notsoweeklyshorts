@@ -798,9 +798,9 @@ export class Hud {
         el.remove();
         this.#lineEls.delete(k);
       }
-    for (const { key, room, m } of last) {
+    for (const { key, m } of last) {
       if (this.#lineEls.has(key)) continue;
-      const el = h('div', { class: 'line' + (room === 'all' ? ' all' : '') }, h('b', { style: `color:${nameColor(m.uid)}` }, room === 'all' ? h('span', { class: 'room' }, 'Everyone') : null, m.nick), m.text);
+      const el = h('div', { class: 'line' }, h('b', { style: `color:${nameColor(m.uid)}` }, m.nick), m.text);
       this.#lineEls.set(key, el);
       this.#feedLines.append(el);
     }
@@ -830,9 +830,10 @@ export class Hud {
       );
       // Buttons beside the box don't take its focus.
       const keep = (e: Event) => e.preventDefault();
-      const toggleTarget = chat.mainOn
-        ? h('button', { class: 'btn small', type: 'button', title: 'Who this message goes to', onmousedown: keep, onclick: click(() => chat.setTarget(chat.target === 'all' ? 'cup' : 'all')) }, chat.target === 'all' ? 'Everyone' : 'Cup')
-        : null;
+      const toggleTarget =
+        chat.mainOn || chat.target === 'all'
+          ? h('button', { class: 'btn small', type: 'button', title: 'Switch between the cup chat and everyone online', onmousedown: keep, onclick: click(() => chat.setTarget(chat.target === 'all' ? 'cup' : 'all')) }, chat.target === 'all' ? 'Everyone' : 'Cup')
+          : null;
       const form = h(
         'form',
         {

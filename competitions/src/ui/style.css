@@ -52,17 +52,19 @@ input.text, textarea.text {
   -webkit-user-select: text; user-select: text;
 }
 input.text::placeholder { color: var(--text); opacity: .28; }
-/* Sliders: the part left of the thumb fills in as it moves (--fill, set in dom.ts). */
-input[type=range] { --fill: 50%; pointer-events: auto; -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; height: 30px; margin: 0; touch-action: pan-y; }
+/* Sliders: a slanted handle like the game's buttons, on a slim track that fills up to it (--fill, set in
+   dom.ts) in the game's own bar colour. */
+input[type=range] { --fill: 50%; --done: #7272c2; --knob: var(--text); pointer-events: auto; -webkit-appearance: none; appearance: none; background: transparent; cursor: pointer; height: 30px; margin: 0; touch-action: pan-y; }
 input[type=range]:focus { outline: none; }
-input[type=range]::-webkit-slider-runnable-track { height: 10px; background: linear-gradient(to right, #6f8fd0 var(--fill), var(--s4) var(--fill)); }
-input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 26px; margin-top: -8px; background: var(--text); border: 3px solid var(--btn); box-shadow: 0 0 0 2px var(--text); transition: transform .12s ease; }
-input[type=range]:hover::-webkit-slider-thumb, input[type=range]:focus-visible::-webkit-slider-thumb { transform: scale(1.08); }
-input[type=range]:active::-webkit-slider-thumb { transform: scale(1.14); }
-input[type=range]::-moz-range-track { height: 10px; background: var(--s4); }
-input[type=range]::-moz-range-progress { height: 10px; background: #6f8fd0; }
-input[type=range]::-moz-range-thumb { width: 14px; height: 20px; border-radius: 0; background: var(--text); border: 3px solid var(--btn); box-shadow: 0 0 0 2px var(--text); }
-input[type=range]:disabled { cursor: default; opacity: .7; }
+input[type=range]::-webkit-slider-runnable-track { height: 8px; background: linear-gradient(to right, var(--done) var(--fill), var(--s4) var(--fill)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 26px; margin-top: -9px; background: var(--knob); clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); transition: transform .12s ease, background-color .12s ease; }
+input[type=range]:hover, input[type=range]:focus-visible { --done: #8686d8; }
+input[type=range]:hover::-webkit-slider-thumb, input[type=range]:focus-visible::-webkit-slider-thumb { transform: scaleX(1.15); }
+input[type=range]:active::-webkit-slider-thumb { transform: scale(1.2, 1.1); }
+input[type=range]::-moz-range-track { height: 8px; background: var(--s4); }
+input[type=range]::-moz-range-progress { height: 8px; background: var(--done); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 26px; border: none; border-radius: 0; background: var(--knob); clip-path: polygon(5px 0, 100% 0, calc(100% - 5px) 100%, 0 100%); }
+input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; }
 .switch { pointer-events: auto; position: relative; width: 48px; height: 26px; flex: none; background: var(--s4); cursor: pointer; border: none; padding: 0; transition: background-color .2s ease; }
 .switch::after { content: ''; position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; background: var(--dim); transition: transform .2s cubic-bezier(.25, .8, .25, 1), background-color .2s ease; }
 .switch:hover::after { background: var(--text); }
@@ -298,8 +300,8 @@ input[type=range]:disabled { cursor: default; opacity: .7; }
 .rule { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 4px 0; }
 .rule label { flex: 1; font-size: 17px; display: flex; flex-direction: column; gap: 3px; }
 .rule label small { font-size: 13px; color: var(--faint); }
-.rule .val { min-width: 60px; text-align: right; font-size: 17px; }
-.rule input[type=range] { width: 120px; }
+.rule .val { min-width: 66px; padding: 5px 9px 5px 12px; text-align: right; font-size: 16px; background: var(--s3); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%); }
+.rule input[type=range] { width: 140px; }
 .list { display: flex; flex-direction: column; gap: 3px; }
 .prow { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: var(--s3); font-size: 18px; }
 .prow .grow { flex: 1; min-width: 0; }
@@ -413,15 +415,12 @@ input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-bu
   .switch::after { width: 24px; height: 24px; }
   .switch.on::after { transform: translateX(26px); }
   input[type=range] { height: 40px; }
-  input[type=range]::-webkit-slider-thumb { width: 26px; height: 32px; margin-top: -11px; }
+  input[type=range]::-webkit-slider-thumb { width: 22px; height: 34px; margin-top: -13px; clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
   .spec .who .arrow { padding: 24px 20px; }
 }
 .rule.wide { grid-column: 1 / -1; }
 .rules-title { margin: 6px 0 12px; font-size: 22px; font-weight: 400; }
 
-.msg .room, .feed .room { font-size: 11px; padding: 1px 5px; margin-right: 6px; background: var(--btn-hover); color: var(--text); vertical-align: 1px; }
-.chat .chathead { padding: 12px 14px 4px; font-size: 20px; }
-.chat .ctabs { align-items: center; padding: 8px 10px 0; background: var(--s1); }
 .feed .box .btn { margin-right: 4px; }
 
 /* Chat text uses the font picked in Settings > Chat (mod/nsws_chat.js sets these on the page). */

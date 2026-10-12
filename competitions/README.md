@@ -48,9 +48,10 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   box ends the typing.
 - Spectators tell the organizer whose car they follow (`act` `watch`, once the choice has held 0.8 s),
   and the racer sees "N watching" top right.
-- `chat.ts`: one chat stream in a cup: the cup's own room (`/nsws/chat?cup=CODE`) plus, when the
-  player has the main chat on, its messages (tagged "Everyone") through the main chat's own
-  connection (`window.__nswsChat.feed`). The main chat window tucks away inside a cup. Outside a cup,
+- `chat.ts`: two chat tabs in a cup, "Cup chat" (the cup's own room, `/nsws/chat?cup=CODE`) and
+  "Everyone" (the main chat's messages and connection, `window.__nswsChat.feed`, when the player has
+  it on), each with an unread count. The race overlay shows the open tab. The main chat window tucks
+  away inside a cup. Outside a cup,
   the main chat shows the same fading previews over a race while its window is minimized, and the
   chat key opens a quick message line (`mod/nsws_chat.js`).
 
