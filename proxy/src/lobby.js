@@ -1,8 +1,8 @@
-// Competitions (PolyCup) networking. The game's multiplayer normally finds players through
+// Competitions (Cuppa) networking. The game's multiplayer normally finds players through
 // Kodub's matchmaking server and then talks peer to peer over WebRTC. Here both go through this
 // Worker instead: every cup code is one LobbyRoom Durable Object that answers the same matchmaking
 // handshake (host / join sockets) and relays the "peer to peer" data channels (mux sockets).
-// The page side is polycup/nsws/transport.js.
+// The page side is competitions/src/transport.js.
 //
 // Cost on the free plan: incoming WebSocket messages bill 20 to a request, so each page bundles
 // everything it sends into at most one binary frame per flush (about 5 a second while racing).
@@ -81,7 +81,7 @@ function ownerHashes(value) {
     return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => /^[0-9a-f]{64}$/.test(h)));
 }
 
-// What an organizer's page reports about its cup (polycup/nsws/hub.ts reportStatus).
+// What an organizer's page reports about its cup (competitions/src/host.ts #reportStatus).
 function cleanStatus(value) {
     const o = value && typeof value === "object" ? value : null;
     if (!o || !["setup", "racing", "break", "done"].includes(o.phase)) return null;

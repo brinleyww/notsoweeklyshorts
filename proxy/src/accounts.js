@@ -125,7 +125,7 @@ export class Accounts extends DurableObject {
         // links it to the account so the chat can show the account's tag without its token.
         this.sql.exec("CREATE TABLE IF NOT EXISTS chat_links (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
-        // Official cups (hosted by the owner, polycup/nsws/entry.ts): each result, kept once. The
+        // Official cups (hosted by the owner, competitions/src/host.ts): each result, kept once. The
         // winner's account (the one holding their name) gets the Cup Champion tag.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS cup_results (
             cup_id TEXT PRIMARY KEY, at INTEGER NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, results TEXT NOT NULL)`);

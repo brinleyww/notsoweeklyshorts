@@ -1,0 +1,232 @@
+// The organizer's tournament logic: pure functions over the shared CupState, no game access.
+import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
+import { player, roundDone, standings, type CupState, type Phase, type ResultRow, type Round, type RoundResult, type TrackRef } from './state.ts';
+
+// A finish claimed this much shorter than the time since GO is refused.
+export const FINISH_SLACK_MS = 5000;
+export const COUNTDOWN_MS = 3600;
+
+export function createCup(o: { id: string; name: string; format: string; rules: Rules; official: boolean; now: number }): CupState {
+  return {
+    v: 1,
+    id: o.id,
+    name: o.name,
+    seq: 0,
+    format: o.format,
+    rules: cleanRules(o.rules),
+    phase: 'lobby',
+    phaseAt: o.now,
+    nextAt: null,
+    hold: false,
+    host: 0,
+    players: [],
+    round: null,
+    vote: null,
+    winner: null,
+    shout: null,
+    rounds: 0,
+    official: o.official,
+  };
+}
+
+export function setPhase(s: CupState, phase: Phase, now: number, nextAt: number | null = null) {
+  s.phase = phase;
+  s.phaseAt = now;
+  s.nextAt = nextAt;
+}
+
+export const started = (s: CupState) => s.phase !== 'lobby';
+export const racers = (s: CupState) => s.players.filter((p) => p.role === 'racer' && !p.out);
+export const activeRacers = (s: CupState) => racers(s).filter((p) => !p.away);
+
+export function canRace(s: CupState, u?: number) {
+  const p = player(s, u);
+  if (p?.out) return false;
+  if (s.phase === 'podium') return false;
+  if (racers(s).filter((r) => r.u !== u).length >= MAX_RACERS) return false;
+  if (!started(s)) return true;
+  return s.rules.lateJoin && s.rules.mode !== 'knockout';
+}
+
+export function setRole(s: CupState, u: number, role: 'racer' | 'spectator') {
+  const p = player(s, u);
+  if (!p || p.role === role) return false;
+  if (role === 'racer' && !canRace(s, u)) return false;
+  p.role = role;
+  if (role === 'spectator' && s.round && s.round.racers.includes(u) && !roundDone(s, u) && s.phase !== 'lobby') s.round.dnf.push(u);
+  return true;
+}
+
+export function newRound(s: CupState, track: TrackRef, k: number, session: number | null): Round {
+  const r: Round = {
+    n: s.rounds + 1,
+    k,
+    try: s.round?.try ?? 0,
+    session,
+    track,
+    racers: activeRacers(s).map((p) => p.u),
+    startAt: null,
+    endAt: null,
+    closeAt: null,
+    warmupUntil: null,
+    runs: {},
+    dnf: [],
+  };
+  for (const p of s.players) delete p.ready;
+  s.round = r;
+  s.vote = null;
+  return r;
+}
+
+// GO for the current round. limitMs is the hard time limit (time attack: the attack itself).
+export function scheduleStart(s: CupState, now: number, limitMs: number | null) {
+  const r = s.round!;
+  r.try++;
+  r.runs = {};
+  r.dnf = [];
+  r.racers = activeRacers(s).map((p) => p.u).filter((u) => r.racers.includes(u) || s.rules.lateJoin);
+  r.startAt = now + COUNTDOWN_MS;
+  r.endAt = limitMs != null ? r.startAt + limitMs : null;
+  r.closeAt = null;
+  r.warmupUntil = null;
+  setPhase(s, 'countdown', now, r.startAt);
+}
+
+export function recordFinish(s: CupState, u: number, frames: number, now: number) {
+  const r = s.round;
+  if (!r || s.phase !== 'racing' || r.startAt == null || !r.racers.includes(u) || r.dnf.includes(u)) return false;
+  if (!Number.isSafeInteger(frames) || frames <= 0) return false;
+  const ta = s.rules.style === 'timeattack';
+  if (!ta && u in r.runs) return false;
+  if (!ta && frames < now - r.startAt - FINISH_SLACK_MS) return false;
+  if (frames > now - r.startAt + FINISH_SLACK_MS) return false;
+  const prev = r.runs[u];
+  if (ta && prev && prev.f <= frames && prev.chk !== 2) {
+    prev.a = (prev.a ?? 1) + 1;
+    return 'slower';
+  }
+  r.runs[u] = { f: frames, a: (prev?.a ?? 0) + 1, chk: 0 };
+  if (!ta && s.rules.finishWindow > 0 && r.closeAt == null) r.closeAt = now + s.rules.finishWindow * 1000;
+  return true;
+}
+
+export function recordDnf(s: CupState, u: number) {
+  const r = s.round;
+  if (!r || !['warmup', 'countdown', 'racing'].includes(s.phase) || !r.racers.includes(u) || r.dnf.includes(u)) return false;
+  if (s.rules.style !== 'timeattack' && u in r.runs) return false;
+  r.dnf.push(u);
+  return true;
+}
+
+export function roundOver(s: CupState, now: number) {
+  const r = s.round;
+  if (!r || s.phase !== 'racing') return false;
+  if (r.endAt != null && now >= r.endAt) return true;
+  if (r.closeAt != null && now >= r.closeAt) return true;
+  const live = r.racers.filter((u) => !player(s, u)?.away);
+  if (s.rules.style === 'timeattack') return live.every((u) => r.dnf.includes(u));
+  return live.every((u) => roundDone(s, u));
+}
+
+// Who places where in the round. Equal times share a place.
+function placings(r: Round) {
+  const timed = r.racers.filter((u) => r.runs[u] && r.runs[u].chk !== 2);
+  timed.sort((a, b) => r.runs[a].f - r.runs[b].f);
+  const place = new Map<number, number>();
+  timed.forEach((u, i) => place.set(u, i && r.runs[timed[i - 1]].f === r.runs[u].f ? place.get(timed[i - 1])! : i + 1));
+  return { timed, place };
+}
+
+// Scores the finished round and moves the cup on: points, wins, knockouts, finalists, champion.
+// progress(u) ranks racers without a finish (higher is further).
+export function closeRound(s: CupState, progress: (u: number) => number): RoundResult {
+  const r = s.round!;
+  const rules = s.rules;
+  const { timed, place } = placings(r);
+  const rows: ResultRow[] = [];
+  for (const u of timed) {
+    const p = player(s, u);
+    const pl = place.get(u)!;
+    const pts = rules.mode === 'knockout' ? 0 : (rules.points[pl - 1] ?? 0);
+    rows.push([u, r.runs[u].f, pl, pts, 0]);
+    if (!p) continue;
+    p.pts += pts;
+    if (pl <= 8) p.places[pl - 1] = (p.places[pl - 1] ?? 0) + 1;
+    if (pl === 1) p.wins++;
+    if (p.best == null || r.runs[u].f < p.best) p.best = r.runs[u].f;
+  }
+  const missing = r.racers.filter((u) => !place.has(u)).sort((a, b) => progress(b) - progress(a));
+  for (const u of missing) rows.push([u, null, null, 0, 0]);
+  s.rounds = r.n;
+
+  if (rules.mode === 'knockout') {
+    // Racers who left are out on their own; the cut falls on those still here.
+    for (const p of s.players) if (p.role === 'racer' && !p.out && p.away) p.out = r.n;
+    const alive = r.racers.filter((u) => !player(s, u)?.out);
+    const order = rows.filter((row) => alive.includes(row[0]));
+    const cut = Math.min(rules.knockout, Math.max(0, alive.length - 1));
+    if (cut > 0 && timed.length > 0) {
+      const boundary = order.length - cut;
+      const edge = order[boundary - 1];
+      for (let i = order.length - 1; i >= boundary; i--) {
+        const row = order[i];
+        // Exact ties at the cut both stay in.
+        if (row[1] != null && edge && row[1] === edge[1]) continue;
+        const p = player(s, row[0]);
+        if (p) p.out = r.n;
+        row[4] = 1;
+      }
+    }
+    const left = s.players.filter((p) => p.role === 'racer' && !p.out);
+    if (left.length <= 1) s.winner = left[0]?.u ?? standings(s)[0]?.u ?? null;
+  } else if (rules.mode === 'finals') {
+    const first = timed.filter((u) => place.get(u) === 1);
+    if (first.length === 1 && player(s, first[0])?.fin) s.winner = first[0];
+    else for (const p of s.players) if (!p.fin && p.pts >= rules.target && p.role === 'racer') p.fin = 1;
+  } else if (rules.mode === 'points') {
+    if (s.players.some((p) => p.pts >= rules.target)) s.winner = standings(s)[0]?.u ?? null;
+  } else if (rules.mode === 'rounds') {
+    if (r.n >= rules.rounds) s.winner = standings(s)[0]?.u ?? null;
+  }
+  return { n: r.n, track: r.track.name, ta: rules.style === 'timeattack' ? 1 : 0, rows };
+}
+
+export function needsNewTrack(s: CupState) {
+  return !s.round || s.round.k >= s.rules.perTrack;
+}
+
+// Most votes wins; ties and no votes are settled at random among the leaders.
+export function tally(opts: TrackRef[], ballots: Record<number, number>, random = Math.random) {
+  const counts = opts.map(() => 0);
+  for (const v of Object.values(ballots)) if (Number.isInteger(v) && v >= 0 && v < opts.length) counts[v]++;
+  const top = Math.max(...counts);
+  const leaders = counts.map((c, i) => (c === top ? i : -1)).filter((i) => i >= 0);
+  return leaders[Math.floor(random() * leaders.length)];
+}
+
+// Who chooses the next track for winner / last picks: the round's winner, or its last placed racer.
+export function picker(s: CupState, result: RoundResult | undefined, kind: 'winner' | 'last') {
+  if (!result) return null;
+  const rows = result.rows.filter((row) => {
+    const p = player(s, row[0]);
+    return !!p && !p.away && !p.out;
+  });
+  const pick = kind === 'winner' ? rows.find((row) => row[2] === 1) : [...rows].reverse()[0];
+  return pick?.[0] ?? null;
+}
+
+export function resetScores(s: CupState) {
+  for (const p of s.players) {
+    p.pts = 0;
+    p.wins = 0;
+    p.places = [];
+    delete p.out;
+    delete p.fin;
+    delete p.best;
+    delete p.ready;
+  }
+  s.winner = null;
+  s.round = null;
+  s.vote = null;
+  s.rounds = 0;
+}

@@ -100,7 +100,7 @@
         nick.className = "nick";
         nick.textContent = a.name || "Owner";
         m.append(nick, ": " + a.text);
-        // An official cup's announcement joins it in one click (polycup/nsws/hub.ts shows its card).
+        // An official cup's announcement joins it in one click (competitions/src/ui/hub.ts shows its card).
         if (/^[A-HJ-NP-Z2-9]{5}$/.test(a.cup ?? "") && !window.__nswsCupApp?.inCup?.()) {
             const join = document.createElement("button");
             join.className = "button join";

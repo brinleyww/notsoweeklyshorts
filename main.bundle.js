@@ -402,7 +402,7 @@ window.__nswsTrackQuery = function(trackId) {
         }
     }));
     const cupKey = id => CUP_KEYS.find(k => k.id === id);
-    // Every key a cup uses, for the Keys list (polycup/nsws/keys.ts). Game keys have two slots
+    // Every key a cup uses, for the Keys list (competitions/src/keys.ts). Game keys have two slots
     // and are saved like Settings -> Controls; "fixed" ones can't be changed.
     const GAME_CUP_KEYS = [[0, "Accelerate"], [2, "Brake"], [3, "Turn left"], [1, "Turn right"], [4, "Reset to checkpoint"], [5, "Restart"], [6, "Cockpit camera"], [25, "Free camera (spectating)"], [7, "Hide the HUD"], [8, "Pause"]];
     function cupKeyList() {
@@ -427,7 +427,7 @@ window.__nswsTrackQuery = function(trackId) {
             }))
         ];
     }
-    // For mod/polycup.js, which is only fetched once someone opens Competitions or a cup link.
+    // For mod/competitions.js, which is only fetched once someone opens Competitions or a cup link.
     window.__nswsCupKeys = {
         chat: getCupChatKeyBind,
         ghosts: getGhostsKeyBind,
@@ -443,7 +443,7 @@ window.__nswsTrackQuery = function(trackId) {
     function loadCompetitions() {
         cupApp ??= new Promise((resolve, reject) => {
             const script = document.createElement("script");
-            script.src = "mod/polycup.js";
+            script.src = "mod/competitions.js";
             script.onload = () => window.__nswsCupApp ? resolve(window.__nswsCupApp) : reject(new Error("Competitions failed to start"));
             script.onerror = () => {
                 cupApp = null;
@@ -1297,7 +1297,7 @@ window.__nswsTrackQuery = function(trackId) {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
         }
     }
-    // Not So Weekly Shorts: a cup run saved as a clip (polycup "Clip my best run").
+    // Not So Weekly Shorts: a cup run saved as a clip ("Clip my best run").
     window.__nswsSaveClip = async ({recording, frames, trackId, carStyle, nickname, name}) => {
         const pako = window.__clipPako?.Ay ?? window.__clipPako;
         if (!pako || typeof recording !== "string" || !Number.isSafeInteger(frames) || frames < 1) return false;
@@ -2080,7 +2080,7 @@ window.__nswsTrackQuery = function(trackId) {
     window.addEventListener("keydown", function(e) {
         var focused = document.activeElement;
         if (e.repeat || window.__nswsKeyBindCapturing || !keyBindingMatches(e, getGhostsKeyBind())) return;
-        // In a cup, PolyCup's own ghost toggle (which knows who is racing) takes the key.
+        // In a cup, the cup's own ghost toggle (which knows who is racing) takes the key.
         if (window.__nswsCupApp?.inCup()) return;
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
         ghostsHidden = !ghostsHidden;
@@ -42501,7 +42501,7 @@ window.__nswsTrackQuery = function(trackId) {
                 }
                 ), 100), "f");
                 // Not So Weekly Shorts: timers stall in a hidden tab, so a hidden organizer's page also
-                // relays cars from the cup's worker clock (polycup/nsws/transport.js).
+                // relays cars from the cup's worker clock (competitions/src/transport.js).
                 const relay = new WeakRef(this);
                 window.__nswsTicker?.every(100, () => {
                     const host = relay.deref();
@@ -43168,7 +43168,7 @@ window.__nswsTrackQuery = function(trackId) {
                     }
                 } else
                     C.set(this, Jn, null, "f");
-                // Multiplayer is only Competitions now, and PolyCup's panel has the invite, the players
+                // Multiplayer is only Competitions now, and the cup panel has the invite, the players
                 // (with kicks) and the track choice, so the stock Invite/Players/Change Track buttons are gone.
                 C.get(this, Wn, "f").appendChild(C.get(this, Kn, "f")),
                 C.get(this, Hn, "f").addChangeListener(C.set(this, $n, ( () => {
@@ -44329,8 +44329,10 @@ window.__nswsTrackQuery = function(trackId) {
         // Not So Weekly Shorts: race sessions in a collision cup, and the racers each one can hit now.
         const cupCollisions = new WeakMap
           , cupCollisionCups = new WeakSet;
-        // PolyCup's NativeApi (polycup/src/game-types.ts) on this build. Names are the race
-        // session's private fields: Sa multiplayer, wa car, ya keyboard, Ba free camera, ea HUD.
+        // Called by every race session once a frame, after the cars moved and before the frame is drawn.
+        let cupFrameHook = null;
+        // Game access for Competitions (competitions/src/game.ts). Names are the race session's
+        // private fields: Sa multiplayer, wa car, ya keyboard, Ba free camera, ea HUD, Ra other cars.
         const cupNative = (y, x, w, S) => {
             const settingsOf = g => C.get(g, Gr, "f");
             const restartAllowed = g => null == C.get(g, ca, "f") && !C.get(g, Pa, "f");
@@ -44340,8 +44342,6 @@ window.__nswsTrackQuery = function(trackId) {
             return {
                 Host: Fn,
                 Client: Dl,
-                Game: ts,
-                TrackLibrary: sd,
                 // Only the maps in the cup's pool (window.__nswsCupPool, picked before the room opened):
                 // the weekly shorts and the chosen main tracks are "official", Kodub's community tracks "community".
                 trackLibrary: {
@@ -44368,7 +44368,9 @@ window.__nswsTrackQuery = function(trackId) {
                         return found;
                     }
                 },
-                watchGames: cb => cb(Sa),
+                onFrame: fn => {
+                    cupFrameHook = fn;
+                },
                 leaderboardUploads: (() => {
                     const defaults = new WeakMap;
                     return (g, enabled) => {
@@ -44388,49 +44390,17 @@ window.__nswsTrackQuery = function(trackId) {
                             peer.dataChannel.onclose?.(new Event("close"));
                         }
                 },
-                renderer: g => C.get(g, zr, "f"),
-                hudElement: g => C.get(g, ea, "f")?.element ?? null,
-                enableCupSpectator: g => {
-                    const spectator = C.get(g, Ba, "f");
-                    if (spectator.isEnabled) return;
-                    spectator.isEnabled = !0;
-                    C.get(g, ea, "f").isVisible = !1 !== C.get(g, $r, "f");
-                },
                 presentation: (g, cup, watching) => {
                     const ended = !!C.get(g, Pa, "f"), ui = C.get(g, ea, "f")?.element, end = C.get(g, fa, "f"), backdrop = end ? kr.get(end) : null;
-                    ui?.classList.toggle("polycup-watching", !!cup && !!watching && !ended);
-                    ui?.classList.toggle("polycup-session-ended", !!cup && ended);
-                    backdrop?.classList.toggle("polycup-session-ended", !!cup && ended);
+                    ui?.classList.toggle("sc-watching", !!cup && !!watching && !ended);
+                    ui?.classList.toggle("sc-session-ended", !!cup && ended);
+                    backdrop?.classList.toggle("sc-session-ended", !!cup && ended);
                     if (cup && watching && !ended) {
                         const toolbar = C.get(g, la, "f");
-                        (!C.get(g, Fr, "f").isCursorHidden || toolbar.hasFocus() || ui?.querySelector(".polycup-toolbar-button:focus")) && toolbar.setVisible(!0);
+                        (!C.get(g, Fr, "f").isCursorHidden || toolbar.hasFocus() || ui?.querySelector(".sc-toolbar-button:focus")) && toolbar.setVisible(!0);
                     }
                 },
-                // 0.6.3 leaderboard entries carry frames; this build calls it time. A board for the week in
-                // progress hides other players' times, so it has no record to show.
-                records: () => ({
-                    server: {
-                        getLeaderboardUserEntry: (token, id, verified) => x.getLeaderboardUserEntry(token, id, verified),
-                        getLeaderboard: async (token, id, start, count, verified) => {
-                            const board = await x.getLeaderboard(token, id, start, count, verified);
-                            if (board.entries.some(e => e.hidden)) throw new Error("Times are hidden this week");
-                            return { entries: board.entries.map(e => ({ frames: e.time, nickname: e.nickname, countryCode: e.countryCode })) };
-                        }
-                    },
-                    profiles: w,
-                    store: S
-                }),
                 carThumbnail: style => ir.F(style, new rr.A),
-                readInputs: g => ({ frames: C.get(g, wa, "f").getTime().numberOfFrames, controls: C.get(g, ya, "f").getControls() }),
-                watchInputs: (g, cb) => {
-                    const controls = C.get(g, ya, "f");
-                    controls.addChangeCallback(cb);
-                    return () => controls.removeChangeCallback(cb);
-                },
-                createInputVisualizer: parent => {
-                    const view = new Wu(parent);
-                    return { element: Du.get(view), update: c => view.update(c), dispose: () => view.dispose() };
-                },
                 clearInput: g => {
                     const controls = C.get(g, ya, "f");
                     if (controls) for (const key of ["up", "right", "down", "left", "reset"]) controls[key] = !1;
@@ -44463,24 +44433,7 @@ window.__nswsTrackQuery = function(trackId) {
                         checkpointCount: C.get(g, Pr, "f").getTotalNumberOfCheckpointIndices()
                     };
                 },
-                camera: g => {
-                    const camera = C.get(g, zr, "f").camera, car = C.get(g, wa, "f");
-                    return {
-                        sessionId: C.get(g, Sa, "f").sessionId,
-                        position: camera.position.toArray(),
-                        quaternion: camera.quaternion.toArray(),
-                        fov: camera.fov,
-                        frames: car.getTime().numberOfFrames,
-                        speed: car.getSpeedKmh(),
-                        carPosition: car.getPosition().toArray(),
-                        carQuaternion: car.getQuaternion().toArray(),
-                        resetCounter: C.get(g, Ia, "f"),
-                        view: camera === car.cameraCockpit ? 1 : 0
-                    };
-                },
                 remoteCar: (g, id) => C.get(g, Ra, "f").get(id)?.car,
-                chatKeys: () => [formatClipKeyName(getCupChatKeyBind())],
-                ghostKeys: () => [formatClipKeyName(getGhostsKeyBind())],
                 autoSpectate: () => getCupAutoSpectate(),
                 restartPressed: (g, e) => {
                     const car = C.get(g, wa, "f"), settings = settingsOf(g);
@@ -44490,7 +44443,7 @@ window.__nswsTrackQuery = function(trackId) {
                     const car = C.get(g, wa, "f");
                     return !(P.ip() || C.get(g, Ba, "f").isEnabled || Ha.call(g) || !restartAllowed(g) || car.hasFinished() || 0 !== car.getNextCheckpointIndex() || !settingsOf(g).checkKeyBinding(e, KeyBind.VehicleCheckpointReset));
                 },
-                // Spectators' free camera (PolyCup 0.3.1), off on tracks whose week blocks it.
+                // Spectators' free camera, off on tracks whose week blocks it.
                 freecamPressed: (g, e) => !P.ip() && settingsOf(g).checkKeyBinding(e, KeyBind.ToggleSpectatorCamera) && !window.__nswsFreecamBlocked?.(C.get(g, Yr, "f").getId()),
                 enterFreecam: g => {
                     const renderer = C.get(g, zr, "f"), camera = renderer.camera, spectator = C.get(g, Ba, "f");
@@ -44525,18 +44478,17 @@ window.__nswsTrackQuery = function(trackId) {
                     car.audioVolume = 1;
                     for (const r of C.get(g, Ra, "f").values()) r.car.audioVolume = C.get(g, Oa, "f");
                 },
-                follow: (g, pose, id) => {
-                    const camera = C.get(g, Ba, "f").camera;
-                    camera.position.fromArray(pose.position);
-                    camera.quaternion.fromArray(pose.quaternion);
-                    camera.fov = pose.fov;
-                    camera.updateProjectionMatrix();
-                    C.get(g, zr, "f").setCamera(camera);
+                followCar: (g, id, cockpit, dt) => {
+                    const r = C.get(g, Ra, "f").get(id);
+                    if (!r) return !1;
+                    const renderer = C.get(g, zr, "f"), spectator = C.get(g, Ba, "f");
+                    spectator.isEnabled && (spectator.isEnabled = !1);
+                    r.car.updateCameras(dt);
+                    const camera = cockpit ? r.car.cameraCockpit : r.car.cameraOrbit;
+                    renderer.camera !== camera && renderer.setCamera(camera);
                     C.get(g, wa, "f").audioVolume = 0;
-                    for (const [peer, r] of C.get(g, Ra, "f")) {
-                        r.car.audioVolume = peer === id ? 1 : .15;
-                        peer === id && (r.car.setVisible(!0), r.car.setOpacity(1));
-                    }
+                    for (const [peer, other] of C.get(g, Ra, "f")) other.car.audioVolume = peer === id ? 1 : .15;
+                    return !0;
                 },
                 peers: c => c instanceof Fn ? mn.get(c).map(p => ({ id: p.id, pc: p.peerConnection })) : gl.get(c) ? [{ id: 0, pc: gl.get(c) }] : [],
                 parse: code => TrackDataModule.A.fromExportString(code),
@@ -44567,7 +44519,6 @@ window.__nswsTrackQuery = function(trackId) {
                         if (!check(this)) return original.call(this);
                     };
                 },
-                // Not So Weekly Shorts additions (polycup/src/game-types.ts).
                 inviteError: c => c instanceof Fn ? c.getInviteError() : null,
                 // The organizer replays a racer's run through the physics; null when it can't be checked.
                 verifyRun: (g, recording, frames) => {
@@ -45372,6 +45323,7 @@ window.__nswsTrackQuery = function(trackId) {
                 C.get(this, ra, "f").update(C.get(this, wa, "f")),
                 C.get(this, ma, "f").setResetCheckpointAvailable(C.get(this, _r, "m", ja).call(this)),
                 C.get(this, Ga, "f")?.update(),
+                cupFrameHook?.(this, n),
                 C.get(this, Ir, "f").update(C.get(this, Pr, "f")),
                 C.get(this, Lr, "f").update(n, C.get(this, zr, "f").camera, C.get(this, Pr, "f").sunDirection),
                 C.get(this, Nr, "f").update(e, !1, C.get(this, zr, "f")),
@@ -54142,7 +54094,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
         }
         ;
-        // PolyCup 0.6.3 asks the host for its invite through these; this build has createInvite.
+        // The 0.6.3 invite API (request / get / renew) on top of this build's createInvite.
         (() => {
             const invites = new WeakMap;
             const stateOf = c => invites.get(c) ?? (invites.set(c, { loading: !1, invite: null }), invites.get(c));
@@ -54155,7 +54107,7 @@ window.__nswsTrackQuery = function(trackId) {
             Fn.prototype.getInvite = function() {
                 return stateOf(this).invite;
             };
-            // A failure is kept for PolyCup's panel (inviteError). When the matchmaking socket of a
+            // A failure is kept for the cup panel (inviteError). When the matchmaking socket of a
             // working room drops, the same code is asked for again for up to a minute (proxy reclaim).
             const INVITE_ERRORS = {
                 IpLimit: "Too many cups were opened from your network in the last 10 minutes. Try again later.",
@@ -54220,7 +54172,7 @@ window.__nswsTrackQuery = function(trackId) {
             Fn.prototype.getInviteError = function() {
                 return stateOf(this).error ?? null;
             };
-            // The cup's status for the Competitions list (polycup/nsws/hub.ts), over the matchmaking socket.
+            // The cup's status for the Competitions list (competitions/src/host.ts), over the matchmaking socket.
             Fn.prototype.reportCupStatus = function(status) {
                 const ws = C.get(this, on, "f");
                 if (ws?.readyState === WebSocket.OPEN) try {
@@ -54234,7 +54186,7 @@ window.__nswsTrackQuery = function(trackId) {
                 Client.prototype.requestInvite = () => {};
                 Client.prototype.renewInvite = () => {};
             }
-            // Everything goes through the proxy in batches (polycup/nsws/transport.js), so other cars
+            // Everything goes through the proxy in batches (competitions/src/transport.js), so other cars
             // are drawn a little further behind to keep a batch in hand.
             Fn.prototype.remoteDelay = Dl.prototype.remoteDelay = .6;
         })();
@@ -59209,7 +59161,7 @@ window.__nswsTrackQuery = function(trackId) {
                 return new WebSocket(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/join?code=" + encodeURIComponent(window.__nswsCupJoinCode || ""))
             }
             getIceServers() {
-                // No ICE: the proxy relays everything (polycup/nsws/transport.js).
+                // No ICE: the proxy relays everything (competitions/src/transport.js).
                 if (window.__nswsPeerConnection) return Promise.resolve([]);
                 return new Promise(( (e, t) => {
                     const n = window.__nswsApiBase + "" + C.get(this, ku, "f") + "iceServers?version=0.6.2"
@@ -60698,7 +60650,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
             ;
             window.__bw_returnToMenu = () => M(!1, null);
-            // For mod/polycup.js (polycup/nsws): Competitions run PolyCup on the game's own multiplayer.
+            // For mod/competitions.js: Competitions run on the game's own multiplayer.
             const cupCategory = data => {
                 const id = data?.getId?.();
                 return id && y.isOfficialTrack(id) ? "official" : id && y.isCommunityTrack(id) ? "community" : "custom";

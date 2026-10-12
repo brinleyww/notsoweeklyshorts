@@ -244,7 +244,7 @@
         return id;
     }
 
-    // The Competitions cup chat (polycup/src/chat.ts) joins its own room as the same player.
+    // The Competitions cup chat (competitions/src/chat.ts) joins its own room as the same player.
     window.__nswsChatIdentity = { visitorId, nickname: readNickname, ownerKey };
 
     function luminance(rgb) {

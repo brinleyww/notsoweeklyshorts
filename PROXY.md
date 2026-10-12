@@ -387,12 +387,12 @@ or exact `nickname`), `/nsws/tagadmin/grant`, `/nsws/tagadmin/bonus`. Deploy
 the Worker before pushing the site; until then the Tags tab and Referrals window
 say they aren't switched on yet.
 
-## Competitions (PolyCup)
+## Competitions (Cuppa)
 
-The main menu's **Competitions** button runs PolyCup by Kiki (used with permission; source in
-`polycup/`, built to `mod/polycup.js`, which only loads when someone opens Competitions or a cup
-link). PolyCup sits on the game's own multiplayer, and every part of it goes through this Worker:
-there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` covers the page side.
+The main menu's **Competitions** button opens Cuppa, the site's cup mode (source in
+`competitions/`, built to `mod/competitions.js`, which only loads when someone opens Competitions
+or a cup link). It sits on the game's own multiplayer, and every part of it goes through this Worker:
+there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md` covers the page side.
 
 - **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), `GET /nsws/cup/info?code=`
   (a cup's name, map pool, official flag and status, read for the join card; `{cup: null}` if it
@@ -444,9 +444,11 @@ there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` cove
   but the short-lived reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
   are kept from the earlier lobbies, so no migration was needed).
 - **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
-  it sends into at most one frame every 200 ms (measured 3-5 a second per page in a live round), so an
-  8-player cup is about 2 requests a second, roughly 7,000 an hour. The room rejects more than 60
-  frames a second from one socket.
+  it sends into one frame: every 200 ms while its car is moving (the organizer: while anyone's is) and
+  every second otherwise; clicks, finishes and phase changes go at once. Measured: about 3.5 frames a
+  second per driving page and about 1 a second idle. An 8-player cup is about 1.5 requests a second
+  while everyone races and well under 1 between rounds. Spectating and live timing send nothing of
+  their own. The room rejects more than 60 frames a second from one socket.
 - **Cup PBs go to the owner:** with "Upload leaderboard times" on in a cup's rules, a personal best set
   in a cup is uploaded with `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal
   replay check and is put on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to
@@ -457,7 +459,7 @@ there is no Kodub matchmaking and nothing peer to peer. `polycup/README.md` cove
   While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
   A cup with player collisions never saves or uploads a time, so nothing from it reaches this queue.
   Cup finishes are checked on the organizer's page instead: each racer's finish carries its replay,
-  which the organizer runs through the game's own physics (`polycup/README.md`).
+  which the organizer runs through the game's own physics (`competitions/README.md`).
 
 ## Name moderation
 

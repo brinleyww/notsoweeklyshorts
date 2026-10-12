@@ -13389,7 +13389,7 @@
             // draws them (keyframes on their own clock), and after every physics frame of the local car
             // its hull box is pushed out of theirs with a bounce (yaw only, never pitch or roll). Cars
             // that overlap after a spawn, restart or respawn pass through each other until they have
-            // separated. Each hit is passed on to the other car (equal masses) through PolyCup.
+            // separated. Each hit is passed on to the other car (equal masses) through the cup's organizer.
             const __collide = new Map();
             const __HALF = [.7732, .3822, 1.8431]
               , __CENTER = [0, .6162, -.1532];
