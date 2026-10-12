@@ -7,9 +7,11 @@
 // [u32 link][u16 channel][u8 kind][u32 length][bytes] (kind 0 = text, 1 = binary).
 // The pace is 200 ms while this page drives (or organizes a live round) and longer otherwise;
 // the cup sets window.__nswsMuxPace, and window.__nswsMuxFlush() sends at once (a click, a finish).
+// On a network that blocks WebSockets the socket is mod/nsws_socket.js's HTTPS fallback; while that
+// sends one POST per batch, it sets window.__nswsMuxMinPace so batches go out a little less often.
 
 const FLUSH_MS = 200;
-const pace = () => Math.max(FLUSH_MS, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
+const pace = () => Math.max(FLUSH_MS, Number(window.__nswsMuxMinPace) || 0, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
 // Past this much queued, flush at once (track transfers) instead of waiting for the timer.
 const FLUSH_BYTES = 256 * 1024;
 const MAX_EARLY = 64;
@@ -64,7 +66,7 @@ class Mux {
     }
 
     connect(resume) {
-        const ws = new WebSocket(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1" : ""));
+        const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1" : ""));
         this.ws = ws;
         ws.binaryType = "arraybuffer";
         ws.addEventListener("open", () => {

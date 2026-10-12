@@ -59164,12 +59164,12 @@ window.__nswsTrackQuery = function(trackId) {
                 if (this.determinismState != Js.Ok)
                     throw new Error("WebSocket creation not allowed with non-deterministic physics");
                 const reclaim = window.__nswsCupReclaim;
-                return new WebSocket(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/host" + (reclaim ? "?reclaim=" + reclaim : ""))
+                return new (window.__nswsSocket || WebSocket)(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/host" + (reclaim ? "?reclaim=" + reclaim : ""))
             }
             createMultiplayerJoinWebSocket() {
                 if (this.determinismState != Js.Ok)
                     throw new Error("WebSocket creation not allowed with non-deterministic physics");
-                return new WebSocket(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/join?code=" + encodeURIComponent(window.__nswsCupJoinCode || ""))
+                return new (window.__nswsSocket || WebSocket)(window.__nswsApiBase.replace(/^http/, "ws") + "nsws/cup/join?code=" + encodeURIComponent(window.__nswsCupJoinCode || ""))
             }
             getIceServers() {
                 // No ICE: the proxy relays everything (competitions/src/transport.js).

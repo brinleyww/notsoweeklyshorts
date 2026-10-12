@@ -17,7 +17,9 @@ the same session with the cars reset for another round on the same track). The p
 Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 
 - `transport.js` fakes RTCPeerConnection / RTCDataChannel over one WebSocket per page, batching
-  everything into binary frames.
+  everything into binary frames. Every cup socket (matchmaking, relay, cup chat) is opened with
+  `window.__nswsSocket` (`mod/nsws_socket.js`), which falls back to HTTPS on networks that block
+  WebSockets (PROXY.md, "HTTPS fallback for sockets").
 - `net.ts` adds the cup's own data channel (id 40, JSON) on each player connection.
 - `host.ts` (`Organizer`) runs only on the organizer's page. It owns the cup state (`state.ts`),
   runs the round clock, loads tracks, replays each finish through the game's physics

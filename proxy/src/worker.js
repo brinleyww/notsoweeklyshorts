@@ -6,9 +6,10 @@ import { AntiCheat, RunChecker } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
+import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -1012,6 +1013,44 @@ async function chatBroadcast(env, data) {
     }
 }
 
+// Where a socket goes: { ns, name, path, headers } (a Durable Object namespace, the instance and the
+// request it gets), or { refused } with the error a page reads. Shared by the WebSocket routes below
+// and the HTTPS fallback (handleSockets), so both take the same checks and limits.
+async function chatTarget(url, connectingIp) {
+    // ?cup=CODE is that cup's own chat room (src/chat.js), used by the Competitions panel.
+    const cup = String(url.searchParams.get("cup") || "").toUpperCase();
+    if (cup && !LOBBY_CODE.test(cup)) return { refused: "BadRequest" };
+    const ip = (await sha256Hex("nsws-chat-ip:" + (connectingIp || ""))).slice(0, 16);
+    const headers = { "X-Chat-Ip": ip };
+    if (cup) headers["X-Chat-Cup"] = cup;
+    return { ns: "CHAT", name: cup ? "cup:" + cup : "global", cup: cup || null, path: "nsws/chat" + url.search, headers };
+}
+
+async function cupTarget(url, env, role, connectingIp) {
+    if (!env.LOBBY || !env.LOBBY_DIR) return { refused: "ServerUnavailable" };
+    let code = String(url.searchParams.get("code") || "").trim().toUpperCase();
+    // An organizer whose matchmaking socket dropped asks for its own code back (lobby.js reclaim).
+    const reclaim = role === "host" ? String(url.searchParams.get("reclaim") || "").trim().toUpperCase() : "";
+    if (role === "host" && LOBBY_CODE.test(reclaim)) {
+        code = reclaim;
+    } else if (role === "host") {
+        const ip = (await sha256Hex("nsws-lobby-ip:" + (connectingIp || ""))).slice(0, 16);
+        code = await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).reserve(ip);
+        if (!code) return { refused: "IpLimit" };
+    } else if (!LOBBY_CODE.test(code)) {
+        return { refused: "ExpiredInvite" };
+    }
+    const headers = { "X-Cup-Code": code, "X-Cup-Role": role };
+    if (role === "host" && reclaim === code) headers["X-Cup-Reclaim"] = "1";
+    return { ns: "LOBBY", name: code, cup: code, path: "nsws/cup/" + role + url.search, headers };
+}
+
+function connectSocket(env, request, target) {
+    const headers = new Headers(request.headers);
+    for (const [k, v] of Object.entries(target.headers)) headers.set(k, v);
+    return env[target.ns].get(env[target.ns].idFromName(target.name)).fetch(new Request(request, { headers }));
+}
+
 // Browsers send the page's Origin on a WebSocket upgrade too, so only the site can open the chat.
 // /chat is the WebSocket. /chat/poll and /chat/send are the same chat over plain HTTPS, for
 // networks whose firewall blocks WebSockets; the page sends them as text/plain so no preflight
@@ -1025,17 +1064,13 @@ async function handleChat(request, url, env, fromSite, origin) {
     }
     if (!isSocket && request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (!env.CHAT) return plain(503, "Chat is off", origin);
-    const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
-    // ?cup=CODE is that cup's own chat room (src/chat.js), used by the Competitions panel.
-    const cup = isSocket ? String(url.searchParams.get("cup") || "").toUpperCase() : "";
-    if (cup && !LOBBY_CODE.test(cup)) return plain(404, "Not found", origin);
-    const room = env.CHAT.get(env.CHAT.idFromName(cup ? "cup:" + cup : "global"));
     if (isSocket) {
-        const headers = new Headers(request.headers);
-        headers.set("X-Chat-Ip", ip);
-        if (cup) headers.set("X-Chat-Cup", cup);
-        return room.fetch(new Request(request, { headers }));
+        const target = await chatTarget(url, request.headers.get("CF-Connecting-IP"));
+        if (target.refused) return plain(404, "Not found", origin);
+        return connectSocket(env, request, target);
     }
+    const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+    const room = env.CHAT.get(env.CHAT.idFromName("global"));
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
     const text = await readSmallBody(request, MAX_CHAT_BODY);
     if (text == null) return plain(413, "Too large", origin);
@@ -1076,24 +1111,67 @@ async function handleCup(request, url, env, fromSite, origin, cfg) {
     const role = { "cup/host": "host", "cup/join": "join", "cup/mux": "mux" }[url.pathname.slice(TRAFFIC_PREFIX.length)];
     if (!role) return plain(404, "Not found", origin);
     if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
-    if (!env.LOBBY || !env.LOBBY_DIR) return socketRefusal("ServerUnavailable");
-    let code = String(url.searchParams.get("code") || "").trim().toUpperCase();
-    // An organizer whose matchmaking socket dropped asks for its own code back (lobby.js reclaim).
-    const reclaim = role === "host" ? String(url.searchParams.get("reclaim") || "").trim().toUpperCase() : "";
-    if (role === "host" && LOBBY_CODE.test(reclaim)) {
-        code = reclaim;
-    } else if (role === "host") {
-        const ip = (await sha256Hex("nsws-lobby-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
-        code = await env.LOBBY_DIR.get(env.LOBBY_DIR.idFromName("global")).reserve(ip);
-        if (!code) return socketRefusal("IpLimit");
-    } else if (!LOBBY_CODE.test(code)) {
-        return socketRefusal("ExpiredInvite");
+    const target = await cupTarget(url, env, role, request.headers.get("CF-Connecting-IP"));
+    if (target.refused) return socketRefusal(target.refused);
+    return connectSocket(env, request, target);
+}
+
+// The HTTPS fallback for sockets (src/bridge.js, mod/nsws_socket.js). /sock/open opens one of the
+// page's sockets on its cup's SocketBridge; /sock/down and /sock/up carry the traffic. All three are
+// site only and text/plain or binary POSTs, so no CORS preflight is needed. The Worker never reads
+// /down or /up bodies: they stream straight to and from the bridge, so a busy cup costs it no CPU.
+const SOCK_SID = /^[0-9a-f]{32}$/;
+const MAX_SOCK_PATH = 512;
+
+async function handleSockets(request, url, env, fromSite, origin) {
+    if (!fromSite) return forbidden();
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+    if (!env.BRIDGE) return plain(503, "Sockets over HTTPS are off", origin);
+    const sid = url.searchParams.get("sid") || "";
+    const cup = String(url.searchParams.get("b") || "").toUpperCase();
+    if (!SOCK_SID.test(sid)) return plain(400, "Bad request", origin);
+    const op = url.pathname.slice((TRAFFIC_PREFIX + "sock/").length);
+    if (op === "open") {
+        const ch = Number(url.searchParams.get("ch"));
+        const text = await readSmallBody(request, MAX_SOCK_PATH);
+        if (text == null || !Number.isSafeInteger(ch)) return plain(400, "Bad request", origin);
+        const target = await sockTarget(text, env, request.headers.get("CF-Connecting-IP"));
+        if (target.refused) return json({ refused: target.refused }, origin);
+        const bridge = env.BRIDGE.get(env.BRIDGE.idFromName(target.cup));
+        const result = await bridge.open(sid, ch, { ns: target.ns, name: target.name, path: target.path, headers: target.headers });
+        return json(result.refused ? result : { b: target.cup }, origin);
     }
-    const headers = new Headers(request.headers);
-    headers.set("X-Cup-Code", code);
-    headers.set("X-Cup-Role", role);
-    if (role === "host" && reclaim === code) headers.set("X-Cup-Reclaim", "1");
-    return env.LOBBY.get(env.LOBBY.idFromName(code)).fetch(new Request(request, { headers }));
+    if (op !== "down" && op !== "up") return plain(404, "Not found", origin);
+    if (!LOBBY_CODE.test(cup)) return plain(400, "Bad request", origin);
+    const bridge = env.BRIDGE.get(env.BRIDGE.idFromName(cup));
+    const inner = new URL("https://bridge.internal/" + op + url.search);
+    const res = await bridge.fetch(new Request(inner.toString(), {
+        method: "POST",
+        body: op === "up" ? request.body : null,
+        duplex: "half",
+    }));
+    const headers = new Headers(res.headers);
+    for (const [k, v] of Object.entries(corsHeaders(origin))) headers.set(k, v);
+    return new Response(res.body, { status: res.status, headers });
+}
+
+// A socket path the page asks for, checked like the WebSocket routes check theirs. Only the cup
+// sockets and cup chats can be carried (the main chat has its own HTTPS fallback in src/chat.js).
+async function sockTarget(text, env, connectingIp) {
+    let url;
+    try {
+        url = new URL(String(text).trim(), "https://socket.internal/");
+    } catch {
+        return { refused: "BadRequest" };
+    }
+    const role = { "/nsws/cup/host": "host", "/nsws/cup/join": "join", "/nsws/cup/mux": "mux" }[url.pathname];
+    if (role) return cupTarget(url, env, role, connectingIp);
+    if (url.pathname === "/nsws/chat" && url.searchParams.get("cup")) {
+        if (!env.CHAT) return { refused: "ServerUnavailable" };
+        return chatTarget(url, connectingIp);
+    }
+    return { refused: "BadRequest" };
 }
 
 export default {
@@ -1108,6 +1186,14 @@ export default {
             const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
+            }
+            if (url.pathname.startsWith(TRAFFIC_PREFIX + "sock/")) {
+                try {
+                    return await handleSockets(request, url, env, fromSite, requestOrigin);
+                } catch (err) {
+                    console.error("sock error:", err && err.message);
+                    return plain(500, "Sockets failed", requestOrigin);
+                }
             }
             if (url.pathname.startsWith(TRAFFIC_PREFIX + "cup/")) {
                 try {

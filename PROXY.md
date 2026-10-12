@@ -454,6 +454,64 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   Cup finishes are checked on the organizer's page instead: each racer's finish carries its replay,
   which the organizer runs through the game's own physics (`competitions/README.md`).
 
+## HTTPS fallback for sockets
+
+School and work firewalls often block WebSockets but let ordinary HTTPS through (that is why the
+leaderboards work there). Everything in a cup is a WebSocket: the matchmaking sockets
+(`/nsws/cup/host`, `/nsws/cup/join`), the relay (`/nsws/cup/mux`) and the cup chat
+(`/nsws/chat?cup=`). So all of them go through `window.__nswsSocket` (`mod/nsws_socket.js`), which
+is a real WebSocket whenever one can open, and otherwise carries on over HTTPS without the page
+noticing. The main chat has its own fallback (see "Chat") and doesn't use this.
+
+- **When it switches:** a socket that is refused, or not open within 8 s, reopens over HTTPS. If
+  that works, the page remembers it for 12 hours (`_nswsChatHttpAt`, the same key the main chat
+  uses) and later sockets go straight to HTTPS. Once a visit the page quietly tries a WebSocket
+  again, and if it opens, the next visit uses WebSockets.
+- **The bridge:** `SocketBridge` (`proxy/src/bridge.js`, binding `BRIDGE`, migration `v6`), one per
+  cup code. It opens the real WebSockets to `LobbyRoom` and `ChatRoom` on the page's behalf, so
+  those rooms see ordinary sockets and needed no changes. `/nsws/sock/open` resolves a socket path
+  with the same checks and limits as the WebSocket routes (`cupTarget`, `chatTarget` in
+  `worker.js`), so nothing else can be reached through it. `/nsws/sock/down` and `/nsws/sock/up`
+  carry the traffic. Site only, `text/plain` or binary POSTs, so there is no CORS preflight.
+- **One session per page and cup:** every socket a page has in a cup shares one stream down and one
+  stream up, numbered so that nothing is lost or doubled when a request drops and is retried.
+  A page that stops calling for 45 s is gone, and its sockets close with 4001, which the rooms treat
+  as a dropped connection (the relay parks, the organizer can reclaim the code). Nothing is stored.
+
+**Keeping it inside the free plan.** Each request counts against Workers' 100,000 a day, and
+each request to the bridge counts against Durable Objects' 100,000 a day.
+
+- **Down** is one streamed response that stays open for 30 s and gets everything as it comes,
+  however busy the cup is: two requests a minute. If the network's proxy holds a response back
+  until it ends (the first byte doesn't arrive in 5 s), the page long-polls instead (waits up to
+  20 s, or answers after the relay's pace once something arrives) and remembers that for 12 hours.
+- **Up** is one streamed request body per 50 s where the browser can stream uploads (Chrome, over
+  HTTP/2). If the upload isn't acknowledged within 5 s (HTTP/1.1, or a proxy in the way), the page
+  sends one POST per batch instead, never more than one at a time. While it does, the relay batches
+  every 300 ms instead of every 200 ms (`window.__nswsMuxMinPace`).
+- **Bodies are raw records**, `[u8 kind][u32 seq][u16 ch][u32 length][bytes]`, never JSON or
+  base64. The Worker passes `/down` and `/up` straight through without reading them, so a 300 KB
+  track transfer costs it no CPU (the free plan allows 10 ms a request).
+- **One bridge per cup**, not per player, so the Durable Object time (13,000 GB-s a day free) grows
+  with the number of cups using the fallback, not the number of players.
+- **Only blocked networks use it.** Everyone else stays on WebSockets, where incoming messages bill
+  20 to a request.
+
+Measured locally (`wrangler dev`) with a car-state frame every 200 ms, per racing player:
+
+| Network                                        | Worker requests                          |
+| ---------------------------------------------- | ---------------------------------------- |
+| WebSockets (normal)                            | ~0.25 a second (20 messages bill as one) |
+| Streams both ways (Chrome, where allowed)      | ~4 a **minute**                          |
+| Stream down, one POST per batch (Firefox, Safari, HTTP/1.1) | ~3.3 a second while driving, ~2 a minute otherwise |
+| Long-poll down, POST up (proxy holds responses back) | ~3.3 POSTs plus up to ~3 polls a second while driving |
+
+Each Worker request to `/sock/down` or `/sock/up` is also one Durable Object request. The bridge's own
+sockets to the rooms bill like any WebSocket player's. So a fallback player in Chrome costs less
+than a WebSocket player, and one on POSTs can race for about 8 hours a day before the free plan's
+100,000 requests run out. If many players at once end up on POSTs, the $5 Workers Paid plan
+(10 million requests a month) removes the limit.
+
 ## Name moderation
 
 Every name and line players write goes through the chat's filter (`proxy/src/chatfilter.js`:

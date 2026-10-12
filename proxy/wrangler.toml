@@ -105,3 +105,13 @@ class_name = "LobbyDirectory"
 [[migrations]]
 tag = "v5"
 new_sqlite_classes = ["LobbyRoom", "LobbyDirectory"]
+
+# The HTTPS fallback for sockets (src/bridge.js): one instance per cup code, holding the WebSockets
+# of that cup's players whose network blocks them.
+[[durable_objects.bindings]]
+name = "BRIDGE"
+class_name = "SocketBridge"
+
+[[migrations]]
+tag = "v6"
+new_sqlite_classes = ["SocketBridge"]

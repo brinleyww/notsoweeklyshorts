@@ -47,7 +47,9 @@ class Room {
     if (!id || !site.__nswsApiBase) return;
     let ws: WebSocket;
     try {
-      ws = new WebSocket(site.__nswsApiBase.replace(/^http/, 'ws') + 'nsws/chat' + query);
+      // The HTTPS fallback (mod/nsws_socket.js) when this network blocks WebSockets.
+      const Socket: typeof WebSocket = site.__nswsSocket ?? WebSocket;
+      ws = new Socket(site.__nswsApiBase.replace(/^http/, 'ws') + 'nsws/chat' + query);
     } catch {
       this.#retryAt = Date.now() + RETRY_MS;
       return;
