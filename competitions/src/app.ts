@@ -28,7 +28,7 @@ export interface Note {
 }
 
 const HELLO_MS = 2000;
-const CLOCK_MS = 60_000;
+const CLOCK_MS = 10_000;
 const PACE_DRIVING = 200;
 const PACE_IDLE = 1000;
 
@@ -63,9 +63,11 @@ export class App {
   org: Organizer | null = null;
   code: string | null = null;
   chatSecret: string | null = null;
-  chatTyping = false;
   split: { cp: number; total: number; place: number; gap: number | null; at: number } | null = null;
   panelOpen = false;
+  #watchWant: number | null = null;
+  #watchSince = 0;
+  #watchSentAt = 0;
   notes: Note[] = [];
   error = '';
   revision = 0;
@@ -83,6 +85,7 @@ export class App {
   #rtt = Infinity;
   #clockAt = 0;
   #clockOkAt = 0;
+  #lastPing: number | null = null;
   #cupId = '';
   #clockBurst = 0;
   #helloAt = 0;
@@ -214,6 +217,7 @@ export class App {
     this.game = null;
     this.info = null;
     this.code = null;
+    this.chat.tick();
     this.changed();
   }
 
@@ -306,6 +310,7 @@ export class App {
     this.chat.tick();
     if (this.org) this.org.tick(Date.now());
     else this.#clientTick();
+    this.#watchSync();
     this.#bumps();
     this.#pace();
   }
@@ -320,13 +325,39 @@ export class App {
     if (this.me != null && (this.#clockBurst < 4 || now - this.#clockAt > CLOCK_MS) && now - this.#clockAt > 400) {
       this.#clockAt = now;
       this.#clockBurst++;
-      this.net.send(0, { k: 't0', a: now }, true);
+      this.net.send(0, this.#lastPing == null ? { k: 't0', a: now } : { k: 't0', a: now, rtt: this.#lastPing }, true);
     }
     const s = this.state,
       info = this.info;
     if (s?.round?.session != null && info && !info.disposed && info.sessionId === s.round.session && this.#readySent !== s.round.session) {
       if (this.net.send(0, { k: 'rdy', s: s.round.session }, true)) this.#readySent = s.round.session;
     }
+  }
+
+  // Tells the organizer whose car this page's camera follows, for that racer's "watching" count.
+  // Sent once the choice has held for a moment, so the director's cuts don't each cost a message.
+  #watchSync() {
+    const me = this.self;
+    if (!me) return;
+    const w = this.watch;
+    const pid = w.active && w.mode !== 'free' ? w.target : null;
+    const want = pid == null ? null : (this.playerByPid(pid)?.u ?? null);
+    const now = performance.now();
+    if (want !== this.#watchWant) {
+      this.#watchWant = want;
+      this.#watchSince = now;
+    }
+    if ((me.watch ?? null) === want || now - this.#watchSince < 800 || now - this.#watchSentAt < 2000) return;
+    this.#watchSentAt = now;
+    this.report({ k: 'act', a: 'watch', v: want }, false);
+  }
+
+  // Typing in one of the layer's text boxes holds the car (keys go to the box, not the game).
+  get chatTyping() {
+    const host = document.activeElement;
+    if (host?.id !== 'nsws-cuppa') return false;
+    const el = host.shadowRoot?.activeElement;
+    return el instanceof HTMLInputElement && el.type === 'text' && el.getClientRects().length > 0;
   }
 
   #bumps() {
@@ -341,9 +372,11 @@ export class App {
     const s = this.state,
       car = this.info?.car;
     const moving = !!car && car.hasStarted() && !car.hasFinished() && !!this.game && !this.driver.blocks(this.game);
-    // The organizer relays everyone else's car, so it keeps the fast pace while any car moves.
-    const hostLive = this.isHost && !!s && performance.now() - this.live.movedAt < 1500;
-    site.__nswsMuxPace = moving || hostLive ? PACE_DRIVING : PACE_IDLE;
+    // Racers switch before GO, so their first moments aren't sent at the slow pace.
+    const racing = this.driver.racing && !this.driver.done && (s?.phase === 'countdown' || s?.phase === 'racing');
+    // The organizer relays everyone else's car, so it keeps the fast pace while any car moves or a round runs.
+    const hostLive = this.isHost && !!s && (performance.now() - this.live.movedAt < 1500 || s.phase === 'countdown' || s.phase === 'racing');
+    site.__nswsMuxPace = moving || racing || hostLive ? PACE_DRIVING : PACE_IDLE;
   }
 
   // To the organizer (or straight into the Organizer on its own page).
@@ -381,6 +414,7 @@ export class App {
       case 't1': {
         const now = Date.now();
         const rtt = now - m.a;
+        if (rtt >= 0 && rtt < 10000) this.#lastPing = rtt;
         if (rtt >= 0 && rtt < 10000 && (rtt <= this.#rtt * 1.5 || now - this.#clockOkAt > CLOCK_MS * 3)) {
           this.#rtt = now - this.#clockOkAt > CLOCK_MS * 3 ? rtt : Math.min(rtt, this.#rtt);
           this.#clockOkAt = now;
@@ -429,11 +463,6 @@ export class App {
     if (!this.net.send(0, m, true)) this.notify('Not connected to the organizer right now', 'bad');
   }
 
-  ping(pid: number | null) {
-    if (pid == null || !this.connection) return null;
-    const ping = this.connection.getPing(pid);
-    return typeof ping === 'number' && Number.isFinite(ping) ? Math.round(ping) : null;
-  }
 
   // The best placed of this page's own finishes, for "Clip my best run".
   bestRun() {

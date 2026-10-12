@@ -33,6 +33,10 @@ export interface Player {
   places: number[];
   out?: number;
   fin?: 1;
+  // Round trip to the organizer in ms, measured by the player's page.
+  ping?: number;
+  // The racer this player's camera follows.
+  watch?: number;
   away?: 1;
   ready?: 1;
   best?: number;
@@ -173,4 +177,9 @@ export function placeOf(r: Round, u: number) {
     if (v !== u && other && other.chk !== 2 && other.f < mine.f) place++;
   }
   return place;
+}
+
+// Reached the points cap under the finalist rule: a round win now takes the cup.
+export function isFinalist(s: CupState, p: Player | undefined) {
+  return !!p?.fin && s.rules.mode === 'points' && s.rules.finalist;
 }

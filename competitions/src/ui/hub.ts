@@ -3,7 +3,7 @@
 import type { App } from '../app.ts';
 import { site, type Connection, type TrackData, type TrackMeta } from '../game.ts';
 import { cleanRules, FORMATS, formatById, MAX_RACERS, PRODUCT } from '../rules.ts';
-import { btn, click, h, icon, fill } from './dom.ts';
+import { btn, click, h, icon, fill, range } from './dom.ts';
 
 export interface MapPool {
   shorts: boolean;
@@ -211,7 +211,7 @@ export class Hub {
       paint();
       return wrap;
     };
-    const size = h('input', { type: 'range', min: 2, max: MAX_RACERS, value: String(st.max) }) as HTMLInputElement;
+    const size = range({ min: 2, max: MAX_RACERS, value: st.max });
     const sizeVal = h('span', { class: 'val' }, `${st.max} players`);
     size.oninput = () => {
       st.max = Number(size.value);

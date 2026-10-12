@@ -43,7 +43,6 @@ export interface Rules {
   lateJoin: boolean;
   freecam: boolean;
   uploads: boolean;
-  customTracks: boolean;
 }
 
 export interface Format {
@@ -61,10 +60,13 @@ export type PointsCurve = 'log' | 'f1' | 'linear' | 'flat';
 export function pointsCurve(kind: PointsCurve, top: number, last: number): number[] {
   top = Math.max(1, Math.round(top));
   last = Math.max(0, Math.min(top, Math.round(last)));
+  // 70% a log fall and 30% an even one, so the top places are a little closer together.
   const log = (hi: number, lo: number, from = 1) =>
-    Array.from({ length: MAX_RACERS - from + 1 }, (_, i) =>
-      Math.round(hi - ((hi - lo) * Math.log((from + i) / from)) / Math.log(MAX_RACERS / from)),
-    );
+    Array.from({ length: MAX_RACERS - from + 1 }, (_, i) => {
+      const curve = Math.log((from + i) / from) / Math.log(MAX_RACERS / from);
+      const even = i / (MAX_RACERS - from);
+      return Math.round(hi - (hi - lo) * (0.7 * curve + 0.3 * even));
+    });
   if (kind === 'flat') return Array(MAX_RACERS).fill(top);
   if (kind === 'linear') return Array.from({ length: MAX_RACERS }, (_, i) => Math.round(top - ((top - last) * i) / (MAX_RACERS - 1)));
   if (kind === 'f1') {
@@ -74,7 +76,7 @@ export function pointsCurve(kind: PointsCurve, top: number, last: number): numbe
   return log(top, last);
 }
 
-// 1st gets 200 and the points fall with the log of the place, so 25th still gets 10.
+// 1st gets 200 and the points fall along that curve, so 25th still gets 10.
 export const DEFAULT_POINTS = pointsCurve('log', 200, 10);
 export const F1_POINTS = pointsCurve('f1', 200, 10);
 
@@ -93,7 +95,7 @@ const base: Rules = {
   taSeconds: 180,
   limit: 'auto',
   limitSeconds: 240,
-  finishWindow: 30,
+  finishWindow: 10,
   next: 'random',
   warmupMode: 'off',
   warmupTiming: 'fixed',
@@ -110,7 +112,6 @@ const base: Rules = {
   lateJoin: true,
   freecam: true,
   uploads: false,
-  customTracks: false,
 };
 
 const format = (id: string, name: string, icon: string, blurb: string, rules: Partial<Rules>): Format => ({
@@ -157,7 +158,6 @@ export const FORMATS: Format[] = [
     perTrack: 2,
     next: 'last',
     lateJoin: false,
-    finishWindow: 20,
   }),
   format('timeattack', 'Time Attack', 'stopwatch', 'Three minutes per track. Unlimited tries, your best lap counts.', {
     style: 'timeattack',
@@ -224,7 +224,6 @@ export function cleanRules(value: unknown): Rules {
     lateJoin: bool(o.lateJoin, base.lateJoin),
     freecam: bool(o.freecam, base.freecam),
     uploads: bool(o.uploads, base.uploads),
-    customTracks: bool(o.customTracks, base.customTracks),
   };
   if (r.collisions) r.uploads = false;
   if (r.mode === 'knockout') r.lateJoin = false;
@@ -338,7 +337,6 @@ export function fromOldRules(o: Record<string, unknown>): Rules {
     lateJoin: o.allowRacerChanges,
     freecam: o.allowSpectatorFreecam,
     uploads: o.uploadLeaderboardTimes,
-    customTracks: Array.isArray(o.pool) && o.pool.includes('custom'),
   } as unknown as Rules);
 }
 

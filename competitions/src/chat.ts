@@ -154,34 +154,78 @@ class Room {
   }
 }
 
-export type ChatTab = 'cup' | 'global';
+// What the main chat (mod/nsws_chat.js) lends Cuppa: its messages and its connection.
+interface MainFeed {
+  active(): boolean;
+  uid(): string | null;
+  recent(): ChatMessage[];
+  subscribe(fn: (m: ChatMessage) => void): () => void;
+  post(text: string): Promise<void>;
+}
+const mainChat = () => (window as unknown as { __nswsChat?: { feed?: MainFeed; setTucked?(on: boolean): void } }).__nswsChat;
 
+export type ChatTarget = 'cup' | 'all';
+export interface ChatLine {
+  key: string;
+  room: ChatTarget;
+  m: ChatMessage;
+}
+
+// One stream in a cup: the cup room plus the main chat (when the player has it on). The main chat's
+// window steps aside meanwhile, so there is only one chat on screen.
 export class CupChat {
   cup: Room;
-  global: Room;
-  tab: ChatTab = 'cup';
-  #globalWanted = false;
+  target: ChatTarget = 'cup';
+  #all: ChatMessage[] = [];
+  #unsubscribe: (() => void) | null = null;
+  unreadAll = 0;
   constructor(private o: { context: () => { cupId: string; host: boolean } | null; changed: () => void }) {
     this.cup = new Room(o.changed);
-    this.global = new Room(o.changed);
-  }
-  get room() {
-    return this[this.tab];
   }
   get isHost() {
     return !!this.o.context()?.host;
   }
-  select(tab: ChatTab) {
-    this.tab = tab;
-    if (tab === 'global') this.#globalWanted = true;
-    this[tab].unread = 0;
-    this.tick();
+  get mainOn() {
+    return !!mainChat()?.feed?.active();
+  }
+  get myAllUid() {
+    return mainChat()?.feed?.uid() ?? null;
+  }
+  lines(limit = 300): ChatLine[] {
+    const out: ChatLine[] = this.cup.messages.map((m) => ({ key: 'c' + m.id, room: 'cup' as const, m }));
+    if (this.mainOn) for (const m of this.#all) out.push({ key: 'a' + m.id, room: 'all', m });
+    out.sort((x, y) => (x.m.at ?? 0) - (y.m.at ?? 0));
+    return out.slice(-limit);
+  }
+  setTarget(target: ChatTarget) {
+    this.target = target === 'all' && this.mainOn ? 'all' : 'cup';
     this.o.changed();
   }
+  post(text: string) {
+    if (this.target === 'all' && this.mainOn) return mainChat()!.feed!.post(text);
+    return this.cup.post(text);
+  }
   tick() {
-    const room = this.o.context() ? (site.__nswsCupRoom?.() ?? null) : null;
+    const context = this.o.context();
+    const room = context ? (site.__nswsCupRoom?.() ?? null) : null;
     this.cup.sync(room ? room.code : '', room ? '?cup=' + encodeURIComponent(room.code) : '', room?.secret ?? null);
-    this.global.sync(room && this.#globalWanted ? 'global' : '', '', null);
-    if (!room) this.#globalWanted = false;
+    const feed = mainChat()?.feed;
+    if (room && feed && !this.#unsubscribe) {
+      this.#all = feed.recent().slice(-40);
+      this.#unsubscribe = feed.subscribe((m) => {
+        this.#all.push(m);
+        if (this.#all.length > 300) this.#all.splice(0, this.#all.length - 300);
+        if (m.uid !== feed.uid()) this.unreadAll++;
+        this.o.changed();
+      });
+      mainChat()?.setTucked?.(true);
+      this.o.changed();
+    } else if (!room && this.#unsubscribe) {
+      this.#unsubscribe();
+      this.#unsubscribe = null;
+      this.#all = [];
+      this.target = 'cup';
+      mainChat()?.setTucked?.(false);
+    }
   }
 }

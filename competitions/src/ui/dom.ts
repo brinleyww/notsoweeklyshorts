@@ -75,6 +75,7 @@ const P: Record<string, string> = {
   stopwatch: '<circle cx="12" cy="14" r="7"/><path d="M12 14V10m-3-7h6m4 4 1.5-1.5"/>',
   burst: '<path d="m12 2 2 6 6-2-3 5 5 3-6 1 1 6-5-4-5 4 1-6-6-1 5-3-3-5 6 2z"/>',
   trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H4v2a4 4 0 0 0 4 4m8-6h4v2a4 4 0 0 1-4 4m-4 1v4m-4 3h8"/>',
+  user: '<circle cx="12" cy="7.5" r="4"/><path d="M4 21c0-4.5 3.6-7.5 8-7.5s8 3 8 7.5"/>',
   users: '<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6m1-16a3.5 3.5 0 0 1 0 7m3 9c0-3-1.5-5-4-5.6"/>',
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   chat: '<path d="M4 5h16v11H9l-5 4z"/>',
@@ -128,6 +129,15 @@ export function click(fn: () => unknown) {
       sink(err);
     }
   };
+}
+
+// A slider whose track fills up to the thumb while it moves.
+export function range(attrs: { min: number; max: number; step?: number; value: number; disabled?: boolean }) {
+  const input = h('input', { type: 'range', min: attrs.min, max: attrs.max, step: attrs.step ?? 1, value: String(attrs.value), disabled: !!attrs.disabled }) as HTMLInputElement;
+  const paint = () => input.style.setProperty('--fill', `${((Number(input.value) - attrs.min) / Math.max(1e-9, attrs.max - attrs.min)) * 100}%`);
+  input.addEventListener('input', paint);
+  paint();
+  return input;
 }
 
 export function confirmBtn(label: string, fn: () => unknown, cls = '', title?: string) {

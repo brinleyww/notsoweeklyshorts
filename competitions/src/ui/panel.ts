@@ -3,8 +3,8 @@
 import type { App } from '../app.ts';
 import { canRace, racers } from '../engine.ts';
 import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
-import { player, standings, type CupState } from '../state.ts';
-import { btn, click, confirmBtn, flag, fmtTime, h, icon, ordinal, fill } from './dom.ts';
+import { player, standings, type CupState, isFinalist } from '../state.ts';
+import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { nameColor } from './hud.ts';
 
 type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
@@ -27,7 +27,6 @@ export class Panel {
   tab: Tab = 'cup';
   #key = '';
   #chatKey = '';
-  #msgs: HTMLElement | null = null;
   #side = h('aside', { class: 'side' });
   // Built once: only the header and the main column are rebuilt, so the chat keeps its focus.
   #head = h('header');
@@ -61,7 +60,8 @@ export class Panel {
     this.app.panelOpen = open;
     this.#key = '';
     this.#chatKey = '';
-    if (!open) this.app.chatTyping = false;
+    const active = (this.el.getRootNode() as ShadowRoot).activeElement;
+    if (!open && active instanceof HTMLElement && this.el.contains(active)) active.blur();
     this.app.changed();
   }
 
@@ -247,7 +247,7 @@ export class Panel {
           {
             class: 'fmt' + (draft.format === f.id ? ' on' : ''),
             disabled: !host,
-            onclick: click(() => this.#apply(f.id, { ...cleanRules(f.rules), customTracks: s.rules.customTracks, uploads: s.rules.uploads })),
+            onclick: click(() => this.#apply(f.id, { ...cleanRules(f.rules), uploads: s.rules.uploads })),
           },
           icon(f.icon),
           h('b', null, f.name),
@@ -306,7 +306,7 @@ export class Panel {
       h('div', { class: 'tile stat' }, h('small', null, 'Now'), h('b', null, PHASE_TEXT[s.phase])),
       h('div', { class: 'tile stat' }, h('small', null, 'Track'), h('b', { class: 'ell' }, r?.track.name ?? '—')),
       h('div', { class: 'tile stat' }, h('small', null, 'Goal'), h('b', { class: 'ell' }, goal)),
-      h('div', { class: 'tile stat' }, h('small', null, 'You'), h('b', null, me?.role === 'racer' || me?.pts ? (myPos ? `${ordinal(myPos)} · ${me?.pts ?? 0} pts` : '—') : 'Watching')),
+      h('div', { class: 'tile stat' }, h('small', null, 'You'), h('b', null, me?.role === 'racer' || me?.pts ? (myPos ? [`${ordinal(myPos)} · `, isFinalist(s, me) ? h('span', { class: 'finalist' }, 'Finalist') : `${me?.pts ?? 0} pts`] : '—') : 'Watching')),
     );
   }
 
@@ -348,7 +348,6 @@ export class Panel {
       (p.places[0] ?? 0) + (p.places[1] ?? 0) + (p.places[2] ?? 0) ? `${(p.places[0] ?? 0) + (p.places[1] ?? 0) + (p.places[2] ?? 0)} podiums` : '',
       p.best ? `best ${fmtTime(p.best)}` : '',
       p.out ? `out in round ${p.out}` : '',
-      p.fin ? 'finalist' : '',
       p.away ? 'disconnected' : '',
     ].filter(Boolean);
     return h(
@@ -356,7 +355,7 @@ export class Panel {
       { class: 'prow' + (u === this.app.me ? ' me' : '') + (p.away ? ' away' : '') },
       h('span', { class: 'pos mono ' + (pos === 1 ? 'amber' : '') }, String(pos)),
       h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`), sub.length ? h('div', { class: 'sub ell' }, sub.join(' · ')) : null),
-      h('span', { class: 'pts mono' }, s.rules.mode === 'knockout' ? (p.out ? '—' : 'IN') : String(p.pts)),
+      h('span', { class: 'pts mono' }, s.rules.mode === 'knockout' ? (p.out ? '—' : 'IN') : isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p.pts)),
     );
   }
 
@@ -388,7 +387,7 @@ export class Panel {
                     const row = r.rows.find((x) => x[0] === p.u);
                     return h('td', { class: row?.[2] === 1 ? 'w' : '' }, row ? (row[2] ? (s.rules.mode === 'knockout' ? ordinal(row[2]) : String(row[3])) : 'DNF') : '');
                   }),
-                  h('td', { class: 'amber' }, s.rules.mode === 'knockout' ? (p.out ? `R${p.out}` : 'IN') : String(p.pts)),
+                  h('td', { class: 'amber' }, s.rules.mode === 'knockout' ? (p.out ? `R${p.out}` : 'IN') : isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p.pts)),
                 ),
               ),
             ),
@@ -435,15 +434,15 @@ export class Panel {
     const host = app.isHost;
     const row = (p: CupState['players'][number]) => {
       // Pages that aren't driving send in one-second batches, so ping is only a rough link check.
-      const ping = app.ping(p.pid);
-      const pingCls = ping == null ? '' : ping < 1600 ? '' : ping < 3000 ? 'mid' : 'bad';
-      const pingText = ping == null ? '…' : ping < 1600 ? 'good link' : ping < 3000 ? 'slow link' : 'poor link';
+      const ping = p.u === s.host ? 0 : p.ping;
+      const pingCls = ping == null ? '' : ping < 120 ? '' : ping < 250 ? 'mid' : 'bad';
+      const pingText = p.u === s.host ? 'organizer' : ping == null ? '…' : `${ping} ms`;
       return h(
         'div',
         { class: 'prow' + (p.u === app.me ? ' me' : '') + (p.away ? ' away' : '') },
         h('span', { class: 'dot' + (p.away ? ' off' : '') }),
         h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`, p.u === s.host ? h('span', { class: 'chip amber', style: 'margin-left:8px' }, 'Organizer') : null), h('div', { class: 'sub' }, p.away ? 'Disconnected · can rejoin with the same link' : p.out ? `Knocked out in round ${p.out}` : p.role === 'racer' ? 'Racing' : 'Watching')),
-        h('span', { class: 'ping ' + pingCls }, p.pid == null || p.u === app.me ? '' : pingText),
+        h('span', { class: 'ping mono ' + pingCls, title: 'Round trip to the organizer' }, p.pid == null ? '' : pingText),
         host && p.u !== app.me
           ? h(
               'div',
@@ -526,8 +525,15 @@ export class Panel {
     const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
-    const toggle = (field: keyof Rules, label: string, hint: string) =>
-      row(label, hint, h('button', { class: 'switch' + (r[field] ? ' on' : ''), disabled: !live(field), onclick: click(() => set({ [field]: !r[field] } as Partial<Rules>)) }));
+    const toggle = (field: keyof Rules, label: string, hint: string) => {
+      const sw = h('button', { class: 'switch' + (r[field] ? ' on' : ''), disabled: !live(field), 'aria-pressed': String(!!r[field]), onclick: click(() => set({ [field]: !r[field] } as Partial<Rules>)) });
+      const el = row(label, hint, sw);
+      if (live(field)) {
+        el.classList.add('toggleable');
+        el.querySelector('label')!.addEventListener('click', () => sw.click());
+      }
+      return el;
+    };
     const seg = <T extends string>(field: keyof Rules, label: string, hint: string, options: [T, string][]) => {
       const el = row(label, hint, h('div', { class: 'seg' }, options.map(([v, l]) => h('button', { class: r[field] === v ? 'on' : '', disabled: !live(field), onclick: click(() => set({ [field]: v } as Partial<Rules>)) }, l))));
       if (options.length >= 4) el.classList.add('wide');
@@ -536,10 +542,10 @@ export class Panel {
     const slider = (field: keyof Rules, label: string, hint: string, min: number, max: number, step: number, fmt: (n: number) => string) => {
       const value = r[field] as number;
       const out = h('span', { class: 'val' }, fmt(value));
-      const range = h('input', { type: 'range', min, max, step, value: String(value), disabled: !live(field) }) as HTMLInputElement;
-      range.addEventListener('input', () => (out.textContent = fmt(Number(range.value))));
-      range.addEventListener('change', () => set({ [field]: Number(range.value) } as Partial<Rules>));
-      return row(label, hint, range, out);
+      const input = range({ min, max, step, value, disabled: !live(field) });
+      input.addEventListener('input', () => (out.textContent = fmt(Number(input.value))));
+      input.addEventListener('change', () => set({ [field]: Number(input.value) } as Partial<Rules>));
+      return row(label, hint, input, out);
     };
     // A typed number, for values with a wide range (the points cap).
     const number = (field: keyof Rules, label: string, hint: string, min: number, max: number) => {
@@ -585,7 +591,6 @@ export class Panel {
       r.next !== 'random' || r.draft ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'For votes and picks (you get 3x)' : 'For votes and picks', 5, 60, 1, (n) => `${n} s`) : null,
       r.draft ? slider('draftSeconds', 'Pick and ban time', 'For each step', 10, 120, 5, (n) => `${n} s`) : null,
       toggle('skipVotes', 'Skip votes', 'Racers can vote a track away'),
-      toggle('customTracks', 'My custom tracks', 'Add your own saved tracks to the pool'),
     );
     const rounds = sect(
       'Rounds',
@@ -776,69 +781,84 @@ export class Panel {
 
   // ---- Chat ----
 
+  // One stream: the cup's chat and, when the player has the main chat on, everyone else's. The box
+  // and its buttons are built once, so typing (and a phone's keyboard) survives new messages.
   #renderChat() {
     const app = this.app,
-      chat = app.chat;
-    const room = chat.room;
-    const key = JSON.stringify([chat.tab, room.status, room.messages.length, room.messages.at(-1)?.id, room.mutes.size, chat.cup.unread, chat.global.unread, room.muted]);
-    if (key === this.#chatKey && this.#side.isConnected) return;
+      chat = app.chat,
+      cup = chat.cup;
+    const ui = (this.#chatUi ??= this.#buildChat());
+    if (ui.box.parentElement !== this.#side) fill(this.#side, ui.box);
+    const muted = chat.target === 'cup' && cup.muted;
+    toggle(ui.cupBtn, 'on', chat.target === 'cup');
+    toggle(ui.allBtn, 'on', chat.target === 'all');
+    ui.allBtn.disabled = !chat.mainOn;
+    ui.allBtn.title = chat.mainOn ? '' : 'Turn Chat on in the main menu to talk to everyone';
+    ui.input.disabled = muted;
+    ui.input.placeholder = muted ? 'The organizer muted you' : chat.target === 'cup' ? 'Message the cup' : 'Message everyone online';
+    const lines = chat.lines();
+    const key = JSON.stringify([chat.isHost, cup.status, lines.length, lines.at(-1)?.key, [...cup.mutes]]);
+    if (key === this.#chatKey) return;
     this.#chatKey = key;
-    const tab = (id: 'cup' | 'global', label: string) => {
-      const unread = chat[id].unread;
-      return h('button', { class: 'tab' + (chat.tab === id ? ' on' : ''), onclick: click(() => chat.select(id)) }, label, unread && chat.tab !== id ? h('span', { class: 'count' }, String(unread)) : null);
-    };
-    const atBottom = !this.#msgs || this.#msgs.scrollHeight - this.#msgs.scrollTop - this.#msgs.clientHeight < 40;
-    const msgs = h(
-      'div',
-      { class: 'msgs' },
-      room.messages.length
-        ? room.messages.map((m) =>
+    const msgs = ui.msgs;
+    const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    fill(
+      msgs,
+      lines.length
+        ? lines.map(({ room, m }) =>
             h(
               'div',
-              { class: 'msg' },
-              chat.tab === 'cup' && chat.isHost && m.uid !== room.uid
-                ? h('button', { class: 'mute', onclick: click(() => room.mute(m.uid, !room.mutes.has(m.uid))) }, room.mutes.has(m.uid) ? 'unmute' : 'mute')
+              { class: 'msg' + (room === 'all' ? ' all' : '') },
+              room === 'cup' && chat.isHost && m.uid !== cup.uid
+                ? h('button', { class: 'mute', onclick: click(() => cup.mute(m.uid, !cup.mutes.has(m.uid))) }, cup.mutes.has(m.uid) ? 'unmute' : 'mute')
                 : null,
-              h('b', { style: `color:${nameColor(m.uid)}` }, m.nick, room.mutes.has(m.uid) ? ' (muted)' : ''),
+              h('b', { style: `color:${nameColor(m.uid)}` }, room === 'all' ? h('span', { class: 'room' }, 'Everyone') : null, m.nick, room === 'cup' && cup.mutes.has(m.uid) ? ' (muted)' : ''),
               m.text,
             ),
           )
-        : h('div', { class: 'empty' }, room.status === 'on' ? 'No messages yet. Say hi!' : 'Connecting to chat…'),
+        : h('div', { class: 'empty' }, cup.status === 'on' ? 'No messages yet. Say hi!' : 'Connecting to chat…'),
     );
-    room.unread = 0;
-    const input = h('input', { class: 'text', maxlength: 200, placeholder: room.muted ? 'The organizer muted you' : chat.tab === 'cup' ? 'Message the cup' : 'Message everyone online', disabled: room.muted }) as HTMLInputElement;
-    const prev = this.#side.querySelector<HTMLInputElement>('form input');
-    if (prev) input.value = prev.value;
-    const hadFocus = prev && this.el.getRootNode() instanceof ShadowRoot && (this.el.getRootNode() as ShadowRoot).activeElement === prev;
+    chat.unreadAll = 0;
+    if (atBottom) msgs.scrollTop = msgs.scrollHeight;
+  }
+
+  #chatUi: { box: HTMLElement; msgs: HTMLElement; input: HTMLInputElement; cupBtn: HTMLButtonElement; allBtn: HTMLButtonElement } | null = null;
+  #buildChat() {
+    const app = this.app,
+      chat = app.chat;
+    const msgs = h('div', { class: 'msgs' });
+    const input = h('input', { class: 'text', maxlength: 200, enterkeyhint: 'send', autocomplete: 'off' }) as HTMLInputElement;
     input.addEventListener('keydown', (e) => e.stopPropagation());
     input.addEventListener('keyup', (e) => e.stopPropagation());
-    input.addEventListener('focus', () => (app.chatTyping = true));
-    input.addEventListener('blur', () => (app.chatTyping = false));
+    // Buttons beside the box don't take its focus.
+    const keep = (e: Event) => e.preventDefault();
+    let sending = false;
     const form = h(
       'form',
       {
         onsubmit: (e: Event) => {
           e.preventDefault();
           const text = input.value;
-          if (!text.trim()) return;
-          input.disabled = true;
-          room
+          if (!text.trim() || sending) return;
+          sending = true;
+          chat
             .post(text)
-            .then(() => (input.value = ''))
+            .then(() => {
+              if (input.value === text) input.value = '';
+            })
             .catch((err) => app.notify(err instanceof Error ? err.message : String(err), 'bad'))
-            .finally(() => {
-              input.disabled = false;
-              input.focus();
-            });
+            .finally(() => (sending = false));
         },
       },
       input,
-      h('button', { class: 'btn small primary', type: 'submit' }, 'Send'),
+      h('button', { class: 'btn small', type: 'submit', onmousedown: keep }, 'Send'),
     );
-    this.#msgs = msgs;
-    fill(this.#side, h('div', { class: 'chat' }, h('div', { class: 'ctabs' }, tab('cup', 'Cup chat'), tab('global', 'Everyone')), msgs, form));
-    if (atBottom) msgs.scrollTop = msgs.scrollHeight;
-    if (hadFocus) input.focus();
+    const cupBtn = h('button', { type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('cup')) }, 'Cup') as HTMLButtonElement;
+    const allBtn = h('button', { type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('all')) }, 'Everyone') as HTMLButtonElement;
+    // Who a message goes to; "Everyone" needs the main chat switched on in the menu.
+    const target = h('div', { class: 'ctabs' }, h('span', { class: 'dim', style: 'font-size:14px;align-self:center;margin-right:4px' }, 'Send to'), h('div', { class: 'seg' }, cupBtn, allBtn));
+    const box = h('div', { class: 'chat' }, h('div', { class: 'chathead' }, 'Chat'), msgs, target, form);
+    return { box, msgs, input, cupBtn, allBtn };
   }
 
   #link() {

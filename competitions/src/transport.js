@@ -427,8 +427,9 @@ export function installTransport() {
     };
     if (!window.__nswsTicker) {
         window.__nswsTicker = createTicker();
+        // Flushes whatever has waited a full pace: in a hidden tab (whose timers crawl), and as soon as
+        // the pace drops (a car starts moving), so a batch queued at the slow pace doesn't hold it up.
         window.__nswsTicker.every(100, () => {
-            if (document.visibilityState !== "hidden") return;
             const now = performance.now();
             for (const mux of muxes.values()) if (mux.queue.length && now - mux.queuedAt >= pace()) mux.flush();
         });

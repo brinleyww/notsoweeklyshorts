@@ -25,10 +25,10 @@ const CSS = `
 .nsws-keys{--s:var(--ui-scale-factor,1);position:fixed;left:0;top:0;width:calc(100% / var(--s));height:calc(100% / var(--s));transform:scale(var(--s));transform-origin:0 0;z-index:100300;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.6);color:var(--text-color);font-family:inherit}
 .nsws-keys.open{display:flex}
 .nsws-keys .panel{width:min(640px,calc(94vw / var(--s)));max-height:calc(90vh / var(--s));display:flex;flex-direction:column;background:var(--surface-secondary-color);box-shadow:0 20px 60px rgba(0,0,0,.55);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%)}
-.nsws-keys .head{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--surface-color);border-bottom:2px solid;border-image:linear-gradient(100deg,#ffd54a,#ff8f3d) 1}
+.nsws-keys .head{display:flex;align-items:center;gap:14px;padding:12px 20px;background:var(--surface-color)}
 .nsws-keys h2{margin:0;font-size:30px;font-weight:400;flex:1}
 .nsws-keys .body{overflow-y:auto;padding:8px 18px 16px}
-.nsws-keys h3{margin:14px 0 6px;font-size:15px;letter-spacing:2px;text-transform:uppercase;font-weight:400;color:#ffcc3d}
+.nsws-keys h3{margin:14px 0 6px;font-size:18px;font-weight:400;color:rgba(255,255,255,.68)}
 .nsws-keys .row{display:flex;align-items:center;gap:8px;padding:5px 8px;margin-top:4px;background:var(--surface-tertiary-color);font-size:18px}
 .nsws-keys .row .grow{flex:1;min-width:0}
 .nsws-keys .button{font-size:16px;padding:4px 10px;min-width:96px}

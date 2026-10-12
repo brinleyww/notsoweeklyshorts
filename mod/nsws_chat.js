@@ -194,6 +194,14 @@
 #nsws-chat>.emoji-panel>.preview>.big{font-family:var(--nsws-chat-emoji),sans-serif;font-size:24px;}
 #nsws-chat-toast{position:fixed;z-index:91;max-width:320px;padding:8px 12px 8px 10px;border-left:3px solid #f0b232;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;overflow-wrap:anywhere;transition:opacity .6s;}
 #nsws-chat-toast.out{opacity:0;}
+#nsws-chat.tucked,#nsws-chat-feed.tucked{display:none!important;}
+#nsws-chat-feed{position:fixed;z-index:89;display:flex;flex-direction:column;gap:4px;width:min(380px,calc(100vw - 24px));font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-style:var(--nsws-chat-font-style);font-size:15px;line-height:1.25;color:var(--text-color,#fff);pointer-events:none;}
+#nsws-chat-feed .line{align-self:flex-start;max-width:100%;padding:5px 10px;background:rgba(25,32,66,.9);overflow-wrap:anywhere;animation:nsws-feed-fade 12s ease both;}
+#nsws-chat-feed.typing .line{animation:none;}
+#nsws-chat-feed .line b{margin-right:6px;font-weight:var(--nsws-chat-name-weight,bold);}
+#nsws-chat-feed form{display:flex;pointer-events:auto;}
+#nsws-chat-feed input{flex:1;font:inherit;font-size:16px;color:var(--text-color,#fff);background:#141a38;border:none;outline:none;padding:7px 10px;}
+@keyframes nsws-feed-fade{0%,80%{opacity:1;}100%{opacity:0;}}
 #nsws-chat>.grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.35) 50%);}
 `;
 
@@ -313,6 +321,11 @@
     }
 
     let root = null;
+    // Set while Cuppa shows this chat inside its own UI (a cup), which then hides the window.
+    let tucked = false;
+    const feedListeners = new Set();
+    let feed = null;
+    let feedInput = null;
     let log = null;
     let input = null;
     let statusLine = null;
@@ -1380,6 +1393,12 @@
             scrollToEnd(true);
         } else if (data.t === "msg") {
             addItem({ kind: "msg", m: data.m });
+            for (const fn of feedListeners) {
+                try {
+                    fn(data.m);
+                } catch {}
+            }
+            previewMessage(data.m);
             if (layout.min && data.m.uid !== me?.uid) {
                 unread++;
                 updateUnread();
@@ -1682,6 +1701,117 @@
         setStatus("");
     }
 
+    // ---- Previews over a normal race, while the window is minimized ----
+
+    function inRace() {
+        const ui = document.querySelector(".game-ui");
+        return !!ui && ui.offsetParent !== null;
+    }
+
+    function previewing() {
+        return !!root && !tucked && layout.min && inRace();
+    }
+
+    // The feed sits just above the minimized chat bar (below it when there is no room).
+    function placeFeed() {
+        if (!feed || !root) return;
+        const bar = root.getBoundingClientRect();
+        feed.style.left = Math.max(8, Math.min(bar.left, window.innerWidth - feed.offsetWidth - 8)) + "px";
+        // Away from the screen edge the bar is nearest to, so it never covers the game's corner info.
+        const above = bar.top > window.innerHeight / 2 && bar.top - 6 - feed.offsetHeight >= 0;
+        feed.style.top = (above ? bar.top - 6 - feed.offsetHeight : bar.bottom + 6) + "px";
+    }
+
+    function ensureFeed() {
+        if (feed) return feed;
+        feed = document.createElement("div");
+        feed.id = "nsws-chat-feed";
+        for (const type of ["keydown", "keyup", "keypress"]) feed.addEventListener(type, stop);
+        document.body.appendChild(feed);
+        return feed;
+    }
+
+    function previewMessage(m) {
+        if (!previewing() || !m || typeof m.text !== "string") return;
+        const el = ensureFeed();
+        if (m.id != null && el.querySelector('.line[data-id="' + m.id + '"]')) return;
+        const line = document.createElement("div");
+        if (m.id != null) line.dataset.id = String(m.id);
+        line.className = "line";
+        const who = document.createElement("b");
+        who.textContent = m.nick;
+        who.style.color = nickColor(m.uid);
+        line.append(who, m.text);
+        line.addEventListener("animationend", () => line.remove());
+        el.insertBefore(line, feedInput?.parentElement ?? null);
+        const lines = el.querySelectorAll(".line");
+        if (lines.length > 5) lines[0].remove();
+        placeFeed();
+    }
+
+    function closeQuick() {
+        feedInput?.parentElement?.remove();
+        feedInput = null;
+        feed?.classList.remove("typing");
+        for (const line of feed?.querySelectorAll(".line") ?? []) line.remove();
+    }
+
+    // The cup chat key types a message without opening the window.
+    function openQuick() {
+        const el = ensureFeed();
+        if (feedInput) return feedInput.focus();
+        el.classList.add("typing");
+        for (const item of items.slice(-5)) if (item.kind === "msg") previewMessage(item.m);
+        const form = document.createElement("form");
+        feedInput = document.createElement("input");
+        feedInput.maxLength = MAX_TEXT;
+        feedInput.placeholder = "Message everyone (Enter to send, Esc to close)";
+        feedInput.autocomplete = "off";
+        feedInput.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") closeQuick();
+        });
+        form.appendChild(feedInput);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const text = feedInput.value.trim();
+            closeQuick();
+            if (text) postText(text).catch((err) => addSystem(err.message));
+        });
+        el.appendChild(form);
+        placeFeed();
+        feedInput.focus();
+    }
+
+    function quickKey(e) {
+        if (!previewing() || window.__nswsKeyBindCapturing || e.repeat) return;
+        if (e.composedPath().some((t) => t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+        const keys = window.__nswsCupKeys;
+        if (!keys?.matches(e, keys.chat())) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openQuick();
+    }
+
+    // Sends text from outside the window (the race previews, Cuppa).
+    function postText(text) {
+        text = [...replaceShortcodes(String(text)).replace(/\s+/g, " ").trim()].slice(0, MAX_TEXT).join("");
+        if (!text) return Promise.reject(new Error("Write something first."));
+        if (!connected()) return Promise.reject(new Error("Chat is connecting. Try again in a moment."));
+        if (!me.owner && readyAt > Date.now()) return Promise.reject(new Error("Slow mode: one message a second."));
+        lastText = text;
+        lastReply = null;
+        send({ t: "msg", text, nick: readNickname() });
+        readyAt = Date.now() + SLOW_MS;
+        return Promise.resolve();
+    }
+
+    function setTucked(on) {
+        tucked = !!on;
+        root?.classList.toggle("tucked", tucked);
+        feed?.classList.toggle("tucked", tucked);
+        if (tucked) closeQuick();
+    }
+
     function submit(e) {
         e.preventDefault();
         trySend();
@@ -1864,7 +1994,9 @@
         if (root) return;
         build();
         window.addEventListener("keydown", onKey, true);
+        window.addEventListener("keydown", quickKey, true);
         window.addEventListener("resize", applyLayout);
+        root.classList.toggle("tucked", tucked);
         connect();
         setTimeout(loadEmoji, 2000);
     }
@@ -1873,7 +2005,11 @@
         disconnect();
         closePanel();
         window.removeEventListener("keydown", onKey, true);
+        window.removeEventListener("keydown", quickKey, true);
         window.removeEventListener("resize", applyLayout);
+        closeQuick();
+        feed?.remove();
+        feed = null;
         root?.remove();
         toast?.remove();
         root = log = input = statusLine = onlineLabel = unreadBadge = replyBar = null;
@@ -1922,6 +2058,19 @@
             storageSet(ENABLED_KEY, on ? "true" : "false");
             on ? enable() : disable();
         },
+        // For Cuppa: one chat stream in a cup, over this connection (no second socket).
+        feed: {
+            active: () => !!root,
+            uid: () => me?.uid ?? null,
+            recent: () => items.filter((item) => item.kind === "msg").slice(-40).map((item) => item.m),
+            subscribe(fn) {
+                feedListeners.add(fn);
+                return () => feedListeners.delete(fn);
+            },
+            post: postText,
+            color: nickColor,
+        },
+        setTucked,
     };
 
     if (isEnabled()) {

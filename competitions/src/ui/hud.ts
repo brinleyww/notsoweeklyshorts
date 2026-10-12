@@ -3,8 +3,8 @@
 // clocks are written in place once a frame, and only when their text changes.
 import type { App } from '../app.ts';
 import { NEXT_LABEL, PRODUCT } from '../rules.ts';
-import { player, standings, type CupState, type Player } from '../state.ts';
-import { btn, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
+import { isFinalist, player, standings, type CupState, type Player } from '../state.ts';
+import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
 
 const BOARD_FULL = 10;
 
@@ -13,6 +13,8 @@ export class Hud {
   #bar = h('div', { class: 'roundbar', hidden: true });
   #count = h('div', { class: 'countdown', hidden: true });
   #board = h('div', { class: 'board', hidden: true });
+  #watchers = h('div', { class: 'watchers', hidden: true });
+  #right = h('div', { class: 'rcol' }, this.#watchers, this.#board);
   #toasts = h('div', { class: 'toasts' });
   #shout = h('div', { class: 'shout', hidden: true });
   #center = h('div', { class: 'center', hidden: true });
@@ -29,10 +31,15 @@ export class Hud {
   #lastTick = -1;
   onOpenPanel: () => void = () => {};
   onChatSubmit: (text: string) => Promise<void> = async () => {};
+  onChatPanel: () => void = () => {};
+  // A card in the middle (vote, results) covers the feed's corner; set by the layer.
+  feedBlocked = false;
   chatOpen = false;
+  // Height the right column has (layer units), set by the layer from what the game draws there.
+  boardRoom = Infinity;
 
   constructor(private app: App) {
-    this.el.append(this.#board, this.#split, this.#bar, this.#shout, this.#toasts, this.#count, this.#warm, this.#spec, this.#center, this.feed, this.#podium);
+    this.el.append(this.#right, this.#split, this.#bar, this.#shout, this.#toasts, this.#count, this.#warm, this.#spec, this.#center, this.feed, this.#podium);
   }
 
   #changed(name: string, key: string) {
@@ -47,6 +54,7 @@ export class Hud {
     show(this.el, !!s && !!app.game);
     if (!s) return;
     this.#renderBar(s);
+    this.#renderWatchers(s);
     this.#renderBoard(s);
     this.#renderCenter(s);
     this.#renderWarm(s);
@@ -92,7 +100,7 @@ export class Hud {
       case 'warmup':
         return 'Warm-up · practice freely';
       case 'countdown':
-        return r && r.k > 1 ? `Round ${r.k} of ${s.rules.perTrack} on this track` : 'Get ready';
+        return 'Get ready';
       case 'racing':
         return s.rules.style === 'timeattack' ? 'Time attack · your best run counts' : r?.closeAt ? 'Someone finished!' : 'Racing';
       case 'checking':
@@ -113,11 +121,14 @@ export class Hud {
     if (!visible) return;
     const key = JSON.stringify([s.phase, r?.n, r?.k, r?.track.name, s.rounds, this.#phaseLabel(s), s.name]);
     if (!this.#changed('bar', key)) return;
+    // The big number is the round on this track (2/3); the cup's own round count is in the line below.
     const n = r?.n ?? s.rounds + (s.phase === 'lobby' ? 0 : 1);
-    const label = h('small', null, s.phase === 'lobby' ? 'LOBBY' : 'ROUND');
-    const num = h('div', { class: 'num' }, label, h('span', { class: 'mono' }, s.phase === 'lobby' ? icon('flag') : s.rules.mode === 'rounds' ? `${Math.max(1, n)}/${s.rules.rounds}` : String(Math.max(1, n))));
-    const title = s.phase === 'lobby' || !r ? s.name : r.track.name;
-    const mid = h('div', { class: 'mid' }, h('div', { class: 'track ell' }, title), h('div', { class: 'sub ell' }, this.#phaseLabel(s)));
+    const onTrack = s.phase === 'lobby' || s.phase === 'draft' || !r ? null : `${Math.max(1, r.k)}/${s.rules.perTrack}`;
+    const label = h('small', null, onTrack ? 'ROUND' : 'LOBBY');
+    const num = h('div', { class: 'num', title: onTrack ? 'Rounds on this track' : null }, label, h('span', { class: 'mono' }, onTrack ?? icon('flag')));
+    const title = !onTrack ? s.name : r!.track.name;
+    const cupRound = onTrack ? (s.rules.mode === 'rounds' ? `Cup round ${Math.max(1, n)}/${s.rules.rounds}` : `Cup round ${Math.max(1, n)}`) : '';
+    const mid = h('div', { class: 'mid' }, h('div', { class: 'track ell' }, title), h('div', { class: 'sub ell' }, [cupRound, this.#phaseLabel(s)].filter(Boolean).join(' · ')));
     const clockLabel = h('small');
     const clockVal = h('span', { class: 'mono' });
     const clock = h('div', { class: 'clock' }, clockLabel, clockVal);
@@ -131,6 +142,12 @@ export class Hud {
     const app = this.app,
       s = app.state;
     if (!s) return;
+    const vc = this.#voteClock;
+    if (vc && vc.el.isConnected) {
+      const left = vc.until - app.now();
+      setText(vc.el, fmtClock(left));
+      toggle(vc.el, 'warn', left < 5000);
+    }
     const now = app.now(),
       r = s.round;
     let label = '',
@@ -193,6 +210,18 @@ export class Hud {
     this.#tickBoard();
   }
 
+  // How many cameras are on this racer's car, picked by hand or by the director.
+  #renderWatchers(s: CupState) {
+    const app = this.app,
+      me = app.me;
+    const live = (s.phase === 'countdown' || s.phase === 'racing') && app.driver.racing && !app.driver.done;
+    const who = live ? s.players.filter((p) => p.watch === me && p.u !== me && p.pid != null && !p.away) : [];
+    show(this.#watchers, who.length > 0);
+    if (!who.length || !this.#changed('watchers', JSON.stringify(who.map((p) => p.name)))) return;
+    fill(this.#watchers, icon('eye'), h('span', { class: 'mono' }, String(who.length)), h('span', { class: 'dim' }, 'watching'));
+    this.#watchers.title = who.map((p) => p.name).join(', ');
+  }
+
   // ---- Live board / standings ----
 
   #rows: { el: HTMLElement; val: HTMLElement; pid: number | null; u: number }[] = [];
@@ -220,13 +249,15 @@ export class Hud {
     } else order = standings(s, app.history).filter((p) => p.role === 'racer' || p.pts > 0).map((p) => p.u);
     let shown = order;
     let more = 0;
-    if (order.length > BOARD_FULL) {
-      shown = order.slice(0, 8);
+    // As many rows as fit: on a phone the touch buttons leave less room.
+    const full = Math.max(3, Math.min(BOARD_FULL, Math.floor((this.boardRoom - 52 - (this.#watchers.hidden ? 0 : 40)) / 32)));
+    if (order.length > full) {
+      shown = order.slice(0, full - 2);
       if (app.me != null && order.includes(app.me) && !shown.includes(app.me)) shown.push(app.me);
       more = order.length - shown.length;
     }
     const watched = app.watch.active ? app.watch.target : null;
-    const key = JSON.stringify([live, s.phase, shown, more, r?.runs, r?.dnf, watched, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away])]);
+    const key = JSON.stringify([live, s.phase, shown, more, full, r?.runs, r?.dnf, watched, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away])]);
     if (!this.#changed('board', key)) return;
     const head = h(
       'div',
@@ -242,7 +273,7 @@ export class Hud {
       const pos = run && run.chk !== 2 ? Object.values(r.runs).filter((x) => x.chk !== 2 && x.f < run.f).length + 1 : order.indexOf(u) + 1;
       const isDnf = live && (r.dnf.includes(u) || run?.chk === 2);
       const val = h('span', { class: 'val mono' });
-      const name = h('span', { class: 'name ell' }, p?.fin && s.phase !== 'racing' ? h('span', { class: 'tag fin' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?');
+      const name = h('span', { class: 'name ell' }, live && isFinalist(s, p) ? h('span', { class: 'tag fin', title: 'Finalist' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?');
       const cls = ['row', `p${pos}`];
       if (u === app.me) cls.push('me');
       if (isDnf) cls.push('dnf');
@@ -259,7 +290,10 @@ export class Hud {
           gain = h('span', { class: 'gain' }, `+${s.rules.points[place - 1] ?? 0}`);
         }
       } else if (isDnf) val.textContent = 'DNF';
-      else if (!live) val.textContent = s.rules.mode === 'knockout' ? (p?.out ? `out R${p.out}` : 'in') : `${p?.pts ?? 0}`;
+      else if (!live && isFinalist(s, p)) {
+        val.textContent = 'Finalist';
+        val.classList.add('finalist');
+      } else if (!live) val.textContent = s.rules.mode === 'knockout' ? (p?.out ? `out R${p.out}` : 'in') : `${p?.pts ?? 0}`;
       const row = h('div', { class: cls.join(' '), 'data-u': u }, h('span', { class: 'pos mono' }, String(pos)), name, gain, val);
       if (live && !run && !isDnf) this.#rows.push({ el: row, val, pid: p?.pid ?? null, u });
       return row;
@@ -362,7 +396,7 @@ export class Hud {
             h('td', { class: 't mono' + (row[2] === 1 ? ' purple' : '') }, row[1] != null ? fmtTime(row[1]) : h('span', { class: 'bad' }, 'DNF')),
             h('td', { class: 'gap mono' }, row[1] != null && first != null && row[1] !== first ? fmtGap(row[1] - first) : ''),
             s.rules.mode !== 'knockout' ? h('td', { class: 'pts mono' }, row[3] ? `+${row[3]}` : '') : null,
-            s.rules.mode !== 'knockout' ? h('td', { class: 'tot mono' }, String(p?.pts ?? 0)) : null,
+            s.rules.mode !== 'knockout' ? h('td', { class: 'tot mono' }, isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p?.pts ?? 0)) : null,
             h('td', { class: 'mv trend ' + (mv > 0 ? 'up' : mv < 0 ? 'down' : '') }, mv > 0 ? `▲${mv}` : mv < 0 ? `▼${-mv}` : ''),
           );
         });
@@ -427,7 +461,11 @@ export class Hud {
     const title =
       v.kind === 'vote' ? 'Vote for the next track' : canVote ? 'You pick the next track' : `${picker?.name ?? 'Someone'} is picking the next track`;
     const kicker = v.kind === 'winner' ? 'WINNER PICKS' : v.kind === 'last' ? 'LAST PLACE PICKS' : v.kind === 'host' ? 'ORGANIZER PICKS' : 'TRACK VOTE';
-    const counts = v.opts.map((_, i) => Object.values(v.ballots).filter((b) => b === i).length);
+    const voters = v.opts.map((_, i) =>
+      Object.entries(v.ballots)
+        .filter(([, b]) => b === i)
+        .map(([u]) => player(s, +u)?.name ?? '?'),
+    );
     const opts = v.opts.map((t, i) => {
       const thumb = h('div', { class: 'thumb' }, icon('flag'));
       this.#thumb(t.id).then((url) => {
@@ -447,7 +485,7 @@ export class Hud {
           },
         },
         thumb,
-        h('div', { class: 'info' }, h('b', { class: 'ell' }, t.name), h('span', { class: 'dim ell', style: 'font-size:13px' }, t.author ? `by ${t.author}` : t.cat), h('div', { class: 'votes' }, Array.from({ length: counts[i] }, () => h('i')))),
+        h('div', { class: 'info' }, h('b', { class: 'ell' }, t.name), h('span', { class: 'dim ell', style: 'font-size:13px' }, t.author ? `by ${t.author}` : t.cat), h('div', { class: 'votes' }, voters[i].map((name) => h('span', { class: 'voter', title: name }, icon('user'))))),
       );
     });
     const hostBrowse = app.isHost && v.kind === 'host' ? btn([icon('search'), 'Browse all tracks'], () => this.onOpenPanel(), 'small ghost') : null;
@@ -455,7 +493,8 @@ export class Hud {
       h(
         'div',
         { class: 'card vote' },
-        h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, kicker), h('h2', null, title))),
+        h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, kicker), h('h2', null, title)), this.#votePart(v.until)),
+        this.#voteBar(v.until, s.phaseAt),
         h('div', { class: 'opts' }, opts),
         h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, canVote ? 'Click a track to vote. You can change your mind until it closes.' : 'Watch the votes come in.'), hostBrowse),
       ),
@@ -512,11 +551,29 @@ export class Hud {
       h(
         'div',
         { class: 'card vote draft' },
-        h('div', { class: 'cap' }, h('div', { class: 'kicker' }, `Pick & ban · ${d.stage === 'ban' ? 'step 1 of 2' : s.rules.bans ? 'step 2 of 2' : 'picks'}`), h('h2', null, title), h('div', { class: 'kicker' }, sub)),
+        h('div', { class: 'cap' }, h('div', { class: 'kicker' }, `Pick & ban · ${d.stage === 'ban' ? 'step 1 of 2' : s.rules.bans ? 'step 2 of 2' : 'picks'}`), h('h2', null, title), h('div', { class: 'kicker' }, sub), this.#votePart(d.until)),
+        this.#voteBar(d.until, s.phaseAt),
         h('div', { class: 'opts grid' }, tiles),
         h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, `${done}/${racers.length} racers done`), app.isHost ? btn('Close this step now', () => app.org!.draftNow(), 'small') : null),
       ),
     );
+  }
+
+  // Seconds left to choose, counted down in place once a frame (see tick).
+  #voteClock: { el: HTMLElement; until: number } | null = null;
+  #votePart(until: number) {
+    const el = h('div', { class: 'vclock mono' }, fmtClock(until - this.app.now()));
+    this.#voteClock = { el, until };
+    return el;
+  }
+  #voteBar(until: number, from: number) {
+    const fillEl = h('i');
+    const bar = h('div', { class: 'bar vbar' }, fillEl);
+    const total = Math.max(1, until - from);
+    const left = Math.max(0, until - this.app.now());
+    fillEl.style.transform = `scaleX(${left / total})`;
+    fillEl.animate([{ transform: `scaleX(${left / total})` }, { transform: 'scaleX(0)' }], { duration: left, fill: 'forwards' });
+    return bar;
   }
 
   #thumbs = new Map<string, Promise<string | null>>();
@@ -724,65 +781,109 @@ export class Hud {
   #feedInput: HTMLInputElement | null = null;
   #feedLines = h('div', { style: 'display:flex;flex-direction:column;align-items:flex-start;gap:4px' });
   #feedBottom = h('div');
-  #lineEls = new Map<number, HTMLElement>();
+  #lineEls = new Map<string, HTMLElement>();
   #feedOpen: boolean | null = null;
-  // Lines are kept by message id (so their fade isn't restarted) and the box survives new messages.
+  #feedTarget = '';
+  // Lines are kept by message (so their fade isn't restarted) and the box survives new messages.
+  // Messages from everyone online (the main chat) are tagged.
   #renderFeed() {
     const app = this.app,
-      chat = app.chat.cup;
-    show(this.feed, !app.panelOpen && app.state?.phase !== 'podium');
+      chat = app.chat;
+    show(this.feed, !app.panelOpen && app.state?.phase !== 'podium' && (!this.feedBlocked || this.chatOpen));
     if (!this.feed.firstChild) fill(this.feed, this.#feedLines, this.#feedBottom);
-    const last = chat.messages.slice(-5);
-    const ids = new Set(last.map((m) => m.id));
-    for (const [id, el] of this.#lineEls)
-      if (!ids.has(id)) {
+    const last = chat.lines(5);
+    const keys = new Set(last.map((l) => l.key));
+    for (const [k, el] of this.#lineEls)
+      if (!keys.has(k)) {
         el.remove();
-        this.#lineEls.delete(id);
+        this.#lineEls.delete(k);
       }
-    for (const m of last) {
-      if (this.#lineEls.has(m.id)) continue;
-      const el = h('div', { class: 'line' }, h('b', { style: `color:${nameColor(m.uid)}` }, m.nick), m.text);
-      this.#lineEls.set(m.id, el);
+    for (const { key, room, m } of last) {
+      if (this.#lineEls.has(key)) continue;
+      const el = h('div', { class: 'line' + (room === 'all' ? ' all' : '') }, h('b', { style: `color:${nameColor(m.uid)}` }, room === 'all' ? h('span', { class: 'room' }, 'Everyone') : null, m.nick), m.text);
+      this.#lineEls.set(key, el);
       this.#feedLines.append(el);
     }
     toggle(this.feed, 'open', this.chatOpen);
-    if (this.#feedOpen === this.chatOpen) return;
+    const target = chat.target + chat.mainOn + matchMedia('(pointer: coarse)').matches;
+    if (this.#feedOpen === this.chatOpen && this.#feedTarget === target) return;
     this.#feedOpen = this.chatOpen;
+    this.#feedTarget = target;
     if (this.chatOpen) {
-      const input = h('input', { class: 'text', maxlength: 200, placeholder: 'Message the cup… (Enter to send, Esc to close)' }) as HTMLInputElement;
+      const touch = matchMedia('(pointer: coarse)').matches;
+      const to = chat.target === 'all' ? 'Message everyone online' : 'Message the cup';
+      const input = h('input', { class: 'text', maxlength: 200, enterkeyhint: 'send', autocomplete: 'off', placeholder: touch ? to : `${to}… (Enter to send, Esc to close)` }) as HTMLInputElement;
+      input.value = this.#draft;
       this.#feedInput = input;
+      let sending = false;
+      input.addEventListener('input', () => (this.#draft = input.value));
       input.addEventListener('keydown', (e) => {
         e.stopPropagation();
         if (e.key === 'Escape') this.closeChat();
-        if (e.key === 'Enter') {
-          const text = input.value;
-          if (!text.trim()) return this.closeChat();
-          input.disabled = true;
-          this.onChatSubmit(text)
-            .then(() => this.closeChat())
-            .catch((err) => app.notify(err instanceof Error ? err.message : String(err), 'bad'))
-            .finally(() => (input.disabled = false));
-        }
       });
       input.addEventListener('keyup', (e) => e.stopPropagation());
-      fill(this.#feedBottom, h('div', { class: 'box' }, input));
-      setTimeout(() => input.focus(), 0);
+      // Clicking or tapping anywhere else closes the box; what was typed stays for next time.
+      input.addEventListener('blur', () =>
+        setTimeout(() => {
+          if (this.chatOpen && this.#feedInput === input && document.hasFocus() && (this.feed.getRootNode() as ShadowRoot).activeElement !== input) this.closeChat();
+        }, 0),
+      );
+      // Buttons beside the box don't take its focus.
+      const keep = (e: Event) => e.preventDefault();
+      const toggleTarget = chat.mainOn
+        ? h('button', { class: 'btn small', type: 'button', title: 'Who this message goes to', onmousedown: keep, onclick: click(() => chat.setTarget(chat.target === 'all' ? 'cup' : 'all')) }, chat.target === 'all' ? 'Everyone' : 'Cup')
+        : null;
+      const form = h(
+        'form',
+        {
+          class: 'box',
+          onsubmit: (e: Event) => {
+            e.preventDefault();
+            const text = input.value;
+            if (!text.trim()) return this.closeChat();
+            if (sending) return;
+            sending = true;
+            this.onChatSubmit(text)
+              .then(() => {
+                if (this.#draft === text) this.#draft = '';
+                // Only the box that sent it, and only if nothing more was typed meanwhile.
+                if (this.#feedInput === input && input.value === text) {
+                  input.value = '';
+                  this.closeChat();
+                }
+              })
+              .catch((err) => app.notify(err instanceof Error ? err.message : String(err), 'bad'))
+              .finally(() => (sending = false));
+          },
+        },
+        toggleTarget,
+        input,
+        touch ? h('button', { class: 'btn small', type: 'submit', onmousedown: keep }, 'Send') : null,
+      );
+      const hadFocus = (this.feed.getRootNode() as ShadowRoot).activeElement?.closest?.('.feed') != null;
+      fill(this.#feedBottom, form);
+      if (hadFocus) input.focus();
     } else {
       this.#feedInput = null;
       fill(this.#feedBottom, h('div', { class: 'hint', onclick: () => this.openChat() }, matchMedia('(pointer: coarse)').matches ? 'Chat' : `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
     }
   }
 
+  #draft = '';
   openChat() {
+    if (this.feedBlocked) return this.onChatPanel();
     this.chatOpen = true;
-    this.app.chatTyping = true;
     this.app.driver.clearInput();
+    this.#renderFeed();
+    // Focused inside the click or key press itself: phones only raise the keyboard for that.
+    this.#feedInput?.focus();
     this.app.changed();
   }
   closeChat() {
     this.chatOpen = false;
-    this.app.chatTyping = false;
-    this.#feedInput?.blur();
+    const input = this.#feedInput;
+    this.#feedInput = null;
+    input?.blur();
     this.app.changed();
   }
 }

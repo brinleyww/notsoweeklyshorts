@@ -36,9 +36,23 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 - `ui/`: everything is in one shadow root over the game, scaled by the game's `--ui-scale-factor`.
   `hud.ts` (round bar, countdown, live board, split popup, spectator bar, results, votes, warm-up,
   chat feed, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules, chat),
-  `hub.ts` (the Competitions screen), `layer.ts` (mounting, keys, the game toolbar buttons).
-- `chat.ts`: the cup chat on the site's universal chat (`/nsws/chat?cup=CODE`) plus a tab for the
-  main chat.
+  `hub.ts` (the Competitions screen), `layer.ts` (mounting, keys, the game toolbar buttons, layout),
+  `keymenu.ts` (a Keys button joined to the speedometer that lists a racer's keys).
+- Layout (`layer.ts`): four times a second the layer measures what the game draws (timer, speedometer,
+  checkpoint count, touch buttons, other mods' counters) and places the round bar, the right column
+  (watchers and the live board, with as many rows as fit) and the chat feed in the room left over. A
+  card in the middle (vote, results) over the feed's corner hides the feed; chat then opens in the panel.
+- Touch: the game's touch steering cancels every touch on `window` that isn't on a `<button>`, and a
+  touch inside the shadow root looks like one on its host `<div>`, so the layer stops touch events at
+  its host. The car is held only while a text box of the layer really has focus; a click outside the
+  box ends the typing.
+- Spectators tell the organizer whose car they follow (`act` `watch`, once the choice has held 0.8 s),
+  and the racer sees "N watching" top right.
+- `chat.ts`: one chat stream in a cup: the cup's own room (`/nsws/chat?cup=CODE`) plus, when the
+  player has the main chat on, its messages (tagged "Everyone") through the main chat's own
+  connection (`window.__nswsChat.feed`). The main chat window tucks away inside a cup. Outside a cup,
+  the main chat shows the same fading previews over a race while its window is minimized, and the
+  chat key opens a quick message line (`mod/nsws_chat.js`).
 
 Game access is `window.__nswsCup` in `main.bundle.js` (`cupNative`, types in `game.ts`). The race
 session calls the cup once a frame before drawing (`cupFrameHook`).
@@ -54,14 +68,14 @@ warm-up, countdown, choosing time and skip votes.
 - **Winning:** points (a typed points cap), a fixed number of rounds, or knockout (the slowest K go
   each round; exact ties at the cut stay; racers who leave are out). With points, the **finalist**
   switch makes the cap a finalist line: a finalist who then wins a round outright takes the cup.
-- **Points per place:** all 25 places can be typed one by one, or filled from a formula (log curve,
-  F1, even steps, the same for all) with the 1st and 25th values. A place never earns more than the
+- **Points per place:** all 25 places can be typed one by one, or filled from a formula (a curve that is
+  70% log and 30% even steps, F1, even steps, the same for all) with the 1st and 25th values. A place never earns more than the
   one above it. Equal totals are split by countback.
 - **Tracks:** rounds per track; next track by random, vote, winner picks, last place picks or the
   organizer (any track; the Tracks tab can also queue one); **pick and ban** (before the first round
   every racer bans, then picks, from one list; the picks become the playlist, repeated; bans always
   leave something to pick); skip votes (over half of the racers skips the track, or changes it after
-  the round when someone already finished); the organizer's custom tracks.
+  the round when someone already finished);.
 - **Rounds:** one run (time limit auto/fixed/off, auto = 3x the best known time from the world record
   or the cup; finish window after the first finish) or time attack (its length); countdown; break.
 - **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times
@@ -89,11 +103,14 @@ by hand on Race Control.
 ## Look
 
 The UI follows PolyTrack's own menus: its navy surfaces, the game's slanted button (the hover fill and
-white underline), plain headings and no gradients; gold only marks 1st place.
+white underline), plain headings and no gradients; gold only marks 1st place. Finalists show
+"Finalist" in reddish orange in place of their points. Chat text uses the font picked in Settings > Chat.
 
 ## Cost on Cloudflare
 
 Incoming WebSocket messages are billed, so a page batches what it sends: every 200 ms while its
-car is moving (or, for the organizer, while anyone's is), and every 1 s otherwise. Clicks,
+car is moving (racers from the countdown on; the organizer while anyone's car moves or a round
+runs), and every 1 s otherwise; the transport re-checks the pace every 100 ms, so a batch queued at
+the slow pace never holds up a car that just started. Clicks,
 finishes and phase changes flush at once. Live timing and spectating need no messages of their
 own. Measured with two pages: about 3.5 frames a second per driving page, about 1 a second idle.

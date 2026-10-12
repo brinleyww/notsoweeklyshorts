@@ -189,6 +189,15 @@ export class Organizer {
     if (m.k === 'hi') return this.#hello(pid, String(m.key), m.role === 'spectator' ? 'spectator' : 'racer');
     if (m.k === 't0') {
       if (typeof m.a === 'number') this.app.net.send(pid, { k: 't1', a: m.a, h: now }, true);
+      const p = byPid(this.state, pid);
+      if (p && typeof m.rtt === 'number' && Number.isFinite(m.rtt) && m.rtt >= 0) {
+        const ping = Math.min(9999, Math.round(m.rtt));
+        // Small wobbles aren't worth a broadcast.
+        if (p.ping == null || Math.abs(p.ping - ping) >= 15) {
+          p.ping = ping;
+          this.touch();
+        }
+      }
       return;
     }
     const p = byPid(this.state, pid);
@@ -218,6 +227,7 @@ export class Organizer {
           }
         } else if (m.a === 'vote') this.#ballot(p.u, m.v);
         else if (m.a === 'skip') this.voteSkip(p.u);
+        else if (m.a === 'watch') this.#watching(p.u, m.v);
         else if ((m.a === 'ban' || m.a === 'pick') && typeof m.v === 'string') {
           if (E.draftChoose(s, p.u, m.a, m.v)) this.touch();
         }
@@ -305,6 +315,20 @@ export class Organizer {
     } else this.app.net.send(m.to, { k: 'bump', n: m.n, from: pid, i: impulse });
   }
 
+  #watchAt = new Map<number, number>();
+  #watching(u: number, v: unknown) {
+    const p = player(this.state, u);
+    const now = Date.now();
+    // At most one change a second per player; pages resend until their choice shows in the state.
+    if (!p || now - (this.#watchAt.get(u) ?? 0) < 1000) return;
+    const to = typeof v === 'number' && v !== u && player(this.state, v) ? v : undefined;
+    if (p.watch === to) return;
+    this.#watchAt.set(u, now);
+    if (to == null) delete p.watch;
+    else p.watch = to;
+    this.touch();
+  }
+
   #ballot(u: number, v: number) {
     const vote = this.state.vote;
     if (!vote || this.state.phase !== 'vote' || !Number.isInteger(v) || v < 0 || v >= vote.opts.length) return;
@@ -347,7 +371,8 @@ export class Organizer {
   pool(): PoolTrack[] {
     if (this.#pool.length && Date.now() - this.#poolAt < 30_000) return this.#pool;
     const list: PoolTrack[] = [];
-    const custom = this.state.rules.customTracks;
+    // Saved custom tracks only join a cup for local testing (a pool marked custom by hand).
+    const custom = (site.__nswsCupPool as { custom?: boolean } | undefined)?.custom === true;
     this.app.native.trackLibrary.forEachTrack((id, meta, category, _env, load, thumb) => {
       if (category === 'custom' && !custom) return;
       list.push({ id, name: meta?.name ?? 'Track', author: meta?.author, cat: (['official', 'community', 'custom'].includes(category) ? category : 'custom') as Category, load, thumb });
