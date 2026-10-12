@@ -83,6 +83,8 @@ export class Hud {
   #phaseLabel(s: CupState) {
     const r = s.round;
     switch (s.phase) {
+      case 'draft':
+        return s.draft?.stage === 'ban' ? 'Pick & ban: bans' : 'Pick & ban: picks';
       case 'lobby':
         return this.app.isHost ? 'Lobby · press Tab to set up and start' : 'Lobby · free practice until the organizer starts';
       case 'loading':
@@ -155,6 +157,9 @@ export class Hud {
       case 'vote':
         if (s.vote) [label, value] = ['Closes in', fmtClock(s.vote.until - now)];
         break;
+      case 'draft':
+        if (s.draft) [label, value] = [s.draft.stage === 'ban' ? 'Bans close' : 'Picks close', fmtClock(s.draft.until - now)];
+        break;
       case 'loading':
       case 'checking':
         [label, value] = ['', '…'];
@@ -194,7 +199,7 @@ export class Hud {
 
   #renderBoard(s: CupState) {
     const app = this.app;
-    const visible = s.phase !== 'podium' && s.phase !== 'lobby' && !(s.phase === 'results' || s.phase === 'checking' || s.phase === 'vote');
+    const visible = !['podium', 'lobby', 'draft', 'results', 'checking', 'vote'].includes(s.phase);
     show(this.#board, visible);
     if (!visible) {
       this.#rows = [];
@@ -244,6 +249,7 @@ export class Hud {
       if (p?.out && !live) cls.push('out');
       if (watched != null && p?.pid === watched) cls.push('watched');
       let gain: HTMLElement | null = null;
+      if (live && run && (run.wr || run.pb)) name.append(h('span', { class: 'badge' + (run.wr ? ' wr' : '') }, run.wr ? 'WR' : 'PB'));
       if (live && run && run.chk !== 2) {
         val.textContent = run.f === firstTime ? fmtTime(run.f) : fmtGap(run.f - firstTime);
         val.classList.add(run.f === firstTime ? 'fast' : 'time');
@@ -254,11 +260,18 @@ export class Hud {
         }
       } else if (isDnf) val.textContent = 'DNF';
       else if (!live) val.textContent = s.rules.mode === 'knockout' ? (p?.out ? `out R${p.out}` : 'in') : `${p?.pts ?? 0}`;
-      const row = h('div', { class: cls.join(' ') }, h('span', { class: 'pos mono' }, String(pos)), name, gain, val);
+      const row = h('div', { class: cls.join(' '), 'data-u': u }, h('span', { class: 'pos mono' }, String(pos)), name, gain, val);
       if (live && !run && !isDnf) this.#rows.push({ el: row, val, pid: p?.pid ?? null, u });
       return row;
     });
+    // Rows slide to their new places instead of jumping.
+    const before = new Map<string, number>();
+    for (const el of this.#board.querySelectorAll<HTMLElement>('[data-u]')) before.set(el.dataset.u!, el.offsetTop);
     fill(this.#board, head, ...rows, more ? h('div', { class: 'more' }, `+${more} more · Tab for all`) : null);
+    for (const el of this.#board.querySelectorAll<HTMLElement>('[data-u]')) {
+      const was = before.get(el.dataset.u!);
+      if (was != null && was !== el.offsetTop) el.animate([{ transform: `translateY(${was - el.offsetTop}px)` }, { transform: 'none' }], { duration: 350, easing: 'ease-out' });
+    }
     this.#tickBoard();
   }
 
@@ -292,6 +305,7 @@ export class Hud {
     else if (s.phase === 'loading') kind = 'loading';
     else if (s.phase === 'results' || s.phase === 'checking') kind = 'results';
     else if (s.phase === 'vote') kind = 'vote';
+    else if (s.phase === 'draft' && s.draft) kind = 'draft';
     show(this.#center, !!kind && !app.panelOpen);
     if (!kind) {
       this.#keys.center = '';
@@ -306,6 +320,7 @@ export class Hud {
       return;
     }
     if (kind === 'results') return this.#renderResults(s);
+    if (kind === 'draft') return this.#renderDraft(s);
     return this.#renderVote(s);
   }
 
@@ -337,7 +352,13 @@ export class Hud {
             'tr',
             { class: cls, style: `animation-delay:${Math.min(i, 14) * 45}ms` },
             h('td', { class: 'pos mono' }, row[2] ? String(row[2]) : '–'),
-            h('td', { class: 'name' }, p ? `${flag(p.cc)} ${p.name}` : 'Left the cup', row[4] ? h('span', { class: 'chip', style: 'margin-left:8px;color:var(--bad)' }, 'OUT') : null),
+            h(
+              'td',
+              { class: 'name' },
+              p ? `${flag(p.cc)} ${p.name}` : 'Left the cup',
+              (row[5] ?? 0) & 2 ? h('span', { class: 'badge wr' }, 'WR') : (row[5] ?? 0) & 1 ? h('span', { class: 'badge' }, 'PB') : null,
+              row[4] ? h('span', { class: 'badge', style: 'color:var(--bad)' }, 'OUT') : null,
+            ),
             h('td', { class: 't mono' + (row[2] === 1 ? ' purple' : '') }, row[1] != null ? fmtTime(row[1]) : h('span', { class: 'bad' }, 'DNF')),
             h('td', { class: 'gap mono' }, row[1] != null && first != null && row[1] !== first ? fmtGap(row[1] - first) : ''),
             s.rules.mode !== 'knockout' ? h('td', { class: 'pts mono' }, row[3] ? `+${row[3]}` : '') : null,
@@ -346,7 +367,7 @@ export class Hud {
           );
         });
     const winner = s.winner != null ? player(s, s.winner) : null;
-    const finalists = s.rules.mode === 'finals' ? s.players.filter((p) => p.fin) : [];
+    const finalists = s.rules.finalist ? s.players.filter((p) => p.fin) : [];
     const banner = winner
       ? h('div', { class: 'banner' }, icon('trophy'), ` ${winner.name} wins the cup!`)
       : finalists.length
@@ -437,6 +458,63 @@ export class Hud {
         h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, kicker), h('h2', null, title))),
         h('div', { class: 'opts' }, opts),
         h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, canVote ? 'Click a track to vote. You can change your mind until it closes.' : 'Watch the votes come in.'), hostBrowse),
+      ),
+    );
+  }
+
+  // Everyone bans, then picks, from the same list of tracks. Tiles wrap to the screen, so it works on a phone.
+  #renderDraft(s: CupState) {
+    const app = this.app,
+      d = s.draft!;
+    const me = app.me;
+    const mePlayer = player(s, me);
+    const racing = !!mePlayer && mePlayer.role === 'racer' && !mePlayer.out;
+    const quota = d.stage === 'ban' ? s.rules.bans : s.rules.picks;
+    const book = d.stage === 'ban' ? d.bans : d.picks;
+    const mine = me != null ? (book[me] ?? []) : [];
+    if (!this.#changed('center', JSON.stringify([d, racing, me]))) return;
+    const banned = new Map<string, string[]>();
+    for (const [u, ids] of Object.entries(d.bans)) for (const id of ids) banned.set(id, [...(banned.get(id) ?? []), player(s, +u)?.name ?? '?']);
+    const picked = new Map<string, string[]>();
+    for (const [u, ids] of Object.entries(d.picks)) for (const id of ids) picked.set(id, [...(picked.get(id) ?? []), player(s, +u)?.name ?? '?']);
+    const racers = s.players.filter((p) => p.role === 'racer' && !p.out && !p.away);
+    const done = racers.filter((p) => (book[p.u]?.length ?? 0) >= quota).length;
+    const tiles = d.opts.map((t) => {
+      const isBanned = banned.has(t.id);
+      const thumb = h('div', { class: 'thumb' }, icon('flag'));
+      this.#thumb(t.id).then((url) => {
+        if (url) {
+          thumb.style.backgroundImage = `url("${url}")`;
+          fill(thumb);
+        }
+      });
+      const who = isBanned ? `Banned by ${banned.get(t.id)!.join(', ')}` : picked.has(t.id) ? `Picked by ${picked.get(t.id)!.join(', ')}` : t.author ? `by ${t.author}` : '';
+      const off = !racing || (d.stage === 'pick' && isBanned) || (!mine.includes(t.id) && mine.length >= quota);
+      return h(
+        'button',
+        {
+          class: 'opt' + (mine.includes(t.id) ? ' mine' : '') + (isBanned ? ' banned' : '') + (picked.has(t.id) ? ' picked' : ''),
+          disabled: off && !mine.includes(t.id),
+          onclick: () => {
+            app.native.sound('checkpoint');
+            app.act({ k: 'act', a: d.stage, v: t.id });
+          },
+        },
+        thumb,
+        h('div', { class: 'info' }, h('b', { class: 'ell' }, t.name), h('span', { class: 'dim ell', style: 'font-size:13px' }, who)),
+      );
+    });
+    const verb = d.stage === 'ban' ? 'Ban' : 'Pick';
+    const title = racing ? `${verb} ${quota === 1 ? 'a track' : quota + ' tracks'}` : d.stage === 'ban' ? 'Racers are banning tracks' : 'Racers are picking tracks';
+    const sub = racing ? `${mine.length}/${quota} chosen · tap again to undo` : 'The cup plays the picked tracks.';
+    fill(
+      this.#center,
+      h(
+        'div',
+        { class: 'card vote draft' },
+        h('div', { class: 'cap' }, h('div', { class: 'kicker' }, `Pick & ban · ${d.stage === 'ban' ? 'step 1 of 2' : s.rules.bans ? 'step 2 of 2' : 'picks'}`), h('h2', null, title), h('div', { class: 'kicker' }, sub)),
+        h('div', { class: 'opts grid' }, tiles),
+        h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, `${done}/${racers.length} racers done`), app.isHost ? btn('Close this step now', () => app.org!.draftNow(), 'small') : null),
       ),
     );
   }
@@ -583,7 +661,8 @@ export class Hud {
     if (best) acts.push(btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'ghost'));
     acts.push(btn([icon('trophy'), 'Full results'], () => this.onOpenPanel(), 'ghost'));
     if (app.isHost) {
-      acts.push(btn([icon('restart'), 'Race again'], () => app.org!.raceAgain(false), 'primary'));
+      acts.push(btn('Race again', () => app.org!.raceAgain(false)));
+      acts.push(btn('New tracks', () => app.org!.raceAgain(true)));
       acts.push(btn([icon('exit'), 'Close the cup'], () => app.onLeave('You closed the cup.'), 'danger'));
     } else acts.push(btn([icon('exit'), 'Leave'], () => app.onLeave(''), 'ghost'));
     const me = table.findIndex((p) => p.u === app.me);
@@ -690,7 +769,7 @@ export class Hud {
       setTimeout(() => input.focus(), 0);
     } else {
       this.#feedInput = null;
-      fill(this.#feedBottom, h('div', { class: 'hint' }, `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
+      fill(this.#feedBottom, h('div', { class: 'hint', onclick: () => this.openChat() }, matchMedia('(pointer: coarse)').matches ? 'Chat' : `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
     }
   }
 

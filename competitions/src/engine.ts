@@ -4,7 +4,6 @@ import { player, roundDone, standings, type CupState, type Phase, type ResultRow
 
 // A finish claimed this much shorter than the time since GO is refused.
 export const FINISH_SLACK_MS = 5000;
-export const COUNTDOWN_MS = 3600;
 
 export function createCup(o: { id: string; name: string; format: string; rules: Rules; now: number }): CupState {
   return {
@@ -22,6 +21,9 @@ export function createCup(o: { id: string; name: string; format: string; rules: 
     players: [],
     round: null,
     vote: null,
+    draft: null,
+    playlist: [],
+    playIndex: 0,
     winner: null,
     shout: null,
     rounds: 0,
@@ -70,6 +72,7 @@ export function newRound(s: CupState, track: TrackRef, k: number, session: numbe
     warmupUntil: null,
     runs: {},
     dnf: [],
+    skip: [],
   };
   for (const p of s.players) delete p.ready;
   s.round = r;
@@ -84,7 +87,7 @@ export function scheduleStart(s: CupState, now: number, limitMs: number | null) 
   r.runs = {};
   r.dnf = [];
   r.racers = activeRacers(s).map((p) => p.u).filter((u) => r.racers.includes(u) || s.rules.lateJoin);
-  r.startAt = now + COUNTDOWN_MS;
+  r.startAt = now + s.rules.countdownSeconds * 1000 + 600;
   r.endAt = limitMs != null ? r.startAt + limitMs : null;
   r.closeAt = null;
   r.warmupUntil = null;
@@ -147,7 +150,8 @@ export function closeRound(s: CupState, progress: (u: number) => number): RoundR
     const p = player(s, u);
     const pl = place.get(u)!;
     const pts = rules.mode === 'knockout' ? 0 : (rules.points[pl - 1] ?? 0);
-    rows.push([u, r.runs[u].f, pl, pts, 0]);
+    const run = r.runs[u];
+    rows.push([u, run.f, pl, pts, 0, (run.pb ? 1 : 0) | (run.wr ? 2 : 0)]);
     if (!p) continue;
     p.pts += pts;
     if (pl <= 8) p.places[pl - 1] = (p.places[pl - 1] ?? 0) + 1;
@@ -178,7 +182,8 @@ export function closeRound(s: CupState, progress: (u: number) => number): RoundR
     }
     const left = s.players.filter((p) => p.role === 'racer' && !p.out);
     if (left.length <= 1) s.winner = left[0]?.u ?? standings(s)[0]?.u ?? null;
-  } else if (rules.mode === 'finals') {
+  } else if (rules.mode === 'points' && rules.finalist) {
+    // A finalist who wins a round outright takes the cup; reaching the target makes a finalist.
     const first = timed.filter((u) => place.get(u) === 1);
     if (first.length === 1 && player(s, first[0])?.fin) s.winner = first[0];
     else for (const p of s.players) if (!p.fin && p.pts >= rules.target && p.role === 'racer') p.fin = 1;
@@ -227,5 +232,86 @@ export function resetScores(s: CupState) {
   s.winner = null;
   s.round = null;
   s.vote = null;
+  s.draft = null;
+  s.playlist = [];
+  s.playIndex = 0;
   s.rounds = 0;
+}
+
+// ---- Pick and ban ----
+
+
+export function startDraft(s: CupState, opts: TrackRef[], now: number) {
+  const stage = s.rules.bans > 0 ? 'ban' : 'pick';
+  s.draft = { stage, until: now + s.rules.draftSeconds * 1000, opts, bans: {}, picks: {} };
+  setPhase(s, 'draft', now, s.draft.until);
+}
+
+// A racer toggles a ban or a pick. Picks can't be banned tracks, and nobody goes over their quota.
+export function draftChoose(s: CupState, u: number, kind: 'ban' | 'pick', id: string) {
+  const d = s.draft;
+  const p = player(s, u);
+  if (!d || s.phase !== 'draft' || d.stage !== kind || !p || p.role !== 'racer' || p.out) return false;
+  if (!d.opts.some((t) => t.id === id)) return false;
+  const banned = new Set(Object.values(d.bans).flat());
+  if (kind === 'pick' && banned.has(id)) return false;
+  // Bans always leave something to pick.
+  if (kind === 'ban' && !banned.has(id) && banned.size + 1 >= d.opts.length) return false;
+  const book = kind === 'ban' ? d.bans : d.picks;
+  const mine = book[u] ?? [];
+  const quota = kind === 'ban' ? s.rules.bans : s.rules.picks;
+  if (mine.includes(id)) book[u] = mine.filter((x) => x !== id);
+  else if (mine.length < quota) book[u] = [...mine, id];
+  else return false;
+  return true;
+}
+
+export function draftComplete(s: CupState) {
+  const d = s.draft;
+  if (!d) return false;
+  const quota = d.stage === 'ban' ? s.rules.bans : s.rules.picks;
+  const book = d.stage === 'ban' ? d.bans : d.picks;
+  const voters = racers(s).filter((p) => !p.away);
+  return voters.length > 0 && voters.every((p) => (book[p.u]?.length ?? 0) >= quota);
+}
+
+// Bans close into picks; picks close into the playlist (racers who didn't pick get random ones).
+export function draftAdvance(s: CupState, now: number, random = Math.random) {
+  const d = s.draft!;
+  if (d.stage === 'ban') {
+    d.stage = 'pick';
+    d.until = now + s.rules.draftSeconds * 1000;
+    setPhase(s, 'draft', now, d.until);
+    return false;
+  }
+  const banned = new Set(Object.values(d.bans).flat());
+  const free = () => d.opts.filter((t) => !banned.has(t.id));
+  const order = racers(s).map((p) => p.u).sort(() => random() - 0.5);
+  const lists = order.map((u) => {
+    const mine = [...(d.picks[u] ?? [])];
+    while (mine.length < s.rules.picks) {
+      const left = free().filter((t) => !mine.includes(t.id));
+      if (!left.length) break;
+      mine.push(left[Math.floor(random() * left.length)].id);
+    }
+    return mine;
+  });
+  const playlist: TrackRef[] = [];
+  for (let i = 0; i < s.rules.picks; i++)
+    for (const list of lists) {
+      const t = d.opts.find((x) => x.id === list[i]);
+      if (t && !playlist.some((x) => x.id === t.id)) playlist.push(t);
+    }
+  if (!playlist.length) playlist.push(...free().slice(0, 1));
+  s.playlist = playlist;
+  s.playIndex = 0;
+  s.draft = null;
+  return true;
+}
+
+export function nextFromPlaylist(s: CupState) {
+  if (!s.playlist.length) return null;
+  const t = s.playlist[s.playIndex % s.playlist.length];
+  s.playIndex++;
+  return t;
 }

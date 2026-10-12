@@ -40,6 +40,9 @@ export class Driver {
   held = new HeldKeys();
   #view: 0 | 1 | undefined;
   #sentFinish = '';
+  // The racer's own best on this track, for the PB badge.
+  #pb: number | null = null;
+  #pbOf = '';
   attempt = 0;
   // This page's finished runs, for "Clip my best run".
   runs: { n: number; trackId: string; track: string; frames: number; attemptFrames: number; recording: string }[] = [];
@@ -128,6 +131,10 @@ export class Driver {
       this.offset = 0;
       this.attempt = 0;
       this.#sentFinish = '';
+      if (this.#pbOf !== r.track.id) {
+        this.#pb = app.native.personalBest(r.track.id);
+        this.#pbOf = r.track.id;
+      }
       this.#view ??= app.native.drivingView(g);
       app.native.reset(g);
       if (app.connection) app.native.clearRecords(app.connection);
@@ -205,7 +212,9 @@ export class Driver {
       if (!this.runs.some((x) => x.n === r.n)) this.runs.push({ n: r.n, trackId: r.track.id, track: r.track.name, frames, attemptFrames: own, recording });
     }
     if (this.offset > 0 && app.game) app.native.showRoundFinish(app.game, frames);
-    app.report({ k: 'fin', n: r.n, t: r.try, f: frames, rec: recording, af: own });
+    const pb = !s.rules.collisions && this.#pb != null && own < this.#pb;
+    if (pb) this.#pb = own;
+    app.report({ k: 'fin', n: r.n, t: r.try, f: frames, rec: recording, af: own, ...(pb ? { pb: 1 as const } : {}) });
   }
 
   #keydown(e: KeyboardEvent) {

@@ -93,6 +93,8 @@ export interface Native {
   presentation(g: Game, cup: boolean, watching: boolean): void;
   leaderboardUploads(g: Game, enabled?: boolean): void;
   carThumbnail(style: unknown): Promise<string>;
+  worldRecord(id: string, verified: boolean): Promise<number | null>;
+  personalBest(id: string): number | null;
   clearInput(g: Game): void;
   drivingBindings(g: Game): Bindings;
   applyDrivingInput(g: Game, c: Controls): void;

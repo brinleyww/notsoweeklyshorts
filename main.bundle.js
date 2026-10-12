@@ -44400,6 +44400,17 @@ window.__nswsTrackQuery = function(trackId) {
                         (!C.get(g, Fr, "f").isCursorHidden || toolbar.hasFocus() || ui?.querySelector(".sc-toolbar-button:focus")) && toolbar.setVisible(!0);
                     }
                 },
+                // A track's world record in frames, or null (no board, hidden this week, offline).
+                worldRecord: async (id, verified) => {
+                    try {
+                        const board = await x.getLeaderboard(w.getCurrentUserProfile().tokenHash, id, 0, 1, verified);
+                        const best = board.entries[0];
+                        return best && !best.hidden ? best.time.numberOfFrames : null;
+                    } catch (e) {
+                        return null;
+                    }
+                },
+                personalBest: id => S.getRecordTime(w.profileSlot, id)?.numberOfFrames ?? null,
                 carThumbnail: style => ir.F(style, new rr.A),
                 clearInput: g => {
                     const controls = C.get(g, ya, "f");

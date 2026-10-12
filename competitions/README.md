@@ -43,27 +43,41 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 Game access is `window.__nswsCup` in `main.bundle.js` (`cupNative`, types in `game.ts`). The race
 session calls the cup once a frame before drawing (`cupFrameHook`).
 
-## Formats
+## Formats and rules
 
-Quickplay, Sprint, Championship, Formula, Cup Finals, Knockout, Time Attack and Bumper Cars are
-presets of the same rules (`rules.ts`); the organizer can change any rule in the lobby and save
-their own presets. A few rules (break length, finish window, late joiners, free camera, next-track
-choice) can change mid-cup.
+Quickplay, Sprint, Championship, Formula, Pick & Ban, Knockout, Time Attack and Bumper Cars are only
+starting points: every format is a set of the same rules (`rules.ts`), and the organizer can change
+each one on its own on the cup panel's setup page. Players see the same rules read-only. Mid-cup,
+the safe ones stay editable: break, finish window, late joiners, free camera, next track, ready ends
+warm-up, countdown, choosing time and skip votes.
 
-- Winning: first to N points, a fixed number of rounds, finals (reach N to become a finalist, then
-  win a round) or knockout (the slowest K are out each round; exact ties at the cut stay).
-- Rounds per track, then the next track: random, vote, winner picks, last place picks, or the
-  organizer picks (any track, from the Tracks tab, which can also queue the next one).
-- Round style: one run (finish window after the first finish, a time limit) or time attack.
-- Warm-up on each new track (racers can ready up to end it early), collisions, late joiners,
-  spectator free camera, the organizer's custom tracks, PB uploads (held for review).
-- Points: 200 for 1st falling with the log of the place to 10 for 25th; Formula uses F1's shape.
-  Equal points are split by countback.
+- **Winning:** points (a typed points cap), a fixed number of rounds, or knockout (the slowest K go
+  each round; exact ties at the cut stay; racers who leave are out). With points, the **finalist**
+  switch makes the cap a finalist line: a finalist who then wins a round outright takes the cup.
+- **Points per place:** all 25 places can be typed one by one, or filled from a formula (log curve,
+  F1, even steps, the same for all) with the 1st and 25th values. A place never earns more than the
+  one above it. Equal totals are split by countback.
+- **Tracks:** rounds per track; next track by random, vote, winner picks, last place picks or the
+  organizer (any track; the Tracks tab can also queue one); **pick and ban** (before the first round
+  every racer bans, then picks, from one list; the picks become the playlist, repeated; bans always
+  leave something to pick); skip votes (over half of the racers skips the track, or changes it after
+  the round when someone already finished); the organizer's custom tracks.
+- **Rounds:** one run (time limit auto/fixed/off, auto = 3x the best known time from the world record
+  or the cup; finish window after the first finish) or time attack (its length); countdown; break.
+- **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times
+  a multiplier with a minimum; optionally ended when every racer is ready.
+- **Players:** late joiners, spectator free camera, bumper cars, PB uploads (held for review).
+- **Presets:** save, copy as text, import from text. Presets saved by the old cup mode (PolyCup) are
+  imported once and translated.
+
+PB and WR badges mark finishes that beat the racer's own best or the track's world record (never in
+bumper cars). Notices call out photo finishes, lead changes, new finalists, match points and the
+final round. The organizer is warned (privately) when a racer sends a run identical to an earlier one.
 
 ## Organizer tools
 
-Start, pause between rounds, next now, end round now, +30 s, restart round, void round, skip
-track, end cup, race again, move players between grid and spectators, remove players, message
+Start, pause between rounds, next now, end round now, +30 s, restart round, void round (press
+twice), skip track, end cup (press twice), race again (same or new tracks), move players between grid and spectators, remove players, message
 everyone (a banner on every screen). End round, Restart and Void are also in the game's toolbar
 during a round.
 

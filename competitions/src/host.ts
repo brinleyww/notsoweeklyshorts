@@ -11,9 +11,6 @@ import { byPid, player, roundDone, standings, type CupState, type RoundResult, t
 const LOAD_WAIT_MS = 15_000;
 const SESSION_RETRY_MS = 8_000;
 const CHECK_WAIT_MS = 10_000;
-const VOTE_MS = 15_000;
-const PICK_MS = 15_000;
-const HOST_PICK_MS = 45_000;
 const BROADCAST_MS = 150;
 const STATUS_MS = 2_000;
 const RECENT_TRACKS = 8;
@@ -64,6 +61,9 @@ export class Organizer {
   #statusKey = '';
   #statusAt = 0;
   #pool: PoolTrack[] = [];
+  #wr = new Map<string, number | null>();
+  #runHashes = new Map<string, Set<number>>();
+  #visited = new Set<string>();
   #poolAt = 0;
 
   constructor(
@@ -217,6 +217,10 @@ export class Organizer {
             this.touch();
           }
         } else if (m.a === 'vote') this.#ballot(p.u, m.v);
+        else if (m.a === 'skip') this.voteSkip(p.u);
+        else if ((m.a === 'ban' || m.a === 'pick') && typeof m.v === 'string') {
+          if (E.draftChoose(s, p.u, m.a, m.v)) this.touch();
+        }
         return;
       case 'bump':
         return this.#bump(pid, m);
@@ -233,6 +237,15 @@ export class Organizer {
     if (result === 'slower') return this.touch();
     const run = r.runs[u];
     const ta = s.rules.style === 'timeattack';
+    if (!s.rules.collisions) {
+      const wr = this.#wr.get(r.track.id);
+      if (m.pb) run.pb = 1;
+      if (wr != null && (m.af ?? m.f) < wr) {
+        run.wr = 1;
+        this.#wr.set(r.track.id, m.af ?? m.f);
+        this.notifyAll(`${p.name} beat the world record on ${r.track.name}!`, 'good');
+      }
+    }
     const reject = (why: string) => {
       const prev = ta ? this.#taBest.get(u) : undefined;
       if (prev != null) r.runs[u] = { f: prev, a: run.a, chk: 1 };
@@ -248,6 +261,7 @@ export class Organizer {
       if (ta) this.#taBest.set(u, run.f);
     } else if (!m.rec || !consistent) reject("couldn't be checked");
     else {
+      this.#flagRepeat(u, r.track.id, m.rec);
       const key = `${r.n}.${r.try}.${u}`;
       this.#checks.set(key, (this.#checks.get(key) ?? 0) + 1);
       this.app.native
@@ -268,6 +282,17 @@ export class Organizer {
         });
     }
     this.touch(true);
+  }
+
+  // Only the organizer is told; the run itself still counts if it replays correctly.
+  #flagRepeat(u: number, trackId: string, rec: string) {
+    let hash = 0;
+    for (let i = 0; i < rec.length; i++) hash = (hash * 31 + rec.charCodeAt(i)) | 0;
+    const key = `${u}:${trackId}`;
+    const seen = this.#runHashes.get(key) ?? new Set<number>();
+    if (seen.has(hash)) this.app.notify(`${player(this.state, u)?.name ?? 'A racer'} sent a run identical to one they drove before. Worth a look.`, 'bad');
+    seen.add(hash);
+    this.#runHashes.set(key, seen);
   }
 
   #bump(pid: number, m: Extract<Msg, { k: 'bump' }>) {
@@ -350,7 +375,9 @@ export class Organizer {
   async #load(ref: TrackRef, epoch: number) {
     const entry = this.pool().find((t) => t.id === ref.id);
     if (!entry) throw new Error(`${ref.name} isn't in this cup's maps any more.`);
+    const wr = this.#wr.has(ref.id) || ref.cat === 'custom' ? Promise.resolve() : this.app.native.worldRecord(ref.id, true).then((f) => void this.#wr.set(ref.id, f));
     const track = await entry.load();
+    await Promise.race([wr, new Promise((r) => setTimeout(r, 3000))]);
     if (epoch !== this.#epoch) return;
     if (!track?.trackData?.hasStartingPoint()) throw new Error(`${ref.name} has no start, so it can't be raced.`);
     const s = this.state;
@@ -398,6 +425,7 @@ export class Organizer {
 
   #chooseTrack(now: number) {
     const s = this.state;
+    if (s.playlist.length && !this.#queued) return this.#loadTrack(E.nextFromPlaylist(s)!);
     if (this.#queued) {
       const next = this.#queued;
       this.#queued = null;
@@ -413,7 +441,8 @@ export class Organizer {
     }
     const opts = this.#randomTracks(kind === 'vote' ? 3 : 4);
     if (!opts.length) return this.app.fail(new Error('There are no tracks in this cup.'));
-    const ms = kind === 'vote' ? VOTE_MS : kind === 'host' ? HOST_PICK_MS : PICK_MS;
+    // The organizer gets three times as long, since they can browse every track.
+    const ms = s.rules.voteSeconds * 1000 * (kind === 'host' ? 3 : 1);
     s.vote = { kind, opts, until: now + ms, ballots: {}, picker: chooser };
     E.setPhase(s, 'vote', now, now + ms);
     this.touch(true);
@@ -430,12 +459,21 @@ export class Organizer {
     } else this.queue(ref);
   }
 
+  // Fixed, or the world record times the multiplier (never under the minimum).
+  #warmupMs(trackId: string) {
+    const r = this.state.rules;
+    const wr = this.#wr.get(trackId);
+    if (r.warmupTiming === 'wr' && wr) return Math.max(r.warmupMin * 1000, Math.round(wr * r.warmupMult));
+    return r.warmup * 1000;
+  }
+
   #limitMs(trackId: string) {
     const r = this.state.rules;
     if (r.style === 'timeattack') return r.taSeconds * 1000;
     if (r.limit === 'off') return null;
     if (r.limit === 'fixed') return r.limitSeconds * 1000;
-    const best = this.#best.get(trackId);
+    const known = [this.#best.get(trackId), this.#wr.get(trackId)].filter((x): x is number => !!x);
+    const best = known.length ? Math.min(...known) : undefined;
     return best ? Math.min(600_000, Math.max(60_000, Math.round(best * 3))) : r.limitSeconds * 1000;
   }
 
@@ -448,10 +486,17 @@ export class Organizer {
       case 'loading':
         this.#tickLoading(now);
         break;
+      case 'draft':
+        if (!this.#pending && (now >= (s.draft?.until ?? 0) || E.draftComplete(s))) {
+          if (E.draftAdvance(s, now)) this.#chooseTrack(now);
+          this.touch(true);
+        }
+        break;
       case 'warmup': {
         const r = s.round!;
         const racers = r.racers.filter((u) => !player(s, u)?.away);
-        if (now >= (r.warmupUntil ?? 0) || (racers.length > 0 && racers.every((u) => player(s, u)?.ready))) this.#go(now);
+        const allReady = s.rules.readyEnds && racers.length > 0 && racers.every((u) => player(s, u)?.ready);
+        if (now >= (r.warmupUntil ?? 0) || allReady) this.#go(now);
         break;
       }
       case 'countdown':
@@ -511,8 +556,11 @@ export class Organizer {
     const waiting = r.racers.filter((u) => u !== this.me && !player(s, u)?.away && this.#ready.get(u) !== r.session);
     if (waiting.length && now - (l?.sessionAt ?? 0) < LOAD_WAIT_MS) return;
     this.#loading = null;
-    if (s.rules.warmup > 0 && s.rules.style !== 'timeattack' && r.k === 1) {
-      r.warmupUntil = now + s.rules.warmup * 1000;
+    const fresh = !this.#visited.has(r.track.id);
+    this.#visited.add(r.track.id);
+    const warm = s.rules.style !== 'timeattack' && r.k === 1 && (s.rules.warmupMode === 'every' || (s.rules.warmupMode === 'first' && fresh));
+    if (warm) {
+      r.warmupUntil = now + this.#warmupMs(r.track.id);
       E.setPhase(s, 'warmup', now, r.warmupUntil);
       this.touch(true);
     } else this.#go(now);
@@ -528,6 +576,8 @@ export class Organizer {
   #closeRound(now: number) {
     const s = this.state;
     const live = this.app.live;
+    const leaderBefore = standings(s, this.history)[0]?.u;
+    const finalistsBefore = new Set(s.players.filter((p) => p.fin).map((p) => p.u));
     const result = E.closeRound(s, (u) => {
       const pid = player(s, u)?.pid;
       return pid == null ? -1 : live.score(pid);
@@ -542,7 +592,31 @@ export class Organizer {
     E.setPhase(s, 'results', now, now + s.rules.breakSeconds * 1000);
     if (s.winner != null) s.nextAt = now + Math.max(5000, s.rules.breakSeconds * 1000);
     if (winner) this.app.native.sound('record');
+    this.#announce(result, leaderBefore, finalistsBefore);
     this.touch(true);
+  }
+
+  // What the round changed, for everyone: photo finishes, lead changes, finalists, match points.
+  #matchPoint = new Set<number>();
+  #announce(result: RoundResult, leaderBefore: number | undefined, finalistsBefore: Set<number>) {
+    const s = this.state;
+    const timed = result.rows.filter((row) => row[1] != null);
+    if (timed.length >= 2 && timed[0][1] !== timed[1][1] && timed[1][1]! - timed[0][1]! <= 50) {
+      const a = player(s, timed[0][0]),
+        b = player(s, timed[1][0]);
+      if (a && b) this.notifyAll(`Photo finish! ${a.name} beat ${b.name} by ${timed[1][1]! - timed[0][1]!} ms`, 'good');
+    }
+    if (s.winner != null) return;
+    const lead = standings(s, this.history)[0];
+    if (lead && leaderBefore != null && lead.u !== leaderBefore && s.rules.mode !== 'knockout') this.notifyAll(`${lead.name} takes the lead`, 'info');
+    for (const p of s.players) if (p.fin && !finalistsBefore.has(p.u)) this.notifyAll(`${p.name} is a finalist! A round win takes the cup`, 'good');
+    if (s.rules.mode === 'points' && !s.rules.finalist)
+      for (const p of s.players)
+        if (p.role === 'racer' && !this.#matchPoint.has(p.u) && p.pts + s.rules.points[0] >= s.rules.target) {
+          this.#matchPoint.add(p.u);
+          this.notifyAll(`Match point for ${p.name}`, 'info');
+        }
+    if (s.rules.mode === 'rounds' && s.rounds === s.rules.rounds - 1) this.notifyAll('Final round next!', 'info');
   }
 
   // Moves on from results: the podium, the same track again, or the next track.
@@ -569,7 +643,7 @@ export class Organizer {
   #reportStatus(now: number) {
     const s = this.state;
     if (now - this.#statusAt < STATUS_MS) return;
-    const phase = s.phase === 'lobby' ? 'setup' : s.phase === 'podium' ? 'done' : ['results', 'vote'].includes(s.phase) ? 'break' : 'racing';
+    const phase = s.phase === 'lobby' || s.phase === 'draft' ? 'setup' : s.phase === 'podium' ? 'done' : ['results', 'vote'].includes(s.phase) ? 'break' : 'racing';
     const status = {
       phase,
       round: s.round?.n ?? s.rounds,
@@ -590,6 +664,14 @@ export class Organizer {
     const s = this.state;
     if (s.phase !== 'lobby') return;
     if (E.racers(s).filter((p) => !p.away).length < 1) throw new Error('Nobody is on the grid yet.');
+    if (s.rules.draft) {
+      const n = Math.min(24, Math.max(8, E.racers(s).length * (s.rules.bans + s.rules.picks) + 3));
+      const opts = this.#randomTracks(n);
+      if (opts.length < 2) throw new Error('A pick and ban needs at least two tracks in the cup.');
+      E.startDraft(s, opts, Date.now());
+      this.touch(true);
+      return;
+    }
     this.#chooseTrack(Date.now());
   }
 
@@ -604,7 +686,7 @@ export class Organizer {
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds'>>) {
     const s = this.state;
     s.rules = cleanRules({ ...s.rules, ...change });
     this.touch(true);
@@ -657,7 +739,7 @@ export class Organizer {
     this.touch(true);
   }
 
-  voidRound(skip = false) {
+  voidRound(skip = false, note = 'The organizer voided the round') {
     const s = this.state,
       r = s.round;
     if (!r || !['countdown', 'racing', 'checking', 'warmup'].includes(s.phase)) return;
@@ -666,7 +748,7 @@ export class Organizer {
     E.setPhase(s, 'results', Date.now(), Date.now() + 4000);
     r.runs = {};
     r.dnf = [];
-    this.notifyAll('The organizer voided the round', 'bad');
+    if (note) this.notifyAll(note, 'bad');
     this.touch(true);
   }
 
@@ -679,12 +761,42 @@ export class Organizer {
     this.touch(true);
   }
 
-  skipTrack() {
+  skipTrack(note = 'The organizer skipped this track') {
     const s = this.state;
-    if (['countdown', 'racing', 'warmup', 'checking'].includes(s.phase)) this.voidRound(true);
+    if (['countdown', 'racing', 'warmup', 'checking'].includes(s.phase)) this.voidRound(true, note);
     else if (s.phase === 'results') {
       if (s.round) s.round.k = s.rules.perTrack;
       this.advance();
+    }
+  }
+
+  // A racer toggles their vote to skip the track. Over half of the racers still here skips it: at
+  // once if nobody has finished yet, otherwise after this round.
+  voteSkip(u: number) {
+    const s = this.state,
+      r = s.round;
+    if (!s.rules.skipVotes || !r || !r.racers.includes(u) || !['warmup', 'countdown', 'racing'].includes(s.phase)) return;
+    r.skip = r.skip.includes(u) ? r.skip.filter((x) => x !== u) : [...r.skip, u];
+    const here = r.racers.filter((x) => !player(s, x)?.away);
+    if (r.skip.filter((x) => here.includes(x)).length * 2 > here.length) {
+      r.skip = [];
+      if (Object.keys(r.runs).length) {
+        r.k = s.rules.perTrack;
+        this.notifyAll('Vote passed: a new track after this round', 'info');
+      } else {
+        this.notifyAll('Vote passed: skipping this track', 'info');
+        this.skipTrack('');
+        return;
+      }
+    }
+    this.touch(true);
+  }
+
+  // Ends the current pick and ban step early.
+  draftNow() {
+    if (this.state.phase === 'draft' && this.state.draft) {
+      this.state.draft.until = Date.now();
+      this.touch(true);
     }
   }
 
@@ -702,6 +814,7 @@ export class Organizer {
 
   endCup() {
     const s = this.state;
+    s.draft = null;
     this.#epoch++;
     this.#loading = null;
     if (s.winner == null) s.winner = standings(s, this.history)[0]?.u ?? null;
@@ -718,6 +831,8 @@ export class Organizer {
     this.#loading = null;
     // App.history is this same array.
     this.history.length = 0;
+    this.#visited.clear();
+    this.#matchPoint.clear();
     for (const peer of this.#peers.values()) peer.hist = 0;
     if (newTracks) this.#recent = [];
     s.id = randomId();

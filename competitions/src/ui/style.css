@@ -14,7 +14,7 @@
   -webkit-user-select: none; user-select: none;
 }
 .root * { box-sizing: border-box; font-family: inherit; font-style: inherit; }
-.stage { position: absolute; left: 0; top: 0; width: calc(100% / var(--s)); height: calc(100% / var(--s)); transform: scale(var(--s)); transform-origin: 0 0; }
+.stage { --cs: var(--touch-scale, var(--s)); position: absolute; left: 0; top: 0; width: calc(100% / var(--cs)); height: calc(100% / var(--cs)); transform: scale(var(--cs)); transform-origin: 0 0; }
 [hidden] { display: none !important; }
 .ic { display: inline-flex; flex: none; }
 .ic svg { width: 1em; height: 1em; display: block; }
@@ -360,3 +360,37 @@ input[type=range]:disabled { cursor: default; opacity: .5; }
 /* Text buttons stay text, like the game's. */
 .btn:not(.icon) .ic { display: none; }
 .panel > header .brand { font-size: 18px; color: var(--dim); padding-right: 6px; }
+/* Pick and ban: tiles wrap to the screen and the list scrolls, for small and touch screens. */
+.vote.draft { width: min(900px, calc(100vw / var(--cs) - 24px)); }
+.vote .opts.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; overflow-y: auto; min-height: 0; padding: 12px; }
+.vote .opts.grid .opt { flex: none; }
+.vote .opt.banned { opacity: .45; }
+.vote .opt.banned .info b { text-decoration: line-through; }
+.vote .opt.picked { box-shadow: inset 4px 0 0 var(--good); }
+.vote .opt.picked.mine, .vote .opt.banned.mine { box-shadow: inset 0 -3px 0 var(--text), inset 4px 0 0 var(--good); }
+.badge { display: inline-block; font-size: 12px; padding: 2px 5px; margin-left: 7px; background: var(--btn-hover); vertical-align: 2px; }
+.badge.wr { color: var(--gold); }
+.feed .hint { pointer-events: auto; cursor: pointer; }
+input.text.num { width: 96px; font-size: 18px; text-align: right; padding-right: 12px; -moz-appearance: textfield; }
+input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; }
+.pcell { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 4px 4px 10px; background: var(--s3); font-size: 15px; color: var(--dim); }
+.pcell input.text.num { width: 70px; font-size: 16px; padding: 5px 10px 5px 6px; }
+.formula { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--s3); font-size: 16px; }
+.formula input.text.num { width: 80px; }
+.presetrow { display: flex; gap: 6px; margin-bottom: 6px; }
+
+/* Touch screens: the layer is drawn larger (see layer.ts) and everything tappable gets more room. */
+@media (pointer: coarse) {
+  .btn.small, .btn.icon { padding: 10px 16px; }
+  .seg button, .mapchip { padding: 10px 14px; }
+  .tab { padding: 12px 16px; }
+  .vote .opt .info { padding: 12px; }
+  .switch { width: 54px; height: 30px; }
+  .switch::after { width: 22px; height: 22px; }
+  .switch.on::after { left: 28px; }
+  input[type=range] { height: 36px; }
+  .spec .who .arrow { padding: 24px 20px; }
+}
+.rule.wide { grid-column: 1 / -1; }
+.rules-title { margin: 6px 0 12px; font-size: 22px; font-weight: 400; }

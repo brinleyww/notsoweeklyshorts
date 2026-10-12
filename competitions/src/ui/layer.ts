@@ -54,6 +54,8 @@ export class Layer {
     onUiError((error) => app.fail(error));
     app.onChange = () => this.render();
     window.addEventListener('keydown', (e) => this.#key(e), { capture: true });
+    window.addEventListener('resize', () => this.#layout());
+    this.#layout();
     const loop = () => {
       this.#raf = requestAnimationFrame(loop);
       this.#frame();
@@ -68,6 +70,9 @@ export class Layer {
       this.#phase = s.phase;
       // A racer's panel gets out of the way when their round starts.
       if (s.phase === 'countdown' && this.app.me != null && s.round?.racers.includes(this.app.me)) this.panel.setOpen(false);
+      // Picks, bans and votes happen on their own cards, so the panel steps aside for racers.
+      const racer = this.app.self?.role === 'racer' && !this.app.self?.out;
+      if ((s.phase === 'draft' || s.phase === 'vote') && racer) this.panel.setOpen(false);
     }
     this.hud.render();
     this.panel.render();
@@ -89,7 +94,19 @@ export class Layer {
 
   // The chat feed sits above whatever the game shows in the bottom-left corner (checkpoints, inputs).
   #layout() {
-    const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale-factor')) || 1;
+    const gameScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale-factor')) || 1;
+    // On a phone the game's scale makes cup text and tiles too small to read or tap, so the layer
+    // is drawn as if the screen were about 640 x 480 (never smaller than the game's own scale).
+    const touch = matchMedia('(pointer: coarse)').matches;
+    const want = touch ? Math.max(gameScale, Math.min(window.innerWidth / 640, window.innerHeight / 480)) : 0;
+    const value0 = want ? want.toFixed(3) : '';
+    // Everything below is measured in the layer's own units.
+    const scale = want || gameScale;
+    const stage = this.root.querySelector<HTMLElement>('.stage');
+    if (stage && stage.style.getPropertyValue('--touch-scale') !== value0) {
+      if (value0) stage.style.setProperty('--touch-scale', value0);
+      else stage.style.removeProperty('--touch-scale');
+    }
     let bottom = 16;
     for (const el of document.querySelectorAll<HTMLElement>('.game-ui > *')) {
       if (el.classList.contains('game-toolbar-ui') || getComputedStyle(el).display === 'none') continue;
@@ -147,7 +164,17 @@ export class Layer {
       const org = app.org!;
       if (s.phase === 'racing') items.push(make('End round', 'stop', () => org.endRoundNow(), 'sc-host'));
       items.push(make('Restart', 'restart', () => org.restartRound(), 'sc-host'));
-      items.push(make('Void', 'x', () => org.voidRound(), 'sc-host'));
+      let voidArmed = 0;
+      items.push(
+        make('Void the round (press twice)', 'x', () => {
+          if (Date.now() - voidArmed > 3000) {
+            voidArmed = Date.now();
+            app.notify('Press Void again to void the round', 'bad');
+            return;
+          }
+          org.voidRound();
+        }, 'sc-host'),
+      );
     }
     container.append(...items);
     this.#toolbar.items = items;

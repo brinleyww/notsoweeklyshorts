@@ -4,9 +4,10 @@ import { App } from './app.ts';
 import { site } from './game.ts';
 import { installTransport } from './transport.js';
 import { Layer } from './ui/layer.ts';
-import { FORMATS } from './rules.ts';
+import { FORMATS, importOldPresets } from './rules.ts';
 
 installTransport();
+importOldPresets();
 
 const app = new App();
 const layer = new Layer(app);

@@ -2,15 +2,16 @@
 // with the cup chat alongside.
 import type { App } from '../app.ts';
 import { canRace, racers } from '../engine.ts';
-import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS, NEXT_LABEL, PRODUCT, rulesSummary, savedPresets, savePreset, type Rules } from '../rules.ts';
+import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
 import { player, standings, type CupState } from '../state.ts';
-import { btn, click, flag, fmtTime, h, icon, ordinal, fill } from './dom.ts';
+import { btn, click, confirmBtn, flag, fmtTime, h, icon, ordinal, fill } from './dom.ts';
 import { nameColor } from './hud.ts';
 
-type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks' | 'rules';
+type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
 
 const PHASE_TEXT: Record<CupState['phase'], string> = {
   lobby: 'Lobby',
+  draft: 'Pick & ban',
   loading: 'Loading',
   warmup: 'Warm-up',
   countdown: 'Starting',
@@ -133,7 +134,6 @@ export class Panel {
       ['players', 'Players', 'users', s.players.filter((p) => !p.away).length],
     ];
     if (app.isHost) tabs.push(['tracks', 'Tracks', 'search', null]);
-    tabs.push(['rules', 'Rules', 'gear', null]);
     const tabBar = h(
       'div',
       { class: 'tabs' },
@@ -163,8 +163,6 @@ export class Panel {
         return this.#playersTab(s);
       case 'tracks':
         return this.#tracksTab(s);
-      case 'rules':
-        return this.#rulesTab(s);
     }
   }
 
@@ -195,10 +193,14 @@ export class Panel {
       );
       out.push(this.#roleChooser(s));
       out.push(this.#formatSection(s));
+      // Every rule of the chosen format can be changed right here, one by one.
+      out.push(...this.#rulesTab(s));
     } else {
       out.push(this.#statusHero(s));
       if (me) out.push(this.#roleChooser(s));
+      out.push(this.#skipVote(s));
       out.push(this.#leaders(s));
+      out.push(...this.#rulesTab(s));
     }
     return out;
   }
@@ -257,7 +259,7 @@ export class Panel {
     return h(
       'div',
       { class: 'sect' },
-      h('h3', null, 'Format', h('span', { class: 'grow' }), host ? h('span', { class: 'dim', style: 'text-transform:none;letter-spacing:0;font-size:13px' }, 'Fine-tune it in Rules') : null),
+      h('h3', null, 'Format', h('span', { class: 'grow' }), host ? h('span', { class: 'dim', style: 'font-size:14px' }, 'Pick one to start from, then change any rule below') : null),
       formats,
       presets.length
         ? h(
@@ -269,7 +271,6 @@ export class Panel {
             ),
           )
         : null,
-      h('div', { class: 'tile', style: 'margin-top:10px;font-size:15px;line-height:1.4' }, rulesSummary(s.rules)),
     );
   }
 
@@ -296,7 +297,7 @@ export class Panel {
         ? `Round ${s.rounds} of ${s.rules.rounds}`
         : s.rules.mode === 'knockout'
           ? `${racers(s).length} racers left`
-          : s.rules.mode === 'finals'
+          : s.rules.finalist
             ? `Finalist at ${s.rules.target} pts`
             : `First to ${s.rules.target} pts`;
     return h(
@@ -306,6 +307,20 @@ export class Panel {
       h('div', { class: 'tile stat' }, h('small', null, 'Track'), h('b', { class: 'ell' }, r?.track.name ?? '—')),
       h('div', { class: 'tile stat' }, h('small', null, 'Goal'), h('b', { class: 'ell' }, goal)),
       h('div', { class: 'tile stat' }, h('small', null, 'You'), h('b', null, me?.role === 'racer' || me?.pts ? (myPos ? `${ordinal(myPos)} · ${me?.pts ?? 0} pts` : '—') : 'Watching')),
+    );
+  }
+
+  #skipVote(s: CupState) {
+    const app = this.app,
+      r = s.round;
+    if (!s.rules.skipVotes || !r || app.me == null || !r.racers.includes(app.me) || !['warmup', 'countdown', 'racing'].includes(s.phase)) return null;
+    const here = r.racers.filter((u) => !player(s, u)?.away).length;
+    const mine = r.skip.includes(app.me);
+    return h(
+      'div',
+      { class: 'tile', style: 'display:flex;align-items:center;gap:12px;margin-bottom:18px' },
+      h('span', { style: 'flex:1;font-size:17px' }, `Skip this track? ${r.skip.length} of ${here} racers want to. Over half skips it.`),
+      btn(mine ? 'Take back my vote' : 'Vote to skip', () => app.act({ k: 'act', a: 'skip' }), 'small'),
     );
   }
 
@@ -436,7 +451,7 @@ export class Panel {
               p.role === 'racer'
                 ? btn([icon('eye')], () => app.org!.setRole(p.u, 'spectator'), 'small ghost icon', 'Move to spectators')
                 : btn([icon('flag')], () => app.org!.setRole(p.u, 'racer'), 'small ghost icon', 'Put on the grid'),
-              btn([icon('x')], () => app.org!.kick(p.u), 'small danger icon', 'Remove from the cup'),
+              confirmBtn('Remove', () => app.org!.kick(p.u), 'small danger', 'Remove from the cup'),
             )
           : null,
       );
@@ -502,104 +517,224 @@ export class Panel {
     const app = this.app;
     const host = app.isHost;
     const lobby = s.phase === 'lobby';
-    const editable = host && lobby;
     const r = s.rules;
     const set = (change: Partial<Rules>) => {
       if (!app.org) return;
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const live = (field: keyof Rules) => host && (lobby || ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next'].includes(field));
-    const toggleRow = (field: keyof Rules, label: string, hint: string) =>
-      h('div', { class: 'rule' }, h('label', null, label, h('small', null, hint)), h('button', { class: 'switch' + (r[field] ? ' on' : ''), disabled: !live(field), onclick: click(() => set({ [field]: !r[field] } as Partial<Rules>)) }));
-    const seg = <T extends string>(field: keyof Rules, label: string, hint: string, options: [T, string][]) =>
-      h(
-        'div',
-        { class: 'rule' },
-        h('label', null, label, h('small', null, hint)),
-        h('div', { class: 'seg' }, options.map(([v, l]) => h('button', { class: r[field] === v ? 'on' : '', disabled: !live(field), onclick: click(() => set({ [field]: v } as Partial<Rules>)) }, l))),
-      );
-    const num = (field: keyof Rules, label: string, hint: string, min: number, max: number, step: number, fmt: (n: number) => string) => {
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes'];
+    const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
+    const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
+    const toggle = (field: keyof Rules, label: string, hint: string) =>
+      row(label, hint, h('button', { class: 'switch' + (r[field] ? ' on' : ''), disabled: !live(field), onclick: click(() => set({ [field]: !r[field] } as Partial<Rules>)) }));
+    const seg = <T extends string>(field: keyof Rules, label: string, hint: string, options: [T, string][]) => {
+      const el = row(label, hint, h('div', { class: 'seg' }, options.map(([v, l]) => h('button', { class: r[field] === v ? 'on' : '', disabled: !live(field), onclick: click(() => set({ [field]: v } as Partial<Rules>)) }, l))));
+      if (options.length >= 4) el.classList.add('wide');
+      return el;
+    };
+    const slider = (field: keyof Rules, label: string, hint: string, min: number, max: number, step: number, fmt: (n: number) => string) => {
       const value = r[field] as number;
-      const out = h('span', { class: 'val mono' }, fmt(value));
+      const out = h('span', { class: 'val' }, fmt(value));
       const range = h('input', { type: 'range', min, max, step, value: String(value), disabled: !live(field) }) as HTMLInputElement;
       range.addEventListener('input', () => (out.textContent = fmt(Number(range.value))));
       range.addEventListener('change', () => set({ [field]: Number(range.value) } as Partial<Rules>));
-      return h('div', { class: 'rule' }, h('label', null, label, h('small', null, hint)), range, out);
+      return row(label, hint, range, out);
     };
-    const sec = (n: number) => (n ? fmtDuration(n) : 'off');
-    const rows: HTMLElement[] = [
-      seg('mode', 'Winning', 'How the cup is decided', [
+    // A typed number, for values with a wide range (the points cap).
+    const number = (field: keyof Rules, label: string, hint: string, min: number, max: number) => {
+      const input = h('input', { class: 'text num', type: 'number', min, max, step: 1, value: String(r[field]), disabled: !live(field) }) as HTMLInputElement;
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') input.blur();
+      });
+      input.addEventListener('change', () => {
+        const n = Math.round(Number(input.value));
+        if (Number.isFinite(n)) set({ [field]: Math.min(max, Math.max(min, n)) } as Partial<Rules>);
+      });
+      return row(label, hint, input);
+    };
+    const sec = (n: number) => fmtDuration(n);
+    const sect = (title: string, ...rows: (HTMLElement | null)[]) => h('div', { class: 'sect' }, h('h3', null, title), h('div', { class: 'rules' }, rows));
+
+    const winning = sect(
+      'Winning',
+      seg('mode', 'Decided by', '', [
         ['points', 'Points'],
         ['rounds', 'Rounds'],
-        ['finals', 'Finals'],
         ['knockout', 'Knockout'],
       ]),
-    ];
-    if (r.mode === 'points' || r.mode === 'finals') rows.push(num('target', r.mode === 'finals' ? 'Finalist at' : 'Points to win', 'Points needed', 200, 5000, 100, (n) => `${n}`));
-    if (r.mode === 'rounds') rows.push(num('rounds', 'Rounds', 'Length of the season', 1, 30, 1, (n) => `${n}`));
-    if (r.mode === 'knockout') rows.push(num('knockout', 'Knocked out', 'Racers out per round', 1, 8, 1, (n) => `${n}`));
-    rows.push(
-      num('perTrack', 'Rounds per track', 'Before the track changes', 1, 10, 1, (n) => `${n}`),
-      seg('next', 'Next track', 'Who chooses', [
+      r.mode === 'points' ? number('target', r.finalist ? 'Finalist at' : 'Points to win', 'The points cap', 1, 100000) : null,
+      r.mode === 'points' ? toggle('finalist', 'Finalist rule', 'Reaching the cap makes you a finalist; then win a round to take the cup') : null,
+      r.mode === 'rounds' ? slider('rounds', 'Rounds', 'Length of the season', 1, 50, 1, (n) => `${n}`) : null,
+      r.mode === 'knockout' ? slider('knockout', 'Knocked out', 'Racers out per round', 1, 8, 1, (n) => `${n}`) : null,
+    );
+    const tracks = sect(
+      'Tracks',
+      slider('perTrack', 'Rounds per track', 'Before the track changes', 1, 30, 1, (n) => `${n}`),
+      toggle('draft', 'Pick and ban', 'Before the first round everyone bans, then picks tracks'),
+      r.draft ? slider('bans', 'Bans per racer', '', 0, 3, 1, (n) => `${n}`) : null,
+      r.draft ? slider('picks', 'Picks per racer', '', 1, 3, 1, (n) => `${n}`) : null,
+      seg('next', r.draft ? 'After the picks' : 'Next track', r.draft ? 'Picks repeat; a queued track goes first' : 'Who chooses', [
         ['random', 'Random'],
         ['vote', 'Vote'],
         ['winner', 'Winner'],
         ['last', 'Last'],
         ['host', 'Me'],
       ]),
+      r.next !== 'random' || r.draft ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'For votes and picks (you get 3x)' : 'For votes and picks', 5, 60, 1, (n) => `${n} s`) : null,
+      r.draft ? slider('draftSeconds', 'Pick and ban time', 'For each step', 10, 120, 5, (n) => `${n} s`) : null,
+      toggle('skipVotes', 'Skip votes', 'Racers can vote a track away'),
+      toggle('customTracks', 'My custom tracks', 'Add your own saved tracks to the pool'),
+    );
+    const rounds = sect(
+      'Rounds',
       seg('style', 'Round style', 'One run, or best of many', [
         ['race', 'One run'],
         ['timeattack', 'Time attack'],
       ]),
+      r.style === 'timeattack' ? slider('taSeconds', 'Time attack length', 'Per round', 30, 1800, 30, sec) : null,
+      r.style === 'race'
+        ? seg('limit', 'Time limit', 'Auto: 3x the best known time (world record or this cup)', [
+            ['auto', 'Auto'],
+            ['fixed', 'Fixed'],
+            ['off', 'Off'],
+          ])
+        : null,
+      r.style === 'race' && r.limit !== 'off' ? slider('limitSeconds', r.limit === 'auto' ? 'Limit with no time known' : 'Time limit', 'Per round', 30, 1800, 30, sec) : null,
+      r.style === 'race' ? slider('finishWindow', 'Finish window', 'After the first finish (0 = off)', 0, 300, 5, (n) => (n ? sec(n) : 'off')) : null,
+      slider('countdownSeconds', 'Countdown', 'Before GO', 3, 10, 1, (n) => `${n} s`),
+      slider('breakSeconds', 'Break', 'Results between rounds', 3, 60, 1, (n) => `${n} s`),
     );
-    if (r.style === 'timeattack') rows.push(num('taSeconds', 'Time attack length', 'Per round', 60, 900, 30, sec));
-    else {
-      rows.push(
-        seg('limit', 'Time limit', 'Auto = 3× the best time seen', [
-          ['auto', 'Auto'],
-          ['fixed', 'Fixed'],
-          ['off', 'Off'],
-        ]),
-      );
-      if (r.limit !== 'off') rows.push(num('limitSeconds', r.limit === 'auto' ? 'Limit before a time is known' : 'Time limit', 'Per round', 60, 900, 30, sec));
-      rows.push(num('finishWindow', 'Finish window', 'After the first finish', 0, 120, 5, sec));
-      rows.push(num('warmup', 'Warm-up', 'Practice on each new track', 0, 300, 15, sec));
-    }
-    rows.push(
-      num('breakSeconds', 'Break', 'Results shown between rounds', 4, 30, 1, (n) => `${n} s`),
-      toggleRow('collisions', 'Bumper cars', 'Cars collide (no times uploaded)'),
-      toggleRow('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
-      toggleRow('freecam', 'Spectator free camera', 'Let spectators fly around'),
-      toggleRow('customTracks', 'My custom tracks', 'Add your own saved tracks to the pool'),
-      toggleRow('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+    const warm = r.style === 'timeattack' ? null : sect(
+      'Warm-up',
+      seg('warmupMode', 'Warm-up', 'Free practice before a track\'s first round', [
+        ['off', 'Off'],
+        ['first', 'First visit'],
+        ['every', 'Every track'],
+      ]),
+      r.warmupMode !== 'off'
+        ? seg('warmupTiming', 'Length', 'Fixed, or from the world record', [
+            ['fixed', 'Fixed'],
+            ['wr', 'World record'],
+          ])
+        : null,
+      r.warmupMode !== 'off' ? slider('warmup', r.warmupTiming === 'wr' ? 'Without a record' : 'Length', '', 10, 600, 10, sec) : null,
+      r.warmupMode !== 'off' && r.warmupTiming === 'wr' ? slider('warmupMult', 'Record multiplier', 'Warm-up = record x this', 0.5, 5, 0.1, (n) => `${n.toFixed(1)}x`) : null,
+      r.warmupMode !== 'off' && r.warmupTiming === 'wr' ? slider('warmupMin', 'Shortest warm-up', '', 10, 300, 5, sec) : null,
+      r.warmupMode !== 'off' ? toggle('readyEnds', 'Ready ends it', 'Starts once every racer is ready') : null,
     );
-    const pts = h('div', { class: 'tile', style: 'font-size:14px;line-height:1.6;color:var(--dim)' }, 'Points by place: ', r.points.slice(0, 10).join(', '), r.points.length > 10 ? ` … ${r.points[r.points.length - 1]}` : '');
-    const saveRow = editable
-      ? h(
-          'div',
-          { style: 'display:flex;gap:8px;margin-top:14px' },
-          (() => {
-            const input = h('input', { class: 'text', placeholder: 'Preset name', maxlength: 40, style: 'flex:1' }) as HTMLInputElement;
-            input.addEventListener('keydown', (e) => e.stopPropagation());
-            return [
-              input,
-              btn([icon('plus'), 'Save as preset'], () => {
-                if (!input.value.trim()) throw new Error('Give the preset a name.');
-                savePreset(input.value.trim(), r);
-                app.notify(`Saved preset "${input.value.trim()}"`, 'good');
-                this.#key = '';
-              }, 'small ghost'),
-            ];
-          })(),
-        )
-      : null;
+    const players = sect(
+      'Players',
+      toggle('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
+      toggle('freecam', 'Spectator free camera', 'Let spectators fly around'),
+      toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
+      toggle('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+    );
     return [
-      h('div', { class: 'sect' }, h('h3', null, editable ? 'Rules' : host ? 'Rules · some can change mid-cup' : 'Rules'), h('div', { class: 'rules' }, rows)),
-      h('div', { class: 'sect' }, h('h3', null, 'Points'), pts),
-      saveRow,
-      !host ? h('p', { class: 'dim', style: 'font-size:14px' }, `Tracks: ${NEXT_LABEL[r.next]}.`) : null,
+      lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules'),
+      winning,
+      r.mode === 'knockout' ? null : this.#pointsSection(s, lobby && host, set),
+      tracks,
+      rounds,
+      warm,
+      players,
+      host && lobby ? this.#presetSection(s) : null,
     ];
+  }
+
+  // Points for every place, each editable, plus a formula that fills them all.
+  #curve: { kind: PointsCurve; top: number; last: number } = { kind: 'log', top: 200, last: 10 };
+  #pointsSection(s: CupState, editable: boolean, set: (change: Partial<Rules>) => void) {
+    const r = s.rules;
+    const cells = r.points.map((value, i) => {
+      const input = h('input', { class: 'text num', type: 'number', min: 0, max: 10000, step: 1, value: String(value), disabled: !editable, 'aria-label': `Points for ${ordinal(i + 1)}` }) as HTMLInputElement;
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') input.blur();
+      });
+      input.addEventListener('change', () => {
+        const n = Math.max(0, Math.min(10000, Math.round(Number(input.value) || 0)));
+        const points = [...r.points];
+        points[i] = n;
+        // A place never earns more than the one above it: raise the places above, lower the ones below.
+        for (let j = i - 1; j >= 0; j--) points[j] = Math.max(points[j], n);
+        for (let j = i + 1; j < points.length; j++) points[j] = Math.min(points[j], n);
+        if (points[0] <= 0) points[0] = 1;
+        set({ points });
+      });
+      return h('label', { class: 'pcell' }, h('span', null, ordinal(i + 1)), input);
+    });
+    const c = this.#curve;
+    const kind = h('div', { class: 'seg' }, (
+      [
+        ['log', 'Curve'],
+        ['f1', 'F1'],
+        ['linear', 'Even'],
+        ['flat', 'Same for all'],
+      ] as [PointsCurve, string][]
+    ).map(([k, l]) => h('button', { class: c.kind === k ? 'on' : '', disabled: !editable, onclick: click(() => ((c.kind = k), (this.#key = ''), this.render(true))) }, l)));
+    const numIn = (v: number, onSet: (n: number) => void, label: string) => {
+      const input = h('input', { class: 'text num', type: 'number', min: 0, max: 10000, value: String(v), disabled: !editable, 'aria-label': label }) as HTMLInputElement;
+      input.addEventListener('keydown', (e) => e.stopPropagation());
+      input.addEventListener('change', () => onSet(Math.max(0, Math.round(Number(input.value) || 0))));
+      return input;
+    };
+    const formula = h(
+      'div',
+      { class: 'formula' },
+      h('span', null, 'Formula'),
+      kind,
+      h('span', { class: 'dim' }, '1st'),
+      numIn(c.top, (n) => (c.top = Math.max(1, n)), 'Points for 1st'),
+      c.kind === 'flat' ? null : h('span', { class: 'dim' }, '25th'),
+      c.kind === 'flat' ? null : numIn(c.last, (n) => (c.last = n), 'Points for 25th'),
+      btn('Fill the table', () => set({ points: pointsCurve(c.kind, c.top, c.last) }), 'small'),
+    );
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, 'Points per place'),
+      editable ? formula : null,
+      h('div', { class: 'pgrid' }, cells),
+      editable ? h('p', { class: 'dim', style: 'font-size:14px;margin:8px 0 0' }, 'Type any value. A place never earns more than the place above it.') : null,
+    );
+  }
+
+  #presetSection(s: CupState) {
+    const app = this.app;
+    const name = h('input', { class: 'text', placeholder: 'Preset name', maxlength: 40, style: 'flex:1' }) as HTMLInputElement;
+    name.addEventListener('keydown', (e) => e.stopPropagation());
+    const paste = h('input', { class: 'text', placeholder: 'Paste a preset here to import it', style: 'flex:1' }) as HTMLInputElement;
+    paste.addEventListener('keydown', (e) => e.stopPropagation());
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, 'Presets'),
+      h(
+        'div',
+        { class: 'presetrow' },
+        name,
+        btn('Save', () => {
+          if (!name.value.trim()) throw new Error('Give the preset a name.');
+          savePreset(name.value.trim(), s.rules);
+          app.notify(`Saved "${name.value.trim()}"`, 'good');
+          this.#key = '';
+        }, 'small'),
+        btn('Copy as text', () => this.#copy(presetText(name.value.trim() || s.format, s.rules), 'Preset copied. Share it with another organizer.'), 'small'),
+      ),
+      h(
+        'div',
+        { class: 'presetrow' },
+        paste,
+        btn('Import', () => {
+          const p = parsePresetText(paste.value.trim());
+          savePreset(p.name, p.rules);
+          this.#apply('custom:' + p.name, p.rules);
+          app.notify(`Imported "${p.name}"`, 'good');
+        }, 'small'),
+      ),
+    );
   }
 
   // ---- Controls ----
@@ -612,7 +747,8 @@ export class Panel {
       const live = ['countdown', 'racing', 'warmup'].includes(s.phase);
       if (s.phase === 'lobby') items.push(btn([icon('play'), 'Start the cup'], () => (org.start(), this.setOpen(false)), 'primary big'));
       if (s.phase === 'podium') {
-        items.push(btn([icon('restart'), 'Race again'], () => (org.raceAgain(false), this.setOpen(false)), 'primary'));
+        items.push(btn('Race again', () => (org.raceAgain(false), this.setOpen(false))));
+        items.push(btn('Race again on new tracks', () => (org.raceAgain(true), this.setOpen(false))));
         items.push(btn([icon('exit'), 'Close the cup'], () => app.onLeave('You closed the cup.'), 'small danger'));
       }
       if (s.phase === 'racing') {
@@ -621,7 +757,7 @@ export class Panel {
       }
       if (live) {
         items.push(btn([icon('restart'), 'Restart round'], () => org.restartRound(), 'small ghost'));
-        items.push(btn([icon('x'), 'Void round'], () => org.voidRound(), 'small ghost'));
+        items.push(confirmBtn('Void round', () => org.voidRound(), 'small'));
       }
       if (s.phase !== 'lobby' && s.phase !== 'podium') {
         items.push(btn([icon('skip'), 'Skip track'], () => org.skipTrack(), 'small ghost'));
@@ -630,7 +766,7 @@ export class Panel {
       items.push(h('span', { style: 'flex:1' }));
       const shout = this.#shoutInput;
       items.push(shout, btn([icon('megaphone')], () => shout.value.trim() && (org.shout(shout.value), (shout.value = '')), 'small ghost icon', 'Show a message to everyone'));
-      if (s.phase !== 'lobby' && s.phase !== 'podium') items.push(btn([icon('trophy'), 'End cup'], () => org.endCup(), 'small danger'));
+      if (s.phase !== 'lobby' && s.phase !== 'podium') items.push(confirmBtn('End cup', () => org.endCup(), 'small danger'));
     } else {
       items.push(h('span', { style: 'flex:1' }));
       items.push(btn([icon('exit'), 'Leave cup'], () => app.onLeave(''), 'small danger'));

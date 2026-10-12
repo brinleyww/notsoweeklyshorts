@@ -130,6 +130,27 @@ export function click(fn: () => unknown) {
   };
 }
 
+export function confirmBtn(label: string, fn: () => unknown, cls = '', title?: string) {
+  let armed = 0;
+  const b = btn(label, () => {
+    if (Date.now() - armed > 3000) {
+      armed = Date.now();
+      b.textContent = 'Click again to confirm';
+      b.classList.add('danger');
+      setTimeout(() => {
+        if (Date.now() - armed >= 3000) {
+          b.textContent = label;
+          if (!cls.includes('danger')) b.classList.remove('danger');
+        }
+      }, 3000);
+      return;
+    }
+    armed = 0;
+    return fn();
+  }, cls, title);
+  return b;
+}
+
 export function btn(label: Child, fn: () => unknown, cls = '', title?: string) {
   return h('button', { class: 'btn ' + cls, type: 'button', title, onclick: click(fn) }, label);
 }

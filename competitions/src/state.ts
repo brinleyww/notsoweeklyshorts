@@ -2,6 +2,7 @@ import type { Rules } from './rules.ts';
 
 export type Phase =
   | 'lobby'
+  | 'draft'
   | 'loading'
   | 'warmup'
   | 'countdown'
@@ -41,6 +42,9 @@ export interface Run {
   f: number;
   a?: number;
   chk?: 0 | 1 | 2;
+  // Beat the racer's own best on this track / the track's world record.
+  pb?: 1;
+  wr?: 1;
 }
 
 export interface Round {
@@ -56,16 +60,26 @@ export interface Round {
   warmupUntil: number | null;
   runs: Record<number, Run>;
   dnf: number[];
+  // Racers voting to skip this track.
+  skip: number[];
 }
 
-// [uid, frames or null for no finish, place or null, points earned, knocked out]
-export type ResultRow = [number, number | null, number | null, number, 0 | 1];
+// [uid, frames or null for no finish, place or null, points earned, knocked out, badges (1 PB, 2 WR)]
+export type ResultRow = [number, number | null, number | null, number, 0 | 1, number?];
 export interface RoundResult {
   n: number;
   track: string;
   ta: 0 | 1;
   rows: ResultRow[];
   void?: 1;
+}
+
+export interface Draft {
+  stage: 'ban' | 'pick';
+  until: number;
+  opts: TrackRef[];
+  bans: Record<number, string[]>;
+  picks: Record<number, string[]>;
 }
 
 export interface Vote {
@@ -91,6 +105,10 @@ export interface CupState {
   players: Player[];
   round: Round | null;
   vote: Vote | null;
+  draft: Draft | null;
+  // Drafted tracks, played in order and then again from the top.
+  playlist: TrackRef[];
+  playIndex: number;
   winner: number | null;
   shout: { text: string; at: number } | null;
   rounds: number;
@@ -129,7 +147,7 @@ export function standings(s: CupState, history: RoundResult[] = []): Player[] {
         bo = b.out ?? Infinity;
       if (ao !== bo) return bo - ao;
     }
-    if (s.rules.mode === 'finals' && !!a.fin !== !!b.fin) return a.fin ? -1 : 1;
+    if (s.rules.finalist && !!a.fin !== !!b.fin) return a.fin ? -1 : 1;
     if (b.pts !== a.pts) return b.pts - a.pts;
     for (let i = 0; i < 8; i++) if ((b.places[i] ?? 0) !== (a.places[i] ?? 0)) return (b.places[i] ?? 0) - (a.places[i] ?? 0);
     return (last.get(a.u) ?? 99) - (last.get(b.u) ?? 99);
