@@ -13575,11 +13575,42 @@
                 return e
             }
             )();
-            function a(e, i) {
+            function stepCar(e, i) {
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
                 __royaleStep(e.id),
                 __collideStep(e);
-                return new Uint8Array(t.HEAPU8.buffer,n,s).slice().buffer
+                return new Uint8Array(t.HEAPU8.buffer,n,s)
+            }
+            function a(e, i) {
+                return stepCar(e, i).slice().buffer
+            }
+            // One buffer per message: a buffer per car state is 1000 ArrayBuffers a second for the page's GC to sweep.
+            function stateBatch(e) {
+                let t = new Uint8Array(s * Math.max(1, e))
+                  , i = 0;
+                return {
+                    push(e) {
+                        if ((i + 1) * s > t.length) {
+                            const e = new Uint8Array(2 * t.length);
+                            e.set(t),
+                            t = e
+                        }
+                        t.set(e, i++ * s)
+                    },
+                    post() {
+                        if (0 == i)
+                            return;
+                        const e = [];
+                        for (let n = 0; n < i; n++)
+                            e.push(t.subarray(n * s, (n + 1) * s));
+                        postMessage({
+                            messageType: Ki.UpdateResult,
+                            carStateBuffers: e
+                        }, {
+                            transfer: [t.buffer]
+                        })
+                    }
+                }
             }
             let o = performance.now()
               , l = 0;
@@ -13624,20 +13655,15 @@
                             }
                     }
                 }
-                const r = [];
+                const r = stateBatch(i.length);
                 for (const {car: t, controls: e} of i)
-                    r.push(a(t, e));
-                r.length > 0 && postMessage({
-                    messageType: Ki.UpdateResult,
-                    carStateBuffers: r
-                }, {
-                    transfer: r
-                })
+                    r.push(stepCar(t, e));
+                r.post()
             }
             function c() {
                 const t = performance.now();
                 if (e.length > 0) {
-                    const i = [];
+                    const i = stateBatch(64);
                     let r;
                     do {
                         r = !0;
@@ -13648,7 +13674,7 @@
                                         throw new Error("Non-realtime simulation requires targetSimulationFrames");
                                     if (t.frames < Qa.maxFrames && t.frames < t.targetSimulationFrames && !t.isPaused) {
                                         const e = t.controls.getControls(t.frames);
-                                        i.push(a(t, e)),
+                                        i.push(stepCar(t, e)),
                                         t.frames++,
                                         r = !1
                                     }
@@ -13657,12 +13683,7 @@
                                 break
                         }
                     } while (Math.max(0, performance.now() - t) / 1e3 < .01 && !r);
-                    i.length > 0 && postMessage({
-                        messageType: Ki.UpdateResult,
-                        carStateBuffers: i
-                    }, {
-                        transfer: i
-                    })
+                    i.post()
                 }
             }
         }

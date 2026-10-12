@@ -3777,7 +3777,7 @@ window.__nswsTrackQuery = function(trackId) {
                             {
                                 const e = t.carStateBuffers;
                                 for (const t of e) {
-                                    const e = new Uint8Array(t)
+                                    const e = ArrayBuffer.isView(t) ? t : new Uint8Array(t)
                                       , n = e[0] | e[1] << 8 | e[2] << 16 | e[3] << 24
                                       , i = r.get(this, f, "f").get(n);
                                     if (null != i) {
@@ -9703,7 +9703,7 @@ window.__nswsTrackQuery = function(trackId) {
                     l.set(this, M, e, "f");
                     const t = new THREE.BufferGeometry;
                     l.set(this, C, new Float32Array(6 * l.get(this, P, "f") * 3), "f"),
-                    l.set(this, R, new THREE.BufferAttribute(l.get(this, C, "f"),3), "f"),
+                    l.set(this, R, new THREE.BufferAttribute(l.get(this, C, "f"),3).setUsage(35048), "f"),
                     t.setAttribute("position", l.get(this, R, "f")),
                     l.set(this, _, new THREE.Mesh(t,l.get(T, T, "f", z)), "f"),
                     l.get(this, _, "f").frustumCulled = !1,
@@ -9716,6 +9716,7 @@ window.__nswsTrackQuery = function(trackId) {
                 clear() {
                     for (let e = 0; e < l.get(this, C, "f").length; ++e)
                         l.get(this, C, "f")[e] = 0;
+                    l.get(this, R, "f").clearUpdateRanges(),
                     l.get(this, R, "f").needsUpdate = !0,
                     l.set(this, I, 0, "f"),
                     this.break()
@@ -9759,6 +9760,8 @@ window.__nswsTrackQuery = function(trackId) {
                         l.get(this, C, "f")[6 * e * 3 + 15] = o.x,
                         l.get(this, C, "f")[6 * e * 3 + 16] = o.y,
                         l.get(this, C, "f")[6 * e * 3 + 17] = o.z,
+                        // Uploading the whole 72 KB buffer per new segment stalls weak GPUs on every slide or landing.
+                        l.get(this, R, "f").addUpdateRange(6 * e * 3, 18),
                         l.get(this, R, "f").needsUpdate = !0,
                         l.get(this, I, "f") >= l.get(this, P, "f") - 1 && l.set(this, I, 0, "f")
                     }
