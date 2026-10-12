@@ -125,10 +125,6 @@ export class Accounts extends DurableObject {
         // links it to the account so the chat can show the account's tag without its token.
         this.sql.exec("CREATE TABLE IF NOT EXISTS chat_links (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
-        // Official cups (hosted by the owner, competitions/src/host.ts): each result, kept once. The
-        // winner's account (the one holding their name) gets the Cup Champion tag.
-        this.sql.exec(`CREATE TABLE IF NOT EXISTS cup_results (
-            cup_id TEXT PRIMARY KEY, at INTEGER NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, results TEXT NOT NULL)`);
         this.top = null;
     }
 
@@ -503,30 +499,6 @@ export class Accounts extends DurableObject {
         while (this.sql.exec("SELECT 1 FROM shares WHERE id = ?", id).toArray().length);
         this.sql.exec("INSERT INTO shares (id, hash, user_id, at, code) VALUES (?, ?, ?, ?, ?)", id, hash, userId, Date.now(), code);
         return { id };
-    }
-
-    // One official cup's final standings. Places are 1-based; the same cup id is stored once.
-    recordCup(cup) {
-        const cupId = text(cup?.cupId, 64);
-        const results = (Array.isArray(cup?.results) ? cup.results : []).slice(0, 128)
-            .map((r) => ({ nickname: text(r?.nickname, 32).trim(), place: Number.isSafeInteger(r?.place) ? r.place : 0, score: Number.isSafeInteger(r?.score) ? r.score : 0 }))
-            .filter((r) => r.nickname && r.place >= 1 && r.place <= 128);
-        if (!/^[0-9a-f-]{8,64}$/i.test(cupId) || results.length < 2) return { error: "bad" };
-        if (this.sql.exec("SELECT 1 FROM cup_results WHERE cup_id = ?", cupId).toArray().length) return { duplicate: true };
-        const now = Date.now();
-        this.sql.exec("INSERT INTO cup_results (cup_id, at, code, name, results) VALUES (?, ?, ?, ?, ?)",
-            cupId, now, text(cup.code, 5), text(cup.name, 40), JSON.stringify(results));
-        let retag = null, champion = null;
-        for (const r of results) {
-            const key = nameKey(r.nickname);
-            if (r.place !== 1 || !key || key === "anonymous") continue;
-            const holder = this.holder(key);
-            if (holder) {
-                retag = this.grantTag(holder, "cupchamp", true).retag;
-                champion = r.nickname;
-            }
-        }
-        return { ok: true, retag, champion };
     }
 
     getShare(id) {

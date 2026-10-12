@@ -18,7 +18,6 @@ export interface HostPlan {
   format: string;
   rules: Rules;
   role: 'racer' | 'spectator';
-  official: boolean;
   chatSecret: string;
 }
 export interface Note {
@@ -231,7 +230,6 @@ export class App {
         format: 'quickplay',
         rules: undefined as unknown as Rules,
         role: 'racer' as const,
-        official: false,
         chatSecret: '',
       };
       this.org = new Organizer(this, plan);

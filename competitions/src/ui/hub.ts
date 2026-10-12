@@ -31,14 +31,12 @@ interface ListedCup {
   host: string;
   players: number;
   max: number;
-  official?: boolean;
   status?: CupStatus | null;
 }
 interface CupInfo {
   name: string;
   host: string;
   pool: MapPool;
-  official?: boolean;
   status?: CupStatus | null;
 }
 
@@ -120,8 +118,6 @@ export class Hub {
   #listTimer = 0;
   #busy = false;
   #cancel: (() => void) | null = null;
-  #official = false;
-  #ownerChecked = false;
   #joinCode: string | null = null;
   onKeys: () => void = () => {};
   onJoined: () => void = () => {};
@@ -201,25 +197,13 @@ export class Hub {
     const left = h(
       'section',
       { class: 'col' },
-      h('div', { class: 'box join' }, h('h3', null, icon('link'), 'Join with a code'), h('div', { class: 'joinrow' }, this.#code, btn([icon('play'), 'Join'], tryJoin, 'primary'))),
-      h('div', { class: 'box grow' }, h('h3', null, icon('globe'), 'Open cups', h('span', { class: 'grow' }), btn(icon('restart'), () => this.#refresh(true), 'small ghost icon', 'Refresh')), this.#list),
+      h('div', { class: 'box' }, h('h3', null, 'Join with a code'), h('div', { class: 'joinrow' }, this.#code, btn('Join', tryJoin))),
+      h('div', { class: 'box fill' }, h('div', { class: 'boxhead' }, h('h3', null, 'Open cups'), btn('Refresh', () => this.#refresh(true), 'small')), this.#list),
     );
 
-    // Host form
     const nick = this.#profileName();
-    const name = h('input', { class: 'text', maxlength: 40, placeholder: nick ? `${nick}'s cup` : 'My cup', value: st.name, style: 'width:100%' }) as HTMLInputElement;
+    const name = h('input', { class: 'text', maxlength: 40, placeholder: nick ? `${nick}'s cup` : 'My cup', value: st.name }) as HTMLInputElement;
     name.oninput = () => (st.name = name.value);
-    const fmtBlurb = h('div', { class: 'blurb' });
-    const fmtGrid = h('div', { class: 'fmts' });
-    const paintFormats = () => {
-      fill(fmtGrid, 
-        ...FORMATS.map((f) =>
-          h('button', { class: 'fmt mini' + (st.format === f.id ? ' on' : ''), title: f.blurb, onclick: click(() => ((st.format = f.id), paintFormats())) }, icon(f.icon), h('b', null, f.name)),
-        ),
-      );
-      fmtBlurb.textContent = formatById(st.format)?.blurb ?? '';
-    };
-    paintFormats();
     const seg = <T extends string | boolean>(options: [T, string][], get: () => T, set: (v: T) => void) => {
       const wrap = h('div', { class: 'seg' });
       const paint = (): void =>
@@ -228,63 +212,38 @@ export class Hub {
       return wrap;
     };
     const size = h('input', { type: 'range', min: 2, max: MAX_RACERS, value: String(st.max) }) as HTMLInputElement;
-    const sizeVal = h('span', { class: 'val mono' }, `${st.max}`);
+    const sizeVal = h('span', { class: 'val' }, `${st.max} players`);
     size.oninput = () => {
       st.max = Number(size.value);
-      sizeVal.textContent = `${st.max}`;
+      sizeVal.textContent = `${st.max} players`;
     };
-    const official = h('button', { class: 'switch' }) as HTMLButtonElement;
-    official.onclick = click(() => {
-      this.#official = !this.#official;
-      official.classList.toggle('on', this.#official);
-    });
-    official.classList.toggle('on', this.#official);
-    const officialRow = h('div', { class: 'frow', hidden: true }, h('label', null, icon('star', 'amber'), ' Official cup', h('small', null, 'Announced to everyone online; the winner gets the Cup Champion tag')), official);
-    if (!this.#ownerChecked)
-      void site.__nswsOwner?.check().then((owner) => {
-        this.#ownerChecked = owner;
-        officialRow.hidden = !owner;
-      }, () => {});
-    else officialRow.hidden = false;
     const right = h(
       'section',
-      { class: 'col host' },
+      { class: 'col' },
       h(
         'div',
-        { class: 'box grow' },
-        h('h3', null, icon('trophy'), 'Host a cup'),
+        { class: 'box' },
+        h('h3', null, 'Host a cup'),
         h('div', { class: 'frow' }, h('label', null, 'Name'), name),
-        h('div', { class: 'flabel' }, 'Format'),
-        fmtGrid,
-        fmtBlurb,
-        h('div', { class: 'flabel' }, 'Maps'),
-        this.#maps(st.pool),
-        h('div', { class: 'frow' }, h('label', null, 'Room size', h('small', null, 'Racers and spectators, you included')), size, sizeVal),
+        h('div', { class: 'frow top' }, h('label', null, 'Maps'), this.#maps(st.pool)),
+        h('div', { class: 'frow' }, h('label', null, 'Room size'), size, sizeVal),
         h('div', { class: 'frow' }, h('label', null, 'Listed'), seg<boolean>([[true, 'Public'], [false, 'Code only']], () => st.public, (v) => (st.public = v))),
-        h('div', { class: 'frow' }, h('label', null, 'You'), seg<'racer' | 'spectator'>([['racer', 'Race'], ['spectator', 'Organize only']], () => st.role, (v) => (st.role = v))),
-        officialRow,
-        h('div', { class: 'grow' }),
-        btn([icon('cuppa'), 'Open the room'], () => {
+        h('div', { class: 'frow' }, h('label', null, 'You'), seg<'racer' | 'spectator'>([['racer', 'Race'], ['spectator', 'Only organize']], () => st.role, (v) => (st.role = v))),
+        h('p', { class: 'hint' }, 'You choose the format and rules once the room is open. Room size counts everyone, racers and spectators.'),
+        btn('Open the room', () => {
           st.name = name.value.trim();
           this.#save();
           return this.host();
-        }, 'primary big wide'),
+        }, 'wide'),
       ),
     );
-    fill(this.el, 
+    fill(
+      this.el,
       h('div', { class: 'scrim', onclick: () => !this.#busy && this.close() }),
       h(
         'div',
         { class: 'hub' },
-        h(
-          'header',
-          null,
-          h('div', { class: 'brand big' }, h('span', { class: 'bolt' }, icon('cuppa')), h('div', null, h('b', null, PRODUCT), h('div', { class: 'tag' }, 'Live cups on Not So Weekly Shorts'))),
-          h('span', { class: 'grow' }),
-          btn([icon('keyboard'), 'Keys'], () => this.onKeys(), 'small ghost'),
-          btn(icon('x'), () => this.close(), 'small ghost icon', 'Close'),
-        ),
-        h('p', { class: 'intro' }, 'Race other players live in short rounds. Every finish scores points, and the format decides the winner: first to the target, a fixed season, a knockout and more.'),
+        h('header', null, h('div', { class: 'titles' }, h('h2', null, PRODUCT), h('p', null, 'Live cups: race other players in short rounds for points.')), btn('Keys', () => this.onKeys(), 'small'), btn('Close', () => this.close(), 'small')),
         h('div', { class: 'body' }, left, right),
         this.#status,
         this.#card,
@@ -347,9 +306,9 @@ export class Hub {
       const res = await fetch(site.__nswsApiBase + 'nsws/cup/list', { cache: 'no-store' });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { cups?: ListedCup[] };
-      const cups = (data.cups ?? []).filter((c) => CODE.test(c.code)).sort((a, b) => Number(!!b.official) - Number(!!a.official) || b.players - a.players);
+      const cups = (data.cups ?? []).filter((c) => CODE.test(c.code)).sort((a, b) => b.players - a.players);
       if (!cups.length) {
-        fill(this.#list, h('div', { class: 'empty' }, icon('flag', 'bigic'), h('div', null, 'No open cups right now.'), h('div', { class: 'faint' }, 'Host one and it shows up here for everyone.')));
+        fill(this.#list, h('div', { class: 'empty' }, 'No open cups right now. Host one and it shows up here for everyone.'));
         return;
       }
       fill(this.#list, ...cups.map((c) => this.#cupRow(c)));
@@ -361,18 +320,17 @@ export class Hub {
   #cupRow(c: ListedCup) {
     const full = c.players >= c.max;
     const st = c.status;
-    const live = st?.phase === 'racing';
-    const chips = [
-      st ? h('span', { class: 'chip ' + (live ? 'live' : st.phase === 'done' ? '' : 'cyan') }, PHASES[st.phase] + (st.phase !== 'setup' && st.round ? ` · R${st.round}` : '')) : null,
-      st?.format ? h('span', { class: 'chip' }, formatById(st.format)?.name ?? st.format) : null,
-      st && !st.canRace && st.phase !== 'setup' ? h('span', { class: 'chip' }, icon('eye'), 'Watch only') : null,
-    ];
+    const about = [
+      `by ${c.host}`,
+      st?.format ? formatById(st.format)?.name ?? st.format : '',
+      st ? PHASES[st.phase] + (st.phase !== 'setup' && st.round ? `, round ${st.round}` : '') : '',
+      st && !st.canRace && st.phase !== 'setup' ? 'watch only' : '',
+    ].filter(Boolean);
     return h(
       'button',
-      { class: 'cup' + (c.official ? ' official' : '') + (full ? ' full' : ''), disabled: full, onclick: click(() => this.join(c.code)) },
-      h('div', { class: 'grow' }, h('div', { class: 'cname ell' }, c.official ? icon('star', 'amber') : null, c.name), h('div', { class: 'csub ell' }, `by ${c.host}`), h('div', { class: 'cchips' }, chips)),
-      h('div', { class: 'cfill' }, h('div', { class: 'mono' }, `${c.players}/${c.max}`), h('div', { class: 'meter' }, h('i', { style: `width:${Math.round((100 * c.players) / Math.max(1, c.max))}%` }))),
-      h('span', { class: 'btn small ' + (full ? 'ghost' : 'primary') }, full ? 'Full' : 'Join'),
+      { class: 'cup' + (full ? ' full' : ''), disabled: full, onclick: click(() => this.join(c.code)) },
+      h('div', { class: 'grow' }, h('div', { class: 'cname ell' }, c.name), h('div', { class: 'csub ell' }, about.join(' · '))),
+      h('div', { class: 'cfill' }, full ? 'Full' : `${c.players}/${c.max}`),
     );
   }
 
@@ -394,13 +352,12 @@ export class Hub {
       this.#say('Opening the room…');
       const loaded = await maps[Math.floor(Math.random() * maps.length)]();
       if (!loaded?.trackData?.hasStartingPoint?.()) throw new Error("That map couldn't be loaded. Try again.");
-      const ownerKey = this.#official ? await site.__nswsOwner?.token().catch(() => null) : null;
       const chat = randomHex(16);
       const format = formatById(st.format) ?? FORMATS[0];
       const nick = this.#profileName();
       const cupName = st.name || (nick ? `${nick}'s cup` : 'Cup');
-      site.__nswsCupHostOptions = { public: st.public, max: st.max, name: cupName, pool: st.pool, chat, reclaim: randomHex(16), ownerKey };
-      this.app.planHost({ name: cupName, format: format.id, rules: cleanRules(format.rules), role: st.role, official: !!ownerKey, chatSecret: chat });
+      site.__nswsCupHostOptions = { public: st.public, max: st.max, name: cupName, pool: st.pool, chat, reclaim: randomHex(16) };
+      this.app.planHost({ name: cupName, format: format.id, rules: cleanRules(format.rules), role: st.role, chatSecret: chat });
       this.#joinCode = null;
       const host = new bridge.Host(sv.loc, sv.api, st.max, sv.profiles);
       const sessionId = host.startNewSessionImmediate(bridge.GameMode.Competitive, loaded.trackMetadata, loaded.trackData);
@@ -437,16 +394,16 @@ export class Hub {
       h(
         'div',
         { class: 'cardbox' },
-        h('div', { class: 'kicker' }, info.official ? 'OFFICIAL CUP' : `CUP ${code}`),
-        h('h2', null, info.official ? icon('star', 'amber') : null, info.name),
+        h('div', { class: 'kicker' }, `Cup ${code}`),
+        h('h2', null, info.name),
         h('dl', null, fact('Organizer', info.host), fact('Maps', poolLabel(info.pool)), st ? fact('Format', formatById(st.format)?.name ?? st.format) : null, st ? fact('Now', `${PHASES[st.phase]}${st.phase === 'setup' ? '' : ` · round ${st.round}`} · ${st.racers} racing`) : null),
         h('p', { class: 'dim' }, canRace ? (st && st.phase !== 'setup' ? 'The cup is under way. You can join the grid and start scoring from the next round, or just watch.' : 'Take a place on the grid, or just watch.') : 'You can watch this cup. Its grid is locked or full.'),
         h(
           'div',
           { class: 'acts' },
-          btn('Cancel', () => (this.#card.hidden = true), 'ghost'),
-          btn([icon('eye'), 'Watch'], () => this.#connect(code, info!, 'spectator'), canRace ? 'ghost' : 'primary'),
-          canRace ? btn([icon('flag'), 'Race'], () => this.#connect(code, info!, 'racer'), 'primary') : null,
+          btn('Cancel', () => (this.#card.hidden = true)),
+          btn('Watch', () => this.#connect(code, info!, 'spectator')),
+          canRace ? btn('Race', () => this.#connect(code, info!, 'racer')) : null,
         ),
       ),
     );
@@ -464,7 +421,7 @@ export class Hub {
     this.#busy = true;
     const bridge = site.__nswsCup!;
     const text = h('p', { class: 'dim' }, `Joining ${info.name}…`);
-    fill(this.#card, h('div', { class: 'cardbox' }, h('div', { class: 'spinner' }), h('h2', null, info.name), text, h('div', { class: 'acts' }, btn('Cancel', () => this.#cancel?.(), 'ghost'))));
+    fill(this.#card, h('div', { class: 'cardbox' }, h('div', { class: 'spinner' }), h('h2', null, info.name), text, h('div', { class: 'acts' }, btn('Cancel', () => this.#cancel?.()))));
     let client: (Connection & { joinInvite(code: string, cancel: unknown): Promise<void>; addConnectionLostCallback(cb: () => void): void; removeConnectionLostCallback(cb: () => void): void }) | null = null;
     let cancelled = false;
     let timer = 0;

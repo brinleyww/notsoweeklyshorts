@@ -94,7 +94,6 @@ export interface CupState {
   winner: number | null;
   shout: { text: string; at: number } | null;
   rounds: number;
-  official: boolean;
 }
 
 export const LIVE_PHASES: Phase[] = ['warmup', 'countdown', 'racing'];

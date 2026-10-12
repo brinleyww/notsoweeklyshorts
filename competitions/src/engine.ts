@@ -6,7 +6,7 @@ import { player, roundDone, standings, type CupState, type Phase, type ResultRow
 export const FINISH_SLACK_MS = 5000;
 export const COUNTDOWN_MS = 3600;
 
-export function createCup(o: { id: string; name: string; format: string; rules: Rules; official: boolean; now: number }): CupState {
+export function createCup(o: { id: string; name: string; format: string; rules: Rules; now: number }): CupState {
   return {
     v: 1,
     id: o.id,
@@ -25,7 +25,6 @@ export function createCup(o: { id: string; name: string; format: string; rules: 
     winner: null,
     shout: null,
     rounds: 0,
-    official: o.official,
   };
 }
 

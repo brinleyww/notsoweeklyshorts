@@ -106,7 +106,7 @@ export class Panel {
       h(
         'div',
         { class: 'titles' },
-        h('h1', { class: 'ell' }, s.official ? [icon('star', 'amber'), ' '] : null, s.name),
+        h('h1', { class: 'ell' }, s.name),
         h(
           'div',
           { class: 'meta' },
@@ -278,6 +278,11 @@ export class Panel {
     if (!org) return;
     org.configure(format.startsWith('custom:') ? format.slice(7) : format, rules);
     this.#draft = null;
+    // The next room starts on the format chosen here.
+    try {
+      const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
+      if (!format.startsWith('custom:')) localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, format }));
+    } catch {}
   }
 
   #statusHero(s: CupState) {

@@ -32,7 +32,7 @@
         { id: "youtuber", label: "YOUTUBER", group: "discord", need: "Run a YouTube channel that covers NSWS." },
         { id: "author", label: "AUTHOR TIME", group: "discord", need: "Set the Author Time medals for a week." },
         { id: "og", label: "OG", group: "discord", need: "Have played NSWS since the early weeks." },
-        { id: "cupchamp", label: "CUP CHAMPION", group: "discord", need: "Win an official NSWS cup in Competitions." },
+        { id: "cupchamp", label: "CUP CHAMPION", group: "discord", need: "Given by the owner to cup winners." },
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [

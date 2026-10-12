@@ -63,15 +63,14 @@ export class Organizer {
   #best = new Map<string, number>();
   #statusKey = '';
   #statusAt = 0;
-  #posted = false;
   #pool: PoolTrack[] = [];
   #poolAt = 0;
 
   constructor(
     private app: App,
-    o: { name: string; format: string; rules: Rules; official: boolean; role: 'racer' | 'spectator' },
+    o: { name: string; format: string; rules: Rules; role: 'racer' | 'spectator' },
   ) {
-    this.state = E.createCup({ id: randomId(), name: o.name, format: o.format, rules: o.rules, official: o.official, now: Date.now() });
+    this.state = E.createCup({ id: randomId(), name: o.name, format: o.format, rules: o.rules, now: Date.now() });
     const me = this.#addPlayer('organizer', app.selfPid, o.role);
     this.state.host = me.u;
     // The new session's id straight from the game (works in a hidden tab, where frames stop).
@@ -488,7 +487,6 @@ export class Organizer {
     }
     this.#broadcast(now);
     this.#reportStatus(now);
-    if (s.phase === 'podium') this.#postOfficial();
   }
 
   #tickLoading(now: number) {
@@ -584,28 +582,6 @@ export class Organizer {
     this.#statusKey = key;
     this.#statusAt = now;
     this.app.connection?.reportCupStatus?.(status);
-  }
-
-  // Official cups (owner key) send their final standings, which gives the winner the Cup Champion tag.
-  #postOfficial() {
-    if (this.#posted || !this.state.official) return;
-    this.#posted = true;
-    const s = this.state;
-    const code = this.app.code;
-    void site.__nswsOwner
-      ?.token()
-      .then((token) => {
-        if (!token) return;
-        const results = standings(s, this.history).map((p, i) => ({ nickname: p.name, place: i + 1, score: p.pts }));
-        return fetch(site.__nswsApiBase + 'nsws/cup/result', {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
-          body: JSON.stringify({ token, cupId: s.id, code, name: s.name, results }),
-          credentials: 'omit',
-          cache: 'no-store',
-        });
-      })
-      .catch(() => setTimeout(() => (this.#posted = false), 30_000));
   }
 
   // ---- Organizer commands ----
@@ -745,7 +721,6 @@ export class Organizer {
     for (const peer of this.#peers.values()) peer.hist = 0;
     if (newTracks) this.#recent = [];
     s.id = randomId();
-    this.#posted = false;
     E.setPhase(s, 'lobby', Date.now());
     this.touch(true);
   }

@@ -65,8 +65,17 @@ choice) can change mid-cup.
 Start, pause between rounds, next now, end round now, +30 s, restart round, void round, skip
 track, end cup, race again, move players between grid and spectators, remove players, message
 everyone (a banner on every screen). End round, Restart and Void are also in the game's toolbar
-during a round. Official cups (owner key) are announced and post their results for the Cup
-Champion tag.
+during a round.
+
+The Competitions screen only opens the room (name, maps, size, listed or not, race or only
+organize); the format and rules are set on the cup panel's setup page afterwards, and the next room
+starts on the format chosen last. There are no official cups: Cup Champion is a tag the owner grants
+by hand on Race Control.
+
+## Look
+
+The UI follows PolyTrack's own menus: its navy surfaces, the game's slanted button (the hover fill and
+white underline), plain headings and no gradients; gold only marks 1st place.
 
 ## Cost on Cloudflare
 

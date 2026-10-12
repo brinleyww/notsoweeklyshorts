@@ -395,8 +395,8 @@ or a cup link). It sits on the game's own multiplayer, and every part of it goes
 there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md` covers the page side.
 
 - **Routes** (allowed sites only): `GET /nsws/cup/list` (public cups), `GET /nsws/cup/info?code=`
-  (a cup's name, map pool, official flag and status, read for the join card; `{cup: null}` if it
-  isn't open), `POST /nsws/cup/result` (owner key only, see below), and three WebSockets that stand
+  (a cup's name, map pool and status, read for the join card; `{cup: null}` if it isn't open), and
+  three WebSockets that stand
   in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup code, reserved by
   `LobbyDirectory`, 10 per address per 10 minutes; `?reclaim=CODE` asks for the organizer's own code
   back), `/nsws/cup/join?code=` and `/nsws/cup/mux?code=&token=` (`&resume=1` to resume).
@@ -416,15 +416,8 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   the row from the list but keeps the code reserved, and for 60 s accepts `/cup/host?reclaim=CODE`
   whose `createInvite` has the same secret: same code, same name, pool and status. The page retries
   every 1.5 s for that minute (`Fn.prototype.requestInvite` in `main.bundle.js`).
-- **Official cups:** a `createInvite` whose `nsws.ownerKey` hashes to `OWNER_KEY_HASHES` marks the
-  cup official (a star in the list and on the join card). Its room announces it through
-  `TrafficStats.announce` with the cup's code (new `cup` column on `announcements`, added by
-  `ALTER TABLE` in `migrate()`), and the page's announcement shows a Join button. When the cup
-  closes, the room stops that announcement by id (`stopAnnouncement(id)` no longer ends someone
-  else's message). At the end of an official cup the organizer's page posts `{token, cupId, code,
-  name, results}` to `/nsws/cup/result`; `Accounts.recordCup` keeps each cup once (`cup_results`)
-  and grants the `cupchamp` tag (Cup Champion) to the account holding the winner's name, then the
-  chat is retagged.
+- **No official cups** (removed after v9.36): Cup Champion (`cupchamp`) is an ordinary owner grant on
+  Race Control -> Tags. The `cup` column on `announcements` and the old `cup_results` table are unused.
 - **Set before the room opens** (the host's `createInvite` carries them as `nsws`): the cup's name,
   public or private, room size, the map pool (`{shorts, main: [Summer|Winter|Desert], community:
   [game versions]}`; only the weekly shorts are on by default) and a random secret for the cup chat.

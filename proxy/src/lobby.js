@@ -71,16 +71,6 @@ const TOKEN = /^[0-9a-f]{24}$/;
 const RECLAIM_MS = 60_000;
 const STATUS_MIN_MS = 2_000;
 
-async function sha256Hex(text) {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function ownerHashes(value) {
-    const list = Array.isArray(value) ? value : String(value ?? "").replace(/[[\]"\s]/g, "").split(",");
-    return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => /^[0-9a-f]{64}$/.test(h)));
-}
-
 // What an organizer's page reports about its cup (competitions/src/host.ts #reportStatus).
 function cleanStatus(value) {
     const o = value && typeof value === "object" ? value : null;
@@ -156,7 +146,7 @@ export class LobbyRoom extends DurableObject {
         const host = this.host();
         if (!host) return null;
         const a = host.deserializeAttachment();
-        return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null), official: !!a.official, status: a.status ?? null };
+        return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null), status: a.status ?? null };
     }
 
     // Called by the cup's chat room (chat.js) to recognise the organizer.
@@ -195,17 +185,12 @@ export class LobbyRoom extends DurableObject {
                 a.name = moderate(o.name, MAX_NAME) || a.nick + "'s cup";
                 a.pool = cleanPool(o.pool);
                 a.chatKey = typeof o.chat === "string" && /^[0-9a-f]{32}$/.test(o.chat) ? o.chat : null;
-                a.official =
-                    typeof o.ownerKey === "string" &&
-                    /^[0-9a-f]{64}$/.test(o.ownerKey) &&
-                    ownerHashes(this.env.OWNER_KEY_HASHES).has(await sha256Hex("nsws-owner:" + o.ownerKey));
             }
             a.invited = true;
             a.reclaimKey = key;
             ws.serializeAttachment(a);
             text(ws, { type: "createInvite", inviteCode: a.code, key: randomHex(16), timeoutMilliseconds: null, censoredNickname: a.nick });
             this.listing(true);
-            if (a.official && !a.announced) await this.announceCup(ws, a);
             return;
         }
         if (m.type === "nswsStatus") {
@@ -232,38 +217,6 @@ export class LobbyRoom extends DurableObject {
         }
     }
 
-    // ---- Official cups (hosted with the owner key): announced to everyone online. ----
-
-    async announceCup(ws, a) {
-        if (!this.env.TRAFFIC) return;
-        try {
-            const stub = this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global"));
-            const result = await stub.announce({
-                name: "Competitions",
-                text: `${a.name} is open: join the official cup now!`,
-                color: "#ffd26b",
-                show: 15,
-                reach: 60,
-                cup: a.code,
-            });
-            a.announced = result?.current?.id ?? null;
-            ws.serializeAttachment(a);
-            if (result?.current && this.env.CHAT)
-                await this.env.CHAT.get(this.env.CHAT.idFromName("global")).announce({ t: "ann", a: result.current });
-        } catch (err) {
-            console.error("cup announce failed:", err && err.message);
-        }
-    }
-
-    async withdrawCup(id) {
-        if (id == null || !this.env.TRAFFIC) return;
-        try {
-            const result = await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).stopAnnouncement(id);
-            if (result?.stopped != null && this.env.CHAT)
-                await this.env.CHAT.get(this.env.CHAT.idFromName("global")).announce({ t: "ann-stop", id: result.stopped });
-        } catch {}
-    }
-
     // ---- Reclaiming a code after the organizer's matchmaking socket dropped. ----
 
     async reclaimRecord() {
@@ -280,7 +233,7 @@ export class LobbyRoom extends DurableObject {
     async hostGone(a, dropped) {
         const live = this.sockets("mux").length > 0;
         if (dropped && a.reclaimKey && live) {
-            const cup = { nick: a.nick, public: a.public, max: a.max, name: a.name, pool: a.pool, chatKey: a.chatKey, official: a.official, announced: a.announced, status: a.status };
+            const cup = { nick: a.nick, public: a.public, max: a.max, name: a.name, pool: a.pool, chatKey: a.chatKey, status: a.status };
             this.reclaim = { key: a.reclaimKey, until: Date.now() + RECLAIM_MS, cup };
             await this.ctx.storage.put("reclaim", this.reclaim);
             // Hidden from the list but still reserved, so nobody else can get the code meanwhile.
@@ -289,13 +242,11 @@ export class LobbyRoom extends DurableObject {
             this.reclaimTimer = setTimeout(() => {
                 if (this.host()) return;
                 this.directory?.remove(a.code).catch(() => {});
-                void this.withdrawCup(a.announced);
                 void this.clearReclaim();
             }, RECLAIM_MS);
             return;
         }
         this.directory?.remove(a.code).catch(() => {});
-        await this.withdrawCup(a.announced);
     }
 
     joinMessage(ws, a, m) {
@@ -507,7 +458,7 @@ export class LobbyRoom extends DurableObject {
         for (const ws of this.sockets("mux")) {
             if (Object.values(ws.deserializeAttachment().pairs || {}).some((p) => p.side === "client" && p.link)) players++;
         }
-        const info = { name: a.name, host: a.nick, players, max: a.max, public: a.public, official: !!a.official, status: a.status ?? null };
+        const info = { name: a.name, host: a.nick, players, max: a.max, public: a.public, status: a.status ?? null };
         const key = JSON.stringify(info);
         if (!force && key === this.listed) return;
         this.listed = key;

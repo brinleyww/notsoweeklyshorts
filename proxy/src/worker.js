@@ -40,7 +40,6 @@ const MIN_SALT_LENGTH = 16;
 const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
-const MAX_CUP_RESULT_BODY = 16 * 1024;
 const MAX_CHAT_BODY = 4096;
 // Big tracks reach ~470 KB; the stored payload must stay under Durable Object SQLite's 2 MB value limit.
 const MAX_TRACK_SYNC_BODY = 1_500_000;
@@ -1061,22 +1060,6 @@ function socketRefusal(error) {
 // (the relayed data channels). Only the site can use them.
 async function handleCup(request, url, env, fromSite, origin, cfg) {
     if (!fromSite) return forbidden();
-    // An official cup's results (owner key): stored once, and its winner gets the Cup Champion tag.
-    if (url.pathname === TRAFFIC_PREFIX + "cup/result") {
-        if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
-        if (request.method !== "POST") return plain(405, "Method not allowed", origin);
-        const stub = accounts(env);
-        if (!stub) return plain(503, "Competitions are off", origin);
-        const text = await readSmallBody(request, MAX_CUP_RESULT_BODY);
-        let body = null;
-        try {
-            body = JSON.parse(text ?? "");
-        } catch {}
-        if (!body || !(await isOwner(body.token, cfg))) return plain(403, "Forbidden", origin);
-        const result = await stub.recordCup(body);
-        if (result?.retag) await chatRetag(env, result.retag);
-        return json({ ok: !!result?.ok, duplicate: !!result?.duplicate, champion: result?.champion ?? null }, origin);
-    }
     if (url.pathname === TRAFFIC_PREFIX + "cup/list") {
         if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
         if (!env.LOBBY_DIR) return plain(503, "Competitions are off", origin);
