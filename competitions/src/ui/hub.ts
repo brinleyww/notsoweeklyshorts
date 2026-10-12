@@ -113,7 +113,18 @@ export class Hub {
   #status = h('div', { class: 'hub-status' });
   #list = h('div', { class: 'cups' });
   #card = h('div', { class: 'hub-card', hidden: true });
-  #code = h('input', { class: 'text codebox mono', maxlength: 300, placeholder: 'ABCDE', spellcheck: false, autocomplete: 'off', 'aria-label': 'Cup code or invite link' }) as HTMLInputElement;
+  #code = h('input', {
+    class: 'text codebox mono',
+    type: 'text',
+    maxlength: 300,
+    placeholder: 'ABCDE',
+    spellcheck: 'false',
+    autocomplete: 'off',
+    autocorrect: 'off',
+    autocapitalize: 'characters',
+    enterkeyhint: 'go',
+    'aria-label': 'Cup code or invite link',
+  }) as HTMLInputElement;
   #settings = loadSettings();
   #listTimer = 0;
   #busy = false;
@@ -192,7 +203,10 @@ export class Hub {
       const v = cupCode(this.#code.value);
       if (v.length <= 5 && v !== this.#code.value) this.#code.value = v;
     };
-    this.#code.onkeydown = (e) => e.key === 'Enter' && tryJoin();
+    // A block body: an on* handler that returns false cancels the key, which made the box untypable.
+    this.#code.onkeydown = (e) => {
+      if (e.key === 'Enter') tryJoin();
+    };
 
     const left = h(
       'section',

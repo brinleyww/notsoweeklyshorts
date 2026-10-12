@@ -47,7 +47,12 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 - Touch: the game's touch steering cancels every touch on `window` that isn't on a `<button>`, and a
   touch inside the shadow root looks like one on its host `<div>`, so the layer stops touch events at
   its host. The car is held only while a text box of the layer really has focus; a click outside the
-  box ends the typing.
+  box ends the typing. Phone keyboards cover the page without resizing it, so while a box of the layer
+  has focus the layer shrinks to `visualViewport` (`#fitKeyboard`) and the chat boxes sit above the
+  keyboard.
+- Never assign an `on*` property a handler that can return `false` (`el.onkeydown = (e) => e.key ===
+  'Enter' && go()`): returning false cancels the event, which once made the cup code box untypable.
+  `h()` attaches handlers with `addEventListener`, where the return value doesn't matter.
 - Spectators tell the organizer whose car they follow (`act` `watch`, once the choice has held 0.8 s),
   and the racer sees "N watching" top right.
 - `chat.ts`: two chat tabs in a cup, "Cup chat" (the cup's own room, `/nsws/chat?cup=CODE`) and

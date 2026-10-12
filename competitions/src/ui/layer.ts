@@ -84,12 +84,48 @@ export class Layer {
       if (e.target instanceof HTMLInputElement && e.target.type === 'text') app.driver.clearInput();
     });
     window.addEventListener('resize', () => this.#layout());
+    // Phone keyboards cover the bottom of the page without resizing it (Android Chrome, iOS Safari),
+    // which is where both chat boxes are. While a box here has focus the layer shrinks to what is
+    // still visible, so the box being typed in sits just above the keyboard.
+    const vv = window.visualViewport;
+    if (vv) {
+      const fit = () => this.#fitKeyboard();
+      vv.addEventListener('resize', fit);
+      vv.addEventListener('scroll', fit);
+      this.root.addEventListener('focusin', () => setTimeout(fit, 0));
+      this.root.addEventListener('focusout', () => setTimeout(fit, 0));
+    }
     this.#layout();
     const loop = () => {
       this.#raf = requestAnimationFrame(loop);
       this.#frame();
     };
     this.#raf = requestAnimationFrame(loop);
+  }
+
+  #keyboard = '';
+  #fitKeyboard() {
+    const vv = window.visualViewport;
+    const el = this.root.querySelector<HTMLElement>('.root');
+    if (!vv || !el) return;
+    const active = this.root.activeElement;
+    const typing = active instanceof HTMLInputElement && active.type === 'text';
+    // Less than this missing is browser chrome coming and going, not a keyboard.
+    const covered = window.innerHeight - vv.height;
+    const key = typing && covered > 120 ? `${Math.round(vv.offsetTop)},${Math.round(vv.height)}` : '';
+    if (key === this.#keyboard) return;
+    this.#keyboard = key;
+    el.classList.toggle('kb', !!key);
+    if (key) {
+      el.style.top = `${Math.round(vv.offsetTop)}px`;
+      el.style.height = `${Math.round(vv.height)}px`;
+      el.style.bottom = 'auto';
+    } else {
+      el.style.removeProperty('top');
+      el.style.removeProperty('height');
+      el.style.removeProperty('bottom');
+    }
+    this.#layout();
   }
 
   #phase = '';
@@ -170,7 +206,7 @@ export class Layer {
     }
     // Measured in screen pixels, written in the layer's own units.
     const W = window.innerWidth,
-      H = window.innerHeight,
+      H = (this.#keyboard && window.visualViewport?.height) || window.innerHeight,
       u = scale;
     const hud = this.hud.el;
     const set = (el: HTMLElement, name: string, px: number) => {
