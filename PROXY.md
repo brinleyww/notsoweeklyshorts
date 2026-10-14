@@ -148,6 +148,8 @@ On the Workers Free plan each beat is one Worker request and one Durable Object
 request, with about two SQLite rows written. That is roughly 1,440 beats a day
 for each player who keeps the site open, so the free limits (100,000 requests
 and 100,000 rows written a day) cover about 30 players online around the clock.
+Hours played add one call to `Accounts` every 5 minutes, not one per beat, and one
+row written per active account per call.
 
 `proxy/src/worker.js`:
 
@@ -349,20 +351,39 @@ same `Accounts` Durable Object (new tables, created in its constructor), so they
 belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
 `src/accounts.js` and in that file must list the same ids, costs and counts.
 
-- **Referral codes.** Every account has an 8-character code (no `I`, `O`, `0`
-  or `1`) that changes every 10 minutes (`REF_CODE_MS`). Main menu → Referrals
-  shows it with a countdown and a link (`?ref=CODE`, used on the visitor's
-  profile as soon as it exists), and fetches the new code when the timer runs
-  out. A code still works for 30 s after that (`REF_GRACE_MS`), and old codes are
-  remembered for a day (`ref_expired`) so a late friend is told it expired. There
-  is also a box to type a friend's code.
+- **Referral codes.** Every account has one 8-character code (no `I`, `O`, `0`
+  or `1`) that never changes, so a link posted in Discord or a video keeps
+  working. Main menu → Referrals shows it with a link (`?ref=CODE`, used on the
+  visitor's profile as soon as it exists) and a box to type a friend's code.
+  Codes from before codes stopped changing are in `ref_expired`, so they answer
+  "expired". The share window's week card carries the same link.
   Each profile can use one code, never its own, and not the code of someone who
   joined with theirs. One address can use 10 codes a day, 3 of them for the same
   player (a whole school shares one address); only a hash of it is stored.
 - **Points.** A used code makes the new player `REFERRED` straight away, but the
   referrer's point only counts once that player uploads a run on an NSWS board
-  (`confirmReferral`, called from `handleSubmit`), so empty profiles are worth
+  (`Accounts.uploaded`, called from `handleSubmit`), so empty profiles are worth
   nothing. Points = confirmed referrals + the owner's bonus − points spent.
+  `refer/me` returns the last 5 confirmed referrals (`recent`); the page shows a
+  toast for any it hasn't announced yet (`_nswsTagsSeen:<code>` in localStorage).
+- **Hours played.** `TrafficStats` adds up each visitor's focused seconds from the
+  beats in memory and hands them to `Accounts.creditPlay` in one call every 5
+  minutes (`PLAY_FLUSH_MS`, an alarm), capped at 10 minutes per visitor per batch.
+  `Accounts` maps the visitor to the account through `chat_links` and adds to
+  `playtime`. The first batch after this shipped was every session's `focus` so
+  far (`meta` key `play_backfill` in `TrafficStats`). Hours tags (`FIRST LAPS` 1 h,
+  `REGULAR` 5, `GRINDER` 10, `VETERAN` 25, `ROAD WARRIOR` 50, `CENTURION` 100,
+  `LIFER` 250) are owned once the hours are there. The page puts a new one on when
+  the player wears no tag or a smaller hours tag, and says so.
+- **Weekly streak.** `handleSubmit` → `Accounts.uploaded` records the week in
+  `played_weeks` when it is `CURRENT_WEEK` (or the next one, for the gap between
+  a site push and the Worker deploy). `streakOf` turns the weeks into the streak:
+  the live week can't break it until it is over, one missed week is covered by a
+  shield, and a used shield comes back after 3 weeks in a row. `refer/me` returns
+  it as `streak`. The first `refer/me` after this shipped filled `played_weeks`
+  from the anti-cheat's run history (`AntiCheat.livePlays`: a week counts if the
+  player's first run on it came before anyone's first run on the next week; `meta`
+  key `weeks_backfill` in `Accounts`). `mod/nsws_streak.js` draws it.
 - **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
   tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,

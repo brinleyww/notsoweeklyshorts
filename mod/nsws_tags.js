@@ -5,13 +5,23 @@
     const API = window.__nswsApiBase;
     const VISITOR_KEY = "nsws_visitor";
     const PENDING_KEY = "_nswsRefPending";
+    // Per account (keyed by its referral code): hours tags and confirmed referrals already announced.
+    const SEEN_KEY = "_nswsTagsSeen:";
     const TOKEN = /^[0-9a-f]{64}$/;
     const CODE = /^[A-HJ-NP-Z2-9]{8}$/;
     const TOAST_MS = 7000;
     const ARM_MS = 4000;
+    const REFRESH_MS = 10 * 60_000;
 
-    // Keep in step with TAGS in proxy/src/accounts.js (ids, costs and referral counts).
+    // Keep in step with TAGS in proxy/src/accounts.js (ids, costs, referral counts and hours).
     const TAGS = [
+        { id: "firstlaps", label: "FIRST LAPS", group: "hours", hours: 1 },
+        { id: "regular", label: "REGULAR", group: "hours", hours: 5 },
+        { id: "grinder", label: "GRINDER", group: "hours", hours: 10 },
+        { id: "veteran", label: "VETERAN", group: "hours", hours: 25 },
+        { id: "roadwarrior", label: "ROAD WARRIOR", group: "hours", hours: 50 },
+        { id: "centurion", label: "CENTURION", group: "hours", hours: 100 },
+        { id: "lifer", label: "LIFER", group: "hours", hours: 250 },
         { id: "rookie", label: "ROOKIE", group: "shop", cost: 1 },
         { id: "pitcrew", label: "PIT CREW", group: "shop", cost: 2 },
         { id: "drifter", label: "DRIFTER", group: "shop", cost: 3 },
@@ -36,6 +46,7 @@
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
+        ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
         ["earned", "Referral rewards", "Free once you get there."],
         ["discord", "Discord tags", "Only the owner gives these out, to go with the Discord roles."],
@@ -66,6 +77,14 @@
 .nsws-tag.t-author{background:#103d3b;color:#5ff2d6;}
 .nsws-tag.t-og{background:#111;color:#ffcc66;}
 .nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
+.nsws-tag>.h{margin-right:.05em;padding-right:.4em;border-right:1px solid currentColor;opacity:.75;font-variant-numeric:tabular-nums;}
+.nsws-tag.t-firstlaps{background:#3d5f86;}
+.nsws-tag.t-regular{background:#1d7f74;}
+.nsws-tag.t-grinder{background:linear-gradient(100deg,#e2661b,#a83a0b);}
+.nsws-tag.t-veteran{background:#4e5d2c;color:#eef3c9;}
+.nsws-tag.t-roadwarrior{background:#24272f;color:#fff;box-shadow:inset 0 -2px #ffd400;}
+.nsws-tag.t-centurion{background:linear-gradient(180deg,#9b1c2a,#5e0d18);color:#ffd76a;}
+.nsws-tag.t-lifer{background:linear-gradient(90deg,#3a1fa8,#1db3d8,#7b2ff0,#3a1fa8);background-size:300% 100%;text-shadow:0 0 5px rgba(255,255,255,.6);animation:nsws-tag-rainbow 6s linear infinite;}
 @keyframes nsws-tag-shine{from{background-position:0 0;}to{background-position:166.667% 0;}}
 @keyframes nsws-tag-slide{from{background-position:0 0;}to{background-position:200% 0;}}
 @keyframes nsws-tag-rainbow{from{background-position:0 0;}to{background-position:150% 0;}}
@@ -122,14 +141,6 @@
 #nsws-ref .card>h2{margin:0 0 6px;font-size:20px;font-weight:normal;}
 #nsws-ref .card>.sub{margin:0 0 10px;font-size:13px;line-height:1.35;color:rgba(255,255,255,.55);}
 #nsws-ref .code{margin:4px 0 10px;font-size:44px;letter-spacing:.12em;color:#ffc94a;text-shadow:0 3px 0 #112052;user-select:all;font-variant-numeric:tabular-nums;}
-#nsws-ref .code.old{opacity:.35;}
-#nsws-ref .timer{margin:-2px 0 12px;}
-#nsws-ref .timer>.label{margin-bottom:5px;font-size:14px;color:rgba(255,255,255,.7);}
-#nsws-ref .timer>.label>b{font-weight:normal;color:#fff;font-variant-numeric:tabular-nums;}
-#nsws-ref .timer>.track{height:6px;background:var(--surface-tertiary-color);}
-#nsws-ref .timer>.track>.fill{height:100%;background:#ffc94a;transition:width .25s linear;}
-#nsws-ref .timer.low>.track>.fill{background:#ff7a59;}
-#nsws-ref .timer.low>.label>b{color:#ff9a7f;}
 #nsws-ref .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
 #nsws-ref .row>.button{margin:0;font-size:18px;padding:7px 14px;}
 #nsws-ref .row>input{flex:1;min-width:0;margin:0;padding:8px 14px;border:0;outline:0;background:var(--surface-tertiary-color);color:var(--text-color);font-size:24px;letter-spacing:.1em;text-transform:uppercase;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);user-select:text;}
@@ -156,8 +167,6 @@
 
     let state = null;
     let loading = null;
-    // Server time minus this browser's, so the code's countdown matches the Worker's clock.
-    let clockOffset = 0;
     let garage = null;
     let ref = null;
 
@@ -245,18 +254,72 @@
     function chip(id) {
         const tag = BY_ID.get(id);
         if (!tag) return null;
-        const span = el("span", "nsws-tag t-" + id, tag.label);
-        span.title = tag.label;
+        const span = el("span", "nsws-tag t-" + id);
+        if (tag.hours) {
+            span.appendChild(el("span", "h", tag.hours + "H"));
+            span.title = tag.label + " · " + tag.hours + (tag.hours === 1 ? " hour" : " hours") + " played";
+        } else {
+            span.title = tag.label;
+        }
+        span.appendChild(document.createTextNode(tag.label));
         return span;
+    }
+
+    function hoursText(hours) {
+        return hours < 10 ? (Math.floor(hours * 10) / 10).toFixed(1) : String(Math.floor(hours));
     }
 
     function setState(next) {
         if (!next || typeof next !== "object" || !Array.isArray(next.owned)) return;
-        if (Number.isFinite(next.now)) clockOffset = next.now - Date.now();
-        if (ref && state?.code !== next.code) ref.copied = "";
         state = next;
         renderGarage();
         renderRef();
+        announce(next);
+        window.dispatchEvent(new CustomEvent("nsws-account", { detail: next }));
+    }
+
+    function readSeen(code) {
+        try {
+            const seen = JSON.parse(storageGet(SEEN_KEY + code));
+            if (seen && Array.isArray(seen.hours) && Number.isFinite(seen.refAt)) return seen;
+        } catch {}
+        return null;
+    }
+
+    // New hours tags and friends whose referral just counted get a toast once. A new hours tag is put
+    // on straight away when the player wears no tag or a smaller hours tag.
+    function announce(next) {
+        if (typeof next.code !== "string" || announce.busy) return;
+        const hoursOwned = TAGS.filter((t) => t.hours && next.owned.includes(t.id));
+        const latestRef = Math.max(0, ...(next.recent ?? []).map((r) => r.at));
+        const seen = readSeen(next.code);
+        const lines = [];
+        if (seen) {
+            const fresh = (next.recent ?? []).filter((r) => r.at > seen.refAt);
+            if (fresh.length === 1) lines.push(fresh[0].nickname + " finished their first run, so your referral counts! +1 point.");
+            else if (fresh.length > 1) lines.push(fresh.length + " friends you referred finished their first run! +" + fresh.length + " points.");
+        }
+        const newHours = hoursOwned.filter((t) => !seen?.hours.includes(t.id));
+        const top = newHours[newHours.length - 1];
+        let wear = null;
+        if (top) {
+            const worn = BY_ID.get(next.equipped);
+            if (next.equipped == null || (worn?.hours && worn.hours < top.hours)) wear = top.id;
+            lines.push("You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
+                + (wear ? " and you're wearing it now." : ". Wear it from Garage → Tags."));
+        }
+        storageSet(SEEN_KEY + next.code, JSON.stringify({ hours: hoursOwned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0) }));
+        if (lines.length) toast(lines.join(" "));
+        const token = profileToken();
+        if (wear && token) {
+            announce.busy = true;
+            api("tags/equip", { userToken: token, tag: wear }).then(({ status, data }) => {
+                announce.busy = false;
+                if (status === 200) setState(data);
+            }, () => {
+                announce.busy = false;
+            });
+        }
     }
 
     // Also links this browser's chat to the profile, so the chat can show its tag.
@@ -290,7 +353,7 @@
 
     const REDEEM_ERRORS = {
         code: "There's no referral code like that. Check it and try again.",
-        expired: "That code has expired. Codes change every 10 minutes, so ask your friend for their new one.",
+        expired: "That's an old code. Codes don't change any more, so ask your friend for their code again and it will work for good.",
         self: "That's your own code. Send it to a friend instead!",
         already: "This profile has already used a referral code.",
         mutual: "That player joined with your code, so you can't use theirs.",
@@ -349,6 +412,10 @@
                 return;
             }
             redeemPending().catch(() => {}).finally(() => loadState().catch(() => {}));
+            // Hours and streaks change while playing, so a long visit re-reads them now and then.
+            setInterval(() => {
+                if (document.visibilityState === "visible") loadState().catch(() => {});
+            }, REFRESH_MS);
         };
         setTimeout(tick, 4000);
     }
@@ -360,6 +427,7 @@
     function requirement(tag) {
         if (tag.group === "shop") return tag.cost === 1 ? "1 point" : tag.cost + " points";
         if (tag.referrals) return Math.min(state?.referrals ?? 0, tag.referrals) + " / " + tag.referrals + " referrals";
+        if (tag.hours) return hoursText(Math.min(state?.hours ?? 0, tag.hours)) + " / " + tag.hours + " h";
         if (tag.group === "discord") return "Owner only";
         return "Use a code";
     }
@@ -373,6 +441,11 @@
     function needText(tag) {
         if (tag.group === "shop") return "Costs " + requirement(tag) + " from the referral shop. You get a point for every friend you refer.";
         if (tag.group === "discord") return tag.need + " Only the owner can give this one out.";
+        if (tag.hours) {
+            const played = "You've played " + hoursText(state?.hours ?? 0) + " hours";
+            return "Play NSWS for " + tag.hours + (tag.hours === 1 ? " hour. " : " hours. ")
+                + (owns(tag.id) ? played + ", so it's yours for good." : played + " so far. It's yours for good once you get there.");
+        }
         return tag.need;
     }
 
@@ -463,7 +536,8 @@
         const points = el("div", "points", String(state.points));
         points.appendChild(el("small", null, state.points === 1 ? "referral point" : "referral points"));
         const sub = el("div", "sub", state.referrals + (state.referrals === 1 ? " referral" : " referrals")
-            + (state.pending ? " · " + state.pending + " waiting for their first run" : ""));
+            + (state.pending ? " · " + state.pending + " waiting for their first run" : "")
+            + " · " + hoursText(state.hours ?? 0) + " h played");
         head.append(points, sub, button("Referrals", () => openReferrals()));
         view.bar.appendChild(head);
 
@@ -548,7 +622,8 @@
             action.disabled = view.busy;
             info.appendChild(action);
         }
-        info.appendChild(el("div", "status", view.note || (selected && !owns(selected.id) && selected.group !== "shop" ? "Locked" : "")));
+        info.appendChild(el("div", "status", view.note || (selected && !owns(selected.id) && selected.group !== "shop"
+            ? (selected.hours ? "Locked · " + requirement(selected) : "Locked") : "")));
         view.preview.appendChild(info);
     }
 
@@ -581,42 +656,8 @@
         closeReferrals();
     }
 
-    function codeLeft() {
-        return state?.codeExpires ? state.codeExpires - (Date.now() + clockOffset) : null;
-    }
-
-    function clock(ms) {
-        const s = Math.max(0, Math.ceil(ms / 1000));
-        return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-    }
-
-    // Runs four times a second while the window is open. At zero it fetches the new code.
-    function tickRef() {
-        const view = ref;
-        const left = codeLeft();
-        if (!view?.timer || left == null) return;
-        const total = state.codeMs || 600_000;
-        view.timer.classList.toggle("low", left < 60_000);
-        view.timerFill.style.width = Math.max(0, Math.min(100, (left / total) * 100)) + "%";
-        view.codeEl.classList.toggle("old", left <= 0);
-        for (const b of view.copyButtons) b.disabled = left <= 0;
-        if (left > 0) {
-            view.timerLabel.textContent = "New code in ";
-            view.timerLabel.appendChild(el("b", null, clock(left)));
-            return;
-        }
-        view.timerLabel.textContent = "Getting your new code…";
-        if (view.renewing || Date.now() - view.renewedAt < 3000) return;
-        view.renewing = true;
-        view.renewedAt = Date.now();
-        loadState().catch(() => {}).finally(() => {
-            view.renewing = false;
-        });
-    }
-
     function closeReferrals() {
         if (!ref) return;
-        clearInterval(ref.ticker);
         ref.overlay.remove();
         window.removeEventListener("keydown", onRefKey, true);
         ref = null;
@@ -640,9 +681,7 @@
         for (const type of ["keydown", "keyup", "keypress"]) overlay.addEventListener(type, stopKeys);
         document.body.appendChild(overlay);
         window.addEventListener("keydown", onRefKey, true);
-        ref = { overlay, body, draft: storageGet(PENDING_KEY) || "", note: "", noteKind: "", busy: false, copied: "", failed: null,
-            renewing: false, renewedAt: 0 };
-        ref.ticker = setInterval(tickRef, 250);
+        ref = { overlay, body, draft: storageGet(PENDING_KEY) || "", note: "", noteKind: "", busy: false, copied: "", failed: null };
         renderRef();
         loadState().catch((err) => {
             if (!ref) return;
@@ -667,19 +706,8 @@
         const grid = el("div", "grid");
 
         const mine = el("div", "card");
-        mine.append(el("h2", null, "Your code"), el("p", "sub", "It changes every 10 minutes, so send it to a friend who's ready to join. They type it in here (Referrals on the main menu), or just open your link."));
-        view.codeEl = el("div", "code", state?.code ?? (view.failed ? "—" : "…"));
-        mine.appendChild(view.codeEl);
-        view.timer = view.timerLabel = view.timerFill = null;
-        if (state?.codeExpires) {
-            view.timer = el("div", "timer");
-            view.timerLabel = el("div", "label");
-            const track = el("div", "track");
-            view.timerFill = el("div", "fill");
-            track.appendChild(view.timerFill);
-            view.timer.append(view.timerLabel, track);
-            mine.appendChild(view.timer);
-        }
+        mine.append(el("h2", null, "Your code"), el("p", "sub", "It's yours for good, so post your link anywhere: Discord, a video, your bio. Friends open the link, or type the code in here (Referrals on the main menu)."));
+        mine.appendChild(el("div", "code", state?.code ?? (view.failed ? "—" : "…")));
         const copyRow = el("div", "row");
         const copy = (what, text) => copyText(text).then(() => {
             if (!ref) return;
@@ -689,7 +717,6 @@
         const copyCode = button(view.copied === "code" ? "Copied!" : "Copy code", () => state && copy("code", state.code));
         const copyLink = button(view.copied === "link" ? "Copied!" : "Copy link", () => state && copy("link", refLink(state.code)));
         copyCode.disabled = copyLink.disabled = !state;
-        view.copyButtons = [copyCode, copyLink];
         copyRow.append(copyCode, copyLink);
         mine.appendChild(copyRow);
         if (view.failed && !state) mine.appendChild(el("p", "note bad", view.failed));
@@ -761,9 +788,9 @@
         how.appendChild(el("h2", null, "How it works"));
         const steps = el("ol");
         for (const step of [
-            "Send a friend your code or link. It changes every 10 minutes, so they need to use it before the timer runs out.",
-            "They enter it on their profile (one code per profile).",
-            "You get a point once they finish a run on any NSWS track.",
+            "Send a friend your link or code. It never changes.",
+            "They open the link or type the code in (one code per profile).",
+            "You get a point once they finish a run on any NSWS track, and we'll tell you when they do.",
             "Spend points on tags in Garage → Tags. Your tag shows next to your name in the chat.",
             "Referring 5, 15 and 30 players unlocks free reward tags.",
         ]) steps.appendChild(el("li", null, step));
@@ -786,7 +813,6 @@
         }
         lower.appendChild(top);
         view.body.appendChild(lower);
-        tickRef();
     }
 
     if (!document.getElementById("nsws-tags-style")) {
@@ -802,6 +828,9 @@
         mountGarage,
         openReferrals,
         refresh: () => loadState(),
+        state: () => state,
+        refLink: () => (state?.code ? refLink(state.code) : null),
+        toast,
     };
 
     start();

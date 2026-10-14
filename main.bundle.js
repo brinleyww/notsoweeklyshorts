@@ -53,6 +53,28 @@ window.__nswsTrackQuery = function(trackId) {
     const token = window.__nswsProfileToken();
     return "&nswsWeek=" + week + (token ? "&userToken=" + encodeURIComponent(token) : "");
 };
+// Settings → Auto-pick ghost. When a track's leaderboard opens with no opponent chosen, the run one
+// place above the player's best becomes the opponent; before they have a best, a mid-board run.
+// fetchPage(skip, amount) is the leaderboard's own request. On the live week other runs are secret.
+window.__nswsAutoGhost = async function(trackId, own, total, fetchPage) {
+    if (!window.__nswsSettingBoolean?.("AutoGhost") || !(total > 0)) return null;
+    const position = own ? own.position - 1 : Math.ceil(total / 2);
+    if (!Number.isSafeInteger(position) || position < 1) return null;
+    const entry = (await fetchPage(position - 1, 1))?.entries?.[0];
+    // On the live week the proxy hands out -position in place of a recording id, even for the Author Time run.
+    if (!entry || entry.hidden || entry.isSelf || !(entry.id > 0)) return null;
+    return {
+        nickname: entry.nickname,
+        recordingId: entry.id,
+        isSelf: !1,
+        auto: "Auto ghost: " + entry.nickname + " (#" + position + "), " + (own ? "the next time to beat." : "a mid-board run to learn the line from.")
+            + " Pick others on the left to change it."
+    };
+};
+window.__nswsAutoGhostNote = function(trackId) {
+    return window.__nswsSettingBoolean?.("AutoGhost") && window.__nswsIsCurrentWeek?.(trackId)
+        ? "Auto ghost picks a run once this week's times are revealed. Until then, pick your own best on the left." : null;
+};
 (function() {
     // Visual FX reads the #screen canvas from its own rAF callback, which can land after
     // WebGL has cleared the buffer. preserveDrawingBuffer keeps the frame readable, and it
@@ -5883,6 +5905,13 @@ window.__nswsTrackQuery = function(trackId) {
                 }
             }
             var y, b, w, x, S, k, E, T, M, _, C, R, P, I, L, U, z, N, D, B, G, F, O, W = n(3476);
+            const FOG_COLORS = {
+                sky: 10211839,
+                white: 15265522,
+                grey: 10134443,
+                sand: 15322010,
+                night: 1778229
+            };
             class RenderManager {
                 constructor(canvas, settings, fogOverride=null) {
                     y.add(this),
@@ -6198,7 +6227,8 @@ window.__nswsTrackQuery = function(trackId) {
                     i.get(this, y, "m", O).call(this),
                     i.get(this, M, "f").updateProjectionMatrix())
                 }
-                e = i.get(this, x, "f")?.getSettingBoolean(W.A.ScreenPixelDensity) ?? 1 ? window.devicePixelRatio : 1;
+                // Render scale is a share of the window's real pixels, whatever the screen scaling or browser zoom.
+                e = window.devicePixelRatio || 1;
                 // Low performance mode draws at most one pixel per CSS pixel: a phone's 3x screen is 9x the GPU work.
                 const n = i.get(this, k, "f").getPixelRatio()
                   , a = Math.min(i.get(this, k, "f").capabilities.maxTextureSize / window.innerWidth, i.get(this, k, "f").capabilities.maxTextureSize / window.innerHeight, i.get(this, x, "f")?.getSettingBoolean(W.A.LowPerformanceMode) ? 1 : 1 / 0)
@@ -6239,16 +6269,33 @@ window.__nswsTrackQuery = function(trackId) {
             }
             ,
             G = function() {
-                let e;
-                e = null != i.get(this, S, "f") ? i.get(this, S, "f") : i.get(this, x, "f")?.getSettingBoolean(W.A.FogEnabled) ?? !0;
-                // A shortened draw distance always ends in fog, so far parts fade out instead of popping.
-                const t = this.getTrackViewDistance()
-                  , n = Number.isFinite(t) ? .5 * t : 0
-                  , r = Number.isFinite(t) ? t : b.maxViewDistance
-                  , a = i.get(this, T, "f").fog;
-                Number.isFinite(t) && null == i.get(this, S, "f") && (e = !0),
-                e ? null == a ? i.get(this, T, "f").fog = new THREE.Fog(10211839,n,r) : (a.near = n,
-                a.far = r) : null != a && (i.get(this, T, "f").fog = null)
+                const o = i.get(this, S, "f")
+                  , settings = i.get(this, x, "f")
+                  , e = null != o ? o : settings?.getSettingBoolean(W.A.FogEnabled) ?? !0
+                  , t = this.getTrackViewDistance()
+                  , limited = Number.isFinite(t) && null == o;
+                let a = i.get(this, T, "f").fog;
+                if (!e && !limited) {
+                    null != a && (i.get(this, T, "f").fog = null);
+                    return
+                }
+                null == a && (a = i.get(this, T, "f").fog = new THREE.Fog(10211839,0,b.maxViewDistance));
+                const num = (k, d) => {
+                    const v = parseFloat(settings?.getSetting(k));
+                    return Number.isFinite(v) ? v : d
+                }
+                  , color = settings?.getSetting(W.A.FogColor) ?? "sky";
+                if (e && null == o) {
+                    a.far = Math.min(Math.max(num(W.A.FogDistance, b.maxViewDistance), 10), b.maxViewDistance),
+                    a.near = a.far * Math.min(Math.max(num(W.A.FogStart, 0), 0), .95),
+                    a.fade = 1 - Math.min(Math.max(num(W.A.FogStrength, 1), 0), 1);
+                } else
+                    e ? (a.near = Number.isFinite(t) ? .5 * t : 0, a.far = Number.isFinite(t) ? t : b.maxViewDistance, a.fade = 0) : (a.near = 0, a.far = 1, a.fade = 1);
+                // A shortened draw distance always ends in fog (fogCullNear/Far in fog_fragment), so far parts fade out instead of popping.
+                a.cullNear = limited ? .5 * t : 0,
+                a.cullFar = limited ? t : 0,
+                a.color.setHex(FOG_COLORS[color] ?? FOG_COLORS.sky),
+                a.fixedColor = "sky" != color && color in FOG_COLORS
             }
             ,
             F = function() {
@@ -9509,7 +9556,12 @@ window.__nswsTrackQuery = function(trackId) {
                 e[e.LowPerformanceMode = 24] = "LowPerformanceMode",
                 e[e.SolidMenuBackground = 25] = "SolidMenuBackground",
                 e[e.TrackCulling = 26] = "TrackCulling",
-                e[e.TrackViewDistance = 27] = "TrackViewDistance"
+                e[e.TrackViewDistance = 27] = "TrackViewDistance",
+                e[e.FogDistance = 28] = "FogDistance",
+                e[e.FogStart = 29] = "FogStart",
+                e[e.FogStrength = 30] = "FogStrength",
+                e[e.FogColor = 31] = "FogColor",
+                e[e.AutoGhost = 32] = "AutoGhost"
             }(i || (i = {}));
             const r = i
         }
@@ -32279,8 +32331,8 @@ window.__nswsTrackQuery = function(trackId) {
                 envmap_vertex: "#ifdef USE_ENVMAP\n\t#ifdef ENV_WORLDPOS\n\t\tvWorldPosition = worldPosition.xyz;\n\t#else\n\t\tvec3 cameraToVertex;\n\t\tif ( isOrthographic ) {\n\t\t\tcameraToVertex = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );\n\t\t} else {\n\t\t\tcameraToVertex = normalize( worldPosition.xyz - cameraPosition );\n\t\t}\n\t\tvec3 worldNormal = inverseTransformDirection( transformedNormal, viewMatrix );\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvReflect = reflect( cameraToVertex, worldNormal );\n\t\t#else\n\t\t\tvReflect = refract( cameraToVertex, worldNormal, refractionRatio );\n\t\t#endif\n\t#endif\n#endif",
                 fog_vertex: "#ifdef USE_FOG\n\tvFogDepth = - mvPosition.z;\n#endif",
                 fog_pars_vertex: "#ifdef USE_FOG\n\tvarying float vFogDepth;\n#endif",
-                fog_fragment: "#ifdef USE_FOG\n\t#ifdef FOG_EXP2\n\t\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );\n\t#else\n\t\tfloat fogFactor = smoothstep( fogNear, fogFar, vFogDepth );\n\t#endif\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif",
-                fog_pars_fragment: "#ifdef USE_FOG\n\tuniform vec3 fogColor;\n\tvarying float vFogDepth;\n\t#ifdef FOG_EXP2\n\t\tuniform float fogDensity;\n\t#else\n\t\tuniform float fogNear;\n\t\tuniform float fogFar;\n\t#endif\n#endif",
+                fog_fragment: "#ifdef USE_FOG\n\t#ifdef FOG_EXP2\n\t\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );\n\t#else\n\t\tfloat fogFactor = smoothstep( fogNear, fogFar, vFogDepth ) * ( 1.0 - fogFade );\n\t\tif ( fogCullFar > 0.0 ) fogFactor = max( fogFactor, smoothstep( fogCullNear, fogCullFar, vFogDepth ) );\n\t#endif\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif",
+                fog_pars_fragment: "#ifdef USE_FOG\n\tuniform vec3 fogColor;\n\tvarying float vFogDepth;\n\t#ifdef FOG_EXP2\n\t\tuniform float fogDensity;\n\t#else\n\t\tuniform float fogNear;\n\t\tuniform float fogFar;\n\t\tuniform float fogFade;\n\t\tuniform float fogCullNear;\n\t\tuniform float fogCullFar;\n\t#endif\n#endif",
                 gradientmap_pars_fragment: "#ifdef USE_GRADIENTMAP\n\tuniform sampler2D gradientMap;\n#endif\nvec3 getGradientIrradiance( vec3 normal, vec3 lightDirection ) {\n\tfloat dotNL = dot( normal, lightDirection );\n\tvec2 coord = vec2( dotNL * 0.5 + 0.5, 0.0 );\n\t#ifdef USE_GRADIENTMAP\n\t\treturn vec3( texture2D( gradientMap, coord ).r );\n\t#else\n\t\tvec2 fw = fwidth( coord ) * 0.5;\n\t\treturn mix( vec3( 0.7 ), vec3( 1.0 ), smoothstep( 0.7 - fw.x, 0.7 + fw.x, coord.x ) );\n\t#endif\n}",
                 lightmap_pars_fragment: "#ifdef USE_LIGHTMAP\n\tuniform sampler2D lightMap;\n\tuniform float lightMapIntensity;\n#endif",
                 lights_lambert_fragment: "LambertMaterial material;\nmaterial.diffuseColor = diffuseColor.rgb;\nmaterial.specularStrength = specularStrength;",
@@ -32532,6 +32584,15 @@ window.__nswsTrackQuery = function(trackId) {
                     },
                     fogFar: {
                         value: 2e3
+                    },
+                    fogFade: {
+                        value: 0
+                    },
+                    fogCullNear: {
+                        value: 0
+                    },
+                    fogCullFar: {
+                        value: 0
                     },
                     fogColor: {
                         value: new THREE.Color(16777215)
@@ -38622,7 +38683,10 @@ window.__nswsTrackQuery = function(trackId) {
                         n.color.getRGB(t.fogColor.value, (0,
                         THREE.getUnlitUniformColorSpace)(e)),
                         n.isFog ? (t.fogNear.value = n.near,
-                        t.fogFar.value = n.far) : n.isFogExp2 && (t.fogDensity.value = n.density)
+                        t.fogFar.value = n.far,
+                        t.fogFade && (t.fogFade.value = n.fade ?? 0,
+                        t.fogCullNear.value = n.cullNear ?? 0,
+                        t.fogCullFar.value = n.cullFar ?? 0)) : n.isFogExp2 && (t.fogDensity.value = n.density)
                     },
                     refreshMaterialUniforms: function(e, a, s, o, l) {
                         a.isMeshBasicMaterial || a.isMeshLambertMaterial ? r(e, a) : a.isMeshToonMaterial ? (r(e, a),
@@ -41415,6 +41479,8 @@ window.__nswsTrackQuery = function(trackId) {
                     const _wasPB = "personal-best" === s && !c.classList.contains("hidden");
                     if (_wasPB && getAutoClipOnPB()) createClip();
                     else if (getAutoClipOnEveryRun()) createClip();
+                    // Share button and streak check (mod/nsws_share.js, mod/nsws_streak.js).
+                    if (_wasPB) window.dispatchEvent(new CustomEvent("nsws-pb", { detail: { panel: C.get(this, Ye, "f"), trackName: i } }));
                 }
                 if (null == o)
                     A.className = "hidden";
@@ -51344,6 +51410,7 @@ window.__nswsTrackQuery = function(trackId) {
                         settings.updateSettings(Array.from(pending));
                         C.get(this, ws, "f").generateMeshes();
                         setPolyFxPreset(preset.polyFx);
+                        preset.colorCorrect && setPolyFxColorCorrect(preset.colorCorrect);
                         const scroll = C.get(this, ks, "f").scrollTop;
                         C.get(this, ms, "m", Ns).call(this);
                         C.get(this, ks, "f").scrollTop = scroll;
@@ -51436,6 +51503,14 @@ window.__nswsTrackQuery = function(trackId) {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Enabled"),
                 value: "true"
             }], R.A.GhostCarEnabled),
+            // Picks the run just above your best on the leaderboard as your opponent (window.__nswsAutoGhost).
+            C.get(this, ms, "m", Gs).call(this, "Auto-pick ghost", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.AutoGhost),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Default camera"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Default"),
                 value: "false"
@@ -51602,29 +51677,90 @@ window.__nswsTrackQuery = function(trackId) {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
             }], R.A.FogEnabled),
-            C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Render scale"), [{
-                title: "10%",
-                value: "0.10"
+            ( () => {
+                const pending = C.get(this, Ps, "f")
+                  , settings = C.get(this, bs, "f")
+                  , container = C.get(this, ks, "f");
+                const sliderRow = (title, key, stops, format) => {
+                    const current = parseFloat(pending.get(key) ?? settings.getSetting(key));
+                    let index = 0;
+                    for (let n = 1; n < stops.length; n++)
+                        Math.abs(parseFloat(stops[n]) - current) < Math.abs(parseFloat(stops[index]) - current) && (index = n);
+                    const row = document.createElement("div");
+                    row.className = "setting";
+                    const label = document.createElement("p");
+                    row.appendChild(label);
+                    const input = document.createElement("input");
+                    input.type = "range",
+                    input.min = "0",
+                    input.max = (stops.length - 1).toString(),
+                    input.step = "1",
+                    input.value = index.toString();
+                    const show = () => label.textContent = title + ": " + format(stops[parseInt(input.value, 10)]);
+                    input.addEventListener("input", ( () => {
+                        pending.set(key, stops[parseInt(input.value, 10)]),
+                        settings.updateSettings(Array.from(pending)),
+                        show()
+                    }
+                    )),
+                    show(),
+                    row.appendChild(input),
+                    container.appendChild(row)
+                }
+                  , percent = v => Math.round(100 * parseFloat(v)) + "%";
+                sliderRow("Fog distance", R.A.FogDistance, ["50", "100", "150", "200", "300", "400", "500", "600", "800", "1000", "1250", "1500", "2000", "2500", "3000", "4000", "5000", "7500", "10000"], v => v + " m"),
+                sliderRow("Fog start", R.A.FogStart, ["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"], percent),
+                sliderRow("Fog strength", R.A.FogStrength, ["0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1"], percent)
+            }
+            )(),
+            C.get(this, ms, "m", Gs).call(this, "Fog colour", [{
+                title: "Sky",
+                value: "sky"
             }, {
-                title: "25%",
-                value: "0.25"
+                title: "White",
+                value: "white"
             }, {
-                title: "50%",
-                value: "0.5"
+                title: "Grey",
+                value: "grey"
             }, {
-                title: "75%",
-                value: "0.75"
+                title: "Sand",
+                value: "sand"
             }, {
-                title: "100%",
-                value: "1"
-            }], R.A.RenderScale),
-            C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Screen Pixel Density"), [{
-                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Fixed"),
-                value: "false"
-            }, {
-                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Auto"),
-                value: "true"
-            }], R.A.ScreenPixelDensity),
+                title: "Night",
+                value: "night"
+            }], R.A.FogColor),
+            ( () => {
+                const pending = C.get(this, Ps, "f")
+                  , settings = C.get(this, bs, "f")
+                  , title = gs.getFromLanguage(C.get(this, Cs, "f"), "Render scale");
+                let label = null;
+                const describe = () => {
+                    const scale = parseFloat(pending.get(R.A.RenderScale) ?? settings.getSetting(R.A.RenderScale)) || 1
+                      , lowPerformance = "true" == (pending.get(R.A.LowPerformanceMode) ?? settings.getSetting(R.A.LowPerformanceMode))
+                      , ratio = Math.min((window.devicePixelRatio || 1) * scale, lowPerformance ? 1 : 1 / 0);
+                    null != label && (label.textContent = title + " (" + Math.round(window.innerWidth * ratio) + "x" + Math.round(window.innerHeight * ratio) + ")")
+                }
+                ;
+                C.get(this, ms, "m", Gs).call(this, title, [{
+                    title: "10%",
+                    value: "0.10"
+                }, {
+                    title: "25%",
+                    value: "0.25"
+                }, {
+                    title: "50%",
+                    value: "0.5"
+                }, {
+                    title: "75%",
+                    value: "0.75"
+                }, {
+                    title: "100%",
+                    value: "1"
+                }], R.A.RenderScale, describe);
+                label = C.get(this, ks, "f").lastElementChild.querySelector("p");
+                describe()
+            }
+            )(),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Anti-aliasing (requires restart)"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
                 value: "false"
@@ -51997,6 +52133,7 @@ window.__nswsTrackQuery = function(trackId) {
                         _btn.className = "button selected";
                         _set(_value);
                         refreshDevicePresetBar?.();
+                        refreshColorCorrectRow?.();
                     }
                     ));
                     _wrap.appendChild(_btn);
@@ -52006,6 +52143,38 @@ window.__nswsTrackQuery = function(trackId) {
                 _container.appendChild(_row);
                 // Apply on menu build too, in case this is the first time __PolyFX sees an override.
                 _set(_current);
+            }
+            )(),
+            ( () => {
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Colour correction";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _buttons = [["Off", "false"], ["On", "true"]].map(([_title, _value]) => {
+                    const _btn = document.createElement("button");
+                    _btn.textContent = _title;
+                    _btn.addEventListener("click", ( () => {
+                        C.get(this, vs, "f").playUIClick();
+                        setPolyFxColorCorrect(_value);
+                        refreshColorCorrectRow();
+                    }
+                    ));
+                    _wrap.appendChild(_btn);
+                    return [_btn, _value];
+                }
+                );
+                refreshColorCorrectRow = () => {
+                    const _on = getPolyFxColorCorrect();
+                    for (const [_btn, _value] of _buttons)
+                        _btn.className = _value == _on ? "button selected" : "button";
+                }
+                ;
+                refreshColorCorrectRow();
+                _row.appendChild(_wrap);
+                C.get(this, ks, "f").appendChild(_row);
             }
             )(),
             ( () => {
@@ -52164,7 +52333,7 @@ window.__nswsTrackQuery = function(trackId) {
         const DEVICE_PRESETS = [
             { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", renderScale: "0.75", polyFx: "0", solidBackground: "true" },
             { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", renderScale: "1", polyFx: "1", solidBackground: "false" },
-            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4", solidBackground: "false" }
+            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", renderScale: "1", polyFx: "4", solidBackground: "false", colorCorrect: "true" }
         ];
         const DEVICE_PRESET_ICONS = {
             low: '<rect x="17" y="5" width="30" height="54" rx="6"/><path d="M28 11h8M29 52h6"/>',
@@ -52196,7 +52365,34 @@ window.__nswsTrackQuery = function(trackId) {
                 localStorage.setItem(POLYFX_PRESET_STORAGE_KEY, value);
             } catch (e) {}
             const fx = window.__PolyFX;
-            if (fx) fx.presetOverride = parseInt(value, 10);
+            if (fx) {
+                fx.presetOverride = parseInt(value, 10);
+                fx.colorCorrect = "true" == getPolyFxColorCorrect();
+            }
+        }
+        const POLYFX_COLOR_CORRECT_STORAGE_KEY = "_polyfxColorCorrect";
+        // Unset follows the PolyFX preset: on for Photoreal, the Ultra preset's PolyFX (mod/polyfx_keybinds.js does the same on load).
+        function getPolyFxColorCorrect() {
+            try {
+                const stored = localStorage.getItem(POLYFX_COLOR_CORRECT_STORAGE_KEY);
+                if (null != stored)
+                    return stored;
+            } catch (e) {}
+            return "4" == getPolyFxPreset() ? "true" : "false";
+        }
+        function getStoredPolyFxColorCorrect() {
+            try {
+                return localStorage.getItem(POLYFX_COLOR_CORRECT_STORAGE_KEY);
+            } catch (e) {
+                return null;
+            }
+        }
+        function setPolyFxColorCorrect(value) {
+            try {
+                null == value ? localStorage.removeItem(POLYFX_COLOR_CORRECT_STORAGE_KEY) : localStorage.setItem(POLYFX_COLOR_CORRECT_STORAGE_KEY, value);
+            } catch (e) {}
+            const fx = window.__PolyFX;
+            if (fx) fx.colorCorrect = "true" == getPolyFxColorCorrect();
         }
         function hasChosenDevicePreset() {
             try {
@@ -52219,6 +52415,7 @@ window.__nswsTrackQuery = function(trackId) {
             document.body.classList.toggle("nsws-solid-bg", !!solid);
         }
         let refreshDevicePresetBar = null;
+        let refreshColorCorrectRow = null;
         function ensureDevicePresetStyle() {
             if (document.getElementById("nsws-device-preset-style")) return;
             const style = document.createElement("style");
@@ -52245,6 +52442,7 @@ window.__nswsTrackQuery = function(trackId) {
             settings.saveSettings();
             meshes.generateMeshes();
             setPolyFxPreset(preset.polyFx);
+            preset.colorCorrect && setPolyFxColorCorrect(preset.colorCorrect);
             try {
                 localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, preset.id);
             } catch (e) {}
@@ -52494,7 +52692,8 @@ window.__nswsTrackQuery = function(trackId) {
                 C.set(this, ks, document.createElement("div"), "f"),
                 C.get(this, ks, "f").className = "container",
                 C.get(this, Ss, "f").appendChild(C.get(this, ks, "f"));
-                const polyFxAtOpen = getPolyFxPreset();
+                const polyFxAtOpen = getPolyFxPreset()
+                  , colorCorrectAtOpen = getStoredPolyFxColorCorrect();
                 const c = document.createElement("div");
                 c.className = "button-wrapper",
                 C.get(this, Ss, "f").appendChild(c),
@@ -52504,6 +52703,7 @@ window.__nswsTrackQuery = function(trackId) {
                     n.playUIClick(),
                     r.updateSettings(Array.from(C.get(this, Rs, "f"))),
                     setPolyFxPreset(polyFxAtOpen),
+                    setPolyFxColorCorrect(colorCorrectAtOpen),
                     a.generateMeshes(),
                     o()
                 }
@@ -52537,6 +52737,7 @@ window.__nswsTrackQuery = function(trackId) {
                 window.addEventListener("keydown", C.set(this, _s, (e => {
                     "Escape" == e.code && (r.updateSettings(Array.from(C.get(this, Rs, "f"))),
                     setPolyFxPreset(polyFxAtOpen),
+                    setPolyFxColorCorrect(colorCorrectAtOpen),
                     a.generateMeshes(),
                     o(),
                     e.preventDefault())
@@ -52546,6 +52747,7 @@ window.__nswsTrackQuery = function(trackId) {
             }
             dispose() {
                 refreshDevicePresetBar = null,
+                refreshColorCorrectRow = null,
                 C.get(this, As, "f").removeChild(C.get(this, Ss, "f")),
                 window.removeEventListener("keydown", C.get(this, _s, "f"))
             }
@@ -52697,6 +52899,12 @@ window.__nswsTrackQuery = function(trackId) {
                             C.get(this, ho, "f").disabled = !0,
                             C.get(this, ro, "f").call(this, null, a)),
                             C.get(this, go, "f") || (C.set(this, go, !0, "f"),
+                            C.get(this, wo, "f").length || window.__nswsAutoGhost?.(C.get(this, Ys, "f"), o, a, ((skip, amount) => C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), skip, amount, false))).then((pick => {
+                                if (null == pick || C.get(this, wo, "f").length) return;
+                                C.set(this, wo, [pick], "f"),
+                                C.get(this, lo, "f").querySelector('[data-rec="' + pick.recordingId + '"]')?.classList.add("selected"),
+                                C.get(this, io, "f").call(this, C.get(this, wo, "f"))
+                            })).catch((e => console.warn(e))),
                             C.get(this, no, "f").syncRecord(C.get(this, to, "f").profileSlot, C.get(this, Ys, "f"), o).then((n => {
                                 "Upload" == n && C.get(this, Xs, "m", e).call(this, t)
                             }
@@ -52730,6 +52938,7 @@ window.__nswsTrackQuery = function(trackId) {
             const __nswsSecret = !s && (!!__nswsHidden || !__nswsOwner && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
             const c = document.createElement("button");
             c.className = "button main",
+            c.dataset.rec = o,
             s && (C.set(this, bo, c, "f"),
             c.classList.add("self")),
             c.addEventListener("click", ( () => {
@@ -53000,7 +53209,12 @@ window.__nswsTrackQuery = function(trackId) {
         $o = function() {
             C.get(this, Jo, "f").length > 0 ? (C.get(this, Ho, "f").classList.remove("no-opponents"),
             1 == C.get(this, Jo, "f").length ? C.get(this, Ho, "f").textContent = C.get(this, zo, "f").get("{0} opponent selected", [C.get(this, Jo, "f").length.toString()]) : C.get(this, Ho, "f").textContent = C.get(this, zo, "f").get("{0} opponents selected", [C.get(this, Jo, "f").length.toString()])) : (C.get(this, Ho, "f").classList.add("no-opponents"),
-            C.get(this, Ho, "f").textContent = C.get(this, zo, "f").get("Select opponents to race against from the leaderboard on the left")),
+            C.get(this, Ho, "f").textContent = C.get(this, zo, "f").get("Select opponents to race against from the leaderboard on the left"));
+            {
+                const opponents = C.get(this, Jo, "f")
+                  , note = 1 == opponents.length && opponents[0].auto ? opponents[0].auto : 0 == opponents.length ? window.__nswsAutoGhostNote?.(C.get(this, Go, "f")) : null;
+                note && (C.get(this, Ho, "f").textContent = note)
+            }
             null != C.get(this, jo, "f") && (C.get(this, jo, "f").disabled = 0 == C.get(this, Jo, "f").length && null == C.get(this, Do, "f").getRecord(C.get(this, Bo, "f").profileSlot, C.get(this, Go, "f")))
         }
         ;
@@ -55434,6 +55648,18 @@ window.__nswsTrackQuery = function(trackId) {
                 ));
                 C.get(this, Bc, "f").appendChild(refBtn);
                 C.get(this, Gc, "f").push(refBtn);
+            }
+            if (window.__nswsStreak) {
+                const streakBtn = document.createElement("button");
+                streakBtn.className = "button";
+                window.__nswsStreak.mountButton(streakBtn);
+                streakBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsStreak.open();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(streakBtn);
+                C.get(this, Gc, "f").push(streakBtn);
             }
             const P = o.getCurrentUserProfile();
 
@@ -59261,9 +59487,10 @@ window.__nswsTrackQuery = function(trackId) {
                 const n = e.loadKeyBindings();
                 null != n && C.get(this, Mu, "m", Pu).call(this, n);
                 keyBindSettings = this;
+                window.__nswsSettingBoolean = (name) => name in R.A && this.getSettingBoolean(R.A[name]);
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -60678,6 +60905,7 @@ window.__nswsTrackQuery = function(trackId) {
                 native: () => cupNative(y, x, w, S)
             };
             window.__nswsMessageBox = E;
+            window.__nswsPersonalBest = id => S.getRecordTime(w.profileSlot, id)?.numberOfFrames ?? null;
             const _ = () => {
                 o.trigger((async () => {
                     P.bQ(),
@@ -61470,6 +61698,10 @@ window.__nswsTrackQuery = function(trackId) {
         });
     }
     window.__nswsRenderMedalBadge = renderMedalBadge;
+    window.__nswsMedalTier = function (trackId) {
+        var record = loadStore()[trackId];
+        return record ? record.tier : null;
+    };
 
     function fetchSettledPlacement(trackId) {
         return fetchPlacement(trackId).then(function (first) {

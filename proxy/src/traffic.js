@@ -29,6 +29,11 @@ const RANGES = {
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
+// Focused time goes to Accounts (hours played) in one batch per this long, not one call per beat.
+const PLAY_FLUSH_MS = 5 * 60_000;
+// Most one visitor can be credited per batch; a late alarm still fits.
+const PLAY_CAP_S = 2 * PLAY_FLUSH_MS / 1000;
+
 // Announcements: one is live at a time, and a newer one replaces it. Players get it with their
 // next beat, so even "online now" has to stay up a few minutes for everyone's beat to come in.
 const ANNOUNCE_SHOW_S = new Set([6, 10, 15, 30]);
@@ -67,6 +72,9 @@ export class TrafficStats extends DurableObject {
         this.ann = null;
         // All-time totals, loaded the first time the dashboard asks and then kept up by record().
         this.totals = null;
+        // visitor -> focused seconds not yet handed to Accounts. Lost if the object is evicted first.
+        this.play = new Map();
+        this.playAlarm = false;
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
             this.restoreLive();
@@ -104,6 +112,39 @@ export class TrafficStats extends DurableObject {
         // An official cup's announcement carries its code, for a Join button.
         if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "cup"))
             this.sql.exec("ALTER TABLE announcements ADD COLUMN cup TEXT");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+    }
+
+    notePlay(visitor, seconds) {
+        if (!(seconds > 0) || !this.env.ACCOUNTS) return;
+        this.play.set(visitor, (this.play.get(visitor) ?? 0) + seconds);
+        if (this.playAlarm) return;
+        this.playAlarm = true;
+        this.ctx.storage.setAlarm(Date.now() + PLAY_FLUSH_MS).catch(() => {
+            this.playAlarm = false;
+        });
+    }
+
+    async alarm() {
+        this.playAlarm = false;
+        if (!this.env.ACCOUNTS) return;
+        // The first batch ever is every session's focused time so far. Beats noted before now are
+        // already in those sums, so the pending map is dropped in the same step.
+        const backfill = !this.sql.exec("SELECT 1 FROM meta WHERE k = 'play_backfill'").toArray().length;
+        const entries = backfill
+            ? this.sql.exec("SELECT visitor, SUM(focus) AS s FROM sessions GROUP BY visitor HAVING s > 0").toArray().map((r) => [r.visitor, r.s])
+            : [...this.play];
+        this.play.clear();
+        if (!entries.length) return;
+        try {
+            await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).creditPlay(entries, backfill ? 0 : PLAY_CAP_S);
+            if (backfill) this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('play_backfill', ?)", String(Date.now()));
+        } catch (err) {
+            console.error("play credit failed:", err && err.message);
+            if (!backfill) for (const [v, s] of entries) this.play.set(v, (this.play.get(v) ?? 0) + s);
+            this.playAlarm = true;
+            await this.ctx.storage.setAlarm(Date.now() + PLAY_FLUSH_MS);
+        }
     }
 
     // The in-memory list of who is online is lost when the object is evicted.
@@ -209,6 +250,7 @@ export class TrafficStats extends DurableObject {
         const runtime = opened ? 0 : Math.min(b.rt, sinceLast + 15, MAX_BEAT_S);
         const focus = Math.min(b.ft, runtime);
         const driving = Math.min(b.dt, runtime);
+        this.notePlay(b.v, focus);
 
         s.last = now;
         s.runtime += runtime;

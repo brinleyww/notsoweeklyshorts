@@ -668,10 +668,11 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     } catch {
         /* not JSON - handed back untouched below */
     }
-    // A referred player's first upload to an NSWS board is what earns their referrer the point.
+    // A referred player's first upload to an NSWS board is what earns their referrer the point,
+    // and an upload on the live week keeps the player's streak going.
     if (response.ok && track.week != null) {
         const stub = accounts(env);
-        if (stub) ctx.waitUntil(stub.confirmReferral(hash).catch(() => {}));
+        if (stub) ctx.waitUntil(stub.uploaded(hash, track.week).catch(() => {}));
     }
     if (check && response.ok) {
         const uploadId = typeof result === "number" ? result : result?.uploadId;

@@ -1,5 +1,6 @@
 {
-	"name": "PolyTrack",
+	"name": "Not So Weekly Shorts",
+	"short_name": "NSWS",
 	"icons": [
 		{
 			"src": "images/icon.svg",

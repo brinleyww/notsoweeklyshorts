@@ -9,6 +9,9 @@
     try {
       const stored = localStorage.getItem('_polyfxGraphicsPreset');
       fx.presetOverride = stored != null ? parseInt(stored, 10) : 1;
+      // Unset follows the preset, as getPolyFxColorCorrect in main.bundle.js does.
+      const colorCorrect = localStorage.getItem('_polyfxColorCorrect');
+      fx.colorCorrect = colorCorrect != null ? colorCorrect === 'true' : fx.presetOverride === 4;
     } catch (e) {
       fx.presetOverride = 1;
     }

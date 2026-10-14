@@ -23,13 +23,12 @@ const IGNORED_IN_NAMES = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
 const SHARED_NAMES = new Set(["", "anonymous"]);
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
-// Each account's code changes every REF_CODE_MS. A code still works for REF_GRACE_MS after the
-// page's countdown reaches zero, for a friend who was halfway through typing it.
-const REF_CODE_MS = 10 * 60_000;
-const REF_GRACE_MS = 30_000;
-// Expired codes are remembered this long, so a late friend hears "expired", not "no such code".
-const REF_EXPIRED_KEEP_MS = 86_400_000;
+const RECENT_REFERRALS = 5;
 const CHAT_UID = /^[0-9a-f]{16}$/;
+const VISITOR = /^[0-9a-f]{32}$/;
+// A missed week is covered by the streak shield, which comes back after this many weeks in a row.
+const SHIELD_REFILL = 3;
+const STREAK_MARKS = 8;
 // A whole school shares one address, so these only stop one person farming referrals.
 const REDEEMS_PER_IP_DAY = 10;
 const REDEEMS_PER_IP_REFERRER_DAY = 3;
@@ -40,9 +39,16 @@ const SEARCH_RESULTS = 12;
 const TOP_TTL_MS = 60_000;
 
 // Keep in step with TAGS in mod/nsws_tags.js, which draws them. "referred" belongs to anyone
-// who redeemed a code, "milestone" to anyone with that many confirmed referrals, "shop" is
-// bought with referral points, and "grant" only the owner hands out.
+// who redeemed a code, "milestone" to anyone with that many confirmed referrals, "hours" to anyone
+// who has played that long, "shop" is bought with referral points, and "grant" only the owner hands out.
 export const TAGS = {
+    firstlaps: { kind: "hours", hours: 1 },
+    regular: { kind: "hours", hours: 5 },
+    grinder: { kind: "hours", hours: 10 },
+    veteran: { kind: "hours", hours: 25 },
+    roadwarrior: { kind: "hours", hours: 50 },
+    centurion: { kind: "hours", hours: 100 },
+    lifer: { kind: "hours", hours: 250 },
     referred: { kind: "referred" },
     recruiter: { kind: "milestone", referrals: 5 },
     ambassador: { kind: "milestone", referrals: 15 },
@@ -88,6 +94,56 @@ async function sha256Hex(value) {
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function liveWeek(env) {
+    const n = Number(env.CURRENT_WEEK);
+    return Number.isSafeInteger(n) ? n : null;
+}
+
+// weeks: the NSWS weeks played while they were live. The live week itself only ends a streak
+// once it is over, so an unplayed live week is "open".
+export function streakOf(weeks, live) {
+    const played = new Set(weeks);
+    const last = Math.max(live ?? 0, ...weeks);
+    const first = weeks.length ? Math.min(...weeks) : last;
+    let run = 0;
+    let best = 0;
+    let shield = true;
+    let refill = 0;
+    const marks = [];
+    for (let w = first; w <= last; w++) {
+        let mark;
+        if (played.has(w)) {
+            mark = "played";
+            best = Math.max(best, ++run);
+            if (!shield && ++refill >= SHIELD_REFILL) {
+                shield = true;
+                refill = 0;
+            }
+        } else if (w === last) {
+            mark = "open";
+        } else if (run > 0 && shield) {
+            mark = "shield";
+            shield = false;
+            refill = 0;
+        } else {
+            mark = "missed";
+            run = 0;
+            shield = true;
+            refill = 0;
+        }
+        marks.push({ week: w, mark });
+    }
+    return {
+        weeks: run,
+        best,
+        shield,
+        refillIn: shield ? 0 : SHIELD_REFILL - refill,
+        thisWeek: played.has(last),
+        live: last,
+        marks: marks.slice(-STREAK_MARKS),
+    };
+}
+
 export class Accounts extends DurableObject {
     constructor(ctx, env) {
         super(ctx, env);
@@ -125,28 +181,92 @@ export class Accounts extends DurableObject {
         // links it to the account so the chat can show the account's tag without its token.
         this.sql.exec("CREATE TABLE IF NOT EXISTS chat_links (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, at INTEGER NOT NULL)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
+        // Focused seconds on the site, credited in batches by TrafficStats from its beats.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS playtime (user_id TEXT PRIMARY KEY, seconds REAL NOT NULL)");
+        // NSWS weeks the account uploaded a run on while that week was live, for the streak.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS played_weeks (
+            user_id TEXT NOT NULL, week INTEGER NOT NULL, PRIMARY KEY (user_id, week)) WITHOUT ROWID`);
+        this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
         this.top = null;
+        this.weeksBackfill = null;
+    }
+
+    hoursOf(userId) {
+        return (this.sql.exec("SELECT seconds FROM playtime WHERE user_id = ?", userId).toArray()[0]?.seconds ?? 0) / 3600;
+    }
+
+    streak(userId) {
+        const weeks = this.sql.exec("SELECT week FROM played_weeks WHERE user_id = ?", userId).toArray().map((r) => r.week);
+        return streakOf(weeks, liveWeek(this.env));
+    }
+
+    // entries: [visitorId, seconds]. A visitor counts for the account its browser is linked to
+    // (chat_links, set on every visit). cap limits each visitor's share of one batch.
+    async creditPlay(entries, cap) {
+        if (!Array.isArray(entries)) return { error: "bad" };
+        const perUser = new Map();
+        for (const entry of entries) {
+            const [visitor, seconds] = Array.isArray(entry) ? entry : [];
+            if (!VISITOR.test(visitor ?? "") || !(seconds > 0)) continue;
+            const uid = (await sha256Hex("nsws-chat:" + visitor)).slice(0, 16);
+            const userId = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id;
+            if (userId) perUser.set(userId, (perUser.get(userId) ?? 0) + (cap > 0 ? Math.min(seconds, cap) : seconds));
+        }
+        this.ctx.storage.transactionSync(() => {
+            for (const [userId, seconds] of perUser) {
+                this.sql.exec(`INSERT INTO playtime (user_id, seconds) VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET seconds = seconds + excluded.seconds`, userId, seconds);
+            }
+        });
+        return { ok: true, accounts: perUser.size };
+    }
+
+    // Once: every week each account played while it was live, from the anti-cheat's run history.
+    async backfillWeeks() {
+        if (this.weeksBackfillFailed > Date.now() - 600_000) return;
+        if (this.sql.exec("SELECT 1 FROM meta WHERE k = 'weeks_backfill'").toArray().length) return;
+        const anti = this.env.ANTICHEAT?.get(this.env.ANTICHEAT.idFromName("global"));
+        if (!anti) return;
+        this.weeksBackfill ??= anti.livePlays().catch((err) => {
+            this.weeksBackfillFailed = Date.now();
+            throw err;
+        }).then((rows) => {
+            this.ctx.storage.transactionSync(() => {
+                for (const r of Array.isArray(rows) ? rows : []) {
+                    if (HEX64.test(r?.userId ?? "") && Number.isSafeInteger(r.week)) {
+                        this.sql.exec("INSERT OR IGNORE INTO played_weeks (user_id, week) VALUES (?, ?)", r.userId, r.week);
+                    }
+                }
+                this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('weeks_backfill', ?)", String(Date.now()));
+            });
+        }).finally(() => {
+            this.weeksBackfill = null;
+        });
+        return this.weeksBackfill;
     }
 
     nicknameOf(userId) {
         return this.sql.exec("SELECT nickname FROM names WHERE user_id = ? ORDER BY at DESC LIMIT 1", userId).toArray()[0]?.nickname ?? null;
     }
 
-    // The account's current code and when it expires; an expired one is replaced here.
+    // Every account keeps one code for good, so a link posted anywhere keeps working.
+    // ref_expired holds the codes that ran out while codes still changed every 10 minutes.
     refCode(userId) {
-        const now = Date.now();
-        const row = this.sql.exec("SELECT code, at FROM ref_codes WHERE user_id = ?", userId).toArray()[0];
-        if (row && now - row.at < REF_CODE_MS) return { code: row.code, expires: row.at + REF_CODE_MS };
-        if (row) {
-            this.sql.exec("INSERT OR REPLACE INTO ref_expired (code, at) VALUES (?, ?)", row.code, now);
-            this.sql.exec("DELETE FROM ref_expired WHERE at < ?", now - REF_EXPIRED_KEEP_MS);
-        }
+        const row = this.sql.exec("SELECT code FROM ref_codes WHERE user_id = ?", userId).toArray()[0];
+        if (row) return row.code;
         let code;
         do code = randomId(8, REF_ALPHABET);
         while (this.sql.exec("SELECT 1 FROM ref_codes WHERE code = ? UNION ALL SELECT 1 FROM ref_expired WHERE code = ?", code, code)
             .toArray().length);
-        this.sql.exec("INSERT OR REPLACE INTO ref_codes (user_id, code, at) VALUES (?, ?, ?)", userId, code, now);
-        return { code, expires: now + REF_CODE_MS };
+        this.sql.exec("INSERT INTO ref_codes (user_id, code, at) VALUES (?, ?, ?)", userId, code, Date.now());
+        return code;
+    }
+
+    recentReferrals(userId) {
+        return this.sql.exec(
+            "SELECT referred, confirmed FROM referrals WHERE referrer = ? AND confirmed IS NOT NULL ORDER BY confirmed DESC LIMIT ?",
+            userId, RECENT_REFERRALS,
+        ).toArray().map((r) => ({ nickname: this.nicknameOf(r.referred) || "A friend", at: r.confirmed }));
     }
 
     referralCounts(userId) {
@@ -161,11 +281,12 @@ export class Accounts extends DurableObject {
     }
 
     // Every tag this account may wear right now.
-    ownedTags(userId, counts = this.referralCounts(userId)) {
+    ownedTags(userId, counts = this.referralCounts(userId), hours = this.hoursOf(userId)) {
         const owned = new Set();
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) owned.add("referred");
         for (const [id, tag] of Object.entries(TAGS)) {
             if (tag.kind === "milestone" && counts.confirmed >= tag.referrals) owned.add(id);
+            if (tag.kind === "hours" && hours >= tag.hours) owned.add(id);
         }
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
@@ -186,14 +307,15 @@ export class Accounts extends DurableObject {
         const counts = this.referralCounts(userId);
         const profile = this.tagProfile(userId);
         const spent = this.sql.exec("SELECT COALESCE(SUM(cost), 0) AS n FROM tag_bought WHERE user_id = ?", userId).one().n;
-        const owned = this.ownedTags(userId, counts);
+        const hours = this.hoursOf(userId);
+        const owned = this.ownedTags(userId, counts, hours);
         const by = this.sql.exec("SELECT referrer FROM referrals WHERE referred = ?", userId).toArray()[0]?.referrer;
-        const ref = this.refCode(userId);
         return {
-            code: ref.code,
-            codeExpires: ref.expires,
+            code: this.refCode(userId),
             now: Date.now(),
-            codeMs: REF_CODE_MS,
+            hours,
+            streak: this.streak(userId),
+            recent: this.recentReferrals(userId),
             referrals: counts.confirmed,
             pending: counts.pending,
             bonus: profile.bonus,
@@ -211,7 +333,8 @@ export class Accounts extends DurableObject {
     }
 
     // The page calls this on every visit. linked tells the Worker the chat should re-read the tag.
-    refState(userId, uid) {
+    async refState(userId, uid) {
+        await this.backfillWeeks()?.catch((err) => console.error("weeks backfill failed:", err && err.message));
         let linked = false;
         if (CHAT_UID.test(uid ?? "")) {
             const row = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0];
@@ -227,11 +350,10 @@ export class Accounts extends DurableObject {
     redeem(userId, code, ipHash) {
         code = String(code ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
         if (!REF_CODE.test(code)) return { error: "code" };
-        const row = this.sql.exec("SELECT user_id, at FROM ref_codes WHERE code = ?", code).toArray()[0];
+        const row = this.sql.exec("SELECT user_id FROM ref_codes WHERE code = ?", code).toArray()[0];
         if (!row) {
             return this.sql.exec("SELECT 1 FROM ref_expired WHERE code = ?", code).toArray().length ? { error: "expired" } : { error: "code" };
         }
-        if (Date.now() - row.at >= REF_CODE_MS + REF_GRACE_MS) return { error: "expired" };
         const referrer = row.user_id;
         if (referrer === userId) return { error: "self" };
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) return { error: "already" };
@@ -248,10 +370,16 @@ export class Accounts extends DurableObject {
         return { ok: true, referrer: this.nicknameOf(referrer) || "a player", state: this.tagState(userId) };
     }
 
-    // Called by the Worker after an upload to an NSWS board.
-    confirmReferral(userId) {
+    // Called by the Worker after an upload to an NSWS board: the upload confirms a referral, and a
+    // run on the live week counts that week for the streak. live + 1 is a new week whose site push
+    // came before the Worker's CURRENT_WEEK bump.
+    uploaded(userId, week) {
         this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
         this.top = null;
+        const live = liveWeek(this.env);
+        if (Number.isSafeInteger(week) && live != null && week >= live && week <= live + 1) {
+            this.sql.exec("INSERT OR IGNORE INTO played_weeks (user_id, week) VALUES (?, ?)", userId, week);
+        }
     }
 
     setEquipped(userId, tag) {

@@ -15,6 +15,8 @@
 #nsws-ann>.m{position:relative;max-width:min(820px,calc(100vw - 32px));padding:10px 22px 12px 32px;background:rgba(33,43,88,.93);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text,ForcedSquare,Arial),var(--nsws-chat-emoji,sans-serif),sans-serif;font-style:var(--nsws-chat-font-style,italic);font-size:clamp(18px,2.4vw,26px);line-height:1.35;overflow-wrap:anywhere;box-shadow:0 8px 28px rgba(0,0,0,.45);}
 #nsws-ann>.m::before{content:"";position:absolute;left:15px;top:11px;bottom:11px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
 #nsws-ann .nick{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
+#nsws-ann a{pointer-events:auto;color:#8cc4ff;text-decoration:underline;text-underline-offset:.15em;cursor:pointer;}
+#nsws-ann a:hover{color:#c4e0ff;}
 #nsws-ann .note{margin-left:.5em;font-size:.6em;opacity:.5;}
 `;
 
@@ -37,6 +39,41 @@
 
     function valid(a) {
         return !!a && Number.isSafeInteger(a.id) && typeof a.text === "string" && a.text.length > 0;
+    }
+
+    const LINK = /\b(?:https?:\/\/|www\.)[^\s<>"]+/gi;
+
+    function href(raw) {
+        try {
+            const url = new URL(/^www\./i.test(raw) ? "https://" + raw : raw);
+            return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+        } catch {
+            return null;
+        }
+    }
+
+    function appendText(m, text) {
+        let last = 0;
+        for (const match of text.matchAll(LINK)) {
+            let raw = match[0].replace(/[.,!?;:'"\]]+$/, "");
+            if (raw.endsWith(")") && !raw.includes("(")) raw = raw.replace(/\)+$/, "");
+            const url = href(raw);
+            if (!url) continue;
+            m.append(text.slice(last, match.index));
+            const a = document.createElement("a");
+            a.href = url;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = raw;
+            // Keep the game from treating the click as input.
+            for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) a.addEventListener(type, (e) => e.stopPropagation());
+            // Hold the banner while the pointer is on a link so it can't fade out from under the click.
+            a.addEventListener("pointerenter", () => shown?.el.contains(a) && shown.anim?.playState === "running" && shown.anim.pause());
+            a.addEventListener("pointerleave", () => shown?.el.contains(a) && shown.anim?.playState === "paused" && shown.anim.play());
+            m.append(a);
+            last = match.index + raw.length;
+        }
+        m.append(text.slice(last));
     }
 
     let audio = null;
@@ -98,7 +135,8 @@
         const nick = document.createElement("span");
         nick.className = "nick";
         nick.textContent = a.name || "Owner";
-        m.append(nick, ": " + a.text);
+        m.append(nick, ": ");
+        appendText(m, a.text);
         if (preview) {
             const note = document.createElement("span");
             note.className = "note";

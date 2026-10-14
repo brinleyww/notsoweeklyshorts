@@ -17606,7 +17606,7 @@ void main() {
         l.intensity = (base ? base.intensity : 1) * s.hemiI;
       }
       if (scene.fog) {
-        scene.fog.color.copy(s.fog);
+        if (!scene.fog.fixedColor) scene.fog.color.copy(s.fog);
         if ("near" in scene.fog) {
           const minNear = (scene.fog.far || 1e4) * 0.55;
           if (scene.fog.near < minNear) scene.fog.near = minNear;
@@ -17761,6 +17761,7 @@ void main() {
   var CarLights = class {
     constructor() {
       this.cars = new Map();
+      this.version = 0;
       this._failed = new WeakSet();
       this.cfg = {
         enabled: true,
@@ -17788,6 +17789,7 @@ void main() {
       for (const [root, car] of this.cars) {
         if (root.parent !== scene) {
           this.cars.delete(root);
+          this.version++;
           continue;
         }
       }
@@ -17861,6 +17863,7 @@ void main() {
         anchor
       };
       this.cars.set(root, car);
+      this.version++;
       this._layoutHeads(car);
       this._layoutBrake(car);
     }
@@ -18886,6 +18889,16 @@ uniform float polyfxGlowIntensity;`
         return { composer: false };
     }
   }
+  // The stock game never tone-maps and clips at 1.0, so a white car in sun sits at 2-3.5 in the
+  // HDR buffer (more with the sky reflections). These keep the effects but grade like the stock game.
+  function correctedCfg(cfg) {
+    if (!cfg.composer) return cfg;
+    const out = { ...cfg, tone: NoToneMapping, exposure: 1 };
+    if (cfg.envIntensity != null) out.envIntensity = cfg.envIntensity * 0.3;
+    if (cfg.bloom) out.bloom = { ...cfg.bloom, strength: cfg.bloom.strength * 0.6, threshold: Math.max(cfg.bloom.threshold, 3) };
+    if (cfg.grade) out.grade = { ...cfg.grade, contrast: 1 + (cfg.grade.contrast - 1) * 0.6, saturation: 1 + (cfg.grade.saturation - 1) * 0.5, split: (cfg.grade.split ?? 0) * 0.4, correct: true };
+    return out;
+  }
   function hourLabel(hour) {
     if (hour == null) return "Default";
     const h = Math.floor(hour);
@@ -18920,23 +18933,36 @@ uniform float polyfxGlowIntensity;`
       saturation: { value: 1 },
       vignette: { value: 0 },
       splitStrength: { value: 0 },
+      correct: { value: 0 },
       shadowTint: { value: new Color(0.94, 0.98, 1.05) },
       highlightTint: { value: new Color(1.05, 1.01, 0.94) }
     },
     vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `
     varying vec2 vUv; uniform sampler2D tDiffuse;
-    uniform float contrast, saturation, vignette, splitStrength;
+    uniform float contrast, saturation, vignette, splitStrength, correct;
     uniform vec3 shadowTint, highlightTint;
     const float PIVOT = 0.18; // linear-light "middle grey"
     void main(){
       vec4 c = texture2D(tDiffuse, vUv);
       vec3 col = max(c.rgb, 0.0);
-      col = PIVOT * pow(col / PIVOT, vec3(contrast));
-      float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-      col = mix(vec3(lum), col, saturation);
-      vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 1.4, lum));
-      col = mix(col, col * split, splitStrength);
+      float lum;
+      if (correct > 0.5) {
+        // The game's colours are display values that it clips at 1.0, so grade them that way:
+        // an S-curve that keeps black and white where they are instead of a power around 0.18.
+        col = min(col, 1.0);
+        col = mix(col, col * col * (3.0 - 2.0 * col), clamp((contrast - 1.0) * 2.0, 0.0, 1.0));
+        lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col = clamp(mix(vec3(lum), col, saturation), 0.0, 1.0);
+        vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 1.0, lum));
+        col = mix(col, min(col * split, 1.0), splitStrength);
+      } else {
+        col = PIVOT * pow(col / PIVOT, vec3(contrast));
+        lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col = mix(vec3(lum), col, saturation);
+        vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 1.4, lum));
+        col = mix(col, col * split, splitStrength);
+      }
       vec2 d = vUv - 0.5;
       float v = 1.0 - dot(d, d) * vignette * 2.0;
       gl_FragColor = vec4(max(col, 0.0) * clamp(v, 0.0, 1.0), c.a);
@@ -19181,7 +19207,8 @@ uniform float polyfxGlowIntensity;`
       this.lastTod = null;
       this.hourOverride = null;
       this.fogDistanceMult = 1;
-      this._origFogFar = null;
+      this.colorCorrect = false;
+      this._appliedColorCorrect = false;
       this.carLights = null;
       this.underglow = null;
       this.headlightsForce = false;
@@ -19283,8 +19310,9 @@ uniform float polyfxGlowIntensity;`
         const photoActive = !!(this.photo && this.photo.active);
         const presetChanged = preset !== this.preset;
         const photoChanged = photoActive !== this.photoWasActive;
-        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel) {
-          this._apply(cfg, renderer, scene, camera, guardLevel);
+        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel || this.colorCorrect !== this._appliedColorCorrect) {
+          this._apply(this.colorCorrect ? correctedCfg(cfg) : cfg, renderer, scene, camera, guardLevel);
+          this._appliedColorCorrect = this.colorCorrect;
           if (presetChanged || photoChanged) this.perfGuard.hold();
           this.preset = preset;
           this.photoWasActive = photoActive;
@@ -19346,10 +19374,7 @@ uniform float polyfxGlowIntensity;`
         }
         this._applyEnv(scene);
         this._applySmokeTint(scene);
-        if (scene.fog) {
-          if (this._origFogFar == null) this._origFogFar = scene.fog.far;
-          scene.fog.far = this._origFogFar * this.fogDistanceMult;
-        }
+        if (scene.fog && this.fogDistanceMult !== 1) scene.fog.far *= this.fogDistanceMult;
         let carLightsSetting = this.carLightsOverride != null ? this.carLightsOverride : 1;
         if (this.carLightsOverride == null) {
           try {
@@ -19434,6 +19459,7 @@ uniform float polyfxGlowIntensity;`
         else this._updateSunMarker(null, null);
         if (this.panel) this.panel.tick();
         this.composer.render();
+        this._prewarmLightVariants(renderer, scene, activeCamera);
         if (this.photo) this.photo.capture(renderer);
       } catch (err) {
         if (!this.warned) {
@@ -19441,6 +19467,39 @@ uniform float polyfxGlowIntensity;`
           this.warned = true;
         }
         renderer.render(scene, camera);
+      }
+    }
+    // three bakes the number of visible lights into every lit shader, so the first brake light (the
+    // stock brake input, even mid-air) recompiled the whole scene mid-race: ~50 ms on Photoreal, up
+    // to seconds on Ultra. This compiles each spot-light count the car lights can reach in the
+    // background (compileAsync) whenever the cars or the render settings change.
+    _prewarmLightVariants(renderer, scene, camera) {
+      const lights = this.carLights;
+      if (!lights || !lights.cars.size || typeof renderer.compileAsync !== "function") return;
+      const headlights = !!(this.carLightsEnabled && lights.cfg.enabled && (this.headlightsForce || this.weatherHeadlights || this.skyActive && !this.envOnly && this.sky && this.sky.sunDir.y < 0.1));
+      const sig = [lights.version, this.preset, this.colorCorrect, this.photoWasActive, renderer.shadowMap.enabled, renderer.shadowMap.type, !!scene.fog, scene.environment ? scene.environment.uuid : "", headlights].join();
+      if (sig === this._prewarmSig) return;
+      this._prewarmSig = sig;
+      const cars = [...lights.cars.values()];
+      const spots = cars.map((c) => c.brakeSpot);
+      if (headlights) for (const c of cars) spots.push(c.headL.spot, c.headR.spot);
+      const visible = spots.map((s) => s.visible);
+      const current = visible.filter(Boolean).length;
+      const target = renderer.getRenderTarget();
+      // The composer's target, so the programs match the ones the RenderPass will ask for.
+      renderer.setRenderTarget(this.composer.renderTarget1);
+      try {
+        for (let k = 0; k <= Math.min(spots.length, 6); k++) {
+          if (k === current) continue;
+          spots.forEach((s, i) => s.visible = i < k);
+          renderer.compileAsync(scene, camera).catch(() => {
+          });
+        }
+      } catch (e) {
+        console.warn("[PolyFX] light prewarm failed:", e);
+      } finally {
+        spots.forEach((s, i) => s.visible = visible[i]);
+        renderer.setRenderTarget(target);
       }
     }
     _ensure(renderer, scene, camera) {
@@ -19589,6 +19648,7 @@ uniform float polyfxGlowIntensity;`
         u.saturation.value = cfg.grade.saturation;
         u.vignette.value = cfg.grade.vignette;
         u.splitStrength.value = cfg.grade.split ?? 0;
+        u.correct.value = cfg.grade.correct ? 1 : 0;
       }
       this.smaa.enabled = !!cfg.smaa;
       this.output.enabled = true;

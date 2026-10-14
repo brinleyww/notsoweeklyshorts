@@ -1260,7 +1260,7 @@
         const root = el("div");
         const grid = el("div", "nrc-compose");
 
-        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once.");
+        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once. Links starting with https:// or www. can be clicked.");
         const field = el("div", "nrc-field");
         const label = el("label");
         const counter = el("span");
