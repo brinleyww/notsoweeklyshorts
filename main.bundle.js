@@ -60521,6 +60521,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     uiElement: C.get(this, Af, "f").element,
                     viewDistance: 1e4,
                     trackName: n?.name ?? null,
+                    trackId: i.getId(),
                     playClick: () => l.playUIClick(),
                     getRuns: () => C.get(this, uf, "f"),
                     getFocus: () => C.get(this, df, "f"),

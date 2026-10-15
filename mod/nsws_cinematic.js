@@ -93,10 +93,808 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         return e;
     }
 
-    // Shot weights for the director. Fixed cameras ("tele", "curb") need the car's path ahead
-    // of playback, which the simulation has usually computed already.
-    const SHOTS = { chase: 3, orbit: 2, tele: 3, curb: 2, heli: 1.4, side: 1.6, front: 1.4, pack: 2.5 };
+    // The director plans the whole edit ahead from the replays: a run always gets the same edit,
+    // and the camera at any moment is a function of the playback time alone.
+    const STEP = 10;
+    const DT = STEP / 1000;
     const RIDE = new Set(["chase", "orbit", "heli", "side", "front", "pack"]);
+    const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack"];
+    const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1 };
+    const LAMBDA = { heli: 1.6, pack: 2 };
+    const HOLD = { type: "chase", t0: 0, t1: Infinity, d: 5.8, h: 1.5, s: 0, high: false };
+    const WAIT = {};
+
+    function hashString(s) {
+        let h = 2166136261;
+        for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+        return h >>> 0;
+    }
+
+    // Each decision gets its own stream, so the order things are evaluated in never matters.
+    function rng(...keys) {
+        let a = 0x9e3779b9;
+        for (const k of keys) a = Math.imul(a ^ (k >>> 0), 2654435761) >>> 0;
+        return () => {
+            a = (a + 0x6d2b79f5) >>> 0;
+            let t = a;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    const smootherstep = (x) => x * x * x * (x * (x * 6 - 15) + 10);
+    const durFit = (d) => clamp(1 - Math.abs(d - 4) / 3, 0, 1);
+
+    // A run's replay sampled every 10 ms, with smoothing that depends only on the time asked for.
+    class PathCache {
+        constructor(run) {
+            this.run = run;
+            this.n = 0;
+            this.p = [];
+            this.u = [];
+            this.nose = [];
+            this.spd = [];
+            this.air = [];
+            this.tan = [];
+            this.finish = null;
+            this.events = [];
+            this.ai = 12;
+            this.corner = null;
+            this.airFrom = null;
+            this.sa = [0, 0, 0];
+            this.sb = [0, 0, 0];
+            this.acc = [0, 0, 0];
+            this.acc2 = [0, 0, 0];
+        }
+
+        sync() {
+            const last = this.run.replay.getLastFrame().numberOfFrames;
+            while (this.n * STEP <= last) {
+                const s = this.run.replay.getFrame(this.n * STEP);
+                if (null == s) break;
+                const { x: qx, y: qy, z: qz, w: qw } = s.quaternion;
+                this.p.push(s.position.x, s.position.y, s.position.z);
+                this.u.push(2 * (qx * qy - qw * qz), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz + qw * qx));
+                this.nose.push(2 * (qw * qy + qx * qz), 1 - 2 * (qx * qx + qy * qy));
+                this.spd.push(Math.abs(s.speedKmh ?? 0));
+                this.air.push(Array.isArray(s.wheelContact) && s.wheelContact.every((w) => null == w) ? 1 : 0);
+                if (null == this.finish && null != s.finishFrames) this.finish = s.finishFrames / 1000;
+                this.n++;
+            }
+            this.analyze();
+        }
+
+        get end() {
+            return (this.n - 1) * DT;
+        }
+
+        pos(t, out) {
+            const f = clamp(t / DT, 0, Math.max(0, this.n - 1));
+            const i = Math.floor(f), j = Math.min(i + 1, this.n - 1), fr = f - i, p = this.p;
+            return out.set(p[3 * i] + (p[3 * j] - p[3 * i]) * fr, p[3 * i + 1] + (p[3 * j + 1] - p[3 * i + 1]) * fr, p[3 * i + 2] + (p[3 * j + 2] - p[3 * i + 2]) * fr);
+        }
+
+        // Horizontal travel direction from the path, or the car's nose while it barely moves.
+        computeTangent(i) {
+            const a = Math.max(0, i - 6), b = Math.min(this.n - 1, i + 6), p = this.p;
+            let x = p[3 * b] - p[3 * a], z = p[3 * b + 2] - p[3 * a + 2];
+            let l = Math.hypot(x, z);
+            if (l < 0.2) {
+                x = this.nose[2 * i];
+                z = this.nose[2 * i + 1];
+                l = Math.hypot(x, z);
+                if (l < 1e-6) {
+                    x = 0;
+                    z = 1;
+                    l = 1;
+                }
+            }
+            this.tx = x / l;
+            this.tz = z / l;
+        }
+
+        tangent(i) {
+            i = clamp(i, 0, this.n - 1);
+            if (i < this.tan.length >> 1) {
+                this.tx = this.tan[2 * i];
+                this.tz = this.tan[2 * i + 1];
+            } else this.computeTangent(i);
+        }
+
+        // Signed turn rate in rad/s, from directions 0.05 s either side.
+        yawRaw(i) {
+            this.tangent(i - 5);
+            const ax = this.tx, az = this.tz;
+            this.tangent(i + 5);
+            return Math.atan2(ax * this.tz - az * this.tx, ax * this.tx + az * this.tz) / (10 * DT);
+        }
+
+        value(kind, i, out) {
+            if (kind === 0) {
+                this.tangent(i);
+                out[0] = this.tx;
+                out[1] = 0;
+                out[2] = this.tz;
+            } else if (kind === 1) {
+                out[0] = this.u[3 * i];
+                out[1] = this.u[3 * i + 1];
+                out[2] = this.u[3 * i + 2];
+            } else {
+                out[0] = this.spd[i];
+                out[1] = out[2] = 0;
+            }
+        }
+
+        // Exponential average over the time before t (time constant 1/lam). Each sample interval
+        // is weighted by its exact share, so the result changes continuously with t.
+        smooth(t, lam, kind, out) {
+            const n = this.n;
+            out[0] = out[1] = out[2] = 0;
+            if (n === 0) return out;
+            const f = clamp(t / DT, 0, n - 1);
+            let i = Math.floor(f);
+            const fr = f - i;
+            const A = this.sa, B = this.sb;
+            this.value(kind, i, A);
+            this.value(kind, Math.min(i + 1, n - 1), B);
+            const ax = A[0] + (B[0] - A[0]) * fr, ay = A[1] + (B[1] - A[1]) * fr, az = A[2] + (B[2] - A[2]) * fr;
+            const w = 1 - Math.exp(-lam * fr * DT);
+            let sx = w * (ax + A[0]) / 2, sy = w * (ay + A[1]) / 2, sz = w * (az + A[2]) / 2, ws = w;
+            let decay = 1 - w;
+            const keep = Math.exp(-lam * DT);
+            const K = Math.ceil(5 / (lam * DT));
+            for (let k = 0; k < K && i > 0; k++, i--) {
+                this.value(kind, i - 1, B);
+                const iw = decay * (1 - keep);
+                sx += iw * (A[0] + B[0]) / 2;
+                sy += iw * (A[1] + B[1]) / 2;
+                sz += iw * (A[2] + B[2]) / 2;
+                ws += iw;
+                decay *= keep;
+                A[0] = B[0];
+                A[1] = B[1];
+                A[2] = B[2];
+            }
+            sx += decay * A[0];
+            sy += decay * A[1];
+            sz += decay * A[2];
+            ws += decay;
+            out[0] = sx / ws;
+            out[1] = sy / ws;
+            out[2] = sz / ws;
+            return out;
+        }
+
+        heading(t, lam, out) {
+            const a = this.smooth(t, lam, 0, this.acc);
+            out.set(a[0], 0, a[2]);
+            if (out.lengthSq() < 1e-10) out.set(0, 0, 1);
+            return out.normalize();
+        }
+
+        // The car's up, smoothed, halfway to world up so wall rides tilt the shot without flipping it.
+        up(t, out) {
+            const a = this.smooth(t, 6, 1, this.acc);
+            const l = Math.hypot(a[0], a[1], a[2]) || 1;
+            return out.set(a[0] / l * 0.5, a[1] / l * 0.5 + 0.5, a[2] / l * 0.5).normalize();
+        }
+
+        speed(t) {
+            return this.smooth(t, 3, 2, this.acc)[0];
+        }
+
+        yawRate(t) {
+            const a = this.smooth(t, 3, 0, this.acc), b = this.smooth(t - 0.1, 3, 0, this.acc2);
+            return Math.atan2(b[0] * a[2] - b[2] * a[0], b[0] * a[0] + b[2] * a[2]) / 0.1;
+        }
+
+        // Corners and jumps, found once each part of the path is final.
+        analyze() {
+            while ((this.tan.length >> 1) < this.n - 6) {
+                this.computeTangent(this.tan.length >> 1);
+                this.tan.push(this.tx, this.tz);
+            }
+            const last = (this.tan.length >> 1) - 6;
+            for (; this.ai <= last; this.ai += 5) {
+                const i = this.ai, t = i * DT;
+                const yaw = this.yawRaw(i);
+                const turning = Math.abs(yaw) > 0.55 && this.spd[i] > 30;
+                let c = this.corner;
+                if (c && (!turning || Math.sign(yaw) !== c.dir)) {
+                    if (t - c.t0 >= 0.25) {
+                        c.t1 = t;
+                        this.events.push(c);
+                    }
+                    c = this.corner = null;
+                }
+                if (turning) {
+                    if (!c) this.corner = { type: "corner", t0: t, apex: t, peak: Math.abs(yaw), dir: Math.sign(yaw) };
+                    else if (Math.abs(yaw) > c.peak) {
+                        c.peak = Math.abs(yaw);
+                        c.apex = t;
+                    }
+                }
+                if (this.air[i]) {
+                    if (null == this.airFrom) this.airFrom = t;
+                } else if (null != this.airFrom) {
+                    if (t - this.airFrom >= 0.3) this.events.push({ type: "jump", t0: this.airFrom, t1: t });
+                    this.airFrom = null;
+                }
+            }
+        }
+    }
+
+    // Builds the shot list for one followed run, a little at a time (a generator), always from
+    // the start of the run and only once the replays reach far enough ahead, so the result never
+    // depends on load speed or frame rate.
+    class Planner {
+        constructor(cine, runs, focus, seed) {
+            const T = cine.T;
+            this.c = cine;
+            this.runs = runs;
+            this.focus = focus;
+            this.run = runs[focus];
+            this.path = cine.pathOf(this.run);
+            this.seed = seed;
+            this.shots = [];
+            this.done = false;
+            this.total = Math.max(...runs.map((r) => r.settings.time?.numberOfFrames ?? 0)) / 1000 + 10;
+            this.encl = new Map();
+            this.bat = new Map();
+            this.w = [0, 1, 2, 3, 4, 5].map(() => new T.Vector3());
+            this.view = { pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true };
+            this.view2 = { pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true };
+            this.gen = this.plan();
+        }
+
+        get plannedTo() {
+            const s = this.shots[this.shots.length - 1];
+            return s ? s.t1 : 0;
+        }
+
+        ready(T) {
+            const need = Math.min(T, this.total - 0.05);
+            return this.runs.every((r) => this.c.pathOf(r).end >= need);
+        }
+
+        step(ms) {
+            if (this.done) return;
+            const end = performance.now() + ms;
+            while (performance.now() < end) {
+                const r = this.gen.next();
+                if (r.done) {
+                    this.done = true;
+                    return;
+                }
+                if (r.value === WAIT) return;
+            }
+        }
+
+        shotAt(t) {
+            const s = this.shots;
+            let lo = 0, hi = s.length - 1, found = -1;
+            while (lo <= hi) {
+                const m = (lo + hi) >> 1;
+                if (s[m].t0 <= t) {
+                    found = m;
+                    lo = m + 1;
+                } else hi = m - 1;
+            }
+            return found >= 0 && t < s[found].t1 ? found : -1;
+        }
+
+        *plan() {
+            while (!this.ready(3.8)) yield WAIT;
+            this.push(this.intro());
+            yield;
+            for (;;) {
+                const t0 = this.plannedTo;
+                while (!this.ready(t0 + 9)) yield WAIT;
+                const finish = this.path.finish;
+                if (null != finish && finish - t0 < 0.6) {
+                    const last = this.shots[this.shots.length - 1];
+                    if (finish > last.t1) {
+                        last.t1 = finish;
+                        this.curves(last);
+                    }
+                    this.push(this.finishShot(finish));
+                    return;
+                }
+                if (t0 >= this.total - 0.5) return;
+                const hardEnd = finish ?? this.total;
+                const idx = this.shots.length;
+                const cands = [];
+                const lastType = this.shots[idx - 1].type;
+                for (let ti = 0; ti < TYPES.length; ti++)
+                    for (let v = 0; TYPES[ti] !== lastType && v < VARIANTS[TYPES[ti]]; v++) {
+                        const c = this.candidate(TYPES[ti], v, rng(this.seed, idx, ti, v), t0, hardEnd);
+                        if (c) {
+                            c.order = ti * 4 + v;
+                            cands.push(c);
+                        }
+                    }
+                yield;
+                cands.sort((a, b) => b.base - a.base || a.order - b.order);
+                let best = null;
+                for (const strict of [true, false]) {
+                    for (const c of cands) {
+                        if (best && c.base + 0.3 <= best.score) break;
+                        yield;
+                        if (this.check(c, strict) && (!best || c.score > best.score || c.score === best.score && c.order < best.order)) best = c;
+                    }
+                    if (best) break;
+                }
+                if (!best) {
+                    const R = rng(this.seed, idx, 99);
+                    best = { type: "chase", t0, ...this.rideParams("chase", 0, R), ...this.chooseEnd(t0, hardEnd, R) };
+                }
+                this.push(best);
+                yield;
+            }
+        }
+
+        push(shot) {
+            this.linkBlend(shot);
+            this.curves(shot);
+            this.shots.push(shot);
+        }
+
+        // A camera riding with the car swoops in from the one before it if that rode along too.
+        linkBlend(shot) {
+            const prev = this.shots[this.shots.length - 1];
+            shot.blend = shot.prev = null;
+            if (prev && RIDE.has(prev.type) && RIDE.has(shot.type) && !shot.end && isFinite(shot.t1)) {
+                const R = rng(this.seed, this.shots.length, 77);
+                shot.blend = Math.min(0.9 + R() * 0.7, 0.45 * (shot.t1 - shot.t0));
+                shot.prev = prev;
+            }
+        }
+
+        intro() {
+            const R = rng(this.seed, 0, 1);
+            const side = R() < 0.5 ? -1 : 1;
+            const shot = { type: "orbit", t0: 0, t1: 3.2, dist: 8, h: 3, h1: 1.6, theta: side * Math.PI * 0.8, omega: -side * 0.5, fov: 55 };
+            return this.check(shot, false) ? shot : { type: "chase", t0: 0, t1: 3.2, d: 6, h: 1.5, s: 0, high: false };
+        }
+
+        finishShot(finish) {
+            const P = this.path, w = this.w, up = this.c.up;
+            const Q = P.pos(finish, w[0]).clone();
+            const Tq = P.heading(finish, 6, w[1]).clone();
+            const N = w[2].crossVectors(Tq, up).normalize().clone();
+            const side = rng(this.seed, 1e5)() < 0.5 ? -1 : 1;
+            for (const sd of [side, -side]) {
+                const C = Q.clone().addScaledVector(N, sd * 7).addScaledVector(up, 2.4).addScaledVector(Tq, 16);
+                let bad = 0;
+                for (const dt of [0, 0.8, 1.6]) {
+                    if (finish + dt > P.end) continue;
+                    if (this.c.blocked(C, P.pos(finish + dt, w[3]).addScaledVector(up, 0.6))) bad++;
+                }
+                if (bad === 0) return { type: "finish", t0: finish, t1: Infinity, cam: C };
+            }
+            return { type: "orbit", end: true, t0: finish, t1: Infinity, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50 };
+        }
+
+        rideParams(type, v, R) {
+            const side = R() < 0.5 ? -1 : 1;
+            switch (type) {
+            case "chase":
+                return { d: 5.2 + R() * 1.6, h: 1.25 + R() * 0.6, s: (R() - 0.5) * 1.6, high: v === 1 };
+            case "orbit":
+                return { dist: 6.2 + R() * 2, h: 1.2 + R() * 1.2, theta: side * (0.5 + R() * 1.4), omega: -side * (0.25 + R() * 0.2), fov: 52 + R() * 8 };
+            case "heli":
+                return { back: 9 + R() * 5, up: 8 + R() * 5, s: side * R() * 5 };
+            case "side":
+                return { side: v === 0 ? -1 : 1, dist: 6.5 + R() * 2.5, h: 0.9 + R() * 1.1, lead0: -3 + R() * 2, lead1: 1 + R() * 3 };
+            case "front":
+                return { dist: 7 + R() * 3, h: 0.8 + R() * 0.9, s: side * (0.6 + R() * 1.6) };
+            case "pack":
+                return { back: 7 + R() * 3, up: 2.5 + R() * 2.5, s: side * R() * 4 };
+            }
+            return {};
+        }
+
+        // Good places to cut: just before a corner or a jump, just after a landing or a checkpoint.
+        cuts(lo, hi) {
+            const out = [];
+            const add = (t) => {
+                if (t > lo && t < hi) out.push(t);
+            };
+            for (const e of this.path.events) {
+                if (e.type === "corner") {
+                    add(e.t0 - 0.35);
+                    add(e.t1 + 0.15);
+                } else {
+                    add(e.t0 - 0.5);
+                    add(e.t1 + 0.35);
+                }
+            }
+            for (const c of this.run.checkpointTimes) add(c.numberOfFrames / 1000 + 0.05);
+            return out.sort((a, b) => a - b);
+        }
+
+        chooseEnd(t0, hardEnd, R) {
+            if (hardEnd - t0 < 3.7) return { t1: hardEnd, aligned: 1 };
+            const lo = t0 + 2.2, hi = Math.min(t0 + 6.5, hardEnd - 1.5);
+            if (hi <= lo) return { t1: hardEnd, aligned: 1 };
+            let best = { t1: Math.min(t0 + 3.6 + R() * 1.4, hi), aligned: 0 };
+            let bestS = durFit(best.t1 - t0);
+            for (const c of this.cuts(lo, hi)) {
+                const s = durFit(c - t0) + 0.3;
+                if (s > bestS) {
+                    bestS = s;
+                    best = { t1: c, aligned: 1 };
+                }
+            }
+            return best;
+        }
+
+        enclosed(t) {
+            const key = Math.round(t * 4);
+            let v = this.encl.get(key);
+            if (null == v) {
+                const from = this.path.pos(key / 4, this.w[4]).addScaledVector(this.c.up, 1);
+                v = this.c.blocked(from, this.w[5].copy(from).addScaledVector(this.c.up, 15), 0) ? 1 : 0;
+                this.encl.set(key, v);
+            }
+            return v;
+        }
+
+        battle(t) {
+            const key = Math.round(t * 10);
+            let v = this.bat.get(key);
+            if (null == v) {
+                v = 0;
+                const P = this.path.pos(key / 10, this.w[4]);
+                for (const r of this.runs)
+                    if (r !== this.run && this.c.pathOf(r).pos(key / 10, this.w[5]).distanceTo(P) < 12) {
+                        v = 1;
+                        break;
+                    }
+                this.bat.set(key, v);
+            }
+            return v;
+        }
+
+        features(a, b) {
+            let n = 0, spd = 0, yaw = 0, air = 0, bat = 0, enc = 0;
+            const P = this.path;
+            for (let t = a; t <= b; t += 0.1, n++) {
+                const i = Math.round(t / DT);
+                spd += P.spd[Math.min(i, P.n - 1)];
+                yaw += Math.abs(P.yawRaw(i));
+                air += P.air[Math.min(i, P.n - 1)];
+                bat += this.runs.length > 1 ? this.battle(t) : 0;
+                enc += this.enclosed(t);
+            }
+            n = Math.max(1, n);
+            return { spd: spd / n, yaw: yaw / n, air: air / n, bat: bat / n, enc: enc / n };
+        }
+
+        suitability(type, f, anchored) {
+            const yawN = clamp(f.yaw / 1.2, 0, 1);
+            switch (type) {
+            case "chase": return 0.5 + 0.4 * f.enc + 0.15 * yawN;
+            case "orbit": return 0.42 + (f.spd < 170 ? 0.25 : 0) - 0.35 * f.enc;
+            case "heli": return 0.38 + 0.2 * yawN - 0.8 * f.enc;
+            case "side": return 0.42 + 0.55 * f.air + (f.spd > 200 && f.yaw < 0.4 ? 0.2 : 0) - 0.4 * f.enc;
+            case "front": return 0.38 + (f.yaw < 0.35 ? 0.15 : 0) - 0.3 * yawN - 0.4 * f.enc;
+            case "pack": return f.bat < 0.4 ? -9 : 0.3 + 0.4 * f.bat - 0.3 * f.enc;
+            case "tele": return 0.6 + 0.25 * anchored - 0.8 * f.enc;
+            case "curb": return 0.48 + 0.3 * anchored - 0.8 * f.enc;
+            }
+            return 0;
+        }
+
+        // Everything but visibility, which costs rays and is checked only for the best few.
+        candidate(type, v, R, t0, hardEnd) {
+            if (hardEnd - t0 < 0.6) return null;
+            let shot;
+            if (RIDE.has(type)) shot = { type, t0, ...this.rideParams(type, v, R), ...this.chooseEnd(t0, hardEnd, R) };
+            else {
+                shot = this.fixedShot(type, v, R, t0, hardEnd);
+                if (!shot) return null;
+            }
+            const f = this.features(t0, shot.t1);
+            const recent = this.shots.slice(-4).map((s) => s.type);
+            let base = this.suitability(type, f, shot.anchored ? 1 : 0) + 0.25 * this.fit(shot) + 0.2 * (shot.aligned ?? 0);
+            // Spread the edit over every kind of shot.
+            base -= 0.3 * this.shots.filter((s) => s.type === type).length / Math.max(1, this.shots.length);
+            if (recent[recent.length - 2] === type) base -= 0.2;
+            if (recent[recent.length - 3] === type) base -= 0.1;
+            const rideRun = recent.slice(-2).every((t) => RIDE.has(t));
+            if (!RIDE.has(type) && rideRun) base += 0.2;
+            if (RIDE.has(type) && recent.length && !RIDE.has(recent[recent.length - 1])) base += 0.1;
+            base += R() * 0.18;
+            shot.base = base;
+            return base > -1 ? shot : null;
+        }
+
+        // Fixed cameras hold for about 3 s, cameras riding along for about 4 s.
+        fit(shot) {
+            const d = shot.t1 - shot.t0;
+            return RIDE.has(shot.type) ? durFit(d) : clamp(1 - Math.abs(d - 3) / 2.5, 0, 1);
+        }
+
+        // A camera fixed beside the track, aimed so the car comes towards it and past.
+        fixedShot(type, v, R, t0, hardEnd) {
+            const P = this.path, w = this.w, up = this.c.up;
+            const [minArc, maxArc] = type === "tele" ? [70, 140] : [26, 48];
+            let arc = 0, tMin = null, tMax = null;
+            P.pos(t0, w[0]);
+            for (let t = t0 + 0.05; t <= Math.min(t0 + 3.2, hardEnd - 0.6); t += 0.05) {
+                P.pos(t, w[1]);
+                arc += w[1].distanceTo(w[0]);
+                w[0].copy(w[1]);
+                if (t < t0 + 0.8) continue;
+                if (arc >= minArc && null == tMin) tMin = t;
+                if (arc <= maxArc) tMax = t;
+            }
+            if (null == tMin || null == tMax || tMax < tMin) return null;
+            let ta = (tMin + tMax) / 2, ev = null;
+            for (const e of P.events) {
+                const at = e.type === "corner" ? e.apex : e.t0;
+                if (at >= tMin && at <= tMax && (type === "curb" || e.type === "corner")) {
+                    ev = e;
+                    ta = at;
+                    break;
+                }
+            }
+            const Q = P.pos(ta, w[2]).clone();
+            const Tq = P.heading(ta, 8, w[3]).clone();
+            const N = new this.c.T.Vector3().crossVectors(Tq, up).normalize();
+            // N x yaw-sign points to the inside of a turn.
+            const inside = ev?.type === "corner" ? ev.dir : (R() < 0.5 ? -1 : 1);
+            const sd = type === "tele" ? (v === 0 ? -inside : inside) : (v === 0 ? inside : -inside);
+            const C = Q.clone();
+            if (type === "tele")
+                C.addScaledVector(N, sd * (7 + R() * 5)).addScaledVector(up, 1.8 + R() * 3).addScaledVector(Tq, 2 + R() * 6);
+            else
+                C.addScaledVector(N, sd * (4 + R() * 1.6)).addScaledVector(up, 0.5 + R() * 0.5).addScaledVector(Tq, R() * 4 - 1);
+            let dmin = Infinity, t1 = null;
+            for (let t = t0; t <= hardEnd; t += 0.05) {
+                const d = C.distanceTo(P.pos(t, w[4]));
+                dmin = Math.min(dmin, d);
+                if (t >= ta && (d > dmin + (type === "tele" ? 45 : 24) || t >= ta + (type === "tele" ? 3 : 2))) {
+                    t1 = t;
+                    break;
+                }
+            }
+            if (null == t1) t1 = hardEnd;
+            if (hardEnd - t1 < 1) t1 = hardEnd;
+            if (dmin < 3) return null;
+            return { type, t0, t1, cam: C, ta, anchored: !!ev, aligned: ev ? 1 : 0, fov: type === "tele" ? null : 74 };
+        }
+
+        // Visibility: fixed cameras need a clear line to the car nearly all the time; cameras
+        // riding with the car must not need pulling in towards it (that reads as a sudden zoom),
+        // so a shot that would run into a wall ends early and hands over to the next one.
+        check(shot, strict) {
+            const P = this.path, w = this.w, up = this.c.up;
+            const step = 0.15;
+            if (RIDE.has(shot.type)) this.linkBlend(shot);
+            if (!RIDE.has(shot.type)) {
+                let ok = 0, n = 0;
+                for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step, n++)
+                    if (!this.c.blocked(shot.cam, P.pos(t, w[0]).addScaledVector(up, 0.6))) ok++;
+                const anchorOk = !this.c.blocked(shot.cam, P.pos(shot.ta, w[0]).addScaledVector(up, 0.6));
+                shot.vis = ok / Math.max(1, n);
+                if (!anchorOk || shot.vis < (strict ? 0.9 : 0.75)) return false;
+            } else {
+                const limit = strict ? 0.75 : 0.4;
+                let sum = 0, n = 0;
+                for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step) {
+                    const want = this.want(shot, t);
+                    if (want < limit) {
+                        if (t - shot.t0 >= 2.2) {
+                            shot.t1 = t - step;
+                            shot.aligned = 0;
+                            this.linkBlend(shot);
+                            shot.base += 0.25 * (this.fit(shot) - 1) - 0.2;
+                            break;
+                        }
+                        return false;
+                    }
+                    sum += want;
+                    n++;
+                }
+                shot.vis = sum / Math.max(1, n);
+            }
+            shot.score = shot.base + 0.3 * shot.vis;
+            return true;
+        }
+
+        // How far the camera can stay from the car before something is in the way (1 = all of it).
+        want(shot, t) {
+            const P = this.path.pos(t, this.w[1]);
+            const view = this.c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+            const from = this.w[2].copy(P).addScaledVector(this.c.up, 0.8);
+            const hit = this.c.hitDistance(from, view.pos, 0.3);
+            return null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
+        }
+
+        // Per-shot curves the camera reads at playback: how far to pull in (a look-ahead minimum,
+        // smoothed, so any pull starts early and is gradual) and the telephoto zoom.
+        curves(shot) {
+            if (!isFinite(shot.t1)) return;
+            const up = this.c.up, P = this.path;
+            if (RIDE.has(shot.type)) {
+                const dt = 0.1, n = Math.max(2, Math.ceil((shot.t1 - shot.t0) / dt) + 1);
+                const want = new Float32Array(n);
+                for (let i = 0; i < n; i++) {
+                    const t = shot.t0 + i * dt;
+                    const Pt = P.pos(t, this.w[1]);
+                    const view = this.c.viewOf(shot, t, Pt, P, this.view, this.view2, false);
+                    const from = this.w[2].copy(Pt).addScaledVector(up, 0.8);
+                    const hit = this.c.hitDistance(from, view.pos, 0.3);
+                    want[i] = null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
+                }
+                const v = new Float32Array(n);
+                for (let i = 0; i < n; i++) {
+                    let m = 1;
+                    for (let j = Math.max(0, i - 1); j <= Math.min(n - 1, i + 6); j++) m = Math.min(m, want[j]);
+                    v[i] = m;
+                }
+                for (let pass = 0; pass < 2; pass++) {
+                    const c = v.slice();
+                    for (let i = 0; i < n; i++) {
+                        let s = 0, k = 0;
+                        for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++, k++) s += c[j];
+                        v[i] = Math.min(c[i], s / k);
+                    }
+                }
+                shot.pull = v.some((x) => x < 0.999) ? { t0: shot.t0, dt, v } : null;
+            } else if (shot.type === "tele") {
+                const dt = 0.05, n = Math.ceil((shot.t1 - shot.t0) / dt) + 1;
+                const ld = new Float32Array(n);
+                for (let i = 0; i < n; i++) ld[i] = Math.log(Math.max(0.5, shot.cam.distanceTo(P.pos(shot.t0 + i * dt, this.w[1]))));
+                const v = new Float32Array(n);
+                for (let i = 0; i < n; i++) {
+                    let s = 0, ws = 0;
+                    for (let j = Math.max(0, i - 10); j <= Math.min(n - 1, i + 10); j++) {
+                        const g = Math.exp(-(((j - i) * dt) ** 2) / (2 * 0.2 * 0.2));
+                        s += g * ld[j];
+                        ws += g;
+                    }
+                    v[i] = clamp(2 * Math.atan(2.4 / Math.exp(s / ws)) * 180 / Math.PI, 14, 50);
+                }
+                shot.fovC = { t0: shot.t0, dt, v };
+            }
+        }
+    }
+
+    function curveAt(c, t) {
+        const f = clamp((t - c.t0) / c.dt, 0, c.v.length - 1);
+        const i = Math.floor(f), j = Math.min(i + 1, c.v.length - 1);
+        return c.v[i] + (c.v[j] - c.v[i]) * (f - i);
+    }
+
+    // Scroll to zoom, drag to look around, for the normal and the cinematic camera. In cinematic
+    // mode the offset eases back to the director's framing a few seconds after you let go.
+    class Viewer {
+        constructor(cine) {
+            const T = cine.T;
+            this.c = cine;
+            this.yaw = this.pitch = this.zoom = 0;
+            this.tYaw = this.tPitch = this.tZoom = 0;
+            this.lastInput = -1e9;
+            this.drag = null;
+            this.qa = new T.Quaternion();
+            this.qb = new T.Quaternion();
+            this.axis = new T.Vector3();
+            this.rel = new T.Vector3();
+            this.basePos = new T.Vector3();
+            this.baseQuat = new T.Quaternion();
+            this.baseFov = 60;
+            this.wPos = new T.Vector3();
+            this.wQuat = new T.Quaternion();
+            this.wFov = 0;
+            this.wCam = null;
+            const canvas = this.canvas = cine.o.render.canvas;
+            this.onWheel = (e) => {
+                if (!this.active()) return;
+                e.preventDefault();
+                const steps = clamp(Math.abs(e.deltaY) / 100, 0.25, 3) * Math.sign(e.deltaY);
+                this.tZoom = clamp(this.tZoom + steps * 0.2, -1.6, 2.2);
+                this.lastInput = performance.now();
+            };
+            this.onDown = (e) => {
+                if (e.button !== 0 || !this.active()) return;
+                this.drag = { x: e.clientX, y: e.clientY, id: e.pointerId };
+                this.lastInput = performance.now();
+            };
+            this.onMove = (e) => {
+                if (!this.drag || e.pointerId !== this.drag.id) return;
+                const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
+                this.drag.x = e.clientX;
+                this.drag.y = e.clientY;
+                this.tYaw -= dx * 0.006;
+                this.tPitch = clamp(this.tPitch + dy * 0.005, -1.2, 1.3);
+                this.lastInput = performance.now();
+            };
+            this.onUp = (e) => {
+                if (this.drag && e.pointerId === this.drag.id) this.drag = null;
+            };
+            this.onDbl = () => {
+                if (this.active()) this.tYaw = this.tPitch = this.tZoom = 0;
+            };
+            canvas?.addEventListener("wheel", this.onWheel, { passive: false });
+            canvas?.addEventListener("pointerdown", this.onDown);
+            canvas?.addEventListener("dblclick", this.onDbl);
+            window.addEventListener("pointermove", this.onMove);
+            window.addEventListener("pointerup", this.onUp);
+        }
+
+        active() {
+            return !this.c.o.isSpectator() && !window.__PolyFX?.photo?.active;
+        }
+
+        reset() {
+            this.yaw = this.pitch = this.zoom = this.tYaw = this.tPitch = this.tZoom = 0;
+        }
+
+        tick(dt) {
+            if (this.c.enabled && !this.drag && performance.now() - this.lastInput > 2500) {
+                const k = damp(1.2, dt);
+                this.tYaw -= this.tYaw * k;
+                this.tPitch -= this.tPitch * k;
+                this.tZoom -= this.tZoom * k;
+            }
+            const k = damp(12, dt);
+            this.yaw += (this.tYaw - this.yaw) * k;
+            this.pitch += (this.tPitch - this.pitch) * k;
+            this.zoom += (this.tZoom - this.zoom) * k;
+        }
+
+        // Applies the offset on top of whatever the game or the director set this frame. If
+        // nothing set the camera since last frame (e.g. after the finish), the stored base is reused.
+        apply(cam, pivot, inPlace) {
+            if (cam !== this.wCam || !cam.position.equals(this.wPos) || !cam.quaternion.equals(this.wQuat) || cam.fov !== this.wFov) {
+                this.basePos.copy(cam.position);
+                this.baseQuat.copy(cam.quaternion);
+                this.baseFov = cam.fov;
+            }
+            const up = this.c.up;
+            if (inPlace) {
+                this.qa.setFromAxisAngle(up, this.yaw);
+                this.qb.setFromAxisAngle(this.axis.set(1, 0, 0), -this.pitch * 0.6);
+                cam.position.copy(this.basePos);
+                cam.quaternion.copy(this.qa).multiply(this.baseQuat).multiply(this.qb);
+                cam.fov = clamp(this.baseFov * Math.pow(2, this.zoom * 0.5), 15, 110);
+            } else {
+                const rel = this.rel.subVectors(this.basePos, pivot).applyAxisAngle(up, this.yaw);
+                this.qa.setFromAxisAngle(up, this.yaw);
+                const len = rel.length();
+                this.axis.crossVectors(rel, up);
+                if (len > 1e-3 && this.axis.lengthSq() > 1e-6) {
+                    this.axis.normalize();
+                    const elev = Math.asin(clamp(rel.y / len, -1, 1));
+                    const target = this.pitch > 0 ? Math.min(elev + this.pitch, Math.max(elev, 1.45)) : Math.max(elev + this.pitch, Math.min(elev, -0.05));
+                    const ang = target - elev;
+                    rel.applyAxisAngle(this.axis, ang);
+                    this.qb.setFromAxisAngle(this.axis, ang);
+                } else this.qb.identity();
+                cam.position.copy(pivot).addScaledVector(rel, Math.pow(2, this.zoom));
+                cam.quaternion.copy(this.qb).multiply(this.qa).multiply(this.baseQuat);
+                cam.fov = this.baseFov;
+            }
+            cam.updateProjectionMatrix();
+            cam.updateMatrixWorld();
+            this.wCam = cam;
+            this.wPos.copy(cam.position);
+            this.wQuat.copy(cam.quaternion);
+            this.wFov = cam.fov;
+        }
+
+        dispose() {
+            this.canvas?.removeEventListener("wheel", this.onWheel);
+            this.canvas?.removeEventListener("pointerdown", this.onDown);
+            this.canvas?.removeEventListener("dblclick", this.onDbl);
+            window.removeEventListener("pointermove", this.onMove);
+            window.removeEventListener("pointerup", this.onUp);
+        }
+    }
 
     class Cinematic {
         constructor(o) {
@@ -112,21 +910,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.meshesAt = -1e9;
             this.v = [0, 1, 2, 3, 4, 5, 6, 7].map(() => new T.Vector3());
             this.up = new T.Vector3(0, 1, 0);
-            this.heading = new T.Vector3(0, 0, 1);
-            this.carUp = new T.Vector3(0, 1, 0);
+            this.pivot = new T.Vector3();
+            this.rayDir = new T.Vector3();
+            this.e = [0, 1, 2, 3, 4, 5].map(() => new T.Vector3());
+            this.paths = new Map();
+            this.planners = new Map();
+            this.viewer = new Viewer(this);
             const view = () => ({ pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true });
             this.viewA = view();
             this.viewB = view();
-            this.blend = null;
             this.shot = null;
-            this.lastType = null;
             this.lastT = null;
-            this.lastFocus = -1;
-            this.roll = 0;
-            this.yawRate = 0;
-            this.pull = 1;
-            this.seed = 1;
-            this.shotCount = 0;
             this.uiAt = -1;
             this.deltaUntil = 0;
             this.lastPassed = -1;
@@ -181,11 +975,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
         }
 
-        rand() {
-            this.seed = (this.seed * 1664525 + 1013904223) >>> 0;
-            return this.seed / 4294967296;
-        }
-
         setEnabled(on) {
             on = !!on;
             if (on === this.enabled) return;
@@ -193,14 +982,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.button.classList.toggle("on", on);
             window.__nswsCinematic.current = on ? this : null;
             document.body.classList.toggle("nsws-cine-on", on);
+            this.viewer.reset();
             if (on) {
                 this.buildLayer();
-                this.shot = null;
-                this.lastT = null;
-                this.lastFocus = -1;
                 this.lastPassed = -1;
                 this.meshesAt = -1e9;
-                this.blend = null;
                 requestAnimationFrame(() => requestAnimationFrame(() => this.layer?.classList.add("shown")));
             } else {
                 this.layer?.remove();
@@ -241,6 +1027,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.layer = null;
             this.button.remove();
             this.bright.remove();
+            this.viewer.dispose();
             this.resetOpacity();
             document.body.classList.remove("nsws-cine-on");
             if (window.__nswsCinematic.current === this) window.__nswsCinematic.current = null;
@@ -248,40 +1035,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.enabled = false;
         }
 
-        // The car's displayed position at a replay frame, if the simulation has reached it.
-        pathAt(run, frame, out) {
-            const s = run.replay.getFrame(Math.round(frame));
-            if (null == s) return false;
-            out.set(s.position.x, s.position.y, s.position.z);
-            return true;
-        }
-
-        loadedFrames(run) {
-            return run.replay.getLastFrame().numberOfFrames;
-        }
-
-        // Horizontal travel direction around a frame, from the path rather than the car's nose,
-        // so drifts and slides keep the camera pointed where the car is going.
-        tangentAt(run, frame, fallback, out) {
-            const a = this.v[6], b = this.v[7];
-            const last = this.loadedFrames(run);
-            const f0 = clamp(frame - 60, 0, last), f1 = clamp(frame + 60, 0, last);
-            if (f1 > f0 && this.pathAt(run, f0, a) && this.pathAt(run, f1, b)) {
-                out.subVectors(b, a);
-                out.y = 0;
-                if (out.lengthSq() > 0.04) return out.normalize();
-            }
-            out.copy(fallback);
-            out.y = 0;
-            if (out.lengthSq() < 1e-6) out.set(0, 0, 1);
-            return out.normalize();
-        }
-
         collectMeshes(runs, now) {
             if (now - this.meshesAt < 3) return;
             this.meshesAt = now;
             const T = this.T;
-            const cars = runs.map((r) => r.car.getPosition());
             const sphere = new T.Sphere();
             const direct = [], instanced = [];
             this.o.render.scene.traverse((obj) => {
@@ -296,7 +1053,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 }
                 if (null == g.boundingSphere) g.computeBoundingSphere();
                 sphere.copy(g.boundingSphere).applyMatrix4(obj.matrixWorld);
-                if (sphere.radius < 4 && cars.some((c) => c.distanceTo(sphere.center) < 5)) return;
+                // Cars and other small moving things never block a shot.
+                if (sphere.radius < 4) return;
                 direct.push(obj);
             });
             this.direct = direct;
@@ -345,7 +1103,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         // Nearest hit along from -> to, ignoring the last `slack` units (the car itself), or null.
         // With `any`, returns at the first hit found.
         castRay(from, to, slack, any) {
-            const dir = this.v[5].subVectors(to, from);
+            const dir = this.rayDir.subVectors(to, from);
             const dist = dir.length();
             if (dist <= slack) return null;
             const ray = this.ray;
@@ -408,253 +1166,179 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return this.castRay(from, to, slack, false);
         }
 
-        nearbyCars(runs, focus, P, radius) {
-            const out = [];
-            for (let i = 0; i < runs.length; i++) {
-                if (i === focus) continue;
-                const p = runs[i].car.getPosition();
-                if (p.distanceTo(P) < radius) out.push(p);
+        pathOf(run) {
+            let p = this.paths.get(run);
+            if (!p) this.paths.set(run, p = new PathCache(run));
+            return p;
+        }
+
+        // One plan per followed run. The seed comes from the track and the runs being watched, so
+        // the same runs always get the same edit and different runs get a different one.
+        plannerFor(runs, focus) {
+            const run = runs[focus];
+            let p = this.planners.get(run);
+            if (!p) {
+                const id = (r) => (r.settings.nickname ?? "") + ":" + (r.settings.time?.numberOfFrames ?? 0);
+                const seed = hashString((this.o.trackId ?? this.o.trackName ?? "") + "|" + runs.map(id).join(",") + "|" + id(run));
+                this.planners.set(run, p = new Planner(this, runs, focus, seed));
+            }
+            return p;
+        }
+
+        // Where a shot puts the camera at time t, from the path alone.
+        evalShot(shot, t, P, path, out) {
+            const up = this.up, e = this.e;
+            const Hs = path.heading(t, LAMBDA[shot.type] ?? 4.5, e[0]);
+            const right = e[1].crossVectors(Hs, up).normalize();
+            const carUp = path.up(t, e[2]);
+            const speed = path.speed(t);
+            const span = isFinite(shot.t1) ? shot.t1 - shot.t0 : 3.2;
+            const k = clamp((t - shot.t0) / Math.max(0.1, span), 0, 1);
+            const pos = out.pos, look = out.look;
+            out.fov = 60;
+            out.roll = 0;
+            out.lens = 0.45;
+            out.moving = true;
+            out.up.copy(up);
+            switch (shot.type) {
+            case "chase": {
+                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006;
+                const h = shot.high ? shot.h + 2.2 : shot.h;
+                pos.copy(P).addScaledVector(Hs, -d).addScaledVector(carUp, h).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(carUp, 0.55);
+                out.fov = 62 + Math.min(speed, 500) * 0.03;
+                out.roll = clamp(path.yawRate(t) * 0.05, -0.12, 0.12);
+                out.lens = 0.4;
+                out.up.copy(carUp);
+                break;
+            }
+            case "orbit": {
+                const back = e[3].copy(Hs).multiplyScalar(-1).applyAxisAngle(up, shot.theta + shot.omega * (t - shot.t0));
+                const h = null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h;
+                pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(up, h);
+                look.copy(P).addScaledVector(up, 0.5);
+                out.fov = shot.fov ?? 50;
+                out.lens = shot.end ? 0.75 : 0.55;
+                break;
+            }
+            case "heli":
+                pos.copy(P).addScaledVector(Hs, -shot.back).addScaledVector(up, shot.up).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(Hs, 3);
+                out.fov = 50;
+                out.lens = 0.2;
+                break;
+            case "side":
+                pos.copy(P).addScaledVector(right, shot.side * shot.dist).addScaledVector(up, shot.h).addScaledVector(Hs, shot.lead0 + (shot.lead1 - shot.lead0) * k);
+                look.copy(P).addScaledVector(Hs, 1.2).addScaledVector(up, 0.4);
+                out.fov = 50;
+                out.lens = 0.65;
+                break;
+            case "front":
+                pos.copy(P).addScaledVector(Hs, shot.dist).addScaledVector(up, shot.h).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(up, 0.5);
+                out.fov = 56;
+                out.lens = 0.5;
+                break;
+            case "pack": {
+                const c = e[3].copy(P).multiplyScalar(2);
+                const near = [];
+                for (const r of this.o.getRuns()) {
+                    if (r === path.run) continue;
+                    const q = this.pathOf(r).pos(t, e[4]);
+                    if (q.distanceTo(P) < 22) {
+                        near.push(q.clone());
+                        c.add(q);
+                    }
+                }
+                c.divideScalar(near.length + 2);
+                let spread = 0;
+                for (const q of near) spread = Math.max(spread, q.distanceTo(c));
+                spread = Math.min(spread, 15);
+                pos.copy(c).addScaledVector(Hs, -(shot.back + spread * 0.6)).addScaledVector(up, shot.up + spread * 0.3).addScaledVector(right, shot.s);
+                look.copy(c).addScaledVector(Hs, 2);
+                out.fov = 55;
+                out.lens = 0.25;
+                break;
+            }
+            case "finish":
+            case "tele":
+            case "curb":
+                out.moving = false;
+                pos.copy(shot.cam);
+                look.copy(P).addScaledVector(up, 0.45);
+                if (shot.type === "curb") {
+                    out.fov = shot.fov;
+                    out.lens = 0.5;
+                } else {
+                    out.fov = shot.fovC ? curveAt(shot.fovC, t) : clamp(2 * Math.atan((shot.type === "finish" ? 3.2 : 2.4) / Math.max(pos.distanceTo(P), 0.1)) * 180 / Math.PI, shot.type === "finish" ? 18 : 14, shot.type === "finish" ? 55 : 50);
+                    out.lens = shot.type === "finish" ? 0.8 : 0.95;
+                }
+                break;
             }
             return out;
         }
 
-        pickShot(runs, focus, run, frame, t, P) {
-            const finished = run.car.hasFinished();
-            this.seed = (frame * 2654435761 + focus * 97 + this.shotCount * 7919) >>> 0;
-            this.shotCount++;
-            if (finished)
-                return this.buildShot("finish", runs, focus, run, frame, t, P) ?? { type: "orbit", t0: t, dur: 1e9, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50, end: true };
-            if (t < 0.35)
-                return { type: "orbit", t0: t, dur: 3.2, dist: 8, h: 3, h1: 1.6, theta: Math.PI * 0.8, omega: -0.5, fov: 55 };
-            const weights = { ...SHOTS };
-            if (this.nearbyCars(runs, focus, P, 22).length === 0) delete weights.pack;
-            if (this.lastType) delete weights[this.lastType];
-            const order = [];
-            while (Object.keys(weights).length) {
-                let sum = 0;
-                for (const k in weights) sum += weights[k];
-                let r = this.rand() * sum;
-                for (const k in weights) {
-                    r -= weights[k];
-                    if (r <= 0) {
-                        order.push(k);
-                        delete weights[k];
-                        break;
-                    }
+        // The shot, mixed with the previous one while a swoop is under way, then pulled in if the
+        // plan found something in the way.
+        viewOf(shot, t, P, path, A, B, withPull) {
+            this.evalShot(shot, t, P, path, A);
+            if (shot.blend && t < shot.t0 + shot.blend) {
+                this.evalShot(shot.prev, t, P, path, B);
+                this.mixViews(B, A, smootherstep(clamp((t - shot.t0) / shot.blend, 0, 1)), P);
+            }
+            if (withPull && shot.pull) {
+                const k = curveAt(shot.pull, t);
+                if (k < 0.999) {
+                    const from = this.e[5].copy(P).addScaledVector(this.up, 0.8);
+                    A.pos.sub(from).multiplyScalar(k).add(from);
                 }
             }
-            for (const type of order) {
-                const shot = this.buildShot(type, runs, focus, run, frame, t, P);
-                if (shot) return shot;
-            }
-            return this.buildShot("chase", runs, focus, run, frame, t, P);
-        }
-
-        buildShot(type, runs, focus, run, frame, t, P) {
-            const R = () => this.rand();
-            const side = R() < 0.5 ? -1 : 1;
-            switch (type) {
-            case "chase":
-                return { type, t0: t, dur: 3.5 + R() * 2.5, d: 5.2 + R() * 1.6, h: 1.25 + R() * 0.6, s: (R() - 0.5) * 1.6, high: R() < 0.2 };
-            case "orbit": {
-                const shot = { type, t0: t, dur: 4 + R() * 2, dist: 6.2 + R() * 2, h: 1.2 + R() * 1.2, theta: side * (0.5 + R() * 1.4), omega: -side * (0.25 + R() * 0.2), fov: 52 + R() * 8 };
-                const H = this.tangentAt(run, frame, this.heading, this.v[0]);
-                const target = this.v[2].copy(P).addScaledVector(this.up, 0.6);
-                for (const k of [0, 0.5, 1]) {
-                    const back = this.v[1].copy(H).multiplyScalar(-1).applyAxisAngle(this.up, shot.theta + shot.omega * shot.dur * k);
-                    const C = this.v[3].copy(P).addScaledVector(back, shot.dist).addScaledVector(this.up, shot.h);
-                    if (this.blocked(C, target)) return null;
-                }
-                return shot;
-            }
-            case "heli":
-            case "side":
-            case "front": {
-                const shot = type === "heli" ? { type, t0: t, dur: 3.5 + R() * 1.5, back: 9 + R() * 5, up: 8 + R() * 5, s: side * R() * 5 }
-                    : type === "side" ? { type, t0: t, dur: 3 + R() * 1.5, side, dist: 6.5 + R() * 2.5, h: 0.9 + R() * 1.1, lead0: -3 + R() * 2, lead1: 1 + R() * 3 }
-                        : { type, t0: t, dur: 3 + R() * 1.5, dist: 7 + R() * 3, h: 0.8 + R() * 0.9, s: side * (0.6 + R() * 1.6) };
-                const H = this.tangentAt(run, frame, this.heading, this.v[0]);
-                this.offsetFor(shot, P, H, 0, this.v[1]);
-                return this.blocked(this.v[1], this.v[2].copy(P).addScaledVector(this.up, 0.6)) ? null : shot;
-            }
-            case "pack":
-                return { type, t0: t, dur: 4 + R() * 1.5, back: 7 + R() * 3, up: 2.5 + R() * 2.5, s: side * R() * 4 };
-            case "finish": {
-                // A camera just past the line, watching the car come through and roll to a stop.
-                const ff = run.car.getFinishTime?.()?.numberOfFrames;
-                if (null == ff || !this.pathAt(run, ff, this.v[0])) return null;
-                const Tq = this.tangentAt(run, ff, this.heading, this.v[1]);
-                const N = this.v[2].crossVectors(Tq, this.up).normalize();
-                for (const sd of [side, -side]) {
-                    const C = new this.T.Vector3().copy(this.v[0]).addScaledVector(N, sd * 7).addScaledVector(this.up, 2.4).addScaledVector(Tq, 16);
-                    if (!this.blocked(C, this.v[3].copy(this.v[0]).addScaledVector(this.up, 0.6)))
-                        return { type, t0: t, dur: 1e9, cam: C };
-                }
-                return null;
-            }
-            case "tele":
-            case "curb": {
-                const last = this.loadedFrames(run);
-                // Far enough ahead to watch the car arrive, whatever its speed.
-                const v = Math.max(10, Math.abs(run.car.getSpeedKmh()) / 3.6);
-                const tau = type === "tele" ? clamp((55 + R() * 35) / v, 0.9, 2.8) : clamp((30 + R() * 15) / v, 0.6, 1.9);
-                const fq = frame + Math.round(tau * 1000);
-                if (fq + 500 > last || null != run.replay.getFrame(fq)?.finishFrames) return null;
-                const Q = this.pathAt(run, fq, this.v[0]) ? this.v[0] : null;
-                if (!Q) return null;
-                const Tq = this.tangentAt(run, fq, this.heading, this.v[1]);
-                const N = this.v[2].crossVectors(Tq, this.up).normalize();
-                for (let attempt = 0; attempt < 4; attempt++) {
-                    const sd = (attempt % 2 === 0 ? side : -side);
-                    const C = new this.T.Vector3().copy(Q);
-                    if (type === "tele")
-                        C.addScaledVector(N, sd * (6 + R() * 6)).addScaledVector(this.up, 1.6 + R() * 3.5).addScaledVector(Tq, 4 + R() * 10);
-                    else
-                        C.addScaledVector(N, sd * (4 + R() * 1.8)).addScaledVector(this.up, 0.45 + R() * 0.55).addScaledVector(Tq, R() * 5 - 1);
-                    let bad = 0;
-                    for (const df of type === "tele" ? [-1100, -600, 0, 500] : [-800, -400, 0, 300]) {
-                        if (!this.pathAt(run, fq + df, this.v[3])) continue;
-                        this.v[3].addScaledVector(this.up, 0.6);
-                        if (this.blocked(C, this.v[3])) bad++;
-                    }
-                    if (bad === 0) return { type, t0: t, dur: tau + (type === "tele" ? 2.2 : 1.6), cam: C, minD: 1e9, fov: type === "tele" ? 40 : 74 };
-                }
-                return null;
-            }
-            }
-            return null;
-        }
-
-        // Camera position for the shots that ride along with the car.
-        offsetFor(shot, P, H, k, out) {
-            const up = this.up;
-            const right = this.v[4].crossVectors(H, up).normalize();
-            switch (shot.type) {
-            case "heli":
-                return out.copy(P).addScaledVector(H, -shot.back).addScaledVector(up, shot.up).addScaledVector(right, shot.s);
-            case "side": {
-                const lead = shot.lead0 + (shot.lead1 - shot.lead0) * k;
-                return out.copy(P).addScaledVector(right, shot.side * shot.dist).addScaledVector(up, shot.h).addScaledVector(H, lead);
-            }
-            case "front":
-                return out.copy(P).addScaledVector(H, shot.dist).addScaledVector(up, shot.h).addScaledVector(right, shot.s);
-            }
-            return out.copy(P);
+            return A;
         }
 
         update(dt) {
-            if (!this.enabled) return;
             const o = this.o;
             const runs = o.getRuns();
             const focus = o.getFocus();
             const run = runs[focus];
             if (!run) return;
-            const T = this.T;
             const car = run.car;
-            const frame = car.getTime().numberOfFrames;
-            const t = frame / 1000;
-            const now = performance.now() / 1000;
-            this.collectMeshes(runs, now);
-
-            const dPlay = null == this.lastT ? 0 : t - this.lastT;
-            const jumped = null != this.lastT && (dPlay < -0.001 || dPlay > dt + 0.25);
-            this.lastT = t;
-            const step = jumped ? 0 : clamp(dPlay, 0, 0.1);
-
+            this.viewer.tick(dt);
             const P = car.getPosition();
-            const carQ = car.getQuaternion();
+            const pivot = this.pivot.copy(P).addScaledVector(this.up, 0.6);
+            if (!this.enabled) {
+                if (!o.isSpectator()) this.viewer.apply(o.render.camera, pivot, o.render.camera === car.cameraCockpit);
+                return;
+            }
+            const frame = car.getTime().numberOfFrames;
+            const t = this.lastT = frame / 1000;
+            this.collectMeshes(runs, performance.now() / 1000);
+            for (const r of runs) this.pathOf(r).sync();
+            const planner = this.plannerFor(runs, focus);
+            planner.step(planner.plannedTo < t + 2 ? 12 : 4);
+            const i = planner.shotAt(t);
+            const shot = this.shot = i >= 0 ? planner.shots[i] : HOLD;
+            const view = this.viewOf(shot, t, P, planner.path, this.viewA, this.viewB, true);
             const speed = Math.abs(car.getSpeedKmh());
-            const carFwd = this.v[3].set(0, 0, 1).applyQuaternion(carQ);
-            const H = this.tangentAt(run, frame, carFwd, this.v[0]).clone();
-            this.carUp.set(0, 1, 0).applyQuaternion(carQ).lerp(this.up, 0.5).normalize();
-
-            let cut = !this.shot || focus !== this.lastFocus;
-            if (this.shot && !cut) {
-                if ((this.shot.type === "finish" || this.shot.end) ? !car.hasFinished() : car.hasFinished()) cut = true;
-                else if (t >= this.shot.t0 + this.shot.dur || this.shot.done) cut = true;
-            }
-            if (jumped && !cut) {
-                if (this.shot.type === "tele" || this.shot.type === "curb") cut = true;
-                else this.shot.t0 = t;
-            }
-            let hardCut = false;
-            if (cut) {
-                const prev = this.shot;
-                const sameCar = focus === this.lastFocus;
-                this.shot = jumped && !car.hasFinished() && t >= 0.35
-                    ? this.buildShot("chase", runs, focus, run, frame, t, P)
-                    : this.pickShot(runs, focus, run, frame, t, P);
-                this.lastType = this.shot.type;
-                this.lastFocus = focus;
-                // Like a broadcast: cameras that ride with the car swoop from one framing to the
-                // next; trackside cameras, jumps and a new car are straight cuts.
-                if (prev && sameCar && !jumped && RIDE.has(prev.type) && RIDE.has(this.shot.type) && !this.shot.end) {
-                    this.blend = { from: prev, t0: t, dur: 1.1 + this.rand() * 0.6 };
-                } else {
-                    hardCut = true;
-                    this.blend = null;
-                    this.heading.copy(H);
-                    this.roll = 0;
-                    this.yawRate = 0;
-                    this.pull = 1;
-                    this.fovNow = null;
-                }
-            }
-
-            const prevHeading = this.v[1].copy(this.heading);
-            const shot = this.shot;
-            const lam = shot.type === "heli" ? 1.6 : shot.type === "pack" ? 2 : 4.5;
-            if (step > 0) {
-                this.heading.lerp(H, damp(lam, step)).normalize();
-                const yaw = Math.atan2(prevHeading.x * this.heading.z - prevHeading.z * this.heading.x, prevHeading.dot(this.heading));
-                this.yawRate += (yaw / step - this.yawRate) * damp(3, step);
-            }
-            const ctx = { P, Hs: this.heading, right: this.v[2].crossVectors(this.heading, this.up).normalize(), speed, t, runs, focus };
-            const view = this.frameShot(shot, ctx, this.viewA);
-            if (this.blend) {
-                const b = this.blend;
-                const x = clamp((t - b.t0) / b.dur, 0, 1);
-                if (x >= 1) this.blend = null;
-                else this.mixViews(this.frameShot(b.from, ctx, this.viewB), view, x * x * x * (x * (x * 6 - 15) + 10), P);
-            }
-            const pos = view.pos, look = view.look;
-            const { fov, roll, lens, moving } = view;
-            const tagUp = this.v[4];
-
-            // Keep ride-along cameras out of walls: pull in towards the car when something is
-            // in the way, or cut away if the shot can't be saved.
-            if (moving && !shot.end) {
-                const from = this.v[6].copy(P).addScaledVector(this.up, 0.8);
-                const hit = this.hitDistance(from, pos, 0.3);
-                const want = null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(pos), 0.15, 1);
-                shot.blockedFor = want < 0.35 ? (shot.blockedFor ?? 0) + step : 0;
-                if (shot.blockedFor > 0.4 && t - shot.t0 > 1.2) shot.done = true;
-                this.pull = want < this.pull ? want : this.pull + (want - this.pull) * damp(2, step);
-                if (this.pull < 0.999) pos.sub(from).multiplyScalar(this.pull).add(from);
-            }
 
             const cam = this.camera;
             if (!o.isSpectator()) {
                 if (o.render.camera !== cam) o.render.setCamera(cam);
-                if (null == this.fovNow || hardCut) this.fovNow = fov;
-                else this.fovNow += (fov - this.fovNow) * damp(5, step);
-                this.roll += (roll - this.roll) * damp(4, step);
-                cam.position.copy(pos);
+                cam.position.copy(view.pos);
                 cam.up.copy(view.up);
-                cam.lookAt(look);
-                if (Math.abs(this.roll) > 1e-4) cam.rotateZ(this.roll);
-                if (Math.abs(cam.fov - this.fovNow) > 1e-3) {
-                    cam.fov = this.fovNow;
-                    cam.updateProjectionMatrix();
-                }
+                cam.lookAt(view.look);
+                if (Math.abs(view.roll) > 1e-4) cam.rotateZ(view.roll);
+                cam.fov = view.fov;
+                cam.updateProjectionMatrix();
                 cam.updateMatrixWorld();
+                this.viewer.apply(cam, pivot, false);
             }
 
             const viewCam = o.render.camera;
-            const focusUv = this.project(viewCam, tagUp.copy(P).addScaledVector(this.carUp, 0.4));
+            const focusUv = this.project(viewCam, this.e[5].copy(P).addScaledVector(this.up, 0.4));
             window.__PolyFX?.setCinematic?.({
                 focus: focusUv ? [focusUv.u, focusUv.v] : [0.5, 0.5],
-                strength: o.isSpectator() ? 0.25 : lens,
+                strength: o.isSpectator() ? 0.25 : view.lens,
                 speed: clamp(speed / 450, 0, 1),
                 exposure: this.exposure,
                 correct: this.correct
@@ -663,98 +1347,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.fadeCars(runs, focus, viewCam, P);
             this.updateTags(runs, focus, viewCam);
             this.updatePanels(runs, focus, run, frame, speed);
-        }
-
-        // Where a shot puts the camera this frame.
-        frameShot(shot, ctx, out) {
-            const { P, Hs, right, speed, t, runs, focus } = ctx;
-            const k = clamp((t - shot.t0) / Math.max(0.1, shot.dur), 0, 1);
-            const pos = out.pos, look = out.look;
-            out.fov = 60;
-            out.roll = 0;
-            out.lens = 0.45;
-            out.moving = true;
-            out.up.copy(this.up);
-            switch (shot.type) {
-            case "chase": {
-                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006;
-                const h = shot.high ? shot.h + 2.2 : shot.h;
-                pos.copy(P).addScaledVector(Hs, -d).addScaledVector(this.carUp, h).addScaledVector(right, shot.s);
-                look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(this.carUp, 0.55);
-                out.fov = 62 + Math.min(speed, 500) * 0.03;
-                out.roll = clamp(this.yawRate * 0.05, -0.12, 0.12);
-                out.lens = 0.4;
-                out.up.copy(this.carUp);
-                break;
-            }
-            case "orbit": {
-                const ang = shot.theta + shot.omega * (t - shot.t0);
-                const back = this.v[5].copy(Hs).multiplyScalar(-1).applyAxisAngle(this.up, ang);
-                const h = null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h;
-                pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(this.up, h);
-                look.copy(P).addScaledVector(this.up, 0.5);
-                out.fov = shot.fov ?? 50;
-                out.lens = shot.end ? 0.75 : 0.55;
-                break;
-            }
-            case "finish":
-                out.moving = false;
-                pos.copy(shot.cam);
-                look.copy(P).addScaledVector(this.up, 0.45);
-                out.fov = clamp(2 * Math.atan(3.2 / Math.max(pos.distanceTo(P), 0.1)) * 180 / Math.PI, 18, 55);
-                out.lens = 0.8;
-                break;
-            case "heli":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(Hs, 3);
-                out.fov = 50;
-                out.lens = 0.2;
-                break;
-            case "side":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(Hs, 1.2).addScaledVector(this.up, 0.4);
-                out.fov = 50;
-                out.lens = 0.65;
-                break;
-            case "front":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(this.up, 0.5);
-                out.fov = 56;
-                out.lens = 0.5;
-                break;
-            case "pack": {
-                const others = this.nearbyCars(runs, focus, P, 22);
-                const c = this.v[5].copy(P).multiplyScalar(2);
-                for (const p of others) c.add(p);
-                c.divideScalar(others.length + 2);
-                let spread = 0;
-                for (const p of others) spread = Math.max(spread, p.distanceTo(c));
-                spread = Math.min(spread, 15);
-                pos.copy(c).addScaledVector(Hs, -(shot.back + spread * 0.6)).addScaledVector(this.up, shot.up + spread * 0.3).addScaledVector(right, shot.s);
-                look.copy(c).addScaledVector(Hs, 2);
-                out.fov = 55;
-                out.lens = 0.25;
-                break;
-            }
-            case "tele":
-            case "curb": {
-                out.moving = false;
-                pos.copy(shot.cam);
-                look.copy(P).addScaledVector(this.up, 0.45);
-                const d = pos.distanceTo(P);
-                shot.minD = Math.min(shot.minD, d);
-                if (d > shot.minD + 24 && t - shot.t0 > 0.8) shot.done = true;
-                if (shot.type === "tele") {
-                    out.fov = clamp(2 * Math.atan(2.4 / Math.max(d, 0.1)) * 180 / Math.PI, 14, 50);
-                    out.lens = 0.95;
-                } else {
-                    out.fov = shot.fov;
-                    out.lens = 0.5;
-                }
-                break;
-            }
-            }
-            return out;
         }
 
         // Blends view `a` into `b` (which receives the result) by x. The camera swings round the
