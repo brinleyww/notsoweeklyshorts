@@ -18982,12 +18982,13 @@ uniform float polyfxGlowIntensity;`
       aspect: { value: 16 / 9 },
       strength: { value: 0 },
       speed: { value: 0 },
+      exposure: { value: 1 },
       time: { value: 0 }
     },
     vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `
     varying vec2 vUv; uniform sampler2D tDiffuse;
-    uniform vec2 focus, texel; uniform float aspect, strength, speed, time;
+    uniform vec2 focus, texel; uniform float aspect, strength, speed, exposure, time;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main(){
       vec4 base = texture2D(tDiffuse, vUv);
@@ -19014,7 +19015,7 @@ uniform float polyfxGlowIntensity;`
       vec2 ca = c * edge * 0.012;
       col.r += texture2D(tDiffuse, vUv + ca).r - base.r;
       col.b += texture2D(tDiffuse, vUv - ca).b - base.b;
-      col *= vec3(1.035, 1.0, 0.955);
+      col *= exposure * vec3(1.035, 1.0, 0.955);
       col *= clamp(1.0 - edge * 0.7, 0.0, 1.0);
       col += (hash(vUv * 1024.0 + fract(time) * 37.0) - 0.5) * 0.014;
       gl_FragColor = vec4(max(col, 0.0), base.a);
@@ -19305,7 +19306,8 @@ uniform float polyfxGlowIntensity;`
       this._scanIsFirst = true;
       this.cinematic = null;
     }
-    // While watching a run in cinematic mode: at least the Semi-real preset with AO, plus the lens pass.
+    // While watching a run in cinematic mode: at least the Semi-real preset with AO, plus the lens pass
+    // with its own brightness (exposure) and, with `correct`, colour correction.
     setCinematic(state) {
       this.cinematic = state || null;
     }
@@ -19368,9 +19370,10 @@ uniform float polyfxGlowIntensity;`
         const photoActive = !!(this.photo && this.photo.active);
         const presetChanged = preset !== this.preset;
         const photoChanged = photoActive !== this.photoWasActive;
-        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel || this.colorCorrect !== this._appliedColorCorrect) {
-          this._apply(this.colorCorrect ? correctedCfg(cfg) : cfg, renderer, scene, camera, guardLevel);
-          this._appliedColorCorrect = this.colorCorrect;
+        const colorCorrect = this.colorCorrect || !!this.cinematic?.correct;
+        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel || colorCorrect !== this._appliedColorCorrect) {
+          this._apply(colorCorrect ? correctedCfg(cfg) : cfg, renderer, scene, camera, guardLevel);
+          this._appliedColorCorrect = colorCorrect;
           if (presetChanged || photoChanged) this.perfGuard.hold();
           this.preset = preset;
           this.photoWasActive = photoActive;
@@ -19526,6 +19529,7 @@ uniform float polyfxGlowIntensity;`
           u.aspect.value = this.size.x / Math.max(1, this.size.y);
           u.strength.value = this.cinematic.strength;
           u.speed.value = this.cinematic.speed;
+          u.exposure.value = this.cinematic.exposure ?? 1;
           u.time.value = performance.now() / 1e3 % 1e3;
         }
         this.composer.render();
@@ -19547,7 +19551,7 @@ uniform float polyfxGlowIntensity;`
       const lights = this.carLights;
       if (!lights || !lights.cars.size || typeof renderer.compileAsync !== "function") return;
       const headlights = !!(this.carLightsEnabled && lights.cfg.enabled && (this.headlightsForce || this.weatherHeadlights || this.skyActive && !this.envOnly && this.sky && this.sky.sunDir.y < 0.1));
-      const sig = [lights.version, this.preset, this.colorCorrect, this.photoWasActive, renderer.shadowMap.enabled, renderer.shadowMap.type, !!scene.fog, scene.environment ? scene.environment.uuid : "", headlights].join();
+      const sig = [lights.version, this.preset, this._appliedColorCorrect, this.photoWasActive, renderer.shadowMap.enabled, renderer.shadowMap.type, !!scene.fog, scene.environment ? scene.environment.uuid : "", headlights].join();
       if (sig === this._prewarmSig) return;
       this._prewarmSig = sig;
       const cars = [...lights.cars.values()];

@@ -2,6 +2,14 @@
     const STYLE = `
 .time-bar-ui > .button.nsws-cine-button.on { background-color: var(--button-hover-color); }
 .time-bar-ui > .button.nsws-cine-button.on::after { width: 100%; }
+.time-bar-ui > .nsws-cine-bright { display: none; align-items: center; margin: 6px 0; padding: 0 16px 0 14px; height: 40px; box-sizing: border-box; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); pointer-events: auto; }
+body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
+.nsws-cine-bright > svg { flex-shrink: 0; margin-right: 10px; width: 22px; height: 22px; }
+.nsws-cine-bright > input { width: 110px; }
+.nsws-cine-bright > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
+.nsws-cine-bright > input::-moz-range-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
+.nsws-cine-bright > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
+.nsws-cine-bright > input::-moz-range-thumb { width: 8px; height: 16px; border: 3px solid var(--button-color); }
 body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-on .checkpoint-ui { display: none !important; }
 .nsws-cine-layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .nsws-cine-layer * { line-height: 1; }
@@ -88,6 +96,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     // Shot weights for the director. Fixed cameras ("tele", "curb") need the car's path ahead
     // of playback, which the simulation has usually computed already.
     const SHOTS = { chase: 3, orbit: 2, tele: 3, curb: 2, heli: 1.4, side: 1.6, front: 1.4, pack: 2.5 };
+    const RIDE = new Set(["chase", "orbit", "heli", "side", "front", "pack"]);
 
     class Cinematic {
         constructor(o) {
@@ -105,8 +114,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.up = new T.Vector3(0, 1, 0);
             this.heading = new T.Vector3(0, 0, 1);
             this.carUp = new T.Vector3(0, 1, 0);
-            this.look = new T.Vector3();
-            this.pos = new T.Vector3();
+            const view = () => ({ pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true });
+            this.viewA = view();
+            this.viewB = view();
+            this.blend = null;
             this.shot = null;
             this.lastType = null;
             this.lastT = null;
@@ -129,10 +140,45 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 o.playClick?.();
                 this.setEnabled(!this.enabled);
             });
+
+            // Brightness for the cinematic look, remembered on this device.
+            this.exposure = 1;
+            try {
+                const e = parseFloat(localStorage.getItem("nsws_cine_exposure"));
+                if (e >= 0.4 && e <= 1.6) this.exposure = e;
+            } catch (e) {}
+            this.correct = true;
+            this.bright = document.createElement("label");
+            this.bright.className = "nsws-cine-bright";
+            this.bright.title = "Brightness (double-click to reset)";
+            this.bright.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5" fill="#fff"/><g stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></g></svg><input type="range" min="0.4" max="1.6" step="0.02">';
+            const range = this.bright.querySelector("input");
+            range.value = String(this.exposure);
+            const setExposure = (v) => {
+                this.exposure = clamp(Math.round(v * 50) / 50, 0.4, 1.6);
+                range.value = String(this.exposure);
+                try {
+                    localStorage.setItem("nsws_cine_exposure", String(this.exposure));
+                } catch (e) {}
+            };
+            range.addEventListener("input", () => setExposure(parseFloat(range.value)));
+            // Give the keyboard back to the replay (Space, arrows) once the slider is let go.
+            range.addEventListener("change", () => range.blur());
+            this.bright.addEventListener("dblclick", () => setExposure(1));
+            this.bright.addEventListener("wheel", (e) => {
+                e.preventDefault();
+                setExposure(this.exposure - Math.sign(e.deltaY) * 0.05);
+            }, { passive: false });
+
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
-            if (seek) bar.insertBefore(this.button, seek);
-            else bar?.appendChild(this.button);
+            if (seek) {
+                bar.insertBefore(this.button, seek);
+                bar.insertBefore(this.bright, seek);
+            } else {
+                bar?.appendChild(this.button);
+                bar?.appendChild(this.bright);
+            }
         }
 
         rand() {
@@ -154,6 +200,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.lastFocus = -1;
                 this.lastPassed = -1;
                 this.meshesAt = -1e9;
+                this.blend = null;
                 requestAnimationFrame(() => requestAnimationFrame(() => this.layer?.classList.add("shown")));
             } else {
                 this.layer?.remove();
@@ -193,6 +240,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.layer?.remove();
             this.layer = null;
             this.button.remove();
+            this.bright.remove();
             this.resetOpacity();
             document.body.classList.remove("nsws-cine-on");
             if (window.__nswsCinematic.current === this) window.__nswsCinematic.current = null;
@@ -529,17 +577,28 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (this.shot.type === "tele" || this.shot.type === "curb") cut = true;
                 else this.shot.t0 = t;
             }
+            let hardCut = false;
             if (cut) {
+                const prev = this.shot;
+                const sameCar = focus === this.lastFocus;
                 this.shot = jumped && !car.hasFinished() && t >= 0.35
                     ? this.buildShot("chase", runs, focus, run, frame, t, P)
                     : this.pickShot(runs, focus, run, frame, t, P);
                 this.lastType = this.shot.type;
                 this.lastFocus = focus;
-                this.heading.copy(H);
-                this.roll = 0;
-                this.yawRate = 0;
-                this.pull = 1;
-                this.fovNow = null;
+                // Like a broadcast: cameras that ride with the car swoop from one framing to the
+                // next; trackside cameras, jumps and a new car are straight cuts.
+                if (prev && sameCar && !jumped && RIDE.has(prev.type) && RIDE.has(this.shot.type) && !this.shot.end) {
+                    this.blend = { from: prev, t0: t, dur: 1.1 + this.rand() * 0.6 };
+                } else {
+                    hardCut = true;
+                    this.blend = null;
+                    this.heading.copy(H);
+                    this.roll = 0;
+                    this.yawRate = 0;
+                    this.pull = 1;
+                    this.fovNow = null;
+                }
             }
 
             const prevHeading = this.v[1].copy(this.heading);
@@ -550,92 +609,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const yaw = Math.atan2(prevHeading.x * this.heading.z - prevHeading.z * this.heading.x, prevHeading.dot(this.heading));
                 this.yawRate += (yaw / step - this.yawRate) * damp(3, step);
             }
-            const Hs = this.heading;
-            const right = this.v[2].crossVectors(Hs, this.up).normalize();
-            const k = clamp((t - shot.t0) / Math.max(0.1, shot.dur), 0, 1);
-            const pos = this.pos, look = this.look;
-            let fov = 60, roll = 0, lens = 0.45, moving = true;
+            const ctx = { P, Hs: this.heading, right: this.v[2].crossVectors(this.heading, this.up).normalize(), speed, t, runs, focus };
+            const view = this.frameShot(shot, ctx, this.viewA);
+            if (this.blend) {
+                const b = this.blend;
+                const x = clamp((t - b.t0) / b.dur, 0, 1);
+                if (x >= 1) this.blend = null;
+                else this.mixViews(this.frameShot(b.from, ctx, this.viewB), view, x * x * x * (x * (x * 6 - 15) + 10), P);
+            }
+            const pos = view.pos, look = view.look;
+            const { fov, roll, lens, moving } = view;
             const tagUp = this.v[4];
-
-            switch (shot.type) {
-            case "chase": {
-                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006;
-                const h = shot.high ? shot.h + 2.2 : shot.h;
-                pos.copy(P).addScaledVector(Hs, -d).addScaledVector(this.carUp, h).addScaledVector(right, shot.s);
-                look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(this.carUp, 0.55);
-                fov = 62 + Math.min(speed, 500) * 0.03;
-                roll = clamp(this.yawRate * 0.05, -0.12, 0.12);
-                lens = 0.4;
-                break;
-            }
-            case "orbit": {
-                const ang = shot.theta + shot.omega * (t - shot.t0);
-                const back = this.v[5].copy(Hs).multiplyScalar(-1).applyAxisAngle(this.up, ang);
-                const h = null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h;
-                pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(this.up, h);
-                look.copy(P).addScaledVector(this.up, 0.5);
-                fov = shot.fov ?? 50;
-                lens = shot.end ? 0.75 : 0.55;
-                break;
-            }
-            case "finish": {
-                moving = false;
-                pos.copy(shot.cam);
-                look.copy(P).addScaledVector(this.up, 0.45);
-                fov = clamp(2 * Math.atan(3.2 / Math.max(pos.distanceTo(P), 0.1)) * 180 / Math.PI, 18, 55);
-                lens = 0.8;
-                break;
-            }
-            case "heli":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(Hs, 3);
-                fov = 50;
-                lens = 0.2;
-                break;
-            case "side":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(Hs, 1.2).addScaledVector(this.up, 0.4);
-                fov = 50;
-                lens = 0.65;
-                break;
-            case "front":
-                this.offsetFor(shot, P, Hs, k, pos);
-                look.copy(P).addScaledVector(this.up, 0.5);
-                fov = 56;
-                lens = 0.5;
-                break;
-            case "pack": {
-                const others = this.nearbyCars(runs, focus, P, 22);
-                const c = this.v[5].copy(P).multiplyScalar(2);
-                for (const p of others) c.add(p);
-                c.divideScalar(others.length + 2);
-                let spread = 0;
-                for (const p of others) spread = Math.max(spread, p.distanceTo(c));
-                spread = Math.min(spread, 15);
-                pos.copy(c).addScaledVector(Hs, -(shot.back + spread * 0.6)).addScaledVector(this.up, shot.up + spread * 0.3).addScaledVector(right, shot.s);
-                look.copy(c).addScaledVector(Hs, 2);
-                fov = 55;
-                lens = 0.25;
-                break;
-            }
-            case "tele":
-            case "curb": {
-                moving = false;
-                pos.copy(shot.cam);
-                look.copy(P).addScaledVector(this.up, 0.45);
-                const d = pos.distanceTo(P);
-                shot.minD = Math.min(shot.minD, d);
-                if (d > shot.minD + 24 && t - shot.t0 > 0.8) shot.done = true;
-                if (shot.type === "tele") {
-                    fov = clamp(2 * Math.atan(2.4 / Math.max(d, 0.1)) * 180 / Math.PI, 14, 50);
-                    lens = 0.95;
-                } else {
-                    fov = shot.fov;
-                    lens = 0.5;
-                }
-                break;
-            }
-            }
 
             // Keep ride-along cameras out of walls: pull in towards the car when something is
             // in the way, or cut away if the shot can't be saved.
@@ -652,11 +636,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const cam = this.camera;
             if (!o.isSpectator()) {
                 if (o.render.camera !== cam) o.render.setCamera(cam);
-                if (null == this.fovNow || cut) this.fovNow = fov;
+                if (null == this.fovNow || hardCut) this.fovNow = fov;
                 else this.fovNow += (fov - this.fovNow) * damp(5, step);
                 this.roll += (roll - this.roll) * damp(4, step);
                 cam.position.copy(pos);
-                cam.up.copy(shot.type === "chase" ? this.carUp : this.up);
+                cam.up.copy(view.up);
                 cam.lookAt(look);
                 if (Math.abs(this.roll) > 1e-4) cam.rotateZ(this.roll);
                 if (Math.abs(cam.fov - this.fovNow) > 1e-3) {
@@ -671,12 +655,126 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             window.__PolyFX?.setCinematic?.({
                 focus: focusUv ? [focusUv.u, focusUv.v] : [0.5, 0.5],
                 strength: o.isSpectator() ? 0.25 : lens,
-                speed: clamp(speed / 450, 0, 1)
+                speed: clamp(speed / 450, 0, 1),
+                exposure: this.exposure,
+                correct: this.correct
             });
 
             this.fadeCars(runs, focus, viewCam, P);
             this.updateTags(runs, focus, viewCam);
             this.updatePanels(runs, focus, run, frame, speed);
+        }
+
+        // Where a shot puts the camera this frame.
+        frameShot(shot, ctx, out) {
+            const { P, Hs, right, speed, t, runs, focus } = ctx;
+            const k = clamp((t - shot.t0) / Math.max(0.1, shot.dur), 0, 1);
+            const pos = out.pos, look = out.look;
+            out.fov = 60;
+            out.roll = 0;
+            out.lens = 0.45;
+            out.moving = true;
+            out.up.copy(this.up);
+            switch (shot.type) {
+            case "chase": {
+                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006;
+                const h = shot.high ? shot.h + 2.2 : shot.h;
+                pos.copy(P).addScaledVector(Hs, -d).addScaledVector(this.carUp, h).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(this.carUp, 0.55);
+                out.fov = 62 + Math.min(speed, 500) * 0.03;
+                out.roll = clamp(this.yawRate * 0.05, -0.12, 0.12);
+                out.lens = 0.4;
+                out.up.copy(this.carUp);
+                break;
+            }
+            case "orbit": {
+                const ang = shot.theta + shot.omega * (t - shot.t0);
+                const back = this.v[5].copy(Hs).multiplyScalar(-1).applyAxisAngle(this.up, ang);
+                const h = null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h;
+                pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(this.up, h);
+                look.copy(P).addScaledVector(this.up, 0.5);
+                out.fov = shot.fov ?? 50;
+                out.lens = shot.end ? 0.75 : 0.55;
+                break;
+            }
+            case "finish":
+                out.moving = false;
+                pos.copy(shot.cam);
+                look.copy(P).addScaledVector(this.up, 0.45);
+                out.fov = clamp(2 * Math.atan(3.2 / Math.max(pos.distanceTo(P), 0.1)) * 180 / Math.PI, 18, 55);
+                out.lens = 0.8;
+                break;
+            case "heli":
+                this.offsetFor(shot, P, Hs, k, pos);
+                look.copy(P).addScaledVector(Hs, 3);
+                out.fov = 50;
+                out.lens = 0.2;
+                break;
+            case "side":
+                this.offsetFor(shot, P, Hs, k, pos);
+                look.copy(P).addScaledVector(Hs, 1.2).addScaledVector(this.up, 0.4);
+                out.fov = 50;
+                out.lens = 0.65;
+                break;
+            case "front":
+                this.offsetFor(shot, P, Hs, k, pos);
+                look.copy(P).addScaledVector(this.up, 0.5);
+                out.fov = 56;
+                out.lens = 0.5;
+                break;
+            case "pack": {
+                const others = this.nearbyCars(runs, focus, P, 22);
+                const c = this.v[5].copy(P).multiplyScalar(2);
+                for (const p of others) c.add(p);
+                c.divideScalar(others.length + 2);
+                let spread = 0;
+                for (const p of others) spread = Math.max(spread, p.distanceTo(c));
+                spread = Math.min(spread, 15);
+                pos.copy(c).addScaledVector(Hs, -(shot.back + spread * 0.6)).addScaledVector(this.up, shot.up + spread * 0.3).addScaledVector(right, shot.s);
+                look.copy(c).addScaledVector(Hs, 2);
+                out.fov = 55;
+                out.lens = 0.25;
+                break;
+            }
+            case "tele":
+            case "curb": {
+                out.moving = false;
+                pos.copy(shot.cam);
+                look.copy(P).addScaledVector(this.up, 0.45);
+                const d = pos.distanceTo(P);
+                shot.minD = Math.min(shot.minD, d);
+                if (d > shot.minD + 24 && t - shot.t0 > 0.8) shot.done = true;
+                if (shot.type === "tele") {
+                    out.fov = clamp(2 * Math.atan(2.4 / Math.max(d, 0.1)) * 180 / Math.PI, 14, 50);
+                    out.lens = 0.95;
+                } else {
+                    out.fov = shot.fov;
+                    out.lens = 0.5;
+                }
+                break;
+            }
+            }
+            return out;
+        }
+
+        // Blends view `a` into `b` (which receives the result) by x. The camera swings round the
+        // car rather than cutting straight across, so a move from behind to the front goes over
+        // the side instead of through the car.
+        mixViews(a, b, x, P) {
+            const ra = this.v[6].subVectors(a.pos, P), rb = this.v[7].subVectors(b.pos, P);
+            const angA = Math.atan2(ra.x, ra.z), angB = Math.atan2(rb.x, rb.z);
+            let dAng = angB - angA;
+            while (dAng > Math.PI) dAng -= 2 * Math.PI;
+            while (dAng < -Math.PI) dAng += 2 * Math.PI;
+            const ang = angA + dAng * x;
+            const r = Math.hypot(ra.x, ra.z) * (1 - x) + Math.hypot(rb.x, rb.z) * x;
+            const y = ra.y * (1 - x) + rb.y * x;
+            b.pos.set(P.x + Math.sin(ang) * r, P.y + y, P.z + Math.cos(ang) * r);
+            b.look.lerpVectors(a.look, b.look, x);
+            b.up.lerpVectors(a.up, b.up, x).normalize();
+            b.fov = a.fov + (b.fov - a.fov) * x;
+            b.roll = a.roll + (b.roll - a.roll) * x;
+            b.lens = a.lens + (b.lens - a.lens) * x;
         }
 
         // Other runs drive the same line, so they often sit right in front of the lens or between
