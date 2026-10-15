@@ -52946,7 +52946,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, eo, "f").playUIClick(),
                 C.get(this, wo, "f").some((e => e.recordingId == o)) ? (C.set(this, wo, C.get(this, wo, "f").filter((e => e.recordingId != o)), "f"),
                 c.classList.remove("selected"),
-                C.get(this, io, "f").call(this, C.get(this, wo, "f"))) : C.get(this, wo, "f").length < 10 && (C.set(this, wo, C.get(this, wo, "f").concat([{
+                C.get(this, io, "f").call(this, C.get(this, wo, "f"))) : (C.set(this, wo, C.get(this, wo, "f").concat([{
                     nickname: t,
                     recordingId: o,
                     isSelf: s
@@ -59090,7 +59090,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 ))
             }
+            // Fetched 10 ids at a time: the watch list has no limit, but one request with every id might be refused.
             getRecordings(e) {
+                if (e.length <= 10)
+                    return this.getRecordingsBatch(e);
+                const t = [];
+                for (let n = 0; n < e.length; n += 10)
+                    t.push(this.getRecordingsBatch(e.slice(n, n + 10)));
+                return Promise.all(t).then((e => e.flat()))
+            }
+            getRecordingsBatch(e) {
                 const t = window.__nswsApiBase + "" + C.get(this, ku, "f") + "recordings?version=0.6.2&ids=" + e.join(",");
                 return new Promise(( (e, n) => {
                     if (this.determinismState != Js.Ok)
@@ -60506,6 +60515,21 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, Sf, "f").nickname = C.get(this, uf, "f")[C.get(this, df, "f")].settings.nickname,
                 C.get(this, Sf, "f").setOverridePosition(!1),
                 C.get(this, Sf, "f").setBottomOffset(52),
+                this.cinematic = window.__nswsCinematic?.attach({
+                    THREE,
+                    render: o,
+                    uiElement: C.get(this, Af, "f").element,
+                    viewDistance: 1e4,
+                    trackName: n?.name ?? null,
+                    playClick: () => l.playUIClick(),
+                    getRuns: () => C.get(this, uf, "f"),
+                    getFocus: () => C.get(this, df, "f"),
+                    isSpectator: () => C.get(this, mf, "f").isEnabled,
+                    restoreCamera: () => {
+                        const e = C.get(this, uf, "f")[C.get(this, df, "f")].car;
+                        C.get(this, mf, "f").isEnabled ? o.setCamera(C.get(this, mf, "f").camera) : h.getSettingBoolean(R.A.DefaultCameraMode) ? o.setCamera(e.cameraCockpit) : o.setCamera(e.cameraOrbit)
+                    }
+                }) ?? null,
                 window.addEventListener("keydown", C.set(this, Tf, (e => {
                     if (!C.get(this, mf, "f").isEnabled)
                         if (h.checkKeyBinding(e, KeyBind.VehicleCheckpointReset) || h.checkKeyBinding(e, KeyBind.VehicleStartReset))
@@ -60570,6 +60594,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             }
             dispose() {
                 if (watchSession === this) watchSession = null;
+                this.cinematic?.dispose(),
                 C.get(this, $p, "f").clear(),
                 C.get(this, rf, "f").clearMountains();
                 for (const e of C.get(this, uf, "f"))
@@ -60637,6 +60662,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, Ef, "f")?.updateCar(C.get(this, uf, "f")[C.get(this, df, "f")].car),
                 C.get(this, kf, "f")?.update(r),
                 C.get(this, mf, "f").update(e),
+                this.cinematic?.update(e),
                 C.get(this, rf, "f").update(C.get(this, $p, "f")),
                 C.get(this, af, "f").update(i, C.get(this, sf, "f").camera, C.get(this, $p, "f").sunDirection),
                 C.get(this, of, "f").update(e, !1, C.get(this, sf, "f")),

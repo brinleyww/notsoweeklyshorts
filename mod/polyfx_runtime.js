@@ -18812,6 +18812,10 @@ uniform float polyfxGlowIntensity;`
       return _PerfGuard.STEPS[this.level];
     }
   };
+  function cinematicPreset(preset) {
+    const rank = [0, 2, 3, 4, 5, 1];
+    return (rank[preset] ?? 0) >= rank[PRESET.SEMI_REAL] ? preset : PRESET.SEMI_REAL;
+  }
   function cfgFor(preset) {
     switch (preset) {
       case PRESET.VERY_LOW:
@@ -18966,6 +18970,54 @@ uniform float polyfxGlowIntensity;`
       vec2 d = vUv - 0.5;
       float v = 1.0 - dot(d, d) * vignette * 2.0;
       gl_FragColor = vec4(max(col, 0.0) * clamp(v, 0.0, 1.0), c.a);
+    }`
+  };
+  // Cinematic watch mode (mod/nsws_cinematic.js): blur that grows away from the followed car,
+  // stretched outward with speed, plus colour fringing, a warm tint, vignette and grain.
+  var CineLensShader = {
+    uniforms: {
+      tDiffuse: { value: null },
+      focus: { value: new Vector2(0.5, 0.5) },
+      texel: { value: new Vector2(1 / 1920, 1 / 1080) },
+      aspect: { value: 16 / 9 },
+      strength: { value: 0 },
+      speed: { value: 0 },
+      time: { value: 0 }
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+    varying vec2 vUv; uniform sampler2D tDiffuse;
+    uniform vec2 focus, texel; uniform float aspect, strength, speed, time;
+    float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec4 base = texture2D(tDiffuse, vUv);
+      vec2 fromFocus = vUv - focus;
+      float dist = length(fromFocus * vec2(aspect, 1.0));
+      float amt = smoothstep(0.12, 0.62, dist) * strength;
+      vec2 radial = dist > 1e-4 ? normalize(fromFocus) : vec2(0.0);
+      vec3 sum = base.rgb;
+      float n = 1.0;
+      if (amt > 0.02) {
+        float r = amt * 7.0;
+        for (int i = 0; i < 16; i++) {
+          float fi = float(i);
+          float a = fi * 2.39996;
+          vec2 off = vec2(cos(a), sin(a)) * sqrt((fi + 0.5) / 16.0) * r;
+          off += radial * (fi / 15.0 - 0.5) * speed * amt * 16.0;
+          sum += texture2D(tDiffuse, vUv + off * texel).rgb;
+          n += 1.0;
+        }
+      }
+      vec3 col = sum / n;
+      vec2 c = vUv - 0.5;
+      float edge = dot(c, c);
+      vec2 ca = c * edge * 0.012;
+      col.r += texture2D(tDiffuse, vUv + ca).r - base.r;
+      col.b += texture2D(tDiffuse, vUv - ca).b - base.b;
+      col *= vec3(1.035, 1.0, 0.955);
+      col *= clamp(1.0 - edge * 0.7, 0.0, 1.0);
+      col += (hash(vUv * 1024.0 + fract(time) * 37.0) - 0.5) * 0.014;
+      gl_FragColor = vec4(max(col, 0.0), base.a);
     }`
   };
   var GodRaysShader = {
@@ -19251,6 +19303,11 @@ uniform float polyfxGlowIntensity;`
       this.lastPerfGuardSetting = null;
       this._scanT = 0;
       this._scanIsFirst = true;
+      this.cinematic = null;
+    }
+    // While watching a run in cinematic mode: at least the Semi-real preset with AO, plus the lens pass.
+    setCinematic(state) {
+      this.cinematic = state || null;
     }
     render(renderer, scene, camera, settings, sunDir) {
       this._trackFrameTime();
@@ -19284,6 +19341,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (!Number.isFinite(preset)) preset = PRESET.OFF;
       }
+      if (this.cinematic) preset = cinematicPreset(preset);
       if (typeof window !== "undefined" && window.__polyfxInGarage) preset = PRESET.OFF;
       if (renderer && renderer.domElement && !renderer.domElement.isConnected) preset = PRESET.OFF;
       let cfg = cfgFor(preset);
@@ -19408,6 +19466,7 @@ uniform float polyfxGlowIntensity;`
           }
           if (!Number.isFinite(aoSetting)) aoSetting = 0;
         }
+        if (this.cinematic) aoSetting = Math.max(aoSetting, 1);
         if (aoSetting !== this.lastAoSetting) {
           this.lastAoSetting = aoSetting;
           this.aoRequested = aoSetting >= 1;
@@ -19458,6 +19517,17 @@ uniform float polyfxGlowIntensity;`
         if (this.godrays && this.godrays.enabled) this._updateSun(activeCamera, sunDir);
         else this._updateSunMarker(null, null);
         if (this.panel) this.panel.tick();
+        this.cineLens.enabled = !!this.cinematic;
+        if (this.cinematic) {
+          const u = this.cineLens.material.uniforms;
+          const f = this.cinematic.focus;
+          u.focus.value.set(f[0], f[1]);
+          u.texel.value.set(1 / Math.max(1, this.size.x), 1 / Math.max(1, this.size.y));
+          u.aspect.value = this.size.x / Math.max(1, this.size.y);
+          u.strength.value = this.cinematic.strength;
+          u.speed.value = this.cinematic.speed;
+          u.time.value = performance.now() / 1e3 % 1e3;
+        }
         this.composer.render();
         this._prewarmLightVariants(renderer, scene, activeCamera);
         if (this.photo) this.photo.capture(renderer);
@@ -19521,6 +19591,8 @@ uniform float polyfxGlowIntensity;`
       this.rainLens.enabled = false;
       this.grade = new FullscreenShaderPass(GradeShader);
       this.grade.enabled = false;
+      this.cineLens = new FullscreenShaderPass(CineLensShader);
+      this.cineLens.enabled = false;
       this.output = new OutputPass();
       this.smaa = new SMAAPass();
       this.composer.addPass(this.renderPass);
@@ -19529,6 +19601,7 @@ uniform float polyfxGlowIntensity;`
       this.composer.addPass(this.godrays);
       this.composer.addPass(this.rainLens);
       this.composer.addPass(this.grade);
+      this.composer.addPass(this.cineLens);
       this.composer.addPass(this.output);
       this.composer.addPass(this.smaa);
       this.renderer = renderer;
