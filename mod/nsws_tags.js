@@ -5,16 +5,23 @@
     const API = window.__nswsApiBase;
     const VISITOR_KEY = "nsws_visitor";
     const PENDING_KEY = "_nswsRefPending";
-    // Per account (keyed by its referral code): hours tags and confirmed referrals already announced.
+    // Per account (keyed by its referral code): earned tags and confirmed referrals already announced.
     const SEEN_KEY = "_nswsTagsSeen:";
     const TOKEN = /^[0-9a-f]{64}$/;
     const CODE = /^[A-HJ-NP-Z2-9]{8}$/;
     const TOAST_MS = 7000;
+    const TOAST_MIN_MS = 3500;
     const ARM_MS = 4000;
     const REFRESH_MS = 10 * 60_000;
 
-    // Keep in step with TAGS in proxy/src/accounts.js (ids, costs, referral counts and hours).
+    // Keep in step with TAGS in proxy/src/accounts.js (ids, costs, referral counts, hours and bingos).
     const TAGS = [
+        { id: "bingo", label: "BINGO", group: "bingo", bingos: 1 },
+        { id: "dauber", label: "DAUBER", group: "bingo", bingos: 5 },
+        { id: "fullhouse", label: "FULL HOUSE", group: "bingo", bingos: 15 },
+        { id: "jackpot", label: "JACKPOT", group: "bingo", bingos: 30 },
+        { id: "cardshark", label: "CARD SHARK", group: "bingo", bingos: 60 },
+        { id: "blackout", label: "BLACKOUT", group: "bingo", blackout: true },
         { id: "firstlaps", label: "FIRST LAPS", group: "hours", hours: 1 },
         { id: "regular", label: "REGULAR", group: "hours", hours: 5 },
         { id: "grinder", label: "GRINDER", group: "hours", hours: 10 },
@@ -46,6 +53,7 @@
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
+        ["bingo", "Bingo", "Earned with bingos on the weekly bingo card (a full row, column or diagonal). BLACKOUT needs every square of one card."],
         ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
         ["earned", "Referral rewards", "Free once you get there."],
@@ -77,6 +85,14 @@
 .nsws-tag.t-author{background:#103d3b;color:#5ff2d6;}
 .nsws-tag.t-og{background:#111;color:#ffcc66;}
 .nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
+.nsws-tag>.ball{display:inline-flex;align-items:center;justify-content:center;min-width:1.3em;height:1.3em;margin:-.1em .05em -.1em -.25em;padding:0 .2em;box-sizing:border-box;border-radius:.65em;background:#fff;color:#14141e;font-size:.72em;font-style:normal;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 .14em rgba(0,0,0,.18);}
+.nsws-tag.t-bingo{background:#d23a4c;}
+.nsws-tag.t-dauber{background:linear-gradient(100deg,#7a2fd6,#d13bbd);}
+.nsws-tag.t-fullhouse{background:#12805c;}
+.nsws-tag.t-jackpot{background:linear-gradient(180deg,#ffe07a,#e0a400);color:#2b1d00;}
+.nsws-tag.t-cardshark{background:#0f2a4a;color:#7fd6ff;box-shadow:inset 0 -2px #7fd6ff;}
+.nsws-tag.t-blackout{background:#000;color:#fff;box-shadow:inset 0 0 0 1px #ffc94a;}
+.nsws-tag.t-blackout>.ball{background:#ffc94a;}
 .nsws-tag>.h{margin-right:.05em;padding-right:.4em;border-right:1px solid currentColor;opacity:.75;font-variant-numeric:tabular-nums;}
 .nsws-tag.t-firstlaps{background:#3d5f86;}
 .nsws-tag.t-regular{background:#1d7f74;}
@@ -258,11 +274,30 @@
         if (tag.hours) {
             span.appendChild(el("span", "h", tag.hours + "H"));
             span.title = tag.label + " · " + tag.hours + (tag.hours === 1 ? " hour" : " hours") + " played";
+        } else if (tag.group === "bingo") {
+            span.appendChild(el("span", "ball", tag.blackout ? "25" : String(tag.bingos)));
+            span.title = tag.label + " · " + (tag.blackout ? "a whole bingo card" : bingosText(tag.bingos));
         } else {
             span.title = tag.label;
         }
         span.appendChild(document.createTextNode(tag.label));
         return span;
+    }
+
+    function bingosText(n) {
+        return n + (n === 1 ? " bingo" : " bingos");
+    }
+
+    // Tags that come by themselves. A new one is put on when the player wears no tag or a smaller one
+    // of the same kind; rank orders them within their kind.
+    const EARNED = [
+        { kind: "blackout", has: (t) => !!t.blackout, rank: () => 1 },
+        { kind: "bingo", has: (t) => t.bingos > 0, rank: (t) => t.bingos },
+        { kind: "hours", has: (t) => t.hours > 0, rank: (t) => t.hours },
+    ];
+
+    function earnedKind(tag) {
+        return tag ? EARNED.find((k) => k.has(tag)) ?? null : null;
     }
 
     function hoursText(hours) {
@@ -281,7 +316,7 @@
     function readSeen(code) {
         try {
             const seen = JSON.parse(storageGet(SEEN_KEY + code));
-            if (seen && Array.isArray(seen.hours) && Number.isFinite(seen.refAt)) return seen;
+            if (seen && (Array.isArray(seen.earned) || Array.isArray(seen.hours)) && Number.isFinite(seen.refAt)) return seen;
         } catch {}
         return null;
     }
@@ -290,25 +325,30 @@
     // on straight away when the player wears no tag or a smaller hours tag.
     function announce(next) {
         if (typeof next.code !== "string" || announce.busy) return;
-        const hoursOwned = TAGS.filter((t) => t.hours && next.owned.includes(t.id));
+        const earned = TAGS.filter((t) => earnedKind(t) && next.owned.includes(t.id));
         const latestRef = Math.max(0, ...(next.recent ?? []).map((r) => r.at));
         const seen = readSeen(next.code);
+        const seenIds = seen?.earned ?? seen?.hours ?? [];
         const lines = [];
         if (seen) {
             const fresh = (next.recent ?? []).filter((r) => r.at > seen.refAt);
             if (fresh.length === 1) lines.push(fresh[0].nickname + " finished their first run, so your referral counts! +1 point.");
             else if (fresh.length > 1) lines.push(fresh.length + " friends you referred finished their first run! +" + fresh.length + " points.");
         }
-        const newHours = hoursOwned.filter((t) => !seen?.hours.includes(t.id));
-        const top = newHours[newHours.length - 1];
+        const worn = BY_ID.get(next.equipped);
         let wear = null;
-        if (top) {
-            const worn = BY_ID.get(next.equipped);
-            if (next.equipped == null || (worn?.hours && worn.hours < top.hours)) wear = top.id;
-            lines.push("You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
-                + (wear ? " and you're wearing it now." : ". Wear it from Garage → Tags."));
+        for (const kind of EARNED) {
+            const fresh = earned.filter((t) => kind.has(t) && !seenIds.includes(t.id));
+            const top = fresh[fresh.length - 1];
+            if (!top) continue;
+            const better = next.equipped == null || (earnedKind(worn) === kind && kind.rank(worn) < kind.rank(top));
+            if (!wear && better) wear = top.id;
+            const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
+                : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"
+                : "You marked a whole bingo card: the BLACKOUT tag is yours";
+            lines.push(what + (wear === top.id ? " and you're wearing it now." : ". Wear it from Garage → Tags."));
         }
-        storageSet(SEEN_KEY + next.code, JSON.stringify({ hours: hoursOwned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0) }));
+        storageSet(SEEN_KEY + next.code, JSON.stringify({ earned: earned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0) }));
         if (lines.length) toast(lines.join(" "));
         const token = profileToken();
         if (wear && token) {
@@ -337,8 +377,24 @@
         return promise;
     }
 
+    // Toasts take turns: a new one waits until the one on screen has been up for TOAST_MIN_MS.
     let toastTimer = 0;
+    let toastShownAt = 0;
+    const toastQueue = [];
     function toast(text) {
+        if (toastQueue.includes(text)) return;
+        toastQueue.push(text);
+        if (toastQueue.length === 1) showToast();
+    }
+
+    function showToast() {
+        const text = toastQueue[0];
+        if (text == null) return;
+        const wait = toastShownAt + TOAST_MIN_MS - Date.now();
+        if (wait > 0) {
+            setTimeout(showToast, wait);
+            return;
+        }
         let box = document.getElementById("nsws-tags-toast");
         if (!box) {
             box = el("div");
@@ -347,8 +403,11 @@
         }
         box.textContent = text;
         box.classList.remove("out");
+        toastShownAt = Date.now();
         clearTimeout(toastTimer);
         toastTimer = setTimeout(() => box.classList.add("out"), TOAST_MS);
+        toastQueue.shift();
+        if (toastQueue.length) setTimeout(showToast, TOAST_MIN_MS);
     }
 
     const REDEEM_ERRORS = {
@@ -428,6 +487,8 @@
         if (tag.group === "shop") return tag.cost === 1 ? "1 point" : tag.cost + " points";
         if (tag.referrals) return Math.min(state?.referrals ?? 0, tag.referrals) + " / " + tag.referrals + " referrals";
         if (tag.hours) return hoursText(Math.min(state?.hours ?? 0, tag.hours)) + " / " + tag.hours + " h";
+        if (tag.blackout) return "Whole card";
+        if (tag.bingos) return Math.min(state?.bingo?.total ?? 0, tag.bingos) + " / " + bingosText(tag.bingos);
         if (tag.group === "discord") return "Owner only";
         return "Use a code";
     }
@@ -445,6 +506,12 @@
             const played = "You've played " + hoursText(state?.hours ?? 0) + " hours";
             return "Play NSWS for " + tag.hours + (tag.hours === 1 ? " hour. " : " hours. ")
                 + (owns(tag.id) ? played + ", so it's yours for good." : played + " so far. It's yours for good once you get there.");
+        }
+        if (tag.blackout) return "Mark every square of one weekly bingo card. It's yours for good once you do.";
+        if (tag.bingos) {
+            const made = "You've made " + bingosText(state?.bingo?.total ?? 0);
+            return "Make " + bingosText(tag.bingos) + " on the weekly bingo cards, counting every week. "
+                + (owns(tag.id) ? made + ", so it's yours for good." : made + " so far.");
         }
         return tag.need;
     }
@@ -623,7 +690,7 @@
             info.appendChild(action);
         }
         info.appendChild(el("div", "status", view.note || (selected && !owns(selected.id) && selected.group !== "shop"
-            ? (selected.hours ? "Locked · " + requirement(selected) : "Locked") : "")));
+            ? (selected.hours || selected.bingos ? "Locked · " + requirement(selected) : "Locked") : "")));
         view.preview.appendChild(info);
     }
 
@@ -828,6 +895,10 @@
         mountGarage,
         openReferrals,
         refresh: () => loadState(),
+        // For other modules whose own requests answer with the account state (mod/nsws_bingo.js).
+        api,
+        profileToken,
+        apply: setState,
         state: () => state,
         refLink: () => (state?.code ? refLink(state.code) : null),
         toast,

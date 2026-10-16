@@ -26,9 +26,33 @@ const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
 const RECENT_REFERRALS = 5;
 const CHAT_UID = /^[0-9a-f]{16}$/;
 const VISITOR = /^[0-9a-f]{32}$/;
-// A missed week is covered by the streak shield, which comes back after this many weeks in a row.
-const SHIELD_REFILL = 3;
-const STREAK_MARKS = 8;
+// The weekly bingo card is 5x5 with a free centre. The card itself is made on the page
+// (mod/nsws_bingo.js); the Worker only keeps which squares are marked, as a bitmask.
+const BINGO_SIZE = 5;
+const BINGO_FREE = 1 << 12;
+const BINGO_FULL = (1 << 25) - 1;
+const BINGO_LINES = (() => {
+    const lines = [];
+    const bit = (r, c) => 1 << (r * BINGO_SIZE + c);
+    for (let i = 0; i < BINGO_SIZE; i++) {
+        let row = 0;
+        let col = 0;
+        for (let j = 0; j < BINGO_SIZE; j++) {
+            row |= bit(i, j);
+            col |= bit(j, i);
+        }
+        lines.push(row, col);
+    }
+    let down = 0;
+    let up = 0;
+    for (let i = 0; i < BINGO_SIZE; i++) {
+        down |= bit(i, i);
+        up |= bit(i, BINGO_SIZE - 1 - i);
+    }
+    lines.push(down, up);
+    return lines;
+})();
+const BINGO_HISTORY = 12;
 // A whole school shares one address, so these only stop one person farming referrals.
 const REDEEMS_PER_IP_DAY = 10;
 const REDEEMS_PER_IP_REFERRER_DAY = 3;
@@ -40,8 +64,15 @@ const TOP_TTL_MS = 60_000;
 
 // Keep in step with TAGS in mod/nsws_tags.js, which draws them. "referred" belongs to anyone
 // who redeemed a code, "milestone" to anyone with that many confirmed referrals, "hours" to anyone
-// who has played that long, "shop" is bought with referral points, and "grant" only the owner hands out.
+// who has played that long, "bingo" to anyone with that many bingos in all, "blackout" to anyone who
+// marked a whole card, "shop" is bought with referral points, and "grant" only the owner hands out.
 export const TAGS = {
+    bingo: { kind: "bingo", bingos: 1 },
+    dauber: { kind: "bingo", bingos: 5 },
+    fullhouse: { kind: "bingo", bingos: 15 },
+    jackpot: { kind: "bingo", bingos: 30 },
+    cardshark: { kind: "bingo", bingos: 60 },
+    blackout: { kind: "blackout" },
     firstlaps: { kind: "hours", hours: 1 },
     regular: { kind: "hours", hours: 5 },
     grinder: { kind: "hours", hours: 10 },
@@ -99,49 +130,10 @@ function liveWeek(env) {
     return Number.isSafeInteger(n) ? n : null;
 }
 
-// weeks: the NSWS weeks played while they were live. The live week itself only ends a streak
-// once it is over, so an unplayed live week is "open".
-export function streakOf(weeks, live) {
-    const played = new Set(weeks);
-    const last = Math.max(live ?? 0, ...weeks);
-    const first = weeks.length ? Math.min(...weeks) : last;
-    let run = 0;
-    let best = 0;
-    let shield = true;
-    let refill = 0;
-    const marks = [];
-    for (let w = first; w <= last; w++) {
-        let mark;
-        if (played.has(w)) {
-            mark = "played";
-            best = Math.max(best, ++run);
-            if (!shield && ++refill >= SHIELD_REFILL) {
-                shield = true;
-                refill = 0;
-            }
-        } else if (w === last) {
-            mark = "open";
-        } else if (run > 0 && shield) {
-            mark = "shield";
-            shield = false;
-            refill = 0;
-        } else {
-            mark = "missed";
-            run = 0;
-            shield = true;
-            refill = 0;
-        }
-        marks.push({ week: w, mark });
-    }
-    return {
-        weeks: run,
-        best,
-        shield,
-        refillIn: shield ? 0 : SHIELD_REFILL - refill,
-        thisWeek: played.has(last),
-        live: last,
-        marks: marks.slice(-STREAK_MARKS),
-    };
+// Rows, columns and diagonals all marked; the free centre always counts.
+export function bingoLines(marks) {
+    const m = marks | BINGO_FREE;
+    return BINGO_LINES.filter((line) => (m & line) === line).length;
 }
 
 export class Accounts extends DurableObject {
@@ -183,21 +175,44 @@ export class Accounts extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
         // Focused seconds on the site, credited in batches by TrafficStats from its beats.
         this.sql.exec("CREATE TABLE IF NOT EXISTS playtime (user_id TEXT PRIMARY KEY, seconds REAL NOT NULL)");
-        // NSWS weeks the account uploaded a run on while that week was live, for the streak.
-        this.sql.exec(`CREATE TABLE IF NOT EXISTS played_weeks (
-            user_id TEXT NOT NULL, week INTEGER NOT NULL, PRIMARY KEY (user_id, week)) WITHOUT ROWID`);
-        this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+        // Marked squares of each weekly bingo card (bit = row * 5 + column).
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS bingo (
+            user_id TEXT NOT NULL, week INTEGER NOT NULL, marks INTEGER NOT NULL, at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, week)) WITHOUT ROWID`);
         this.top = null;
-        this.weeksBackfill = null;
     }
 
     hoursOf(userId) {
         return (this.sql.exec("SELECT seconds FROM playtime WHERE user_id = ?", userId).toArray()[0]?.seconds ?? 0) / 3600;
     }
 
-    streak(userId) {
-        const weeks = this.sql.exec("SELECT week FROM played_weeks WHERE user_id = ?", userId).toArray().map((r) => r.week);
-        return streakOf(weeks, liveWeek(this.env));
+    // Every card's marks, newest first, with the bingo count over all of them.
+    bingoOf(userId) {
+        const cards = this.sql.exec("SELECT week, marks FROM bingo WHERE user_id = ? ORDER BY week DESC", userId).toArray();
+        let total = 0;
+        let blackouts = 0;
+        for (const c of cards) {
+            total += bingoLines(c.marks);
+            if ((c.marks | BINGO_FREE) === BINGO_FULL) blackouts++;
+        }
+        return { live: liveWeek(this.env), total, blackouts, cards: cards.slice(0, BINGO_HISTORY).map((c) => ({ week: c.week, marks: c.marks | BINGO_FREE })) };
+    }
+
+    // Squares are only marked on the live week's card (or the next week's, between a site push and
+    // the Worker's CURRENT_WEEK bump), so old cards stay as they were.
+    markBingo(userId, week, squares) {
+        const live = liveWeek(this.env);
+        if (!Number.isSafeInteger(week) || !Array.isArray(squares) || squares.length > 25) return { error: "bad" };
+        if (live == null || week < live || week > live + 1) return { error: "closed" };
+        let add = 0;
+        for (const i of squares) {
+            if (!Number.isSafeInteger(i) || i < 0 || i >= 25) return { error: "bad" };
+            add |= 1 << i;
+        }
+        this.sql.exec(`INSERT INTO bingo (user_id, week, marks, at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, week) DO UPDATE SET marks = marks | excluded.marks, at = excluded.at`,
+            userId, week, add | BINGO_FREE, Date.now());
+        return this.changed(userId);
     }
 
     // entries: [visitorId, seconds]. A visitor counts for the account its browser is linked to
@@ -219,30 +234,6 @@ export class Accounts extends DurableObject {
             }
         });
         return { ok: true, accounts: perUser.size };
-    }
-
-    // Once: every week each account played while it was live, from the anti-cheat's run history.
-    async backfillWeeks() {
-        if (this.weeksBackfillFailed > Date.now() - 600_000) return;
-        if (this.sql.exec("SELECT 1 FROM meta WHERE k = 'weeks_backfill'").toArray().length) return;
-        const anti = this.env.ANTICHEAT?.get(this.env.ANTICHEAT.idFromName("global"));
-        if (!anti) return;
-        this.weeksBackfill ??= anti.livePlays().catch((err) => {
-            this.weeksBackfillFailed = Date.now();
-            throw err;
-        }).then((rows) => {
-            this.ctx.storage.transactionSync(() => {
-                for (const r of Array.isArray(rows) ? rows : []) {
-                    if (HEX64.test(r?.userId ?? "") && Number.isSafeInteger(r.week)) {
-                        this.sql.exec("INSERT OR IGNORE INTO played_weeks (user_id, week) VALUES (?, ?)", r.userId, r.week);
-                    }
-                }
-                this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('weeks_backfill', ?)", String(Date.now()));
-            });
-        }).finally(() => {
-            this.weeksBackfill = null;
-        });
-        return this.weeksBackfill;
     }
 
     nicknameOf(userId) {
@@ -281,12 +272,14 @@ export class Accounts extends DurableObject {
     }
 
     // Every tag this account may wear right now.
-    ownedTags(userId, counts = this.referralCounts(userId), hours = this.hoursOf(userId)) {
+    ownedTags(userId, counts = this.referralCounts(userId), hours = this.hoursOf(userId), bingo = this.bingoOf(userId)) {
         const owned = new Set();
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) owned.add("referred");
         for (const [id, tag] of Object.entries(TAGS)) {
             if (tag.kind === "milestone" && counts.confirmed >= tag.referrals) owned.add(id);
             if (tag.kind === "hours" && hours >= tag.hours) owned.add(id);
+            if (tag.kind === "bingo" && bingo.total >= tag.bingos) owned.add(id);
+            if (tag.kind === "blackout" && bingo.blackouts > 0) owned.add(id);
         }
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
@@ -308,13 +301,14 @@ export class Accounts extends DurableObject {
         const profile = this.tagProfile(userId);
         const spent = this.sql.exec("SELECT COALESCE(SUM(cost), 0) AS n FROM tag_bought WHERE user_id = ?", userId).one().n;
         const hours = this.hoursOf(userId);
-        const owned = this.ownedTags(userId, counts, hours);
+        const bingo = this.bingoOf(userId);
+        const owned = this.ownedTags(userId, counts, hours, bingo);
         const by = this.sql.exec("SELECT referrer FROM referrals WHERE referred = ?", userId).toArray()[0]?.referrer;
         return {
             code: this.refCode(userId),
             now: Date.now(),
             hours,
-            streak: this.streak(userId),
+            bingo,
             recent: this.recentReferrals(userId),
             referrals: counts.confirmed,
             pending: counts.pending,
@@ -333,8 +327,7 @@ export class Accounts extends DurableObject {
     }
 
     // The page calls this on every visit. linked tells the Worker the chat should re-read the tag.
-    async refState(userId, uid) {
-        await this.backfillWeeks()?.catch((err) => console.error("weeks backfill failed:", err && err.message));
+    refState(userId, uid) {
         let linked = false;
         if (CHAT_UID.test(uid ?? "")) {
             const row = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0];
@@ -370,16 +363,10 @@ export class Accounts extends DurableObject {
         return { ok: true, referrer: this.nicknameOf(referrer) || "a player", state: this.tagState(userId) };
     }
 
-    // Called by the Worker after an upload to an NSWS board: the upload confirms a referral, and a
-    // run on the live week counts that week for the streak. live + 1 is a new week whose site push
-    // came before the Worker's CURRENT_WEEK bump.
-    uploaded(userId, week) {
+    // Called by the Worker after an upload to an NSWS board: the upload confirms a referral.
+    uploaded(userId) {
         this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
         this.top = null;
-        const live = liveWeek(this.env);
-        if (Number.isSafeInteger(week) && live != null && week >= live && week <= live + 1) {
-            this.sql.exec("INSERT OR IGNORE INTO played_weeks (user_id, week) VALUES (?, ?)", userId, week);
-        }
     }
 
     setEquipped(userId, tag) {

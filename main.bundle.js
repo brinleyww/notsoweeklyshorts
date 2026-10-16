@@ -41515,7 +41515,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     const _wasPB = "personal-best" === s && !c.classList.contains("hidden");
                     if (_wasPB && getAutoClipOnPB()) createClip();
                     else if (getAutoClipOnEveryRun()) createClip();
-                    // Share button and streak check (mod/nsws_share.js, mod/nsws_streak.js).
+                    // Share button and bingo squares (mod/nsws_share.js, mod/nsws_bingo.js).
                     if (_wasPB) window.dispatchEvent(new CustomEvent("nsws-pb", { detail: { panel: C.get(this, Ye, "f"), trackName: i } }));
                 }
                 if (null == o)
@@ -55688,17 +55688,17 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, Bc, "f").appendChild(refBtn);
                 C.get(this, Gc, "f").push(refBtn);
             }
-            if (window.__nswsStreak) {
-                const streakBtn = document.createElement("button");
-                streakBtn.className = "button";
-                window.__nswsStreak.mountButton(streakBtn);
-                streakBtn.addEventListener("click", ( () => {
+            if (window.__nswsBingo) {
+                const bingoBtn = document.createElement("button");
+                bingoBtn.className = "button";
+                window.__nswsBingo.mountButton(bingoBtn);
+                bingoBtn.addEventListener("click", ( () => {
                     n.playUIClick();
-                    window.__nswsStreak.open();
+                    window.__nswsBingo.open();
                 }
                 ));
-                C.get(this, Bc, "f").appendChild(streakBtn);
-                C.get(this, Gc, "f").push(streakBtn);
+                C.get(this, Bc, "f").appendChild(bingoBtn);
+                C.get(this, Gc, "f").push(bingoBtn);
             }
             const P = o.getCurrentUserProfile();
 
@@ -61440,6 +61440,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }).then(function (lbData) {
                     var total = lbData && typeof lbData.total === "number" ? lbData.total : null;
                     if (!total || total < 1) return null;
+                    // The weekly bingo's leaderboard squares (mod/nsws_bingo.js).
+                    window.dispatchEvent(new CustomEvent("nsws-placement", { detail: { trackId: trackId, position: entryData.position, total: total } }));
                     return {
                         position: entryData.position,
                         total: total,

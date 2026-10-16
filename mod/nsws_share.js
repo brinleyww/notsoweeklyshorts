@@ -1,7 +1,7 @@
 // Sharing. A new personal best gets a Share button on its banner: it turns the PB screen (the 3D view
 // plus the banner, without the HUD) into an image to copy or save. The week card is a line of medal
-// emojis for the current week with the player's referral link. On a week that is still live, every
-// time in the image reads SECRET, like the leaderboard.
+// emojis and the week's bingo card for the current week, with the player's referral link. On a week that is still live, every
+// time in the image reads SECRET, like the leaderboard. Sharing counts for the weekly bingo.
 (function () {
     const TIME = /[+\-−]?\d+(?::\d{1,2})*[.,]\d+s?/g;
     const MIN_WIDTH = 1280;
@@ -102,7 +102,11 @@
         });
     }
 
-    // Spoiler-free, like a Wordle grid: one emoji per track, best medal or just a finish.
+    function activity(kind) {
+        window.dispatchEvent(new CustomEvent("nsws-activity", { detail: { kind } }));
+    }
+
+    // Spoiler-free, like a Wordle grid: the bingo card, then one emoji per track, best medal or just a finish.
     function weekCard(week = window.__nswsCurrentWeek) {
         const tracks = window.__nswsTracksForWeek?.(week) ?? [];
         if (!tracks.length) return null;
@@ -112,16 +116,18 @@
             return window.__nswsPersonalBest?.(t.id) != null ? FINISHED : UNPLAYED;
         });
         const done = marks.filter((m) => m !== UNPLAYED).length;
-        const lines = ["Not So Weekly Shorts · " + weekName(week), marks.join("") + "  " + done + "/" + tracks.length + " tracks"];
-        const s = window.__nswsStreak?.state?.();
-        if (s && s.weeks > 0 && s.live === week) lines.push("🔥 " + s.weeks + "-week streak");
-        lines.push(shareLink());
+        const bingo = window.__nswsBingo?.shareLines?.(week);
+        const lines = bingo ? [...bingo] : ["Not So Weekly Shorts · " + weekName(week)];
+        lines.push(marks.join("") + "  " + done + "/" + tracks.length + " tracks", shareLink());
         return lines.join("\n");
     }
 
     function copyWeekCard(week) {
         const card = weekCard(week);
-        return card ? copyText(card) : Promise.reject(new Error("no week"));
+        if (!card) return Promise.reject(new Error("no week"));
+        return copyText(card).then(() => {
+            if (week == null || week === window.__nswsCurrentWeek) activity("card");
+        });
     }
 
     function loadLogo() {
@@ -335,6 +341,7 @@
             try {
                 await navigator.clipboard.write([new ClipboardItem({ "image/png": view.blob })]);
                 setNote("Copied! Paste it into Discord or a chat.", "good");
+                activity("share");
             } catch {
                 setNote("Your browser wouldn't copy the image. Save it instead.", "bad");
             }
@@ -348,6 +355,7 @@
             a.click();
             a.remove();
             setNote("Saved.", "good");
+            activity("share");
         }, "images/save.svg");
         if (canCopy) row.appendChild(copyButton);
         row.appendChild(saveButton);
@@ -355,7 +363,7 @@
 
         if (week != null) {
             const card = el("div", "card");
-            card.append(el("h2", null, "Week card"), el("p", "sub", "Your " + weekName(week) + " medals with no times, plus your invite link."));
+            card.append(el("h2", null, "Week card"), el("p", "sub", "Your " + weekName(week) + " bingo card and medals with no times, plus your invite link."));
             const pre = el("pre", null, weekCard(week));
             const copyCard = button("Copy week card", () => {
                 copyWeekCard(week).then(() => setNote("Week card copied!", "good"), () => setNote("Couldn't copy the week card.", "bad"));
@@ -384,7 +392,7 @@
             const file = new File([blob], fileName(trackName), { type: "image/png" });
             if (navigator.canShare?.({ files: [file] })) {
                 row.appendChild(button("Share…", () => {
-                    navigator.share({ files: [file], text: "My new PB on Not So Weekly Shorts! " + shareLink() }).catch(() => {});
+                    navigator.share({ files: [file], text: "My new PB on Not So Weekly Shorts! " + shareLink() }).then(() => activity("share"), () => {});
                 }, "images/share.svg"));
             }
             if (!canCopy && !secret) setNote("Save the image, then post it anywhere.");

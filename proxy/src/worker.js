@@ -668,11 +668,10 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     } catch {
         /* not JSON - handed back untouched below */
     }
-    // A referred player's first upload to an NSWS board is what earns their referrer the point,
-    // and an upload on the live week keeps the player's streak going.
+    // A referred player's first upload to an NSWS board is what earns their referrer the point.
     if (response.ok && track.week != null) {
         const stub = accounts(env);
-        if (stub) ctx.waitUntil(stub.uploaded(hash, track.week).catch(() => {}));
+        if (stub) ctx.waitUntil(stub.uploaded(hash).catch(() => {}));
     }
     if (check && response.ok) {
         const uploadId = typeof result === "number" ? result : result?.uploadId;
@@ -808,7 +807,7 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 }
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
-    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip"]);
+    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark"]);
 const HEX32 = /^[0-9a-f]{32}$/;
 
 // The chat only learns about a tag change here, so its players' next messages show the new tag.
@@ -869,6 +868,11 @@ async function handleAccounts(request, url, env, fromSite, origin) {
             result = await stub.redeem(userId, body.code, ip);
             break;
         }
+        case "bingo/mark": {
+            const marked = await stub.markBingo(userId, body.week, body.squares);
+            result = marked.error ? marked : marked.state;
+            break;
+        }
         case "tags/buy":
         case "tags/equip": {
             const changed = path === "tags/buy" ? await stub.buyTag(userId, body.tag) : await stub.equipTag(userId, body.tag ?? null);
@@ -883,7 +887,7 @@ async function handleAccounts(request, url, env, fromSite, origin) {
     }
     if (result == null) return plain(404, "Not found", origin);
     if (result.error === "code" || result.error === "expired" || result.error === "self" || result.error === "already" || result.error === "mutual"
-        || result.error === "points" || result.error === "locked") {
+        || result.error === "points" || result.error === "locked" || result.error === "closed") {
         return json({ error: result.error }, origin, 409);
     }
     if (result.error === "busy" && path === "refer/redeem") return json({ error: "busy" }, origin, 429);
@@ -1204,7 +1208,7 @@ export default {
                     return plain(500, "Competitions failed", requestOrigin);
                 }
             }
-            if (/^\/nsws\/(names|clips|share|refer|tags)\//.test(url.pathname)) {
+            if (/^\/nsws\/(names|clips|share|refer|tags|bingo)\//.test(url.pathname)) {
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin);
                 } catch (err) {

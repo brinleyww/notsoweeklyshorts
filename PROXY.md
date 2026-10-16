@@ -375,15 +375,21 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   `REGULAR` 5, `GRINDER` 10, `VETERAN` 25, `ROAD WARRIOR` 50, `CENTURION` 100,
   `LIFER` 250) are owned once the hours are there. The page puts a new one on when
   the player wears no tag or a smaller hours tag, and says so.
-- **Weekly streak.** `handleSubmit` → `Accounts.uploaded` records the week in
-  `played_weeks` when it is `CURRENT_WEEK` (or the next one, for the gap between
-  a site push and the Worker deploy). `streakOf` turns the weeks into the streak:
-  the live week can't break it until it is over, one missed week is covered by a
-  shield, and a used shield comes back after 3 weeks in a row. `refer/me` returns
-  it as `streak`. The first `refer/me` after this shipped filled `played_weeks`
-  from the anti-cheat's run history (`AntiCheat.livePlays`: a week counts if the
-  player's first run on it came before anyone's first run on the next week; `meta`
-  key `weeks_backfill` in `Accounts`). `mod/nsws_streak.js` draws it.
+- **Weekly bingo.** Every NSWS week has one 5x5 card with a free centre, the same
+  for everyone. `mod/nsws_bingo.js` makes it from the week's tracks (seeded by the
+  week and its track ids): one column per track with an easy, a medium and a hard
+  square, and activities in the rest. The page checks squares itself (finishes,
+  medals, leaderboard place, things done on the site) and sends newly done ones
+  to `/nsws/bingo/mark` (`{userToken, week, squares}`), which only takes the
+  `CURRENT_WEEK` card (or the next one, for the gap between a site push and the
+  Worker deploy). `Accounts` keeps the marks as a 25-bit mask per account and week
+  (`bingo` table) and counts bingos, full rows, columns and diagonals, over every
+  week (`bingoLines`). `refer/me` and `bingo/mark` return it as `bingo`
+  (`{live, total, blackouts, cards}`). Bingo tags (`BINGO` 1, `DAUBER` 5,
+  `FULL HOUSE` 15, `JACKPOT` 30, `CARD SHARK` 60) come with the total, and
+  `BLACKOUT` with one whole card. Squares are the player's own word, like the
+  hours: the tags are for fun, not for the boards. (An earlier weekly streak left
+  an unused `played_weeks` table and `meta` key `weeks_backfill`.)
 - **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
   tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,
@@ -400,7 +406,7 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   message shows it.
 
 Player endpoints (`userToken` in a `text/plain` JSON body, site only):
-`/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`.
+`/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`, `/nsws/bingo/mark`.
 Owner endpoints (owner key as `token`): `/nsws/tagadmin`,
 `/nsws/tagadmin/search` (any part of any name an account has been seen with;
 3+ letters also match letters in order), `/nsws/tagadmin/lookup` (by `userId`

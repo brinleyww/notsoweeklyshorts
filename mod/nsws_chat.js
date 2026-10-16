@@ -1379,6 +1379,8 @@
     function send(data) {
         if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
         else if (http && me) httpSend(data);
+        else return;
+        if (data.t === "msg") window.dispatchEvent(new CustomEvent("nsws-activity", { detail: { kind: "chat" } }));
     }
 
     function onServer(data) {

@@ -337,18 +337,4 @@ export class AntiCheat extends DurableObject {
         const lobbyCounts = this.sql.exec("SELECT state, COUNT(*) AS n FROM lobby_runs GROUP BY state").toArray();
         return { tracks, counts, queue, rejects, rejectTotals, blocked, boards, lobby, lobbyCounts };
     }
-
-    // For the streak backfill (Accounts.backfillWeeks): each account's weeks whose first upload
-    // came before anyone's first upload on the next week, i.e. while the week was still live.
-    async livePlays() {
-        const starts = new Map(this.sql.exec(`SELECT week, MIN(at) AS t FROM runs
-            WHERE source = 'proxy' AND week IS NOT NULL GROUP BY week`).toArray().map((r) => [r.week, r.t]));
-        const out = [];
-        for (const r of this.sql.exec(`SELECT user_id, week, MIN(at) AS t FROM runs
-            WHERE source = 'proxy' AND week IS NOT NULL AND user_id IS NOT NULL GROUP BY user_id, week`)) {
-            const next = starts.get(r.week + 1);
-            if (next == null || r.t < next) out.push({ userId: r.user_id, week: r.week });
-        }
-        return out;
-    }
 }

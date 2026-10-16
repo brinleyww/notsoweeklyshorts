@@ -159,6 +159,8 @@
     window.__nswsTraffic = {
         event(name, track) {
             events[name] = (events[name] || 0) + 1;
+            // The weekly bingo (mod/nsws_bingo.js) counts the same things.
+            window.dispatchEvent(new CustomEvent("nsws-traffic", { detail: { name, track: typeof track === "string" ? track : null } }));
             if (typeof track !== "string" || !TRACK_ID.test(track) || !(name in TRACK_EVENTS)) return;
             const t = tracks[track] || (tracks[track] = [0, 0, 0]);
             t[TRACK_EVENTS[name]]++;
