@@ -323,8 +323,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.ai = 12;
             this.corner = null;
             this.airFrom = null;
-            this.levelAt = null;
-            this.inverted = 0;
+            this.core = null;
             this.sa = [0, 0, 0];
             this.sb = [0, 0, 0];
             this.acc = [0, 0, 0];
@@ -456,11 +455,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return out.normalize();
         }
 
-        // The car's up, smoothed, halfway to world up so wall rides tilt the shot without flipping it.
+        // The car's up, smoothed, halfway to world up so wall rides tilt the shot without flipping
+        // it, and all the way to the car's up as it goes upside down, so the camera stays on the
+        // car's side of the road.
         up(t, out) {
             const a = this.smooth(t, 6, 1, this.acc);
             const l = Math.hypot(a[0], a[1], a[2]) || 1;
-            return out.set(a[0] / l * 0.5, a[1] / l * 0.5 + 0.5, a[2] / l * 0.5).normalize();
+            const k = 0.5 + 0.5 * clamp(0.5 - a[1] / l, 0, 1);
+            return out.set(a[0] / l * k, a[1] / l * k + 1 - k, a[2] / l * k).normalize();
         }
 
         speed(t) {
@@ -503,6 +505,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return rise > 5 && back < -0.3;
         }
 
+        // The upside-down stretch found so far, ending at t1, as an event (null if it was in the air).
+        loopEvent(t1) {
+            const c = this.core;
+            if (!c || c.road < 2) return null;
+            let i = Math.round(c.a / DT);
+            const stop = Math.max(0, Math.round((c.a - 2.5) / DT));
+            while (i > stop && this.u[3 * (i - 1) + 1] < 0.8) i--;
+            const j = Math.min(this.n - 1, Math.round(t1 / DT));
+            return { type: "loop", t0: i * DT, t1: j * DT, round: this.isLoop(i, j) };
+        }
+
         // Corners and jumps, found once each part of the path is final.
         analyze() {
             while ((this.tan.length >> 1) < this.n - 6) {
@@ -529,14 +542,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                         c.apex = t;
                     }
                 }
-                // Driving upside down between two stretches of level road: a loop, a corkscrew or
-                // a pipe. Flips in the air don't count.
+                // Driving upside down: a loop, a corkscrew or a pipe (a flip in the air doesn't count).
+                // The stretch runs from where the car starts tipping over to where it is upright
+                // again, at most 2.5 s either side of the upside-down part, slopes, jumps or the
+                // finish line around it notwithstanding.
                 const uy = this.u[3 * i + 1];
-                if (uy > 0.85) {
-                    if (this.inverted >= 2 && t - this.levelAt < 6) this.events.push({ type: "loop", t0: this.levelAt, t1: t, round: this.isLoop(Math.round(this.levelAt / DT), i) });
-                    this.inverted = 0;
-                    this.levelAt = t;
-                } else if (uy < -0.3 && !this.air[i] && null != this.levelAt) this.inverted++;
+                if (uy < -0.2) {
+                    this.core ??= { a: t, b: t, road: 0 };
+                    this.core.b = t;
+                    if (!this.air[i]) this.core.road++;
+                } else if (this.core && (uy > 0.8 || t - this.core.b > 2.5)) {
+                    const ev = this.loopEvent(t);
+                    if (ev) this.events.push(ev);
+                    this.core = null;
+                }
                 if (this.air[i]) {
                     if (null == this.airFrom) this.airFrom = t;
                 } else if (null != this.airFrom) {
@@ -609,7 +628,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
         *plan() {
             while (!this.ready(3.8)) yield WAIT;
-            this.push(this.intro());
+            // A run that starts in (or right before) a loop starts on the loop shot instead.
+            const first = this.nextLoop(0);
+            const introEnd = first ? Math.min(3.2, first.t0 - LOOP_LEAD) : 3.2;
+            this.push(introEnd < 1.5 ? this.loopShot(first, 0, 0, this.path.finish) : this.intro(introEnd));
             yield;
             for (;;) {
                 const t0 = this.plannedTo;
@@ -680,11 +702,16 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
         }
 
-        intro() {
+        // An orbit round the car on the start line, or, if that can't see it, the first of a few
+        // other framings that can (any may end early and hand over).
+        intro(t1) {
             const R = rng(this.seed, 0, 1);
             const side = R() < 0.5 ? -1 : 1;
-            const shot = { type: "orbit", t0: 0, t1: 3.2, dist: 8, h: 3, h1: 1.6, theta: side * Math.PI * 0.8, omega: -side * 0.5, fov: 55 };
-            return this.check(shot, false) ? shot : { type: "chase", t0: 0, t1: 3.2, d: 6, h: 1.5, s: 0, high: false };
+            const orbit = (sd) => ({ type: "orbit", t0: 0, t1, minLen: 1.2, dist: 8, h: 3, h1: 1.6, theta: sd * Math.PI * 0.8, omega: -sd * 0.5, fov: 55 });
+            for (const shot of [orbit(side), orbit(-side), { type: "chase", t0: 0, t1, minLen: 1.2, d: 6, h: 1.5, s: 0, high: false },
+                { type: "chase", t0: 0, t1, minLen: 1.2, d: 6, h: 1.5, s: 0, high: true }, { type: "heli", t0: 0, t1, minLen: 1.2, back: 11, up: 6, s: side * 2 }])
+                if (this.check(shot, false)) return shot;
+            return { type: "chase", t0: 0, t1, d: 6, h: 1.5, s: 0, high: false };
         }
 
         finishShot(finish) {
@@ -698,16 +725,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 let bad = 0;
                 for (const dt of [0, 0.8, 1.6]) {
                     if (finish + dt > P.end) continue;
-                    if (this.c.hides(C, P.pos(finish + dt, w[3]).addScaledVector(up, 0.6))) bad++;
+                    if (this.lost(C, finish + dt)) bad++;
                 }
                 if (bad === 0) return { type: "finish", t0: finish, t1: Infinity, cam: C };
             }
             return { type: "orbit", end: true, t0: finish, t1: Infinity, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50 };
         }
 
+        // The next upside-down stretch not over by t, including one still under way where the
+        // replay ends (a run that finishes in a loop).
         nextLoop(t) {
             let best = null;
-            for (const e of this.path.events)
+            const open = this.path.loopEvent(this.path.end);
+            for (const e of open ? [...this.path.events, open] : this.path.events)
                 if (e.type === "loop" && e.t1 > t + 0.2 && (!best || e.t0 < best.t0)) best = e;
             return best;
         }
@@ -740,7 +770,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const cam = center.clone().addScaledVector(N, sd * rl * k).addScaledVector(up, rl * 0.15).addScaledVector(dir, -rl * 0.3);
                     let ok = 0, n = 0, okIn = 0, nIn = 0;
                     for (let t = t0; t <= t1; t += 0.1) {
-                        const seen = !c.hides(cam, P.pos(t, w[0]).addScaledVector(P.carUp(t, w[1]), 0.4));
+                        const seen = !this.lost(cam, t);
                         n++;
                         if (seen) ok++;
                         if (t >= ev.t0 && t <= ev.t1) {
@@ -989,6 +1019,21 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return { type, t0, t1, cam: C, ta, anchored: !!ev, aligned: ev ? 1 : 0, fov: type === "tele" ? null : 74, ph: R() * 1000 };
         }
 
+        // Whether a camera sits on the underside of the road while the car is up a wall or upside
+        // down (a loop the plan didn't catch): the road itself is then between them.
+        underRoad(cam, t, P) {
+            const path = this.path;
+            if (path.air[clamp(Math.round(t / DT), 0, path.n - 1)]) return false;
+            const U = path.carUp(t, this.uu ??= new this.c.T.Vector3());
+            return U.y < 0.5 && (cam.x - P.x) * U.x + (cam.y - P.y) * U.y + (cam.z - P.z) * U.z < -0.3;
+        }
+
+        // A fixed camera loses sight of the car at t.
+        lost(cam, t) {
+            const P = this.path.pos(t, this.w[0]);
+            return this.underRoad(cam, t, P) || this.c.hides(cam, P.addScaledVector(this.path.carUp(t, this.w[1]), 0.6));
+        }
+
         // Visibility: fixed cameras need a clear line to the car nearly all the time; cameras
         // riding with the car must not need pulling in towards it (that reads as a sudden zoom),
         // so a shot that would run into a wall ends early and hands over to the next one.
@@ -1021,8 +1066,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (!RIDE.has(shot.type)) {
                 let ok = 0, n = 0;
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step, n++)
-                    if (!this.c.hides(shot.cam, P.pos(t, w[0]).addScaledVector(up, 0.6))) ok++;
-                const anchorOk = !this.c.hides(shot.cam, P.pos(shot.ta, w[0]).addScaledVector(up, 0.6));
+                    if (!this.lost(shot.cam, t)) ok++;
+                const anchorOk = !this.lost(shot.cam, shot.ta);
                 shot.vis = ok / Math.max(1, n);
                 if (!anchorOk || shot.vis < (strict ? 0.9 : 0.75)) return false;
             } else {
@@ -1031,13 +1076,13 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step) {
                     const want = this.want(shot, t);
                     // Something crossing the view for a moment (a gate, a pillar) doesn't count.
-                    if (want < limit && t + 2 * step <= shot.t1 && (this.want(shot, t + step) >= limit || this.want(shot, t + 2 * step) >= limit)) {
+                    if (want < limit && want > 0 && t + step <= shot.t1 && this.want(shot, t + step) >= limit) {
                         sum += 1;
                         n++;
                         continue;
                     }
                     if (want < limit) {
-                        if (t - shot.t0 >= 2.2) {
+                        if (t - shot.t0 >= (shot.minLen ?? 2.2)) {
                             shot.t1 = t - step;
                             shot.aligned = 0;
                             this.linkBlend(shot);
@@ -1126,11 +1171,13 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return n ? sum / n : 0.5;
         }
 
-        // How far the camera can stay from the car before something is in the way (1 = all of it).
+        // How far the camera can stay from the car before something is in the way (1 = all of it,
+        // 0 = the road itself is in the way).
         want(shot, t) {
             const P = this.path.pos(t, this.w[1]);
             const view = this.c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
-            const from = this.w[2].copy(P).addScaledVector(this.c.up, 0.8);
+            if (this.underRoad(view.pos, t, P)) return 0;
+            const from = this.w[2].copy(P).addScaledVector(this.path.carUp(t, this.w[3]), 0.8);
             const hit = this.c.occluder(from, view.pos, 0.3);
             return null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
         }
@@ -1147,7 +1194,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const t = shot.t0 + i * dt;
                     const Pt = P.pos(t, this.w[1]);
                     const view = this.c.viewOf(shot, t, Pt, P, this.view, this.view2, false);
-                    const from = this.w[2].copy(Pt).addScaledVector(up, 0.8);
+                    const from = this.w[2].copy(Pt).addScaledVector(P.carUp(t, this.w[3]), 0.8);
                     const hit = this.c.occluder(from, view.pos, 0.3);
                     want[i] = null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
                 }
@@ -2461,8 +2508,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const acc = (speed - path.speed(t - 0.3)) / 0.3;
                 const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006 + clamp(acc * 0.012, -1.2, 1.8);
                 const h = shot.high ? shot.h + 2.2 : shot.h;
-                pos.copy(P).addScaledVector(Hs, -d).addScaledVector(carUp, h).addScaledVector(right, shot.s);
-                look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(carUp, 0.55);
+                // Down a steep ramp or up a wall, behind the car along the ground would be inside
+                // the road: follow its real direction of travel instead.
+                const steep = clamp((0.94 - path.carUp(t, e[4]).y) / 0.5, 0, 1);
+                const D = steep > 0 && path.tangent3(t, e[3], e[4]) ? e[3].multiplyScalar(steep).addScaledVector(Hs, 1 - steep).normalize() : Hs;
+                pos.copy(P).addScaledVector(D, -d).addScaledVector(carUp, h).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(D, 3.5).addScaledVector(carUp, 0.55);
                 out.fov = 62 + Math.min(speed, 500) * 0.03;
                 out.roll = clamp(path.yawRate(t) * 0.05, -0.12, 0.12);
                 out.lens = 0.4;
@@ -2598,8 +2649,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (withPull && shot.pull) {
                 const k = curveAt(shot.pull, t);
                 if (k < 0.999) {
-                    const from = this.e[5].copy(P).addScaledVector(this.up, 0.8);
-                    A.pos.sub(from).multiplyScalar(k).add(from);
+                    const from = this.e[5].copy(P).addScaledVector(path.carUp(t, this.e[4]), 0.8);
+                    // Never into the car: at most down to about a car length away.
+                    const d = A.pos.distanceTo(from);
+                    A.pos.sub(from).multiplyScalar(Math.max(k, Math.min(1, MIN_VIEW_DISTANCE / Math.max(d, 1e-3)))).add(from);
                 }
             }
             return A;
