@@ -6214,14 +6214,17 @@ window.__nswsAutoGhostNote = function(trackId) {
             }
             ,
             N = function() {
+                const fixed = this.sizeOverride
+                  , sw = fixed?.width ?? window.innerWidth
+                  , sh = fixed?.height ?? window.innerHeight;
                 let e, t = i.get(this, x, "f")?.getSettingFloat(W.A.RenderScale) ?? 1;
                 if (t = Number.isFinite(t) ? Math.min(Math.max(t, .1), 2) : 1,
                 i.get(this, M, "f")instanceof THREE.PerspectiveCamera) {
-                    const e = window.innerWidth / window.innerHeight
+                    const e = sw / sh
                       , t = new THREE.Vector2;
                     i.get(this, k, "f").getSize(t);
                     const n = Math.max(1, .5 * e);
-                    t.width == window.innerWidth && t.height == window.innerHeight && i.get(this, M, "f").aspect == e && i.get(this, M, "f").zoom == n || (i.get(this, k, "f").setSize(window.innerWidth, window.innerHeight),
+                    t.width == sw && t.height == sh && i.get(this, M, "f").aspect == e && i.get(this, M, "f").zoom == n || (i.get(this, k, "f").setSize(sw, sh, !fixed),
                     i.get(this, M, "f").aspect = e,
                     i.get(this, M, "f").zoom = n,
                     i.get(this, y, "m", O).call(this),
@@ -6232,7 +6235,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 // Low performance mode draws at most one pixel per CSS pixel: a phone's 3x screen is 9x the GPU work.
                 const n = i.get(this, k, "f").getPixelRatio()
                   , a = Math.min(i.get(this, k, "f").capabilities.maxTextureSize / window.innerWidth, i.get(this, k, "f").capabilities.maxTextureSize / window.innerHeight, i.get(this, x, "f")?.getSettingBoolean(W.A.LowPerformanceMode) ? 1 : 1 / 0)
-                  , s = Math.min(e * t, a);
+                  , s = fixed ? 1 : Math.min(e * t, a);
                 n != s && i.get(this, k, "f").setPixelRatio(s)
             }
             ,
@@ -60580,6 +60583,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                     ,
                     totalTime: () => C.get(this, gf, "f"),
+                    step: e => this.update(e, !0),
+                    audio: l,
+                    getControls: () => this.getDisplayedControls(),
+                    getTime: () => C.get(this, ff, "f"),
+                    setTime: e => C.set(this, ff, e, "f"),
+                    isPaused: () => C.get(this, pf, "f"),
+                    isDragging: () => C.get(this, vf, "f").isDragging,
+                    setPaused: e => {
+                        C.set(this, pf, e, "f"),
+                        C.get(this, vf, "f").isPaused = e
+                    }
+                    ,
                     restoreCamera: () => {
                         const e = C.get(this, uf, "f")[C.get(this, df, "f")].car;
                         C.get(this, mf, "f").isEnabled ? o.setCamera(C.get(this, mf, "f").camera) : h.getSettingBoolean(R.A.DefaultCameraMode) ? o.setCamera(e.cameraCockpit) : o.setCamera(e.cameraOrbit)
@@ -60670,7 +60685,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                 window.removeEventListener("keyup", C.get(this, Mf, "f")),
                 C.get(this, Ef, "f")?.dispose()
             }
-            update(e) {
+            update(e, exportStep) {
+                if (this.cinematic?.exporting && !exportStep)
+                    return;
                 window.__getPlayerState = () => C.get(this, uf, "f")[C.get(this, df, "f")]?.car ?? null,
                 C.set(this, pf, C.get(this, vf, "f").isPaused, "f");
                 let t = 1 / 0;
@@ -60678,7 +60695,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t = Math.min(t, e.replay.getLastFrame().numberOfFrames);
                 const n = new yt.A(t);
                 let i;
-                if (C.get(this, pf, "f") || C.get(this, vf, "f").isDragging) {
+                if (C.get(this, pf, "f") || C.get(this, vf, "f").isDragging || this.cinematic?.holding) {
                     i = 0;
                     for (const e of C.get(this, uf, "f"))
                         e.car.audioVolume = 0

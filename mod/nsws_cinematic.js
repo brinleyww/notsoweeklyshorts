@@ -14,6 +14,21 @@ body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .time-bar-ui > .button.nsws-watch-inputs.off > svg { opacity: 0.35; }
 .time-bar-ui > .button.nsws-watch-save.on { background-color: #8a2a3a; }
 body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
+.nsws-save-menu { position: fixed; z-index: 10000; display: flex; flex-direction: column; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
+.nsws-save-menu > p { margin: 4px 10px 8px 10px; font-size: 16px; opacity: 0.7; }
+.nsws-save-menu > .button { margin: 2px 0; padding: 9px 18px; font-size: 19px; text-align: left; white-space: nowrap; }
+.nsws-save-menu > .button.selected { background-color: var(--button-hover-color); }
+.nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
+.nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
+.nsws-export > div { pointer-events: auto; display: flex; flex-direction: column; min-width: 340px; max-width: 80vw; padding: 18px 24px; background: var(--surface-color); clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
+.nsws-export p { margin: 0 0 10px 0; font-size: 22px; }
+.nsws-export p.note { font-size: 16px; opacity: 0.75; }
+.nsws-export .track { height: 8px; margin-bottom: 16px; background: rgba(255, 255, 255, 0.2); }
+.nsws-export .track > i { display: block; width: 0; height: 100%; background: #fff; }
+.nsws-export .button { align-self: center; padding: 8px 30px; font-size: 20px; }
+.nsws-loading { position: fixed; left: 50%; top: 50%; z-index: 20; width: 44px; height: 44px; margin: -28px 0 0 -28px; border: 6px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; border-radius: 50%; opacity: 0; pointer-events: none; transition: opacity 0.2s; animation: nsws-spin 0.9s linear infinite; }
+.nsws-loading.shown { opacity: 1; }
+@keyframes nsws-spin { to { transform: rotate(360deg); } }
 body.nsws-recording .time-bar-ui, body.nsws-recording .preview-toolbar-ui, body.nsws-recording #_nsws-cps { opacity: 0 !important; pointer-events: none !important; }
 body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-on .checkpoint-ui { display: none !important; }
 .nsws-cine-layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
@@ -91,6 +106,161 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         return Number.isSafeInteger(hex) ? "#" + hex.toString(16).padStart(6, "0") : "#7272c2";
     }
 
+    const yieldTask = () => new Promise((r) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => r();
+        ch.port2.postMessage(0);
+    });
+
+    // Bitrate of the default "High quality" save, at 1080p60; the smaller sizes are shares of it.
+    const BASE_RATE = 9e6;
+    // Below this many bits per pixel H.264 turns to mush, so a smaller file gets fewer pixels
+    // (then 30 fps) instead.
+    const MIN_BPP = 0.045;
+    const SAVE_SIZES = [
+        { id: "auto", label: "High quality", rate: 1 },
+        { id: "75", label: "75% size", rate: 0.75 },
+        { id: "50", label: "50% size", rate: 0.5 },
+        { id: "25", label: "25% size", rate: 0.25 },
+        { id: "10mb", label: "Under 10 MB (Discord)", cap: 9.6e6 }
+    ];
+    const LADDER = [[1920, 1080, 60], [1600, 900, 60], [1280, 720, 60], [1280, 720, 30], [960, 540, 30], [854, 480, 30], [640, 360, 30], [426, 240, 30]];
+
+    // The sharpest size and frame rate the bitrate can carry that this device can encode.
+    async function encoderConfig(rate, strict) {
+        const fit = LADDER.findIndex(([w, h, f]) => rate / (w * h * f) >= MIN_BPP);
+        for (let i = fit < 0 ? LADDER.length - 1 : fit; i < LADDER.length; i++) {
+            const [width, height, framerate] = LADDER[i];
+            for (const codec of ["avc1.64002a", "avc1.4d002a", "avc1.42002a", "vp09.00.41.08"])
+                for (const mode of [strict ? "constant" : "variable", null]) {
+                    const cfg = { codec, width, height, framerate, bitrate: Math.round(rate), latencyMode: "quality" };
+                    if (mode) cfg.bitrateMode = mode;
+                    if (codec.startsWith("avc")) cfg.avc = { format: "avc" };
+                    try {
+                        if ((await VideoEncoder.isConfigSupported(cfg)).supported) return cfg;
+                    } catch (e) {}
+                }
+        }
+        return null;
+    }
+
+    // A plain MP4 around the encoded frames: one video track, index first so it plays while loading.
+    function muxMp4({ vp9, desc, width, height, fps, chunks }) {
+        const cat = (parts) => {
+            let n = 0;
+            for (const p of parts) n += p.length;
+            const out = new Uint8Array(n);
+            let at = 0;
+            for (const p of parts) {
+                out.set(p, at);
+                at += p.length;
+            }
+            return out;
+        };
+        const u32 = (...v) => {
+            const b = new Uint8Array(4 * v.length), d = new DataView(b.buffer);
+            v.forEach((x, i) => d.setUint32(4 * i, x >>> 0));
+            return b;
+        };
+        const u16 = (...v) => {
+            const b = new Uint8Array(2 * v.length), d = new DataView(b.buffer);
+            v.forEach((x, i) => d.setUint16(2 * i, x & 0xffff));
+            return b;
+        };
+        const str = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
+        const box = (type, ...parts) => {
+            const body = cat(parts);
+            return cat([u32(body.length + 8), str(type), body]);
+        };
+        const full = (type, version, flags, ...parts) => box(type, new Uint8Array([version, flags >> 16 & 255, flags >> 8 & 255, flags & 255]), ...parts);
+        const matrix = u32(0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000);
+        const n = chunks.length, ms = Math.round(n * 1000 / fps);
+        const sizes = new Uint8Array(4 * n), sd = new DataView(sizes.buffer);
+        chunks.forEach((c, i) => sd.setUint32(4 * i, c.data.length));
+        const keys = [];
+        chunks.forEach((c, i) => c.key && keys.push(i + 1));
+        const config = vp9 ? full("vpcC", 1, 0, new Uint8Array([0, 41, 8 << 4 | 1 << 1, 1, 1, 1]), u16(0)) : box("avcC", desc);
+        const sample = box(vp9 ? "vp09" : "avc1", new Uint8Array(6), u16(1, 0, 0), u32(0, 0, 0), u16(width, height), u32(0x480000, 0x480000, 0), u16(1), new Uint8Array(32), u16(0x18, 0xffff), config);
+        const ftyp = box("ftyp", str("isom"), u32(0x200), str("isom"), str("iso2"), str(vp9 ? "vp09" : "avc1"), str("mp41"));
+        const moov = (base) => {
+            const offs = new Uint8Array(4 * n), od = new DataView(offs.buffer);
+            let at = base;
+            chunks.forEach((c, i) => {
+                od.setUint32(4 * i, at);
+                at += c.data.length;
+            });
+            return box("moov",
+                full("mvhd", 0, 0, u32(0, 0, 1000, ms, 0x10000), u16(0x100, 0), u32(0, 0), matrix, u32(0, 0, 0, 0, 0, 0, 2)),
+                box("trak",
+                    full("tkhd", 0, 3, u32(0, 0, 1, 0, ms, 0, 0), u16(0, 0, 0, 0), matrix, u32(width * 65536, height * 65536)),
+                    box("mdia",
+                        full("mdhd", 0, 0, u32(0, 0, fps * 1000, n * 1000), u16(0x55c4, 0)),
+                        full("hdlr", 0, 0, u32(0), str("vide"), u32(0, 0, 0), str("VideoHandler\0")),
+                        box("minf",
+                            full("vmhd", 0, 1, u16(0, 0, 0, 0)),
+                            box("dinf", full("dref", 0, 0, u32(1), full("url ", 0, 1))),
+                            box("stbl",
+                                full("stsd", 0, 0, u32(1), sample),
+                                full("stts", 0, 0, u32(1, n, 1000)),
+                                full("stss", 0, 0, u32(keys.length), u32(...keys)),
+                                full("stsc", 0, 0, u32(1, 1, 1, 1)),
+                                full("stsz", 0, 0, u32(0, n), sizes),
+                                full("stco", 0, 0, u32(n), offs))))));
+        };
+        const head = moov(0).length;
+        let bytes = 8;
+        for (const c of chunks) bytes += c.data.length;
+        return new Blob([ftyp, moov(ftyp.length + head + 8), u32(bytes), str("mdat"), ...chunks.map((c) => c.data)], { type: "video/mp4" });
+    }
+
+    // Draws parts side by side (a slanted strip like the game's buttons): each part has text,
+    // size, and optionally bg, chip colour, alpha, left/right padding l/r, min text width, right.
+    function rowWidth(g, parts, u, pal) {
+        let w = 0;
+        for (const p of parts) {
+            g.font = pal.style + " " + (p.size * u).toFixed(1) + "px " + pal.font;
+            p.tw = g.measureText(p.text).width;
+            p.w = (p.l + p.r + (p.chip ? 13 : 0)) * u + Math.max(p.tw, (p.min ?? 0) * u);
+            w += p.w;
+        }
+        return w;
+    }
+
+    function drawRow(g, parts, x, y, h, skew, u, pal, bg) {
+        const w = parts.reduce((a, p) => a + p.w, 0);
+        g.save();
+        g.beginPath();
+        g.moveTo(x + skew, y);
+        g.lineTo(x + w, y);
+        g.lineTo(x + w - skew, y + h);
+        g.lineTo(x, y + h);
+        g.closePath();
+        g.clip();
+        g.fillStyle = bg;
+        g.fillRect(x, y, w, h);
+        const base = g.globalAlpha;
+        for (const p of parts) {
+            if (p.bg) {
+                g.fillStyle = p.bg;
+                g.fillRect(x, y, p.w, h);
+            }
+            let tx = x + p.l * u;
+            if (p.chip) {
+                g.fillStyle = p.chip;
+                g.fillRect(tx, y + (h - 20 * u) / 2, 5 * u, 20 * u);
+                tx += 13 * u;
+            }
+            if (p.right) tx = x + p.w - p.r * u - p.tw;
+            g.font = pal.style + " " + (p.size * u).toFixed(1) + "px " + pal.font;
+            g.globalAlpha = base * (p.alpha ?? 1);
+            g.fillStyle = "#fff";
+            g.fillText(p.text, tx, y + h / 2 + u);
+            g.globalAlpha = base;
+            x += p.w;
+        }
+        g.restore();
+    }
+
     function el(tag, className, parent) {
         const e = document.createElement(tag);
         if (className) e.className = className;
@@ -111,6 +281,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     const PASS_SHAKE = { curb: 0.02, tele: 0.005, finish: 0.006 };
     const LAND_SHAKE = { chase: 0.012, front: 0.01, side: 0.008, orbit: 0.004, heli: 0.004, pack: 0.005 };
     const HOLD = { type: "chase", t0: 0, t1: Infinity, d: 5.8, h: 1.5, s: 0, high: false };
+    // Loop shots start this long before the car starts up the loop.
+    const LOOP_LEAD = 0.35;
     const WAIT = {};
 
     function hashString(s) {
@@ -151,6 +323,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.ai = 12;
             this.corner = null;
             this.airFrom = null;
+            this.levelAt = null;
+            this.inverted = 0;
             this.sa = [0, 0, 0];
             this.sb = [0, 0, 0];
             this.acc = [0, 0, 0];
@@ -293,9 +467,40 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return this.smooth(t, 3, 2, this.acc)[0];
         }
 
+        // Direction of travel in 3D (round loops and up walls), or null while barely moving.
+        tangent3(t, out, tmp) {
+            this.pos(t + 0.08, out).sub(this.pos(t - 0.08, tmp));
+            return out.lengthSq() > 1e-6 ? out.normalize() : null;
+        }
+
+        // The car's own up, lightly smoothed and not leaned towards world up.
+        carUp(t, out) {
+            const a = this.smooth(t, 8, 1, this.acc);
+            out.set(a[0], a[1], a[2]);
+            if (out.lengthSq() < 1e-8) out.set(0, 1, 0);
+            return out.normalize();
+        }
+
         yawRate(t) {
             const a = this.smooth(t, 3, 0, this.acc), b = this.smooth(t - 0.1, 3, 0, this.acc2);
             return Math.atan2(b[0] * a[2] - b[2] * a[0], b[0] * a[0] + b[2] * a[2]) / 0.1;
+        }
+
+        // Whether being upside down between samples a and b was a round loop: climbing well above
+        // the way in and travelling back the way it came at the top (a corkscrew or a pipe turns
+        // or rolls instead).
+        isLoop(a, b) {
+            const p = this.p;
+            let top = a;
+            for (let i = a; i <= b; i++)
+                if (this.u[3 * i + 1] < this.u[3 * top + 1]) top = i;
+            let rise = 0;
+            for (let i = a; i <= b; i++) rise = Math.max(rise, p[3 * i + 1] - p[3 * a + 1]);
+            const i0 = Math.max(0, top - 3), i1 = Math.min(this.n - 1, top + 3);
+            const vx = p[3 * i1] - p[3 * i0], vz = p[3 * i1 + 2] - p[3 * i0 + 2];
+            this.tangent(a);
+            const back = (vx * this.tx + vz * this.tz) / (Math.hypot(vx, vz) || 1);
+            return rise > 5 && back < -0.3;
         }
 
         // Corners and jumps, found once each part of the path is final.
@@ -324,6 +529,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                         c.apex = t;
                     }
                 }
+                // Driving upside down between two stretches of level road: a loop, a corkscrew or
+                // a pipe. Flips in the air don't count.
+                const uy = this.u[3 * i + 1];
+                if (uy > 0.85) {
+                    if (this.inverted >= 2 && t - this.levelAt < 6) this.events.push({ type: "loop", t0: this.levelAt, t1: t, round: this.isLoop(Math.round(this.levelAt / DT), i) });
+                    this.inverted = 0;
+                    this.levelAt = t;
+                } else if (uy < -0.3 && !this.air[i] && null != this.levelAt) this.inverted++;
                 if (this.air[i]) {
                     if (null == this.airFrom) this.airFrom = t;
                 } else if (null != this.airFrom) {
@@ -412,7 +625,13 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     return;
                 }
                 if (t0 >= this.total - 0.5) return;
-                const hardEnd = finish ?? this.total;
+                const loop = this.nextLoop(t0);
+                if (loop && loop.t0 - LOOP_LEAD - t0 < 1.4) {
+                    this.push(this.loopShot(loop, t0, this.shots.length, finish));
+                    yield;
+                    continue;
+                }
+                const hardEnd = Math.min(finish ?? this.total, loop ? loop.t0 - LOOP_LEAD : Infinity);
                 const idx = this.shots.length;
                 const cands = [];
                 const lastType = this.shots[idx - 1].type;
@@ -484,6 +703,54 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (bad === 0) return { type: "finish", t0: finish, t1: Infinity, cam: C };
             }
             return { type: "orbit", end: true, t0: finish, t1: Infinity, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50 };
+        }
+
+        nextLoop(t) {
+            let best = null;
+            for (const e of this.path.events)
+                if (e.type === "loop" && e.t1 > t + 0.2 && (!best || e.t0 < best.t0)) best = e;
+            return best;
+        }
+
+        // Loops get their own shot: from beside a round loop if the whole of it is in sight from
+        // there, otherwise from behind the car turning with it, which keeps the road under the
+        // camera (a normal chase camera ends up outside the loop, looking at the back of the road).
+        loopShot(ev, t0, idx, finish) {
+            const P = this.path, w = this.w, c = this.c, up = c.up, T = c.T;
+            const R = rng(this.seed, idx, 55);
+            const t1 = Math.max(t0 + 0.4, Math.min(ev.t1 + 0.5, finish ?? Infinity, P.end));
+            const top = new T.Vector3();
+            let topY = -Infinity;
+            for (let t = ev.t0; t <= ev.t1; t += 0.05) {
+                P.pos(t, w[0]);
+                if (w[0].y > topY) {
+                    topY = w[0].y;
+                    top.copy(w[0]);
+                }
+            }
+            const lowY = Math.min(P.pos(ev.t0, w[0]).y, P.pos(ev.t1, w[1]).y);
+            const rl = clamp((topY - lowY) / 2, 3, 40);
+            const center = new T.Vector3(top.x, lowY + rl, top.z);
+            const dir = P.heading(ev.t0, 8, new T.Vector3());
+            const N = new T.Vector3().crossVectors(dir, up).normalize();
+            const first = R() < 0.5 ? -1 : 1;
+            const shape = { d: 5.4 + R() * 1.2, h: 1.5 + R() * 0.5, ph: R() * 1000 };
+            for (const k of ev.round ? [2.4, 3.1, 1.9] : [])
+                for (const sd of [first, -first]) {
+                    const cam = center.clone().addScaledVector(N, sd * rl * k).addScaledVector(up, rl * 0.15).addScaledVector(dir, -rl * 0.3);
+                    let ok = 0, n = 0, okIn = 0, nIn = 0;
+                    for (let t = t0; t <= t1; t += 0.1) {
+                        const seen = !c.hides(cam, P.pos(t, w[0]).addScaledVector(P.carUp(t, w[1]), 0.4));
+                        n++;
+                        if (seen) ok++;
+                        if (t >= ev.t0 && t <= ev.t1) {
+                            nIn++;
+                            if (seen) okIn++;
+                        }
+                    }
+                    if (okIn >= 0.85 * nIn && ok >= 0.75 * n) return { type: "loop", t0, t1, side: true, cam, center, dir, rl, ...shape };
+                }
+            return { type: "loop", t0, t1, side: false, ...shape };
         }
 
         // A shot's shape, plus a phase for its camera shake and, for some, a slow Dutch tilt.
@@ -690,7 +957,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             let ta = (tMin + tMax) / 2, ev = null;
             for (const e of P.events) {
                 const at = e.type === "corner" ? e.apex : e.t0;
-                if (at >= tMin && at <= tMax && (type === "curb" || e.type === "corner")) {
+                if (at >= tMin && at <= tMax && e.type !== "loop" && (type === "curb" || e.type === "corner")) {
                     ev = e;
                     ta = at;
                     break;
@@ -1140,7 +1407,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
     }
 
-    function ghostLod(cars, focusCar, cam, stackRadius = 1) {
+    // A ghost seen before only reappears (or drops out for being tiny) once that has been due
+    // for this long, so one hovering at a threshold doesn't blink.
+    const LOD_HOLD = 0.4;
+
+    function ghostLod(cars, focusCar, cam, stackRadius = 1, now = performance.now() / 1000) {
         if (!cam || !cars.length) return;
         const camPos = lodScratch ??= cam.position.clone();
         cam.getWorldPosition(camPos);
@@ -1151,8 +1422,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const p = car.getPosition();
             list.push({ car, p, d: p.distanceTo(camPos), index });
         });
-        list.sort((a, b) => a.d - b.d);
-        const kept = [];
         let fp = null;
         if (focusCar) {
             fp = focusCar.getPosition();
@@ -1166,20 +1435,35 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
             lodState.set(focusCar, { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false });
         }
-        let shadows = 0, audible = 0;
+        // Stacked ghosts are settled in run order, not by distance to the camera, so which of
+        // two stacked ghosts shows never swaps as the camera moves.
+        const kept = [];
         for (const g of list) {
-            const st = lodState.get(g.car) ?? { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false };
-            // Every test has hysteresis, so a ghost near a threshold doesn't flicker.
-            const px = 4.5 * pxPerUnit / Math.max(g.d, 0.1);
-            let vis = px >= (st.vis ? 5 : 7);
-            if (vis && fp && g.p.distanceTo(fp) < stackRadius * (st.vis ? 1 : 1.3)) vis = false;
-            if (vis)
+            const was = lodState.get(g.car)?.vis ?? true;
+            g.stacked = !!fp && g.p.distanceTo(fp) < stackRadius * (was ? 1 : 1.3);
+            if (!g.stacked)
                 for (const k of kept)
-                    if (k.distanceTo(g.p) < (st.vis ? 1 : 1.4)) {
-                        vis = false;
+                    if (k.distanceTo(g.p) < (was ? 1 : 1.4)) {
+                        g.stacked = true;
                         break;
                     }
-            if (vis) kept.push(g.p);
+            if (!g.stacked) kept.push(g.p);
+        }
+        list.sort((a, b) => a.d - b.d);
+        let shadows = 0, audible = 0;
+        for (const g of list) {
+            const known = lodState.get(g.car);
+            const st = known ?? { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false };
+            // Every test has hysteresis, so a ghost near a threshold doesn't flicker.
+            const px = 4.5 * pxPerUnit / Math.max(g.d, 0.1);
+            let vis = !g.stacked && px >= (st.vis ? 5 : 7);
+            let pending = null;
+            // Ghosts piling onto one spot hide at once; it is coming back that waits.
+            if (known && vis !== st.vis && !(st.vis && g.stacked)) {
+                pending = null != st.pending && st.pending <= now ? st.pending : now;
+                if (now - pending < LOD_HOLD) vis = st.vis;
+                else pending = null;
+            }
             const cast = vis && shadows < LOD_SHADOWS;
             if (cast) shadows++;
             const mute = !(vis && audible < LOD_AUDIBLE);
@@ -1195,7 +1479,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const order = st.order ?? g.index;
             const noSkid = Math.max(cars.length, st.total ?? 0) > LOD_SKID_RUNS && order >= LOD_SKID_RUNS;
             if (noSkid !== st.noSkid) g.car.skidmarksSuppressed = noSkid;
-            lodState.set(g.car, { vis, cast, detail: vis ? detail : st.detail, mute, culled: true, noSkid, order, total: Math.max(cars.length, st.total ?? 0) });
+            lodState.set(g.car, { vis, cast, detail: vis ? detail : st.detail, mute, culled: true, noSkid, order, total: Math.max(cars.length, st.total ?? 0), pending });
         }
     }
 
@@ -1318,16 +1602,29 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.saveBtn.innerHTML = '<img src="images/save.svg">';
             this.saveBtn.addEventListener("click", () => {
                 o.playClick?.();
-                this.rec ? this.stopRecording() : this.startRecording();
+                if (this.exp) this.exp.cancel = true;
+                else if (this.rec) this.stopRecording();
+                else this.toggleSaveMenu();
             });
             this.onRecKey = (e) => {
-                if (this.rec && e.code === "Escape") {
+                if (this.exp) {
+                    // The export drives playback; keys would pause or seek it.
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    if (e.code === "Escape") this.exp.cancel = true;
+                } else if (this.menu && e.code === "Escape") {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    this.toggleSaveMenu();
+                } else if (this.rec && e.code === "Escape") {
                     e.preventDefault();
                     e.stopImmediatePropagation();
                     this.stopRecording();
                 }
             };
             window.addEventListener("keydown", this.onRecKey, true);
+
+            this.spinner = el("div", "nsws-loading", document.body);
 
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
@@ -1341,6 +1638,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             on = !!on;
             if (on === this.enabled) return;
             this.enabled = on;
+            this.holding = false;
             this.button.classList.toggle("on", on);
             window.__nswsCinematic.current = on ? this : null;
             document.body.classList.toggle("nsws-cine-on", on);
@@ -1385,6 +1683,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
 
         dispose() {
+            this.disposed = true;
+            if (this.exp) this.exp.cancel = true;
+            this.menu?.remove();
+            this.menu = null;
+            this.notice?.remove();
+            this.spinner.remove();
             this.layer?.remove();
             this.layer = null;
             this.button.remove();
@@ -1632,16 +1936,489 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         saveRecording(rec) {
             if (rec.saved || !rec.chunks.length) return;
             rec.saved = true;
-            const ext = rec.mimeType.startsWith("video/mp4") ? "mp4" : "webm";
-            const blob = new Blob(rec.chunks, { type: rec.mimeType.split(";")[0] });
+            this.download(new Blob(rec.chunks, { type: rec.mimeType.split(";")[0] }), rec.mimeType.startsWith("video/mp4") ? "mp4" : "webm", rec.name);
+        }
+
+        download(blob, ext, name) {
             const clean = (x) => String(x).replace(/[\\/:*?"<>|]+/g, "").trim();
             const a = document.createElement("a");
             a.href = URL.createObjectURL(blob);
-            a.download = clean((this.o.trackName ? this.o.trackName + " - " : "") + rec.name) + "." + ext;
+            a.download = clean((this.o.trackName ? this.o.trackName + " - " : "") + name) + "." + ext;
             document.body.appendChild(a);
             a.click();
             a.remove();
-            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+            setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        }
+
+        toggleSaveMenu() {
+            if (this.menu) {
+                this.menu.remove();
+                this.menu = null;
+                window.removeEventListener("pointerdown", this.onMenuAway, true);
+                return;
+            }
+            let chosen = "auto";
+            try {
+                chosen = localStorage.getItem("nsws_save_size") ?? "auto";
+            } catch (e) {}
+            const menu = this.menu = el("div", "nsws-save-menu", document.body);
+            el("p", "", menu).textContent = "Save video";
+            for (const size of SAVE_SIZES) {
+                const b = el("button", "button" + (size.id === chosen ? " selected" : ""), menu);
+                b.textContent = size.label;
+                b.addEventListener("click", () => {
+                    this.o.playClick?.();
+                    try {
+                        localStorage.setItem("nsws_save_size", size.id);
+                    } catch (e) {}
+                    this.toggleSaveMenu();
+                    this.exportVideo(size);
+                });
+            }
+            const r = this.saveBtn.getBoundingClientRect();
+            menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+            menu.style.bottom = Math.round(window.innerHeight - r.top + 6) + "px";
+            this.onMenuAway = (e) => {
+                if (!menu.contains(e.target) && !this.saveBtn.contains(e.target)) this.toggleSaveMenu();
+            };
+            window.addEventListener("pointerdown", this.onMenuAway, true);
+        }
+
+        exportUI(exp) {
+            this.notice?.remove();
+            const box = this.notice = el("div", "nsws-export", document.body);
+            const inner = el("div", "", box);
+            const title = el("p", "", inner);
+            title.textContent = "Saving video";
+            const label = el("p", "note", inner);
+            const track = el("div", "track", inner);
+            const fill = el("i", "", track);
+            const button = el("button", "button", inner);
+            button.textContent = "Cancel";
+            button.addEventListener("click", () => {
+                this.o.playClick?.();
+                exp.cancel = true;
+            });
+            let last = "";
+            return {
+                set: (text, frac) => {
+                    const t = text + (null != frac ? " " + Math.floor(clamp(frac, 0, 1) * 100) + "%" : "");
+                    if (t !== last) label.textContent = last = t;
+                    fill.style.width = (clamp(frac ?? 0, 0, 1) * 100).toFixed(1) + "%";
+                },
+                done: (head, note) => {
+                    box.classList.add("done");
+                    title.textContent = head;
+                    label.textContent = note ?? "";
+                    track.remove();
+                    button.textContent = "OK";
+                    const close = () => box.remove();
+                    button.onclick = () => {
+                        this.o.playClick?.();
+                        close();
+                    };
+                    setTimeout(close, 9000);
+                },
+                remove: () => box.remove()
+            };
+        }
+
+        // Saving draws the replay again frame by frame, as fast as the device allows, and encodes
+        // it straight to MP4: no screen capture, no waiting for it to play, and the same video
+        // whatever size the window is. Overlays are drawn onto the frames. Browsers without
+        // WebCodecs fall back to recording the tab.
+        async exportVideo(size) {
+            if (this.exp || this.rec) return;
+            if (!window.VideoEncoder || !window.VideoFrame) return this.startRecording();
+            const o = this.o;
+            const exp = this.exp = { cancel: false };
+            this.saveBtn.classList.add("on");
+            const ui = this.exportUI(exp);
+            const prevTime = o.getTime(), prevPaused = o.isPaused();
+            const sfx = o.audio?.destinationSfx ?? null, prevGain = sfx?.gain.value;
+            let result = null, error = null;
+            try {
+                result = await this.runExport(exp, ui, size, () => {
+                    // Everything below the replay's own clock is ours now; silence the fast-forward.
+                    this.exporting = true;
+                    if (sfx) {
+                        sfx.gain.cancelScheduledValues(0);
+                        sfx.gain.value = 0;
+                    }
+                });
+            } catch (e) {
+                error = e;
+                console.error(e);
+            } finally {
+                this.exporting = false;
+                o.render.sizeOverride = null;
+                if (sfx) sfx.gain.value = prevGain;
+                if (!this.disposed) {
+                    o.setTime(prevTime);
+                    o.setPaused(prevPaused);
+                }
+                this.exp = null;
+                this.saveBtn.classList.remove("on");
+                this.lastPassed = -1;
+            }
+            if (this.disposed || exp.cancel) return ui.remove();
+            if (result === "fallback") {
+                ui.remove();
+                return this.startRecording();
+            }
+            if (!result) return ui.done("Couldn't save the video", error ? String(error.message ?? error) : "");
+            const run = o.getRuns()[o.getFocus()];
+            this.download(result.blob, "mp4", run.settings.nickname ?? "run");
+            const mb = (result.blob.size / 1048576).toFixed(1);
+            let note = result.width + "\u00d7" + result.height + ", " + result.fps + " fps, " + mb + " MB";
+            if (result.height < 720) note += ". The resolution had to drop to " + result.height + "p to reach this size; pick a bigger size for a sharper video.";
+            ui.done("Video saved", note);
+        }
+
+        async runExport(exp, ui, size, begin) {
+            const o = this.o, runs = o.getRuns(), focus = o.getFocus(), run = runs[focus];
+            const total = o.totalTime?.() ?? 0;
+            const finish = (run.settings.time?.numberOfFrames ?? 0) / 1000;
+            o.setPaused(true);
+            const loaded = () => Math.min(...runs.map((r) => r.replay.getLastFrame().numberOfFrames));
+            const need = Math.round(total * 1000) - 1;
+            let seen = -1, since = performance.now();
+            while (!exp.cancel && loaded() < need) {
+                const l = loaded();
+                if (l !== seen) {
+                    seen = l;
+                    since = performance.now();
+                } else if (performance.now() - since > 4000) break;
+                ui.set("Loading runs", l / need);
+                await new Promise((r) => setTimeout(r, 100));
+            }
+            const end = Math.min(finish + 4, loaded() / 1000);
+            if (this.enabled) {
+                for (const r of runs) this.pathOf(r).sync();
+                const planner = this.plannerFor(runs, focus);
+                let mark = planner.plannedTo;
+                since = performance.now();
+                while (!exp.cancel && !planner.done) {
+                    planner.step(30);
+                    if (planner.plannedTo !== mark) {
+                        mark = planner.plannedTo;
+                        since = performance.now();
+                    } else if (performance.now() - since > 3000) break;
+                    ui.set("Planning shots", planner.plannedTo / end);
+                    await yieldTask();
+                }
+            }
+            if (exp.cancel) return null;
+            const D = end + 0.1;
+            const cap = size.cap ?? null;
+            let rate = cap ? cap * 8 * 0.96 / D : BASE_RATE * (size.rate ?? 1);
+            begin();
+            for (let pass = 0; pass < 3; pass++) {
+                const cfg = await encoderConfig(rate, !!cap);
+                if (!cfg) return pass ? null : "fallback";
+                const out = await this.renderPass(exp, ui, cfg, end, pass);
+                if (!out) return null;
+                // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
+                if (cap && out.blob.size > cap && pass < 2) {
+                    rate *= cap / out.blob.size * 0.9;
+                    continue;
+                }
+                return out;
+            }
+            return null;
+        }
+
+        async renderPass(exp, ui, cfg, end, pass) {
+            const o = this.o, W = cfg.width, H = cfg.height, fps = cfg.framerate;
+            o.render.sizeOverride = { width: W, height: H };
+            const canvas = document.createElement("canvas");
+            canvas.width = W;
+            canvas.height = H;
+            const g = canvas.getContext("2d", { alpha: false });
+            const chunks = [];
+            let desc = null, failed = null;
+            const enc = new VideoEncoder({
+                output: (chunk, meta) => {
+                    const data = new Uint8Array(chunk.byteLength);
+                    chunk.copyTo(data);
+                    chunks.push({ data, key: chunk.type === "key" });
+                    const d = meta?.decoderConfig?.description;
+                    if (d && !desc) desc = new Uint8Array(ArrayBuffer.isView(d) ? d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) : d.slice(0));
+                },
+                error: (e) => failed = e
+            });
+            enc.configure(cfg);
+            if (this.enabled) this.viewer.reset();
+            const n = Math.floor(end * fps) + 1;
+            try {
+                for (let k = 0; k < n; k++) {
+                    if (exp.cancel || this.disposed) return null;
+                    if (failed) throw failed;
+                    this.expT = k / fps;
+                    o.setPaused(false);
+                    o.setTime(k ? (k - 1) / fps : 0);
+                    o.step(k ? 1 / fps : 0);
+                    g.fillStyle = "#000";
+                    g.fillRect(0, 0, W, H);
+                    g.drawImage(o.render.canvas, 0, 0, W, H);
+                    this.paintOverlay(g, W, H, this.expT);
+                    const frame = new VideoFrame(canvas, { timestamp: Math.round(k * 1e6 / fps), duration: Math.round(1e6 / fps) });
+                    enc.encode(frame, { keyFrame: k % (fps * 4) === 0 });
+                    frame.close();
+                    ui.set(pass ? "Fitting it under the size" : "Rendering", (k + 1) / n);
+                    while (enc.encodeQueueSize > 3 && !failed) await new Promise((r) => setTimeout(r, 1));
+                    await yieldTask();
+                }
+                await enc.flush();
+                if (failed) throw failed;
+            } finally {
+                if (enc.state !== "closed") enc.close();
+            }
+            const vp9 = cfg.codec.startsWith("vp09");
+            if (!chunks.length || !vp9 && !desc) throw new Error("The encoder produced no video");
+            return { blob: muxMp4({ vp9, desc, width: W, height: H, fps, chunks }), width: W, height: H, fps };
+        }
+
+        readPalette() {
+            const root = getComputedStyle(document.documentElement), body = getComputedStyle(this.o.uiElement ?? document.body);
+            const v = (name, d) => root.getPropertyValue(name).trim() || d;
+            return {
+                surface: v("--surface-color", "#28346a"),
+                surface2: v("--surface-secondary-color", "#212b5a"),
+                surface3: v("--surface-tertiary-color", "#192042"),
+                font: body.fontFamily || "sans-serif",
+                style: body.fontStyle === "italic" ? "italic" : "normal"
+            };
+        }
+
+        // The overlays, drawn onto an exported frame: the same layout as on screen, sized to the video.
+        paintOverlay(g, W, H, t) {
+            const o = this.o, runs = o.getRuns(), focus = o.getFocus(), run = runs[focus], car = run.car;
+            const u = H / 720;
+            const pal = this.palette ??= this.readPalette();
+            const font = (px) => pal.style + " " + (px * u).toFixed(1) + "px " + pal.font;
+            const frame = car.getTime().numberOfFrames;
+            const fin = car.getFinishTime?.();
+            const finAt = null != fin ? fin.numberOfFrames / 1000 : null;
+            const multi = runs.length > 1;
+            const rows = multi ? this.standings(runs) : null;
+            const bar = this.enabled ? Math.round(H * 0.065) : 0;
+            g.save();
+            g.textBaseline = "middle";
+            if (this.enabled) {
+                const tags = this.layoutTags(runs, focus, o.render.camera, W, H, u).filter((x) => x.show).sort((a, b) => b.d - a.d);
+                for (const tag of tags) {
+                    const s = tag.s * u, name = tag.run.settings.nickname ?? "";
+                    g.font = pal.style + " " + (15 * s).toFixed(1) + "px " + pal.font;
+                    const bw = 16 * s + g.measureText(name).width + 9 * s, bh = 23 * s;
+                    const x0 = tag.x - bw / 2, y0 = tag.y - bh;
+                    g.fillStyle = tag.focus ? "rgba(40, 52, 106, 0.9)" : "rgba(25, 32, 66, 0.62)";
+                    g.fillRect(x0, y0, bw, bh);
+                    g.fillStyle = colorOf(tag.run);
+                    g.fillRect(x0 + 5 * s, y0 + 4 * s, 5 * s, 15 * s);
+                    g.fillStyle = "#fff";
+                    g.fillText(name, x0 + 16 * s, y0 + bh / 2 + s);
+                }
+                g.fillStyle = "#000";
+                g.fillRect(0, 0, W, bar);
+                g.fillRect(0, H - bar, W, bar);
+                if (rows) this.paintTower(g, rows, focus, W - 12 * u, bar + 10 * u, u, pal);
+            }
+
+            // The live panel, fading out at the finish.
+            const panelAlpha = null == finAt ? 1 : 1 - clamp((t - finAt) / 0.3, 0, 1);
+            if (panelAlpha > 0) {
+                g.globalAlpha = panelAlpha;
+                const me = rows ? rows.findIndex((r) => r.i === focus) : 0;
+                g.font = font(22);
+                const parts = [];
+                if (multi) parts.push({ text: (me + 1) + "/" + runs.length, size: 22, bg: "#334b77", l: 18, r: 14 });
+                parts.push({ text: run.settings.nickname ?? "", size: 22, l: 14, r: 14, chip: colorOf(run) });
+                parts.push({ text: formatTime(null != fin ? fin.numberOfFrames : frame), size: 22, bg: pal.surface3, l: 14, r: 14, min: g.measureText("0").width / u * 7.2, right: true });
+                parts.push({ text: Math.round(Math.abs(car.getSpeedKmh())) + " km/h", size: 16, bg: pal.surface3, l: 14, r: 18, alpha: 0.7 });
+                const rh = 36 * u;
+                let y = H - bar - (this.enabled ? 10 : 18) * u - rh;
+                const rw = rowWidth(g, parts, u, pal);
+                drawRow(g, parts, (W - rw) / 2, y, rh, 8 * u, u, pal, pal.surface);
+                const boxAbove = (text, size, bg, color, alpha, padY) => {
+                    g.font = font(size);
+                    const bw = g.measureText(text).width + 24 * u, bh = (size + 2 * padY) * u;
+                    y -= 4 * u + bh;
+                    g.fillStyle = bg;
+                    g.fillRect((W - bw) / 2, y, bw, bh);
+                    g.globalAlpha = panelAlpha * alpha;
+                    g.fillStyle = color;
+                    g.fillText(text, (W - bw) / 2 + 12 * u, y + bh / 2 + u);
+                    g.globalAlpha = panelAlpha;
+                };
+                if (o.trackName) boxAbove(o.trackName, 14, "rgba(25, 32, 66, 0.75)", "#fff", 0.85, 3);
+                // Split against the best other run at the checkpoint just passed, for 2.6 s.
+                let passed = 0;
+                for (const c of run.checkpointTimes)
+                    if (c.numberOfFrames <= frame) passed++;
+                const cp = passed > 0 ? run.checkpointTimes[passed - 1].numberOfFrames : null;
+                if (multi && null != cp && frame - cp < 2600) {
+                    let best = null;
+                    for (let i = 0; i < runs.length; i++) {
+                        const c = i === focus ? null : runs[i].checkpointTimes[passed - 1];
+                        if (c && (null == best || c.numberOfFrames < best)) best = c.numberOfFrames;
+                    }
+                    if (null != best) {
+                        const diff = cp - best;
+                        boxAbove((diff <= 0 ? "-" : "+") + (Math.abs(diff) / 1000).toFixed(3), 20, "rgba(25, 32, 66, 0.85)", diff <= 0 ? "#7fe08a" : "#ff8a80", 1, 4);
+                    }
+                }
+                g.globalAlpha = 1;
+            }
+
+            if (null != finAt && t >= finAt) this.paintCard(g, runs, focus, run, fin.numberOfFrames, t - finAt, W, H, bar, u, pal);
+            if (!document.body.classList.contains("nsws-hide-inputs")) this.paintInputs(g, H - bar - 18 * u, u);
+            if (this.enabled && t < 0.7) {
+                g.globalAlpha = 1 - t / 0.7;
+                g.fillStyle = "#000";
+                g.fillRect(0, 0, W, H);
+            }
+            g.restore();
+        }
+
+        paintTower(g, rows, focus, right, top, u, pal) {
+            const MAX = 10;
+            let list = rows.slice(0, MAX);
+            const meAt = rows.findIndex((r) => r.i === focus);
+            if (meAt >= MAX) list = rows.slice(0, MAX - 1).concat([rows[meAt]]);
+            const lead = rows[0];
+            g.font = pal.style + " " + (15 * u).toFixed(1) + "px " + pal.font;
+            const items = list.map((r) => {
+                let gap = "";
+                if (null != r.finished) gap = r === lead ? formatTime(r.finished) : "+" + ((r.finished - lead.finished) / 1000).toFixed(3);
+                else if (r !== lead && r.passed > 0) {
+                    const c = lead.run.checkpointTimes[r.passed - 1];
+                    if (c) gap = "+" + ((r.lastCp - c.numberOfFrames) / 1000).toFixed(3);
+                }
+                let name = r.run.settings.nickname ?? "";
+                while (name.length > 1 && g.measureText(name).width > 150 * u) name = name.slice(0, -2) + "\u2026";
+                return { r, name, gap, nw: g.measureText(name).width, gw: gap ? g.measureText(gap).width : 0 };
+            });
+            const posW = g.measureText("00").width + 14 * u;
+            const width = posW + 4 * u + Math.max(...items.map((x) => x.nw)) + 14 * u + Math.max(0, ...items.map((x) => x.gw ? x.gw + 19 * u : 0));
+            const rh = 23 * u, x0 = right - width;
+            items.forEach((it, n) => {
+                const y = top + n * (rh + 2 * u), place = rows.indexOf(it.r) + 1;
+                g.fillStyle = it.r.i === focus ? "rgba(51, 75, 119, 0.92)" : "rgba(25, 32, 66, 0.72)";
+                g.fillRect(x0, y, width, rh);
+                g.fillStyle = "rgba(0, 0, 0, 0.25)";
+                g.fillRect(x0, y, posW, rh);
+                g.fillStyle = colorOf(it.r.run);
+                g.fillRect(x0 + posW, y, 4 * u, rh);
+                g.fillStyle = "#fff";
+                g.textAlign = "center";
+                g.fillText(String(place), x0 + posW / 2, y + rh / 2 + u);
+                g.textAlign = "left";
+                g.fillText(it.name, x0 + posW + 11 * u, y + rh / 2 + u);
+                if (it.gap) {
+                    g.globalAlpha = 0.75;
+                    g.textAlign = "right";
+                    g.fillText(it.gap, right - 7 * u, y + rh / 2 + u);
+                    g.textAlign = "left";
+                    g.globalAlpha = 1;
+                }
+            });
+        }
+
+        paintCard(g, runs, focus, run, finishFrames, since, W, H, bar, u, pal) {
+            const a = clamp(since / 0.3, 0, 1), m = 1 - Math.pow(1 - clamp(since / 0.45, 0, 1), 3);
+            const font = (px) => pal.style + " " + (px * u).toFixed(1) + "px " + pal.font;
+            const name = run.settings.nickname ?? "", time = formatTime(finishFrames);
+            let place = null;
+            if (runs.length > 1) {
+                const times = runs.map((r, i) => ({ i, f: r.settings.time?.numberOfFrames ?? 1e12 })).sort((x, y) => x.f - y.f);
+                place = times.findIndex((x) => x.i === focus) + 1;
+            }
+            g.font = font(40);
+            const pw = place ? g.measureText(String(place)).width + (g.font = font(20), g.measureText(ordinal(place)).width) + 44 * u : 0;
+            g.font = font(28);
+            const nw = g.measureText(name).width + 16 * u;
+            g.font = font(16);
+            const tw = this.o.trackName ? g.measureText(this.o.trackName).width : 0;
+            g.font = font(32);
+            const rw = g.measureText(time).width + 48 * u;
+            const ww = Math.max(nw, tw) + 40 * u;
+            const h = 80 * u, w = pw + ww + rw;
+            const x = (W - w) / 2, y = H - bar - 0.09 * H - h - 3 * u + 40 * u * (1 - m);
+            g.save();
+            g.globalAlpha = a;
+            g.beginPath();
+            const sk = 10 * u;
+            g.moveTo(x + sk, y);
+            g.lineTo(x + w, y);
+            g.lineTo(x + w - sk, y + h + 3 * u);
+            g.lineTo(x, y + h + 3 * u);
+            g.closePath();
+            g.clip();
+            g.fillStyle = "#7272c2";
+            g.fillRect(x, y, w, h + 3 * u);
+            g.fillStyle = "#334b77";
+            g.fillRect(x, y, pw, h);
+            g.fillStyle = pal.surface2;
+            g.fillRect(x + pw, y, ww, h);
+            g.fillStyle = pal.surface3;
+            g.fillRect(x + pw + ww, y, rw, h);
+            g.fillStyle = "#fff";
+            if (place) {
+                g.font = font(40);
+                const p = String(place);
+                g.fillText(p, x + 24 * u, y + h / 2 + 2 * u);
+                const px = x + 24 * u + g.measureText(p).width + 2 * u;
+                g.font = font(20);
+                g.fillText(ordinal(place), px, y + h / 2 + 8 * u);
+            }
+            const wx = x + pw + 20 * u;
+            g.fillStyle = colorOf(run);
+            g.fillRect(wx, y + 14 * u + 1 * u, 6 * u, 26 * u);
+            g.fillStyle = "#fff";
+            g.font = font(28);
+            g.fillText(name, wx + 16 * u, y + (this.o.trackName ? 29 : 40) * u);
+            if (this.o.trackName) {
+                g.globalAlpha = a * 0.6;
+                g.font = font(16);
+                g.fillText(this.o.trackName, wx, y + 58 * u);
+                g.globalAlpha = a;
+            }
+            g.textAlign = "right";
+            const rx = x + w - 26 * u;
+            g.globalAlpha = a * 0.6;
+            g.font = font(14);
+            g.fillText("Time", rx, y + 25 * u);
+            g.globalAlpha = a;
+            g.font = font(32);
+            g.fillText(time, rx, y + 52 * u);
+            g.restore();
+        }
+
+        paintInputs(g, bottom, u) {
+            const c = this.o.getControls?.();
+            if (!c) return;
+            const k = 34 * u, gap = 4 * u, x = 24 * u;
+            const key = (kx, ky, on, rot) => {
+                g.fillStyle = on ? "rgba(255, 255, 255, 0.92)" : "rgba(25, 32, 66, 0.6)";
+                g.fillRect(kx, ky, k, k);
+                g.save();
+                g.translate(kx + k / 2, ky + k / 2);
+                g.rotate(rot);
+                g.fillStyle = on ? "#192042" : "#fff";
+                g.beginPath();
+                g.moveTo(0, -k * 0.24);
+                g.lineTo(k * 0.22, k * 0.14);
+                g.lineTo(-k * 0.22, k * 0.14);
+                g.closePath();
+                g.fill();
+                g.restore();
+            };
+            const y1 = bottom - k, y0 = y1 - gap - k;
+            key(x + k + gap, y0, c.up, 0);
+            key(x, y1, c.left, -Math.PI / 2);
+            key(x + k + gap, y1, c.down, Math.PI);
+            key(x + 2 * (k + gap), y1, c.right, Math.PI / 2);
         }
 
         pathOf(run) {
@@ -1751,6 +2528,24 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out.lens = 0.25;
                 break;
             }
+            case "loop":
+                if (shot.side) {
+                    // Drifting along beside the loop, the frame leaning towards the car.
+                    pos.copy(shot.cam).addScaledVector(shot.dir, (k - 0.5) * shot.rl * 0.4);
+                    look.copy(shot.center).lerp(P, 0.5);
+                    const reach = Math.max(shot.rl * 1.3, look.distanceTo(P) + 2.5);
+                    out.fov = clamp(2 * Math.atan(reach / Math.max(pos.distanceTo(look), 1)) * 180 / Math.PI, 30, 80);
+                    out.lens = 0.6;
+                } else {
+                    const T3 = path.tangent3(t, e[3], e[4]) ?? e[3].copy(Hs);
+                    const U = path.carUp(t, e[4]);
+                    pos.copy(P).addScaledVector(T3, -shot.d).addScaledVector(U, shot.h);
+                    look.copy(P).addScaledVector(T3, 3).addScaledVector(U, 0.5);
+                    out.up.copy(U);
+                    out.fov = 64 + Math.min(speed, 500) * 0.03;
+                    out.lens = 0.4;
+                }
+                break;
             case "finish":
             case "tele":
             case "curb":
@@ -1819,11 +2614,16 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const car = run.car;
             this.viewer.tick(dt);
             if (this.rec && car.getTime().numberOfFrames / 1000 >= this.rec.end) this.stopRecording();
+            const time = o.getTime?.() ?? 0;
+            const stalled = !o.isPaused?.() && !o.isDragging?.() && time === this.prevTime && time < (o.totalTime?.() ?? 0) - 1e-3;
+            this.prevTime = time;
             const P = car.getPosition();
             const pivot = this.pivot.copy(P).addScaledVector(this.up, 0.6);
             if (!this.enabled) {
+                this.holding = false;
+                this.showWaiting(stalled);
                 if (!o.isSpectator()) this.viewer.apply(o.render.camera, pivot, o.render.camera === car.cameraCockpit);
-                ghostLod(runs.map((r) => r.car), car, o.render.camera, 1);
+                ghostLod(runs.map((r) => r.car), car, o.render.camera, 1, this.clock());
                 return;
             }
             const frame = car.getTime().numberOfFrames;
@@ -1832,6 +2632,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             for (const r of runs) this.pathOf(r).sync();
             const planner = this.plannerFor(runs, focus);
             planner.step(planner.plannedTo < t + 2 ? 12 : 4);
+            this.holding = !this.exporting && !planner.done && planner.plannedTo < t + 0.3;
+            this.showWaiting(stalled || this.holding);
             const i = planner.shotAt(t);
             const shot = this.shot = i >= 0 ? planner.shots[i] : HOLD;
             const view = this.viewOf(shot, t, P, planner.path, this.viewA, this.viewB, true);
@@ -1860,11 +2662,28 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 correct: this.correct
             });
 
-            // Cinematic shots sit close to the car, so ghosts overlapping it are hidden more widely.
-            ghostLod(runs.map((r) => r.car), car, viewCam, 2.6);
+            ghostLod(runs.map((r) => r.car), car, viewCam, 1, this.clock());
             this.fadeCars(runs, focus, viewCam, P);
+            if (this.exporting) return;
             this.updateTags(runs, focus, viewCam);
             this.updatePanels(runs, focus, run, frame, speed);
+        }
+
+        clock() {
+            return this.exporting ? this.expT : performance.now() / 1000;
+        }
+
+        // Shows the spinner while playback waits, for the replays to load that far or for the
+        // director to plan the moment shown (playback holds for that, see `holding`).
+        showWaiting(waiting) {
+            const now = performance.now();
+            if (!waiting) this.waitSince = null;
+            else this.waitSince ??= now;
+            const show = null != this.waitSince && now - this.waitSince > 150 && !this.exporting;
+            if (show !== this.spinnerShown) {
+                this.spinnerShown = show;
+                this.spinner.classList.toggle("shown", show);
+            }
         }
 
         // Blends view `a` into `b` (which receives the result) by x. The camera swings round the
@@ -1901,6 +2720,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (i !== focus) {
                     const Q = car.getPosition();
                     op = clamp((Q.distanceTo(C) - 2) / 5, 0, 1);
+                    // A ghost running into the followed car fades out rather than vanishing.
+                    op = Math.min(op, clamp((Q.distanceTo(P) - 1) / 1.6, 0, 1));
                     const k = clamp(this.v[7].subVectors(Q, C).dot(seg) / len2, 0, 1);
                     if (k > 0 && k < 0.92) {
                         const off = this.v[7].copy(C).addScaledVector(seg, k).distanceTo(Q);
@@ -1928,16 +2749,48 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return { u: v.x * 0.5 + 0.5, v: v.y * 0.5 + 0.5 };
         }
 
-        updateTags(runs, focus, cam) {
-            if (!this.layer) return;
-            const W = window.innerWidth, Hh = window.innerHeight;
+        // Where each nametag goes on a W x H view (sizes times px), the followed car's first and
+        // then nearest first, dropping any that would mostly cover one already placed.
+        layoutTags(runs, focus, cam, W, H, px) {
             const camPos = cam.getWorldPosition(this.v[5]);
-            const seen = new Set();
             const carUp = this.v[6];
-            const placed = [];
             const want = [];
             for (let i = 0; i < runs.length; i++) {
                 const run = runs[i];
+                const P = run.car.getPosition();
+                carUp.set(0, 1, 0).applyQuaternion(run.car.getQuaternion());
+                P.addScaledVector(carUp, 1.55);
+                const d = P.distanceTo(camPos);
+                const uv = d > 2.2 && d < 170 ? this.project(cam, P) : null;
+                const show = !!uv && uv.u > -0.1 && uv.u < 1.1 && uv.v > -0.1 && uv.v < 1.1;
+                want.push({ i, run, uv, d, show, focus: i === focus, x: 0, y: 0, s: 1 });
+            }
+            want.sort((a, b) => (b.i === focus) - (a.i === focus) || a.d - b.d);
+            const placed = [];
+            for (const t of want) {
+                if (!t.show) continue;
+                t.s = clamp(9 / t.d, 0.62, 1.1);
+                t.x = t.uv.u * W;
+                t.y = (1 - t.uv.v) * H;
+                const w = ((t.run.settings.nickname ?? "").length * 9.5 + 24) * t.s * px, h = 23 * t.s * px;
+                const box = [t.x - w / 2, t.y - h, t.x + w / 2, t.y];
+                for (const b of placed) {
+                    const ox = Math.min(box[2], b[2]) - Math.max(box[0], b[0]);
+                    const oy = Math.min(box[3], b[3]) - Math.max(box[1], b[1]);
+                    if (ox > 0 && oy > h * 0.35 && ox > Math.min(w, b[2] - b[0]) * 0.3) {
+                        t.show = false;
+                        break;
+                    }
+                }
+                if (t.show) placed.push(box);
+            }
+            return want;
+        }
+
+        updateTags(runs, focus, cam) {
+            if (!this.layer) return;
+            const seen = new Set();
+            for (const { run, show, focus: isFocus, x: tx, y: ty, s: ts, d } of this.layoutTags(runs, focus, cam, window.innerWidth, window.innerHeight, 1)) {
                 let tag = this.tagEls.get(run);
                 if (!tag) {
                     const e = el("div", "nsws-cine-tag", this.tags);
@@ -1948,45 +2801,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     this.tagEls.set(run, tag);
                 }
                 seen.add(run);
-                const P = run.car.getPosition();
-                carUp.set(0, 1, 0).applyQuaternion(run.car.getQuaternion());
-                P.addScaledVector(carUp, 1.55);
-                const d = P.distanceTo(camPos);
-                const uv = d > 2.2 && d < 170 ? this.project(cam, P) : null;
-                const show = !!uv && uv.u > -0.1 && uv.u < 1.1 && uv.v > -0.1 && uv.v < 1.1;
-                want.push({ i, run, tag, uv, d, show });
-            }
-            want.sort((a, b) => (b.i === focus) - (a.i === focus) || a.d - b.d);
-            for (const { i, run, tag, uv, d } of want) {
-                let show = want.find((w) => w.tag === tag).show;
-                let box = null;
-                if (show) {
-                    const sc = clamp(9 / d, 0.62, 1.1);
-                    const w = ((run.settings.nickname ?? "").length * 9.5 + 24) * sc, h = 23 * sc;
-                    const x = uv.u * W, y = (1 - uv.v) * Hh;
-                    box = [x - w / 2, y - h, x + w / 2, y];
-                    for (const b of placed) {
-                        const ox = Math.min(box[2], b[2]) - Math.max(box[0], b[0]);
-                        const oy = Math.min(box[3], b[3]) - Math.max(box[1], b[1]);
-                        if (ox > 0 && oy > h * 0.35 && ox > Math.min(w, b[2] - b[0]) * 0.3) {
-                            show = false;
-                            break;
-                        }
-                    }
-                }
                 if (show !== tag.shown) {
                     tag.e.style.display = show ? "" : "none";
                     tag.shown = show;
                 }
-                const isFocus = i === focus;
                 if (isFocus !== tag.focus) {
                     tag.e.classList.toggle("focus", isFocus);
                     tag.focus = isFocus;
                 }
                 if (!show) continue;
-                placed.push(box);
-                const x = Math.round(uv.u * W), y = Math.round((1 - uv.v) * Hh);
-                const s = Math.round(clamp(9 / d, 0.62, 1.1) * 100) / 100;
+                const x = Math.round(tx), y = Math.round(ty);
+                const s = Math.round(ts * 100) / 100;
                 if (x !== tag.x || y !== tag.y || s !== tag.s) {
                     tag.e.style.transform = "translate(" + x + "px," + y + "px) translate(-50%,-100%) scale(" + s + ")";
                     tag.x = x;
