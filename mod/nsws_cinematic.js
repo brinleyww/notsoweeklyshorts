@@ -10,6 +10,11 @@ body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .nsws-cine-bright > input::-moz-range-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
 .nsws-cine-bright > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
 .nsws-cine-bright > input::-moz-range-thumb { width: 8px; height: 16px; border: 3px solid var(--button-color); }
+.time-bar-ui > button > svg { margin: 0 0 2px 0; vertical-align: middle; width: 28px; height: 28px; pointer-events: none; }
+.time-bar-ui > .button.nsws-watch-inputs.off > svg { opacity: 0.35; }
+.time-bar-ui > .button.nsws-watch-save.on { background-color: #8a2a3a; }
+body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
+body.nsws-recording .time-bar-ui, body.nsws-recording .preview-toolbar-ui, body.nsws-recording #_nsws-cps { opacity: 0 !important; pointer-events: none !important; }
 body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-on .checkpoint-ui { display: none !important; }
 .nsws-cine-layer { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
 .nsws-cine-layer * { line-height: 1; }
@@ -101,6 +106,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack"];
     const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1 };
     const LAMBDA = { heli: 1.6, pack: 2 };
+    // Camera shake per shot type, in radians at full speed.
+    const SHAKE = { chase: 0.006, front: 0.005, side: 0.004, curb: 0.007, tele: 0.003, orbit: 0.002, heli: 0.002, pack: 0.003, finish: 0.002 };
     const HOLD = { type: "chase", t0: 0, t1: Infinity, d: 5.8, h: 1.5, s: 0, high: false };
     const WAIT = {};
 
@@ -342,6 +349,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.total = Math.max(...runs.map((r) => r.settings.time?.numberOfFrames ?? 0)) / 1000 + 10;
             this.encl = new Map();
             this.bat = new Map();
+            this.grp = new Map();
             this.w = [0, 1, 2, 3, 4, 5].map(() => new T.Vector3());
             this.view = { pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true };
             this.view2 = { pos: new T.Vector3(), look: new T.Vector3(), up: new T.Vector3(0, 1, 0), fov: 60, roll: 0, lens: 0.45, moving: true };
@@ -419,7 +427,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 let best = null;
                 for (const strict of [true, false]) {
                     for (const c of cands) {
-                        if (best && c.base + 0.3 <= best.score) break;
+                        if (best && c.base + 0.3 + 0.225 + 0.35 <= best.score) break;
                         yield;
                         if (this.check(c, strict) && (!best || c.score > best.score || c.score === best.score && c.order < best.order)) best = c;
                     }
@@ -476,7 +484,15 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return { type: "orbit", end: true, t0: finish, t1: Infinity, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50 };
         }
 
+        // A shot's shape, plus a phase for its camera shake and, for some, a slow Dutch tilt.
         rideParams(type, v, R) {
+            const p = this.rideShape(type, v, R);
+            p.ph = R() * 1000;
+            if (type !== "chase" && type !== "pack" && R() < 0.6) p.dutch = (R() < 0.5 ? -1 : 1) * (0.03 + R() * 0.05);
+            return p;
+        }
+
+        rideShape(type, v, R) {
             const side = R() < 0.5 ? -1 : 1;
             switch (type) {
             case "chase":
@@ -484,7 +500,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "orbit":
                 return { dist: 6.2 + R() * 2, h: 1.2 + R() * 1.2, theta: side * (0.5 + R() * 1.4), omega: -side * (0.25 + R() * 0.2), fov: 52 + R() * 8 };
             case "heli":
-                return { back: 9 + R() * 5, up: 8 + R() * 5, s: side * R() * 5 };
+                return { back: 10 + R() * 5, up: 5 + R() * 3, s: side * R() * 5 };
             case "side":
                 return { side: v === 0 ? -1 : 1, dist: 6.5 + R() * 2.5, h: 0.9 + R() * 1.1, lead0: -3 + R() * 2, lead1: 1 + R() * 3 };
             case "front":
@@ -557,8 +573,41 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return v;
         }
 
+        // Other cars near the followed one at time t, counted with soft weights (0 at 45 u, 1 at 25 u).
+        group(t) {
+            const key = Math.round(t * 10);
+            let v = this.grp.get(key);
+            if (null == v) {
+                v = 0;
+                const P = this.path.pos(key / 10, this.w[4]);
+                for (const r of this.runs)
+                    if (r !== this.run) v += clamp((45 - this.c.pathOf(r).pos(key / 10, this.w[5]).distanceTo(P)) / 20, 0, 1);
+                this.grp.set(key, v);
+            }
+            return v;
+        }
+
+        // Whether most of the group around the followed car is behind it over a stretch.
+        packFront(a, b) {
+            let ahead = 0, behind = 0;
+            const H = this.w[3], P = this.w[4], q = this.w[5];
+            for (let t = a; t <= b; t += 0.25) {
+                this.path.heading(t, 4.5, H);
+                this.path.pos(t, P);
+                for (const r of this.runs) {
+                    if (r === this.run) continue;
+                    this.c.pathOf(r).pos(t, q);
+                    if (q.distanceTo(P) > 40) continue;
+                    const along = q.sub(P).dot(H);
+                    if (along > 3) ahead++;
+                    else if (along < -3) behind++;
+                }
+            }
+            return behind >= 2 && behind > ahead * 1.3;
+        }
+
         features(a, b) {
-            let n = 0, spd = 0, yaw = 0, air = 0, bat = 0, enc = 0;
+            let n = 0, spd = 0, yaw = 0, air = 0, bat = 0, enc = 0, grp = 0;
             const P = this.path;
             for (let t = a; t <= b; t += 0.1, n++) {
                 const i = Math.round(t / DT);
@@ -566,10 +615,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 yaw += Math.abs(P.yawRaw(i));
                 air += P.air[Math.min(i, P.n - 1)];
                 bat += this.runs.length > 1 ? this.battle(t) : 0;
+                grp += this.runs.length > 1 ? this.group(t) : 0;
                 enc += this.enclosed(t);
             }
             n = Math.max(1, n);
-            return { spd: spd / n, yaw: yaw / n, air: air / n, bat: bat / n, enc: enc / n };
+            return { spd: spd / n, yaw: yaw / n, air: air / n, bat: bat / n, grp: grp / n, enc: enc / n };
         }
 
         suitability(type, f, anchored) {
@@ -580,7 +630,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "heli": return 0.38 + 0.2 * yawN - 0.8 * f.enc;
             case "side": return 0.42 + 0.55 * f.air + (f.spd > 200 && f.yaw < 0.4 ? 0.2 : 0) - 0.4 * f.enc;
             case "front": return 0.38 + (f.yaw < 0.35 ? 0.15 : 0) - 0.3 * yawN - 0.4 * f.enc;
-            case "pack": return f.bat < 0.4 ? -9 : 0.3 + 0.4 * f.bat - 0.3 * f.enc;
+            case "pack": return f.grp < 0.6 ? -9 : 0.3 + 0.12 * Math.min(f.grp, 5) - 0.3 * f.enc;
             case "tele": return 0.6 + 0.25 * anchored - 0.8 * f.enc;
             case "curb": return 0.48 + 0.3 * anchored - 0.8 * f.enc;
             }
@@ -591,7 +641,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         candidate(type, v, R, t0, hardEnd) {
             if (hardEnd - t0 < 0.6) return null;
             let shot;
-            if (RIDE.has(type)) shot = { type, t0, ...this.rideParams(type, v, R), ...this.chooseEnd(t0, hardEnd, R) };
+            if (RIDE.has(type)) {
+                shot = { type, t0, ...this.rideParams(type, v, R), ...this.chooseEnd(t0, hardEnd, R) };
+                if (type === "pack") shot.front = this.packFront(t0, shot.t1);
+            }
             else {
                 shot = this.fixedShot(type, v, R, t0, hardEnd);
                 if (!shot) return null;
@@ -664,7 +717,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (null == t1) t1 = hardEnd;
             if (hardEnd - t1 < 1) t1 = hardEnd;
             if (dmin < 3) return null;
-            return { type, t0, t1, cam: C, ta, anchored: !!ev, aligned: ev ? 1 : 0, fov: type === "tele" ? null : 74 };
+            return { type, t0, t1, cam: C, ta, anchored: !!ev, aligned: ev ? 1 : 0, fov: type === "tele" ? null : 74, ph: R() * 1000 };
         }
 
         // Visibility: fixed cameras need a clear line to the car nearly all the time; cameras
@@ -707,8 +760,79 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 }
                 shot.vis = sum / Math.max(1, n);
             }
-            shot.score = shot.base + 0.3 * shot.vis;
+            shot.comp = this.composition(shot);
+            if (strict && shot.comp < 0.12) return false;
+            const cover = this.coverage(shot);
+            shot.cover = cover ? cover.frac : null;
+            shot.score = shot.base + 0.3 * shot.vis + 0.45 * (shot.comp - 0.5) + (cover ? 0.35 * cover.frac * Math.min(1, cover.near / 2) : 0);
             return true;
+        }
+
+        // Share of the cars near the followed one that the shot keeps in frame, nearer ones
+        // counting more, and how many cars that is about. Null with nobody near.
+        coverage(shot) {
+            if (this.runs.length < 2) return null;
+            const c = this.c, up = c.up, T = c.T;
+            const fwd = this.vf ??= new T.Vector3(), right = this.vr ??= new T.Vector3(), cu = this.vu ??= new T.Vector3();
+            const q = this.vq ??= new T.Vector3(), from = this.vp ??= new T.Vector3();
+            const span = (isFinite(shot.t1) ? shot.t1 : shot.t0 + 3) - shot.t0;
+            let seen = 0, near = 0, samples = 0;
+            for (const k of [0.3, 0.75]) {
+                const t = shot.t0 + span * k;
+                const P = this.path.pos(t, this.w[1]);
+                const view = c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+                from.copy(view.pos);
+                fwd.subVectors(view.look, from).normalize();
+                right.crossVectors(fwd, up);
+                if (right.lengthSq() < 1e-6) continue;
+                right.normalize();
+                cu.crossVectors(right, fwd);
+                const tv = Math.tan(view.fov * Math.PI / 360), th = tv * 16 / 9;
+                samples++;
+                for (const r of this.runs) {
+                    if (r === this.run) continue;
+                    c.pathOf(r).pos(t, q);
+                    const d = q.distanceTo(P);
+                    if (d > 60) continue;
+                    const wt = 1 - d / 60;
+                    near += wt;
+                    q.sub(from);
+                    const z = q.dot(fwd);
+                    if (z > 1 && Math.abs(q.dot(right) / (z * th)) < 0.92 && Math.abs(q.dot(cu) / (z * tv)) < 0.92) seen += wt;
+                }
+            }
+            return near > 0 && samples ? { frac: seen / near, near: near / samples } : null;
+        }
+
+        // How much of the upper frame shows walls, scenery or sky rather than flat road or ground
+        // (0..1). A camera looking down at an empty surface has no sense of place or speed.
+        composition(shot) {
+            const c = this.c, up = c.up, w = this.w, T = c.T;
+            const fwd = this.cf ??= new T.Vector3(), right = this.cr ??= new T.Vector3(), cu = this.cu ??= new T.Vector3();
+            const dir = this.cd ??= new T.Vector3(), to = this.ct ??= new T.Vector3(), from = this.cfrom ??= new T.Vector3();
+            const span = (isFinite(shot.t1) ? shot.t1 : shot.t0 + 3) - shot.t0;
+            let sum = 0, n = 0;
+            for (const k of [0.3, 0.8]) {
+                const t = shot.t0 + span * k;
+                const P = this.path.pos(t, w[1]);
+                const view = c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+                from.copy(view.pos);
+                fwd.subVectors(view.look, from).normalize();
+                right.crossVectors(fwd, up);
+                if (right.lengthSq() < 1e-6) continue;
+                right.normalize();
+                cu.crossVectors(right, fwd);
+                const tv = Math.tan(view.fov * Math.PI / 360), th = tv * 16 / 9;
+                for (const v of [0.35, 0.85])
+                    for (const u of [-0.7, 0, 0.7]) {
+                        dir.copy(fwd).addScaledVector(right, u * th).addScaledVector(cu, v * tv).normalize();
+                        const hit = c.hitDistance(from, to.copy(from).addScaledVector(dir, 300), 0);
+                        if (null == hit) sum += v > 0.5 ? 0.7 : 0.45;
+                        else if (!(c.hitNormal.y > 0.85 && Math.abs(from.y + dir.y * hit - P.y) < 2.5)) sum += 1;
+                        n++;
+                    }
+            }
+            return n ? sum / n : 0.5;
         }
 
         // How far the camera can stay from the car before something is in the way (1 = all of it).
@@ -920,6 +1044,153 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
     }
 
+    // With many ghosts each car costs ~20 draw calls, twice over with its shadow, and most of that
+    // adds nothing: ghosts stacked in one spot, a few pixels tall, or too small to show their rims
+    // and suspension. So: stacked and tiny ghosts are hidden; small ones drop the exhaust and
+    // suspension and draw each wheel (then the body) in one material; only the followed car and
+    // the nearest few ghosts cast shadows or make sound, and only the first 16 runs leave skid marks
+    // (they all drive the same line). `cars` are the cars the caller is
+    // showing this frame; this only ever hides or simplifies some of them.
+    const LOD_SHADOWS = 6;
+    const LOD_AUDIBLE = 8;
+    const LOD_SKID_RUNS = 16;
+    const lodState = new WeakMap();
+    const lodParts = new WeakMap();
+    let lodScratch = null;
+
+    function partsOf(car) {
+        let parts = lodParts.get(car);
+        if (!parts) {
+            parts = { meshes: [], casters: [], extras: [], multi: [] };
+            car.object3D?.traverse((m) => {
+                if (!m.isMesh) return;
+                parts.meshes.push(m);
+                if (m.castShadow) parts.casters.push(m);
+                if (/^(Exhaust|Suspension)/.test(m.name)) parts.extras.push(m);
+                else if (Array.isArray(m.material) && m.material.length > 1) parts.multi.push({ mesh: m, materials: m.material, wheel: /^Wheel/.test(m.name) });
+            });
+            lodParts.set(car, parts);
+        }
+        return parts;
+    }
+
+    function setCastShadow(car, on) {
+        for (const m of partsOf(car).casters) m.castShadow = on;
+    }
+
+    // The game draws every car mesh even when it is off screen. Ghosts are culled like the rest
+    // of the scene, with a margin on the bounds so nothing pops at the edge of the screen.
+    function setCulling(car, on) {
+        for (const m of partsOf(car).meshes) {
+            if (on) {
+                const g = m.geometry;
+                if (null == g.boundingSphere) g.computeBoundingSphere();
+                if (!g.userData.nswsPadded) {
+                    g.boundingSphere.radius += 1;
+                    g.userData.nswsPadded = true;
+                }
+            }
+            m.frustumCulled = on;
+        }
+    }
+
+    // Detail 0 = full, 1 = no exhaust or suspension and one material per wheel, 2 = one material
+    // for the body too. A mesh given a single material is drawn in one call, whatever its groups.
+    function setDetail(car, level) {
+        const parts = partsOf(car);
+        for (const m of parts.extras) m.visible = level === 0;
+        for (const p of parts.multi) {
+            const single = p.wheel ? level >= 1 : level >= 2;
+            if (single && p.mesh.material === p.materials) p.mesh.material = p.materials[0];
+            else if (!single && p.mesh.material !== p.materials) {
+                // Fading may have changed the one material in use; carry it over.
+                for (const mat of p.materials) {
+                    mat.opacity = p.materials[0].opacity;
+                    if (mat.transparent !== p.materials[0].transparent) {
+                        mat.transparent = p.materials[0].transparent;
+                        mat.needsUpdate = true;
+                    }
+                }
+                p.mesh.material = p.materials;
+            }
+        }
+    }
+
+    function ghostLod(cars, focusCar, cam, stackRadius = 1) {
+        if (!cam || !cars.length) return;
+        const camPos = lodScratch ??= cam.position.clone();
+        cam.getWorldPosition(camPos);
+        const pxPerUnit = window.innerHeight / (2 * Math.tan(cam.fov * Math.PI / 360) / (cam.zoom || 1));
+        const list = [];
+        cars.forEach((car, index) => {
+            if (car === focusCar) return;
+            const p = car.getPosition();
+            list.push({ car, p, d: p.distanceTo(camPos), index });
+        });
+        list.sort((a, b) => a.d - b.d);
+        const kept = [];
+        let fp = null;
+        if (focusCar) {
+            fp = focusCar.getPosition();
+            const st = lodState.get(focusCar);
+            if (st) {
+                if (!st.cast) setCastShadow(focusCar, true);
+                if (st.detail) setDetail(focusCar, 0);
+                if (st.mute) focusCar.audioCulled = false;
+                if (st.culled) setCulling(focusCar, false);
+                if (st.noSkid) focusCar.skidmarksSuppressed = false;
+            }
+            lodState.set(focusCar, { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false });
+        }
+        let shadows = 0, audible = 0;
+        for (const g of list) {
+            const st = lodState.get(g.car) ?? { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false };
+            // Every test has hysteresis, so a ghost near a threshold doesn't flicker.
+            const px = 4.5 * pxPerUnit / Math.max(g.d, 0.1);
+            let vis = px >= (st.vis ? 5 : 7);
+            if (vis && fp && g.p.distanceTo(fp) < stackRadius * (st.vis ? 1 : 1.3)) vis = false;
+            if (vis)
+                for (const k of kept)
+                    if (k.distanceTo(g.p) < (st.vis ? 1 : 1.4)) {
+                        vis = false;
+                        break;
+                    }
+            if (vis) kept.push(g.p);
+            const cast = vis && shadows < LOD_SHADOWS;
+            if (cast) shadows++;
+            const mute = !(vis && audible < LOD_AUDIBLE);
+            if (!mute) audible++;
+            const detail = px >= (st.detail === 0 ? 50 : 60) ? 0 : px >= (st.detail === 2 ? 26 : 22) ? 1 : 2;
+            if (g.car.object3D && g.car.object3D.visible !== vis) g.car.setVisible(vis);
+            if (cast !== st.cast) setCastShadow(g.car, cast);
+            if (vis && detail !== st.detail) setDetail(g.car, detail);
+            if (mute !== st.mute) g.car.audioCulled = mute;
+            if (!st.culled) setCulling(g.car, true);
+            // A ghost keeps the place it had when first seen, so finished ghosts dropping out of
+            // the list never change which marks are drawn.
+            const order = st.order ?? g.index;
+            const noSkid = Math.max(cars.length, st.total ?? 0) > LOD_SKID_RUNS && order >= LOD_SKID_RUNS;
+            if (noSkid !== st.noSkid) g.car.skidmarksSuppressed = noSkid;
+            lodState.set(g.car, { vis, cast, detail: vis ? detail : st.detail, mute, culled: true, noSkid, order, total: Math.max(cars.length, st.total ?? 0) });
+        }
+    }
+
+    function resetGhostLod(cars) {
+        for (const car of cars) {
+            const st = lodState.get(car);
+            if (!st) continue;
+            if (!st.vis) car.setVisible(true);
+            if (!st.cast) setCastShadow(car, true);
+            if (st.detail) setDetail(car, 0);
+            if (st.mute) car.audioCulled = false;
+            if (st.culled) setCulling(car, false);
+            if (st.noSkid) car.skidmarksSuppressed = false;
+            lodState.delete(car);
+        }
+    }
+
+    window.__nswsGhostLod = ghostLod;
+
     class Cinematic {
         constructor(o) {
             ensureStyle();
@@ -936,6 +1207,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.up = new T.Vector3(0, 1, 0);
             this.pivot = new T.Vector3();
             this.rayDir = new T.Vector3();
+            this.hitNormal = new T.Vector3(0, 1, 0);
             this.oDir = new T.Vector3();
             this.oRight = new T.Vector3();
             this.oUp = new T.Vector3();
@@ -993,14 +1265,51 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 setExposure(this.exposure - Math.sign(e.deltaY) * 0.05);
             }, { passive: false });
 
+            // Input display on or off while watching, remembered on this device.
+            this.inputsBtn = document.createElement("button");
+            this.inputsBtn.className = "button nsws-watch-inputs";
+            this.inputsBtn.title = "Input display";
+            this.inputsBtn.innerHTML = '<svg viewBox="0 0 24 24"><g fill="#fff"><rect x="9" y="3" width="6" height="6" rx="1"/><rect x="2" y="11" width="6" height="6" rx="1"/><rect x="9" y="11" width="6" height="6" rx="1"/><rect x="16" y="11" width="6" height="6" rx="1"/></g></svg>';
+            let showInputs = true;
+            try {
+                showInputs = localStorage.getItem("nsws_watch_inputs") !== "0";
+            } catch (e) {}
+            const applyInputs = () => {
+                this.inputsBtn.classList.toggle("off", !showInputs);
+                document.body.classList.toggle("nsws-hide-inputs", !showInputs);
+            };
+            applyInputs();
+            this.inputsBtn.addEventListener("click", () => {
+                o.playClick?.();
+                showInputs = !showInputs;
+                try {
+                    localStorage.setItem("nsws_watch_inputs", showInputs ? "1" : "0");
+                } catch (e) {}
+                applyInputs();
+            });
+
+            this.saveBtn = document.createElement("button");
+            this.saveBtn.className = "button nsws-watch-save";
+            this.saveBtn.title = "Save video";
+            this.saveBtn.innerHTML = '<img src="images/save.svg">';
+            this.saveBtn.addEventListener("click", () => {
+                o.playClick?.();
+                this.rec ? this.stopRecording() : this.startRecording();
+            });
+            this.onRecKey = (e) => {
+                if (this.rec && e.code === "Escape") {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    this.stopRecording();
+                }
+            };
+            window.addEventListener("keydown", this.onRecKey, true);
+
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
-            if (seek) {
-                bar.insertBefore(this.button, seek);
-                bar.insertBefore(this.bright, seek);
-            } else {
-                bar?.appendChild(this.button);
-                bar?.appendChild(this.bright);
+            for (const b of [this.button, this.inputsBtn, this.saveBtn, this.bright]) {
+                if (seek) bar.insertBefore(b, seek);
+                else bar?.appendChild(b);
             }
         }
 
@@ -1056,7 +1365,13 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.layer = null;
             this.button.remove();
             this.bright.remove();
+            this.inputsBtn.remove();
+            this.saveBtn.remove();
+            document.body.classList.remove("nsws-hide-inputs");
+            window.removeEventListener("keydown", this.onRecKey, true);
+            if (this.rec) this.stopRecording();
             this.viewer.dispose();
+            resetGhostLod(this.o.getRuns().map((r) => r.car));
             this.resetOpacity();
             document.body.classList.remove("nsws-cine-on");
             if (window.__nswsCinematic.current === this) window.__nswsCinematic.current = null;
@@ -1142,7 +1457,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             let best = null;
             const take = () => {
                 for (const h of this.hits)
-                    if (h.distance <= ray.far && (null == best || h.distance < best)) best = h.distance;
+                    if (h.distance <= ray.far && (null == best || h.distance < best)) {
+                        best = h.distance;
+                        if (h.face) this.hitNormal.copy(h.face.normal).transformDirection(this.probe.matrixWorld);
+                    }
                 this.hits.length = 0;
             };
             for (const obj of this.direct ?? []) {
@@ -1219,6 +1537,89 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return null != this.occluder(cam, target, 1.5);
         }
 
+        // Records the replay from the start to just after the followed run finishes, then saves it.
+        // Capturing this tab keeps everything on screen (nametags, panels, input display) with the
+        // bottom bar hidden; where tab capture isn't available it records the 3D view alone.
+        async startRecording() {
+            if (this.rec || this.recStarting) return;
+            this.recStarting = true;
+            let stream = null;
+            try {
+                stream = await navigator.mediaDevices?.getDisplayMedia?.({
+                    video: { frameRate: 60, width: { ideal: Math.round(innerWidth * devicePixelRatio) }, height: { ideal: Math.round(innerHeight * devicePixelRatio) } },
+                    audio: true,
+                    preferCurrentTab: true,
+                    selfBrowserSurface: "include",
+                    surfaceSwitching: "exclude",
+                    monitorTypeSurfaces: "exclude"
+                }) ?? null;
+            } catch (e) {
+                stream = null;
+            }
+            if (!stream) {
+                try {
+                    stream = this.o.render.canvas.captureStream(60);
+                } catch (e) {
+                    this.recStarting = false;
+                    return;
+                }
+            }
+            const audio = stream.getAudioTracks().length > 0;
+            const types = audio
+                ? ["video/mp4;codecs=avc1.640028,mp4a.40.2", "video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4;codecs=avc1,opus", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"]
+                : ["video/mp4;codecs=avc1.640028", "video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
+            const mimeType = types.find((t) => window.MediaRecorder?.isTypeSupported?.(t));
+            if (!mimeType) {
+                for (const tr of stream.getTracks()) tr.stop();
+                this.recStarting = false;
+                return;
+            }
+            const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 10e6 });
+            const chunks = [];
+            const runs = this.o.getRuns();
+            const run = runs[this.o.getFocus()];
+            const finish = (run.settings.time?.numberOfFrames ?? 0) / 1000;
+            const rec = this.rec = { recorder, stream, chunks, mimeType, end: Math.min(finish + 4, this.o.totalTime?.() ?? Infinity), name: run.settings.nickname ?? "run" };
+            recorder.ondataavailable = (e) => {
+                if (e.data.size) chunks.push(e.data);
+            };
+            recorder.onstop = () => this.saveRecording(rec);
+            for (const tr of stream.getVideoTracks()) tr.addEventListener("ended", () => this.stopRecording());
+            document.body.classList.add("nsws-recording");
+            this.saveBtn.classList.add("on");
+            this.o.restart?.();
+            // Let the restart reach the screen before the first recorded frame.
+            await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+            this.recStarting = false;
+            if (this.rec === rec) recorder.start(1000);
+        }
+
+        stopRecording() {
+            const rec = this.rec;
+            if (!rec) return;
+            this.rec = null;
+            document.body.classList.remove("nsws-recording");
+            this.saveBtn.classList.remove("on");
+            if (rec.recorder.state !== "inactive") rec.recorder.stop();
+            else this.saveRecording(rec);
+            for (const tr of rec.stream.getTracks()) tr.stop();
+        }
+
+        saveRecording(rec) {
+            if (rec.saved || !rec.chunks.length) return;
+            rec.saved = true;
+            const ext = rec.mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+            const blob = new Blob(rec.chunks, { type: rec.mimeType.split(";")[0] });
+            const clean = (x) => String(x).replace(/[\\/:*?"<>|]+/g, "").trim();
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = clean((this.o.trackName ? this.o.trackName + " - " : "") + rec.name) + "." + ext;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        }
+
         pathOf(run) {
             let p = this.paths.get(run);
             if (!p) this.paths.set(run, p = new PathCache(run));
@@ -1255,7 +1656,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             out.up.copy(up);
             switch (shot.type) {
             case "chase": {
-                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006;
+                // The camera falls back as the car accelerates and closes in under braking.
+                const acc = (speed - path.speed(t - 0.3)) / 0.3;
+                const d = (shot.high ? shot.d + 3 : shot.d) + Math.min(speed, 600) * 0.006 + clamp(acc * 0.012, -1.2, 1.8);
                 const h = shot.high ? shot.h + 2.2 : shot.h;
                 pos.copy(P).addScaledVector(Hs, -d).addScaledVector(carUp, h).addScaledVector(right, shot.s);
                 look.copy(P).addScaledVector(Hs, 3.5).addScaledVector(carUp, 0.55);
@@ -1267,7 +1670,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
             case "orbit": {
                 const back = e[3].copy(Hs).multiplyScalar(-1).applyAxisAngle(up, shot.theta + shot.omega * (t - shot.t0));
-                const h = null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h;
+                const h = (null != shot.h1 ? shot.h + (shot.h1 - shot.h) * k * k * (3 - 2 * k) : shot.h) + 0.5 * Math.sin(Math.PI * k);
                 pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(up, h);
                 look.copy(P).addScaledVector(up, 0.5);
                 out.fov = shot.fov ?? 50;
@@ -1275,8 +1678,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 break;
             }
             case "heli":
-                pos.copy(P).addScaledVector(Hs, -shot.back).addScaledVector(up, shot.up).addScaledVector(right, shot.s);
-                look.copy(P).addScaledVector(Hs, 3);
+                // High, but looking far enough ahead that the horizon and scenery stay in the frame.
+                pos.copy(P).addScaledVector(Hs, -shot.back * (1 - 0.2 * k)).addScaledVector(up, shot.up * (1 - 0.15 * k)).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(Hs, 10).addScaledVector(up, 1.5);
                 out.fov = 50;
                 out.lens = 0.2;
                 break;
@@ -1293,22 +1697,32 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out.lens = 0.5;
                 break;
             case "pack": {
+                // Frames the whole group around the followed car, pulling back and rising as it
+                // spreads out. Cars are weighted in and out smoothly so the shot never jumps; with
+                // most of the group behind, the camera sits ahead and looks back at them.
                 const c = e[3].copy(P).multiplyScalar(2);
-                const near = [];
+                let wsum = 2;
+                const near = this.packNear ??= [];
+                near.length = 0;
                 for (const r of this.o.getRuns()) {
                     if (r === path.run) continue;
                     const q = this.pathOf(r).pos(t, e[4]);
-                    if (q.distanceTo(P) < 22) {
-                        near.push(q.clone());
-                        c.add(q);
-                    }
+                    const wt = clamp((45 - q.distanceTo(P)) / 20, 0, 1);
+                    if (wt <= 0) continue;
+                    near.push(q.x, q.y, q.z, wt);
+                    c.addScaledVector(q, wt);
+                    wsum += wt;
                 }
-                c.divideScalar(near.length + 2);
-                let spread = 0;
-                for (const q of near) spread = Math.max(spread, q.distanceTo(c));
-                spread = Math.min(spread, 15);
-                pos.copy(c).addScaledVector(Hs, -(shot.back + spread * 0.6)).addScaledVector(up, shot.up + spread * 0.3).addScaledVector(right, shot.s);
-                look.copy(c).addScaledVector(Hs, 2);
+                c.divideScalar(wsum);
+                let radius = 3 + P.distanceTo(c);
+                for (let i = 0; i < near.length; i += 4)
+                    radius = Math.max(radius, 3 + Math.hypot(near[i] - c.x, near[i + 1] - c.y, near[i + 2] - c.z) * near[i + 3]);
+                // Past this, the followed car would be too small; stragglers fall out of frame instead.
+                radius = Math.min(radius, 14);
+                const fit = Math.min(24, Math.max(shot.back, radius / Math.tan(55 * Math.PI / 360 * 0.8)));
+                const dir = shot.front ? 1 : -1;
+                pos.copy(c).addScaledVector(Hs, dir * fit).addScaledVector(up, shot.up + radius * 0.35).addScaledVector(right, shot.s);
+                look.copy(c).addScaledVector(Hs, shot.front ? -2 : 7).addScaledVector(up, 0.8);
                 out.fov = 55;
                 out.lens = 0.25;
                 break;
@@ -1318,7 +1732,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "curb":
                 out.moving = false;
                 pos.copy(shot.cam);
-                look.copy(P).addScaledVector(up, 0.45);
+                // The operator trails the car a little as it whips past.
+                look.copy(P).lerp(path.pos(t - 0.07, e[3]), 0.6).addScaledVector(up, 0.45);
                 if (shot.type === "curb") {
                     out.fov = shot.fov;
                     out.lens = 0.5;
@@ -1328,7 +1743,28 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 }
                 break;
             }
+
+            // Shake that grows with speed, a jolt after landing a jump, and the shot's slow tilt.
+            const amp = (SHAKE[shot.type] ?? 0) * (Math.min(speed / 320, 1.3) ** 2 + 2.5 * this.landing(path, t));
+            if (amp > 0) {
+                const ph = shot.ph ?? shot.t0 * 7.13;
+                const dist = pos.distanceTo(look);
+                const nx = Math.sin(t * 13.1 + ph) * 0.6 + Math.sin(t * 29.7 + ph * 1.7) * 0.4;
+                const ny = Math.sin(t * 11.3 + ph * 2.3) * 0.6 + Math.sin(t * 31.9 + ph * 0.7) * 0.4;
+                look.addScaledVector(right, nx * amp * dist).addScaledVector(up, ny * amp * dist);
+                out.roll += Math.sin(t * 9.7 + ph * 3.1) * amp * 0.6;
+            }
+            if (shot.dutch) out.roll += shot.dutch * smootherstep(k);
             return out;
+        }
+
+        // 0..1, how hard the car landed a jump in the last moment (fades over ~0.6 s).
+        landing(path, t) {
+            let j = 0;
+            for (const ev of path.events)
+                if (ev.type === "jump" && t >= ev.t1 && t - ev.t1 < 0.8)
+                    j = Math.max(j, Math.exp(-(t - ev.t1) * 5) * Math.min(1, (ev.t1 - ev.t0) / 0.8));
+            return j;
         }
 
         // The shot, mixed with the previous one while a swoop is under way, then pulled in if the
@@ -1357,10 +1793,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (!run) return;
             const car = run.car;
             this.viewer.tick(dt);
+            if (this.rec && car.getTime().numberOfFrames / 1000 >= this.rec.end) this.stopRecording();
             const P = car.getPosition();
             const pivot = this.pivot.copy(P).addScaledVector(this.up, 0.6);
             if (!this.enabled) {
                 if (!o.isSpectator()) this.viewer.apply(o.render.camera, pivot, o.render.camera === car.cameraCockpit);
+                ghostLod(runs.map((r) => r.car), car, o.render.camera, 1);
                 return;
             }
             const frame = car.getTime().numberOfFrames;
@@ -1397,6 +1835,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 correct: this.correct
             });
 
+            // Cinematic shots sit close to the car, so ghosts overlapping it are hidden more widely.
+            ghostLod(runs.map((r) => r.car), car, viewCam, 2.6);
             this.fadeCars(runs, focus, viewCam, P);
             this.updateTags(runs, focus, viewCam);
             this.updatePanels(runs, focus, run, frame, speed);
@@ -1429,16 +1869,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const seg = this.v[6].subVectors(P, C);
             const len2 = Math.max(1e-6, seg.lengthSq());
             this.opacity ??= new Map();
-            this.hidden ??= new Set();
             for (let i = 0; i < runs.length; i++) {
                 const car = runs[i].car;
+                if (car.object3D && !car.object3D.visible) continue;
                 let op = 1;
-                // Runs stacked inside the followed car (the start, identical lines) are hidden outright.
-                const inside = i !== focus && car.getPosition().distanceTo(P) < 2.6;
-                if (inside !== this.hidden.has(car)) {
-                    inside ? this.hidden.add(car) : this.hidden.delete(car);
-                    car.setVisible(!inside);
-                }
                 if (i !== focus) {
                     const Q = car.getPosition();
                     op = clamp((Q.distanceTo(C) - 2) / 5, 0, 1);
@@ -1457,8 +1891,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
 
         resetOpacity() {
-            for (const car of this.hidden ?? []) car.setVisible(true);
-            this.hidden?.clear();
             if (!this.opacity) return;
             for (const [car, op] of this.opacity)
                 if (op !== 1) car.setOpacity(1);

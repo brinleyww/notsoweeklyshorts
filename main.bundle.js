@@ -9759,7 +9759,17 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t.setAttribute("position", l.get(this, R, "f")),
                     l.set(this, _, new THREE.Mesh(t,l.get(T, T, "f", z)), "f"),
                     l.get(this, _, "f").frustumCulled = !1,
+                    // Not drawn until the wheel leaves a mark, and only the part of the buffer in use.
+                    l.get(this, _, "f").visible = !1,
+                    t.setDrawRange(0, 0),
+                    this.__used = 0,
+                    this.__suppressed = !1,
                     l.get(this, M, "f").scene.add(l.get(this, _, "f"))
+                }
+                // Not So Weekly Shorts: with many ghosts only some of them leave marks.
+                set suppressed(e) {
+                    this.__suppressed = !!e,
+                    l.get(this, _, "f").visible = this.__used > 0 && !this.__suppressed
                 }
                 dispose() {
                     l.get(this, _, "f").geometry.dispose(),
@@ -9771,6 +9781,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.get(this, R, "f").clearUpdateRanges(),
                     l.get(this, R, "f").needsUpdate = !0,
                     l.set(this, I, 0, "f"),
+                    this.__used = 0,
+                    l.get(this, _, "f").geometry.setDrawRange(0, 0),
+                    l.get(this, _, "f").visible = !1,
                     this.break()
                 }
                 break() {
@@ -9815,6 +9828,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                         // Uploading the whole 72 KB buffer per new segment stalls weak GPUs on every slide or landing.
                         l.get(this, R, "f").addUpdateRange(6 * e * 3, 18),
                         l.get(this, R, "f").needsUpdate = !0,
+                        6 * (e + 1) > this.__used && (this.__used = 6 * (e + 1),
+                        l.get(this, _, "f").geometry.setDrawRange(0, this.__used),
+                        l.get(this, _, "f").visible = !this.__suppressed),
                         l.get(this, I, "f") >= l.get(this, P, "f") - 1 && l.set(this, I, 0, "f")
                     }
                     l.set(this, L, u, "f"),
@@ -10191,6 +10207,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                 setVisible(e) {
                     l.get(this, ve, "f").visible = e
                 }
+                get object3D() {
+                    return l.get(this, ve, "f")
+                }
+                set skidmarksSuppressed(e) {
+                    for (const t of l.get(this, Le, "f"))
+                        t.suppressed = e
+                }
                 // Not So Weekly Shorts: cup collisions, through this car's own simulation.
                 setCollisionCars(e) {
                     const t = l.get(this, Z, "f")
@@ -10250,7 +10273,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     (t || l.get(this, ie, "f").frames % 50 == 0) && l.get(this, $, "f")?.call(this, l.get(this, ie, "f"))
                 }
                 update(e) {
-                    if (l.get(this, G, "m", Xe).call(this),
+                    if (this.__audioCulled || l.get(this, G, "m", Xe).call(this),
                     l.get(this, De, "f")?.update(e),
                     null != l.get(this, be, "f")) {
                         const e = this.getPosition()
@@ -10322,9 +10345,22 @@ window.__nswsAutoGhostNote = function(trackId) {
                 get cameraCockpit() {
                     return l.get(this, Y, "f").camera
                 }
+                // Called for every car every frame; with many ghosts the repeated audio-param calls added up.
                 set audioVolume(e) {
-                    l.set(this, V, e, "f"),
-                    null != l.get(this, W, "f") && l.get(this, W, "f").gain.setTargetAtTime(l.get(this, V, "f"), 0, .01)
+                    l.set(this, V, e, "f");
+                    const t = this.__audioCulled ? 0 : e;
+                    null != l.get(this, W, "f") && this.__appliedVolume !== t && (this.__appliedVolume = t,
+                    l.get(this, W, "f").gain.setTargetAtTime(t, 0, .01))
+                }
+                // Not So Weekly Shorts: ghosts beyond the nearest few go silent and skip their audio work
+                // (an engine and five 3D panners each), and leave the audio graph so it isn't mixed.
+                set audioCulled(e) {
+                    if (e = !!e, this.__audioCulled === e)
+                        return;
+                    this.__audioCulled = e;
+                    const t = l.get(this, W, "f");
+                    null != t && (e ? t.disconnect() : t.connect(l.get(this, O, "f").destinationSfx)),
+                    this.audioVolume = l.get(this, V, "f")
                 }
                 static async initResources() {
                     const e = await new Promise(( (e, t) => {
@@ -45371,6 +45407,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         this.__cupCollide = !!collide
                     }
                     C.get(this, _r, "m", $a).call(this),
+                    window.__nswsGhostLod?.(C.get(this, xa, "f").filter((e => !e.hasEnded && !ghostsHidden)).map((e => e.car)), C.get(this, wa, "f"), C.get(this, zr, "f").camera, 1),
                     C.get(this, Ba, "f").update(e),
                     C.get(this, la, "f").setVisible(!C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").hasFinished() || !C.get(this, va, "f") || C.get(this, Wr, "f").touchEnabled || !C.get(this, Fr, "f").isCursorHidden || C.get(this, la, "f").hasFocus())
                 } else {
@@ -52946,7 +52983,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, eo, "f").playUIClick(),
                 C.get(this, wo, "f").some((e => e.recordingId == o)) ? (C.set(this, wo, C.get(this, wo, "f").filter((e => e.recordingId != o)), "f"),
                 c.classList.remove("selected"),
-                C.get(this, io, "f").call(this, C.get(this, wo, "f"))) : (C.set(this, wo, C.get(this, wo, "f").concat([{
+                C.get(this, io, "f").call(this, C.get(this, wo, "f"))) : C.get(this, wo, "f").length < nswsGhostLimit() && (C.set(this, wo, C.get(this, wo, "f").concat([{
                     nickname: t,
                     recordingId: o,
                     isSelf: s
@@ -53062,6 +53099,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             C.get(this, po, "f").appendChild(r)
         }
         ;
+        // Each ghost is a whole car to simulate and draw, so Low performance mode keeps it to 10.
+        const nswsGhostLimit = () => keyBindSettings?.getSettingBoolean(R.A.LowPerformanceMode) ? 10 : 1 / 0;
         const Lo = class {
             constructor(e, t, n, i, r, a, s, o, l, c, h) {
                 Xs.add(this),
@@ -53346,7 +53385,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, jo, "f").prepend(document.createTextNode(t.get("Watch"))),
                 C.get(this, jo, "f").addEventListener("click", ( () => {
                     a.playUIClick();
-                    const nswsWatchSelected = C.get(this, Jo, "f");
+                    const nswsWatchSelected = C.get(this, Jo, "f").slice(0, nswsGhostLimit());
                     if (nswsWatchSelected.length > 0) {
                         C.get(this, No, "f").getRecordings(nswsWatchSelected.map((e => e.recordingId))).then((t => {
                             if (t.some((e => null == e)))
@@ -53383,7 +53422,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 L.prepend(document.createTextNode(t.get("Play"))),
                 L.addEventListener("click", ( () => {
                     a.playUIClick();
-                    const e = C.get(this, Jo, "f");
+                    const e = C.get(this, Jo, "f").slice(0, nswsGhostLimit());
                     if (e.length > 0)
                         f(C.get(this, No, "f").getRecordings(e.map((e => e.recordingId))).then((t => {
                             if (t.some((e => null == e)))
@@ -60526,6 +60565,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                     getRuns: () => C.get(this, uf, "f"),
                     getFocus: () => C.get(this, df, "f"),
                     isSpectator: () => C.get(this, mf, "f").isEnabled,
+                    restart: () => {
+                        C.set(this, ff, 0, "f"),
+                        C.set(this, pf, !1, "f"),
+                        C.get(this, vf, "f").isPaused = !1
+                    }
+                    ,
+                    totalTime: () => C.get(this, gf, "f"),
                     restoreCamera: () => {
                         const e = C.get(this, uf, "f")[C.get(this, df, "f")].car;
                         C.get(this, mf, "f").isEnabled ? o.setCamera(C.get(this, mf, "f").camera) : h.getSettingBoolean(R.A.DefaultCameraMode) ? o.setCamera(e.cameraCockpit) : o.setCamera(e.cameraOrbit)
