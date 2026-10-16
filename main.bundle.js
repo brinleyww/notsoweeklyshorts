@@ -55227,6 +55227,14 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, Rc, "f").show()
             }
             ));
+            // Opens a track's screen the way the Play menu does. __bw_selectTrackById alone leaves the main
+            // menu on screen behind it.
+            window.__nswsOpenTrack = trackId => {
+                document.querySelector(".track-selection-ui:not(.hidden)") || (C.get(this, vc, "m", qc).call(this),
+                C.get(this, vc, "m", Xc).call(this),
+                C.get(this, Rc, "f").show());
+                return !!window.__bw_selectTrackById?.(trackId)
+            };
             const M = document.createElement("p");
             if (M.textContent = t.get("Play"),
             T.appendChild(M),

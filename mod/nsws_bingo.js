@@ -604,13 +604,13 @@
             const cell = el("button", "cell" + (sq.kind === "free" ? " free" : "") + (done ? " done" : "") + (inLine.has(i) && lines.length ? " line" : ""));
             cell.appendChild(el("span", null, sq.kind === "free" ? "★ FREE" : sq.text));
             cell.title = done ? "Done" : sq.kind === "free" ? "Free square" : sq.hint || sq.text;
-            if (isLive && !done && sq.kind === "track" && window.__bw_selectTrackById) {
+            if (isLive && !done && sq.kind === "track" && window.__nswsOpenTrack) {
                 cell.classList.add("go");
                 cell.title = sq.text + " (click to open the track)";
                 cell.addEventListener("click", () => {
                     window.__nswsUIClick?.();
                     close();
-                    window.__bw_selectTrackById(sq.track.id);
+                    window.__nswsOpenTrack(sq.track.id);
                 });
             } else if (isLive && !done && sq.hint) {
                 cell.classList.add("go");
