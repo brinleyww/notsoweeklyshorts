@@ -10695,6 +10695,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         n.buffer = e,
                         n.playbackRate.value = 1.25;
                         const i = l.get(this, O, "f").context.createGain();
+                        window.__nswsAudioTap?.(this, 5, 0, 1.25, .03 * t),
                         i.gain.value = .03 * t,
                         n.connect(i),
                         i.connect(l.get(this, O, "f").destinationMaster),
@@ -10782,6 +10783,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , a = this.hasStarted() && !this.hasFinished() && (i && !(r && l.get(this, ie, "f").brakeLightEnabled) || r && !l.get(this, ie, "f").brakeLightEnabled);
                     let s;
                     s = n ? a ? t : Math.max(.7, t / 2) : a ? Math.max(.7, 1.15 * t) : Math.max(.7, t / 2),
+                    window.__nswsAudioTap?.(this, 0, 0, s, Math.min(.285, s / 14)),
                     l.get(this, H, "f").source.playbackRate.setTargetAtTime(s, 0, .05),
                     l.get(this, H, "f").gain.gain.setTargetAtTime(Math.min(.285, s / 14), 0, .05)
                 }
@@ -10808,6 +10810,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 i.connect(r),
                                 r.connect(l.get(this, J, "f")[t]),
                                 i.start(l.get(this, O, "f").context.currentTime + .02 * Math.random()),
+                                window.__nswsAudioTap?.(this, 3, t, i.playbackRate.value, r.gain.value),
                                 l.get(this, j, "f")[t] = .1
                             }
                         }
@@ -10846,6 +10849,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         } else
                             t.gain.gain.setTargetAtTime(0, 0, .15);
                         const n = .3 + Math.min(.4, Math.abs(this.getSpeedKmh()) / 800);
+                        window.__nswsAudioTap?.(this, 1, e, n, null != l.get(this, ie, "f").wheelContact[e] ? Math.min(3, Math.abs(this.getSpeedKmh()) / 110) / 10.5 : 0),
                         t.source.playbackRate.setTargetAtTime(n, 0, .15)
                     }
             }
@@ -10873,7 +10877,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         i.gain.value = Math.max(.3, Math.min(e / 4e3, 1)) / 2.5,
                         n.connect(i),
                         i.connect(l.get(this, Q, "f")),
-                        n.start(0)
+                        n.start(0),
+                        window.__nswsAudioTap?.(this, 4, 0, n.playbackRate.value, i.gain.value)
                     }
                 }
             }
@@ -10904,6 +10909,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 if (null != l.get(this, Ue, "f"))
                     for (let e = 0; e < l.get(this, Ue, "f").length; ++e) {
                         const t = l.get(this, Ue, "f")[e];
+                        window.__nswsAudioTap?.(this, 2, e, .5, 0 == l.get(this, ze, "f")[e] ? .75 / 3.5 : 0),
                         0 == l.get(this, ze, "f")[e] ? t.gain.gain.setTargetAtTime(.75 / 3.5, 0, .1) : t.gain.gain.setTargetAtTime(0, 0, .1)
                     }
             }

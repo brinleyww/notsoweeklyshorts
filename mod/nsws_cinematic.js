@@ -18,6 +18,17 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu > p { margin: 4px 10px 8px 10px; font-size: 16px; opacity: 0.7; }
 .nsws-save-menu > .button { margin: 2px 0; padding: 9px 18px; font-size: 19px; text-align: left; white-space: nowrap; }
 .nsws-save-menu > .button.selected { background-color: var(--button-hover-color); }
+.nsws-save-menu > .opt { display: flex; align-items: center; margin: 2px 0; }
+.nsws-save-menu > .opt > select { flex: 1; min-width: 0; height: 40px; margin: 0 4px 0 0; padding: 0 10px; border: none; outline: none; background-color: var(--button-color); color: #fff; font: inherit; font-size: 18px; }
+.nsws-save-menu > .opt > select > option { background-color: var(--surface-color); }
+.nsws-save-menu > .opt > .button { margin: 0; padding: 8px 14px; font-size: 18px; }
+.nsws-save-menu > .opt > .button.off { opacity: 0.55; }
+.nsws-save-menu > .opt > .button.wide { flex: 1; text-align: left; }
+.nsws-save-menu > .vol { display: flex; align-items: center; margin: 2px 0 6px 0; padding: 0 10px; height: 34px; background-color: var(--button-color); }
+.nsws-save-menu > .vol > span { margin-right: 10px; font-size: 16px; opacity: 0.8; white-space: nowrap; }
+.nsws-save-menu > .vol > input { flex: 1; min-width: 0; }
+.nsws-save-menu > .vol > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
+.nsws-save-menu > .vol > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
 .nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
 .nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
 .nsws-export > div { pointer-events: auto; display: flex; flex-direction: column; min-width: 340px; max-width: 80vw; padding: 18px 24px; background: var(--surface-color); clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
@@ -145,7 +156,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     }
 
     // A plain MP4 around the encoded frames: one video track, index first so it plays while loading.
-    function muxMp4({ vp9, desc, width, height, fps, chunks }) {
+    function muxMp4({ vp9, desc, width, height, fps, chunks, audio }) {
         const cat = (parts) => {
             let n = 0;
             for (const p of parts) n += p.length;
@@ -182,6 +193,44 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         const config = vp9 ? full("vpcC", 1, 0, new Uint8Array([0, 41, 8 << 4 | 1 << 1, 1, 1, 1]), u16(0)) : box("avcC", desc);
         const sample = box(vp9 ? "vp09" : "avc1", new Uint8Array(6), u16(1, 0, 0), u32(0, 0, 0), u16(width, height), u32(0x480000, 0x480000, 0), u16(1), new Uint8Array(32), u16(0x18, 0xffff), config);
         const ftyp = box("ftyp", str("isom"), u32(0x200), str("isom"), str("iso2"), str(vp9 ? "vp09" : "avc1"), str("mp41"));
+        // Sound: AAC (with its esds descriptor) or Opus (dOps), samples after the video's.
+        const an = audio?.chunks.length ?? 0;
+        const aTotal = audio ? audio.chunks.reduce((t, c) => t + c.dur, 0) : 0;
+        const ams = audio ? Math.round(aTotal * 1000 / audio.sampleRate) : 0;
+        const descr = (tag, body) => cat([new Uint8Array([tag, 0x80, 0x80, 0x80, body.length]), body]);
+        const aTrak = (base) => {
+            const a = audio;
+            const sz = new Uint8Array(4 * an), szd = new DataView(sz.buffer), offs = new Uint8Array(4 * an), od = new DataView(offs.buffer);
+            let at = base;
+            a.chunks.forEach((c, i) => {
+                szd.setUint32(4 * i, c.data.length);
+                od.setUint32(4 * i, at);
+                at += c.data.length;
+            });
+            const runs = [];
+            for (const c of a.chunks) {
+                if (runs.length && runs[runs.length - 1] === c.dur) runs[runs.length - 2]++;
+                else runs.push(1, c.dur);
+            }
+            const head = [new Uint8Array(6), u16(1), u32(0, 0), u16(a.channels, 16, 0, 0), u32(a.sampleRate * 65536)];
+            const entry = a.codec === "aac"
+                ? box("mp4a", ...head, full("esds", 0, 0, descr(3, cat([u16(2), new Uint8Array([0]), descr(4, cat([new Uint8Array([0x40, 0x15, 0, 0, 0]), u32(a.bitrate, a.bitrate), descr(5, a.desc ?? new Uint8Array([0x11, 0x90]))])), descr(6, new Uint8Array([2]))]))))
+                : box("Opus", ...head, box("dOps", new Uint8Array([0, a.channels]), u16(a.preSkip), u32(a.sampleRate), u16(0), new Uint8Array([0])));
+            return box("trak",
+                full("tkhd", 0, 3, u32(0, 0, 2, 0, ams, 0, 0), u16(0, 1, 0x100, 0), matrix, u32(0, 0)),
+                box("mdia",
+                    full("mdhd", 0, 0, u32(0, 0, a.sampleRate, aTotal), u16(0x55c4, 0)),
+                    full("hdlr", 0, 0, u32(0), str("soun"), u32(0, 0, 0), str("SoundHandler\0")),
+                    box("minf",
+                        full("smhd", 0, 0, u16(0, 0)),
+                        box("dinf", full("dref", 0, 0, u32(1), full("url ", 0, 1))),
+                        box("stbl",
+                            full("stsd", 0, 0, u32(1), entry),
+                            full("stts", 0, 0, u32(runs.length / 2), u32(...runs)),
+                            full("stsc", 0, 0, u32(1, 1, 1, 1)),
+                            full("stsz", 0, 0, u32(0, an), sz),
+                            full("stco", 0, 0, u32(an), offs)))));
+        };
         const moov = (base) => {
             const offs = new Uint8Array(4 * n), od = new DataView(offs.buffer);
             let at = base;
@@ -190,7 +239,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 at += c.data.length;
             });
             return box("moov",
-                full("mvhd", 0, 0, u32(0, 0, 1000, ms, 0x10000), u16(0x100, 0), u32(0, 0), matrix, u32(0, 0, 0, 0, 0, 0, 2)),
+                full("mvhd", 0, 0, u32(0, 0, 1000, Math.max(ms, ams), 0x10000), u16(0x100, 0), u32(0, 0), matrix, u32(0, 0, 0, 0, 0, 0, an ? 3 : 2)),
                 box("trak",
                     full("tkhd", 0, 3, u32(0, 0, 1, 0, ms, 0, 0), u16(0, 0, 0, 0), matrix, u32(width * 65536, height * 65536)),
                     box("mdia",
@@ -205,12 +254,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                                 full("stss", 0, 0, u32(keys.length), u32(...keys)),
                                 full("stsc", 0, 0, u32(1, 1, 1, 1)),
                                 full("stsz", 0, 0, u32(0, n), sizes),
-                                full("stco", 0, 0, u32(n), offs))))));
+                                full("stco", 0, 0, u32(n), offs))))),
+                ...(an ? [aTrak(at)] : []));
         };
         const head = moov(0).length;
         let bytes = 8;
         for (const c of chunks) bytes += c.data.length;
-        return new Blob([ftyp, moov(ftyp.length + head + 8), u32(bytes), str("mdat"), ...chunks.map((c) => c.data)], { type: "video/mp4" });
+        for (let i = 0; i < an; i++) bytes += audio.chunks[i].data.length;
+        return new Blob([ftyp, moov(ftyp.length + head + 8), u32(bytes), str("mdat"), ...chunks.map((c) => c.data), ...(an ? audio.chunks.map((c) => c.data) : [])], { type: "video/mp4" });
     }
 
     // Draws parts side by side (a slanted strip like the game's buttons): each part has text,
@@ -1735,6 +1786,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.menu?.remove();
             this.menu = null;
             this.notice?.remove();
+            window.__nswsVideoAudio?.stopPreview();
             this.spinner.remove();
             this.layer?.remove();
             this.layer = null;
@@ -1997,7 +2049,135 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             setTimeout(() => URL.revokeObjectURL(a.href), 60000);
         }
 
+        soundOptions() {
+            if (!this.sound) {
+                const get = (k, d) => {
+                    try {
+                        return localStorage.getItem(k) ?? d;
+                    } catch (e) {
+                        return d;
+                    }
+                };
+                const vol = parseFloat(get("nsws_save_music_vol", "0.7"));
+                this.sound = { cars: get("nsws_save_cars", "1") !== "0", music: get("nsws_save_music", "none"), volume: vol >= 0 && vol <= 1 ? vol : 0.7 };
+                const VA = window.__nswsVideoAudio;
+                if (this.sound.music === "song" || !VA?.STYLES.some((st) => st.id === this.sound.music)) this.sound.music = "none";
+            }
+            return this.sound;
+        }
+
+        saveSound() {
+            try {
+                localStorage.setItem("nsws_save_cars", this.sound.cars ? "1" : "0");
+                localStorage.setItem("nsws_save_music", this.sound.music === "song" ? "none" : this.sound.music);
+                localStorage.setItem("nsws_save_music_vol", String(this.sound.volume));
+            } catch (e) {}
+        }
+
+        musicSeed() {
+            const run = this.o.getRuns()[this.o.getFocus()];
+            return window.__nswsVideoAudio.hashString((this.o.trackId ?? "") + "|" + (run?.settings.nickname ?? ""));
+        }
+
+        // Car sounds on or off, the background music (a generated style or a song from this
+        // device) with a preview, and its volume.
+        soundMenu(menu) {
+            const VA = window.__nswsVideoAudio;
+            if (!VA || !window.AudioEncoder) return;
+            const opt = this.soundOptions();
+            const carsRow = el("div", "opt", menu);
+            const cars = el("button", "button wide", carsRow);
+            const showCars = () => {
+                cars.textContent = "Car sounds: " + (opt.cars ? "On" : "Off");
+                cars.classList.toggle("off", !opt.cars);
+            };
+            showCars();
+            cars.addEventListener("click", () => {
+                this.o.playClick?.();
+                opt.cars = !opt.cars;
+                showCars();
+                this.saveSound();
+            });
+
+            const musicRow = el("div", "opt", menu);
+            const select = el("select", "", musicRow);
+            select.title = "Music";
+            const fill = () => {
+                select.innerHTML = "";
+                const add = (value, text) => {
+                    const o = el("option", "", select);
+                    o.value = value;
+                    o.textContent = text;
+                };
+                add("none", "No music");
+                for (const st of VA.STYLES) add(st.id, "Music: " + st.label);
+                if (this.song) add("song", "Song: " + this.song.name);
+                add("file", "Your own song\u2026");
+                select.value = opt.music;
+            };
+            fill();
+            const play = el("button", "button", musicRow);
+            play.title = "Preview";
+            const showPlay = (on) => play.textContent = on ? "\u25a0" : "\u25b6";
+            showPlay(false);
+            const picker = el("input", "", menu);
+            picker.type = "file";
+            picker.accept = "audio/*";
+            picker.style.display = "none";
+            picker.addEventListener("change", async () => {
+                const f = picker.files?.[0];
+                if (!f) return;
+                try {
+                    this.song = { name: f.name.replace(/\.[^.]+$/, ""), buffer: await VA.decodeSong(f) };
+                    opt.music = "song";
+                } catch (e) {
+                    opt.music = "none";
+                }
+                fill();
+                this.saveSound();
+            });
+            select.addEventListener("change", () => {
+                VA.stopPreview();
+                showPlay(false);
+                if (select.value === "file") {
+                    select.value = opt.music;
+                    picker.click();
+                    return;
+                }
+                opt.music = select.value;
+                this.saveSound();
+            });
+            play.addEventListener("click", async () => {
+                if (this.previewing) {
+                    VA.stopPreview();
+                    return;
+                }
+                if (opt.music === "none") return;
+                this.previewing = true;
+                showPlay(true);
+                try {
+                    await VA.preview(opt.music, this.musicSeed(), opt.music === "song" ? this.song?.buffer : null, opt.volume);
+                } catch (e) {}
+                this.previewing = false;
+                if (this.menu === menu) showPlay(false);
+            });
+
+            const volRow = el("label", "vol", menu);
+            el("span", "", volRow).textContent = "Music volume";
+            const vol = el("input", "", volRow);
+            vol.type = "range";
+            vol.min = "0";
+            vol.max = "1";
+            vol.step = "0.05";
+            vol.value = String(opt.volume);
+            vol.addEventListener("input", () => {
+                opt.volume = parseFloat(vol.value);
+                this.saveSound();
+            });
+        }
+
         toggleSaveMenu() {
+            window.__nswsVideoAudio?.stopPreview();
             if (this.menu) {
                 this.menu.remove();
                 this.menu = null;
@@ -2010,6 +2190,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             } catch (e) {}
             const menu = this.menu = el("div", "nsws-save-menu", document.body);
             el("p", "", menu).textContent = "Save video";
+            this.soundMenu(menu);
+            el("p", "", menu).textContent = "Size";
             for (const size of SAVE_SIZES) {
                 const b = el("button", "button" + (size.id === chosen ? " selected" : ""), menu);
                 b.textContent = size.label;
@@ -2023,6 +2205,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 });
             }
             const r = this.saveBtn.getBoundingClientRect();
+            menu.style.maxHeight = Math.round(r.top - 14) + "px";
+            menu.style.overflowY = "auto";
             menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
             menu.style.bottom = Math.round(window.innerHeight - r.top + 6) + "px";
             this.onMenuAway = (e) => {
@@ -2118,6 +2302,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.download(result.blob, "mp4", run.settings.nickname ?? "run");
             const mb = (result.blob.size / 1048576).toFixed(1);
             let note = result.width + "\u00d7" + result.height + ", " + result.fps + " fps, " + mb + " MB";
+            if (result.sound === "failed") note += ", no sound (this browser can't encode audio)";
+            else if (result.sound) note += ", " + [result.sound.cars ? "car sounds" : null, result.sound.music].filter(Boolean).join(" + ");
             if (result.height < 720) note += ". The resolution had to drop to " + result.height + "p to reach this size; pick a bigger size for a sharper video.";
             ui.done("Video saved", note);
         }
@@ -2158,13 +2344,30 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (exp.cancel) return null;
             const D = end + 0.1;
             const cap = size.cap ?? null;
-            let rate = cap ? cap * 8 * 0.96 / D : BASE_RATE * (size.rate ?? 1);
+            const VA = window.__nswsVideoAudio;
+            const sound = VA && window.AudioEncoder ? this.soundOptions() : null;
+            const music = !sound || sound.music === "none" || sound.music === "song" && !this.song ? null : sound.music;
+            const wantAudio = !!sound && (sound.cars || !!music);
+            const audioRate = !wantAudio ? 0 : cap || (size.rate ?? 1) <= 0.25 ? 96000 : (size.rate ?? 1) >= 1 ? 160000 : 128000;
+            let rate = cap ? Math.max(2e5, cap * 8 * 0.96 / D - audioRate) : BASE_RATE * (size.rate ?? 1);
             begin();
+            let audio = null, capture = null;
             for (let pass = 0; pass < 3; pass++) {
                 const cfg = await encoderConfig(rate, !!cap);
                 if (!cfg) return pass ? null : "fallback";
-                const out = await this.renderPass(exp, ui, cfg, end, pass);
-                if (!out) return null;
+                if (pass === 0 && sound?.cars) capture = { fps: cfg.framerate, frames: [], events: [] };
+                const video = await this.renderPass(exp, ui, cfg, end, pass, pass === 0 ? capture : null);
+                if (!video) return null;
+                if (pass === 0 && wantAudio) {
+                    ui.set("Mixing sound", null);
+                    const dur = video.chunks.length / video.fps;
+                    const cars = capture?.frames.length ? await VA.renderCars(capture, (name) => this.o.audio?.getBuffer?.(name) ?? null, dur) : null;
+                    if (exp.cancel) return null;
+                    const tune = music === "song" ? this.song.buffer : music ? await VA.renderMusic(music, dur, this.musicSeed()) : null;
+                    if (exp.cancel) return null;
+                    audio = await VA.encode(VA.mix(dur, cars, 1, tune, sound.volume), audioRate);
+                }
+                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: music === "song" ? this.song.name : music ? VA.STYLES.find((st) => st.id === music).label : null } : "failed" : null };
                 // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
                 if (cap && out.blob.size > cap && pass < 2) {
                     rate *= cap / out.blob.size * 0.9;
@@ -2175,7 +2378,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return null;
         }
 
-        async renderPass(exp, ui, cfg, end, pass) {
+        async renderPass(exp, ui, cfg, end, pass, capture) {
             const o = this.o, W = cfg.width, H = cfg.height, fps = cfg.framerate;
             o.render.sizeOverride = { width: W, height: H };
             const canvas = document.createElement("canvas");
@@ -2197,6 +2400,25 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             enc.configure(cfg);
             if (this.enabled) this.viewer.reset();
             const n = Math.floor(end * fps) + 1;
+            // What the cars' sound code asks for each frame, for the soundtrack (see nsws_video_audio.js).
+            const runs = o.getRuns();
+            const ids = new Map(runs.map((r, i) => [r.car, i]));
+            let cur = null;
+            if (capture)
+                window.__nswsAudioTap = (car, kind, w, rate, gain) => {
+                    const id = ids.get(car);
+                    if (null == id || !cur) return;
+                    if (kind >= 3) {
+                        capture.events.push({ t: cur.t, car: id, kind, rate, gain });
+                        return;
+                    }
+                    let c = cur.cars.get(id);
+                    if (!c) cur.cars.set(id, c = { p: null, eng: [0.7, 0], tire: [], skid: [0, 0, 0, 0] });
+                    if (kind === 0) c.eng = [rate, gain];
+                    else if (kind === 1) c.tire[w] = [rate, gain];
+                    else c.skid[w] = gain;
+                };
+            const T = this.T, cp = new T.Vector3(), cf = new T.Vector3(), cq = new T.Quaternion(), cu = new T.Vector3();
             try {
                 for (let k = 0; k < n; k++) {
                     if (exp.cancel || this.disposed) return null;
@@ -2204,7 +2426,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     this.expT = k / fps;
                     o.setPaused(false);
                     o.setTime(k ? (k - 1) / fps : 0);
+                    if (capture) cur = { t: this.expT, cars: new Map(), cam: null };
                     o.step(k ? 1 / fps : 0);
+                    if (capture) {
+                        const cam = o.render.camera;
+                        cam.getWorldPosition(cp);
+                        cam.getWorldDirection(cf);
+                        cu.set(0, 1, 0).applyQuaternion(cam.getWorldQuaternion(cq));
+                        cur.cam = [cp.x, cp.y, cp.z, cf.x, cf.y, cf.z, cu.x, cu.y, cu.z];
+                        for (const [id, c] of cur.cars) {
+                            const p = runs[id].car.getPosition();
+                            c.p = [p.x, p.y, p.z];
+                        }
+                        capture.frames.push(cur);
+                    }
                     g.fillStyle = "#000";
                     g.fillRect(0, 0, W, H);
                     g.drawImage(o.render.canvas, 0, 0, W, H);
@@ -2220,10 +2455,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (failed) throw failed;
             } finally {
                 if (enc.state !== "closed") enc.close();
+                if (capture) window.__nswsAudioTap = null;
             }
             const vp9 = cfg.codec.startsWith("vp09");
             if (!chunks.length || !vp9 && !desc) throw new Error("The encoder produced no video");
-            return { blob: muxMp4({ vp9, desc, width: W, height: H, fps, chunks }), width: W, height: H, fps };
+            return { vp9, desc, width: W, height: H, fps, chunks };
         }
 
         readPalette() {
