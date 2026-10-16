@@ -106,8 +106,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack"];
     const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1 };
     const LAMBDA = { heli: 1.6, pack: 2 };
-    // Camera shake per shot type, in radians at full speed.
-    const SHAKE = { chase: 0.006, front: 0.005, side: 0.004, curb: 0.007, tele: 0.003, orbit: 0.002, heli: 0.002, pack: 0.003, finish: 0.002 };
+    // Camera shake, in radians: trackside cameras rumble as the car passes close by, and cameras
+    // riding with the car only jolt when it lands a jump.
+    const PASS_SHAKE = { curb: 0.02, tele: 0.005, finish: 0.006 };
+    const LAND_SHAKE = { chase: 0.012, front: 0.01, side: 0.008, orbit: 0.004, heli: 0.004, pack: 0.005 };
     const HOLD = { type: "chase", t0: 0, t1: Infinity, d: 5.8, h: 1.5, s: 0, high: false };
     const WAIT = {};
 
@@ -502,9 +504,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "heli":
                 return { back: 10 + R() * 5, up: 5 + R() * 3, s: side * R() * 5 };
             case "side":
-                return { side: v === 0 ? -1 : 1, dist: 6.5 + R() * 2.5, h: 0.9 + R() * 1.1, lead0: -3 + R() * 2, lead1: 1 + R() * 3 };
+                return { side: v === 0 ? -1 : 1, dist: 6.5 + R() * 2.5, h: 1.5 + R() * 1, lead0: -3 + R() * 2, lead1: 1 + R() * 3 };
             case "front":
-                return { dist: 7 + R() * 3, h: 0.8 + R() * 0.9, s: side * (0.6 + R() * 1.6) };
+                return { dist: 7 + R() * 3, h: 1.3 + R() * 0.8, s: side * (0.6 + R() * 1.6) };
             case "pack":
                 return { back: 7 + R() * 3, up: 2.5 + R() * 2.5, s: side * R() * 4 };
             }
@@ -653,7 +655,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const recent = this.shots.slice(-4).map((s) => s.type);
             let base = this.suitability(type, f, shot.anchored ? 1 : 0) + 0.25 * this.fit(shot) + 0.2 * (shot.aligned ?? 0);
             // Spread the edit over every kind of shot.
-            base -= 0.3 * this.shots.filter((s) => s.type === type).length / Math.max(1, this.shots.length);
+            base -= 0.5 * this.shots.filter((s) => s.type === type).length / Math.max(1, this.shots.length);
             if (recent[recent.length - 2] === type) base -= 0.2;
             if (recent[recent.length - 3] === type) base -= 0.1;
             const rideRun = recent.slice(-2).every((t) => RIDE.has(t));
@@ -704,7 +706,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (type === "tele")
                 C.addScaledVector(N, sd * (7 + R() * 5)).addScaledVector(up, 1.8 + R() * 3).addScaledVector(Tq, 2 + R() * 6);
             else
-                C.addScaledVector(N, sd * (4 + R() * 1.6)).addScaledVector(up, 0.5 + R() * 0.5).addScaledVector(Tq, R() * 4 - 1);
+                C.addScaledVector(N, sd * (4 + R() * 1.6)).addScaledVector(up, 1.1 + R() * 0.6).addScaledVector(Tq, R() * 4 - 1);
             let dmin = Infinity, t1 = null;
             for (let t = t0; t <= hardEnd; t += 0.05) {
                 const d = C.distanceTo(P.pos(t, w[4]));
@@ -723,10 +725,32 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         // Visibility: fixed cameras need a clear line to the car nearly all the time; cameras
         // riding with the car must not need pulling in towards it (that reads as a sudden zoom),
         // so a shot that would run into a wall ends early and hands over to the next one.
+        // Low cameras beside the road can lose the bottom half of the car behind the barrier.
+        // Raise the shot until the lower body is in sight.
+        liftOverRailing(shot) {
+            if (!["side", "front", "curb", "tele"].includes(shot.type)) return;
+            const c = this.c, up = c.up, w = this.w;
+            for (let tries = 0; tries < 3; tries++) {
+                let hidden = 0;
+                for (const k of [0.25, 0.5, 0.75]) {
+                    const t = shot.t0 + (shot.t1 - shot.t0) * k;
+                    const P = this.path.pos(t, w[1]);
+                    const view = c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+                    const low = w[2].copy(P).addScaledVector(up, 0.3), high = w[0].copy(P).addScaledVector(up, 1.1);
+                    if (c.blocked(view.pos, low, 1.2) && !c.blocked(view.pos, high, 1.2)) hidden++;
+                }
+                if (!hidden) return;
+                if (shot.cam) shot.cam.addScaledVector(up, 0.7);
+                else shot.h += 0.7;
+                shot.lifted = (shot.lifted ?? 0) + 1;
+            }
+        }
+
         check(shot, strict) {
             const P = this.path, w = this.w, up = this.c.up;
             const step = 0.15;
             if (RIDE.has(shot.type)) this.linkBlend(shot);
+            this.liftOverRailing(shot);
             if (!RIDE.has(shot.type)) {
                 let ok = 0, n = 0;
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step, n++)
@@ -1123,7 +1147,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         const pxPerUnit = window.innerHeight / (2 * Math.tan(cam.fov * Math.PI / 360) / (cam.zoom || 1));
         const list = [];
         cars.forEach((car, index) => {
-            if (car === focusCar) return;
+            if (!car || car === focusCar) return;
             const p = car.getPosition();
             list.push({ car, p, d: p.distanceTo(camPos), index });
         });
@@ -1744,8 +1768,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 break;
             }
 
-            // Shake that grows with speed, a jolt after landing a jump, and the shot's slow tilt.
-            const amp = (SHAKE[shot.type] ?? 0) * (Math.min(speed / 320, 1.3) ** 2 + 2.5 * this.landing(path, t));
+            // Shake as the car passes close to a trackside camera or lands a jump, and the shot's slow tilt.
+            const near = shot.cam ? clamp((18 - pos.distanceTo(P)) / 14, 0, 1) : 0;
+            const amp = (PASS_SHAKE[shot.type] ?? 0) * near * near * Math.min(speed / 250, 1.3) + (LAND_SHAKE[shot.type] ?? 0) * this.landing(path, t);
             if (amp > 0) {
                 const ph = shot.ph ?? shot.t0 * 7.13;
                 const dist = pos.distanceTo(look);
