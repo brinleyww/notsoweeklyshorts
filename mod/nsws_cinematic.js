@@ -469,7 +469,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 let bad = 0;
                 for (const dt of [0, 0.8, 1.6]) {
                     if (finish + dt > P.end) continue;
-                    if (this.c.blocked(C, P.pos(finish + dt, w[3]).addScaledVector(up, 0.6))) bad++;
+                    if (this.c.hides(C, P.pos(finish + dt, w[3]).addScaledVector(up, 0.6))) bad++;
                 }
                 if (bad === 0) return { type: "finish", t0: finish, t1: Infinity, cam: C };
             }
@@ -677,8 +677,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (!RIDE.has(shot.type)) {
                 let ok = 0, n = 0;
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step, n++)
-                    if (!this.c.blocked(shot.cam, P.pos(t, w[0]).addScaledVector(up, 0.6))) ok++;
-                const anchorOk = !this.c.blocked(shot.cam, P.pos(shot.ta, w[0]).addScaledVector(up, 0.6));
+                    if (!this.c.hides(shot.cam, P.pos(t, w[0]).addScaledVector(up, 0.6))) ok++;
+                const anchorOk = !this.c.hides(shot.cam, P.pos(shot.ta, w[0]).addScaledVector(up, 0.6));
                 shot.vis = ok / Math.max(1, n);
                 if (!anchorOk || shot.vis < (strict ? 0.9 : 0.75)) return false;
             } else {
@@ -686,6 +686,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 let sum = 0, n = 0;
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step) {
                     const want = this.want(shot, t);
+                    // Something crossing the view for a moment (a gate, a pillar) doesn't count.
+                    if (want < limit && t + 2 * step <= shot.t1 && (this.want(shot, t + step) >= limit || this.want(shot, t + 2 * step) >= limit)) {
+                        sum += 1;
+                        n++;
+                        continue;
+                    }
                     if (want < limit) {
                         if (t - shot.t0 >= 2.2) {
                             shot.t1 = t - step;
@@ -710,7 +716,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const P = this.path.pos(t, this.w[1]);
             const view = this.c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
             const from = this.w[2].copy(P).addScaledVector(this.c.up, 0.8);
-            const hit = this.c.hitDistance(from, view.pos, 0.3);
+            const hit = this.c.occluder(from, view.pos, 0.3);
             return null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
         }
 
@@ -727,8 +733,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const Pt = P.pos(t, this.w[1]);
                     const view = this.c.viewOf(shot, t, Pt, P, this.view, this.view2, false);
                     const from = this.w[2].copy(Pt).addScaledVector(up, 0.8);
-                    const hit = this.c.hitDistance(from, view.pos, 0.3);
+                    const hit = this.c.occluder(from, view.pos, 0.3);
                     want[i] = null == hit ? 1 : clamp((hit - 0.4) / from.distanceTo(view.pos), 0.15, 1);
+                }
+                // Anything in the way for under 0.6 s is passing the lens, not a wall: no pull for it.
+                for (let i = 0; i < n;) {
+                    if (want[i] >= 0.98) {
+                        i++;
+                        continue;
+                    }
+                    let j = i;
+                    while (j < n && want[j] < 0.98) j++;
+                    if (j - i < 6) want.fill(1, i, j);
+                    i = j;
                 }
                 const v = new Float32Array(n);
                 for (let i = 0; i < n; i++) {
@@ -769,6 +786,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         const i = Math.floor(f), j = Math.min(i + 1, c.v.length - 1);
         return c.v[i] + (c.v[j] - c.v[i]) * (f - i);
     }
+
+    const MIN_VIEW_DISTANCE = 3.5;
 
     // Scroll to zoom, drag to look around, for the normal and the cinematic camera. In cinematic
     // mode the offset eases back to the director's framing a few seconds after you let go.
@@ -875,6 +894,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     rel.applyAxisAngle(this.axis, ang);
                     this.qb.setFromAxisAngle(this.axis, ang);
                 } else this.qb.identity();
+                // Zooming in stops about a car length from the car (or where the camera already is,
+                // if that is closer), and the scroll target stops there too so zooming out answers at once.
+                const minZoom = Math.min(0, Math.log2(MIN_VIEW_DISTANCE / Math.max(len, 1e-3)));
+                this.tZoom = Math.max(this.tZoom, minZoom);
+                this.zoom = Math.max(this.zoom, minZoom);
                 cam.position.copy(pivot).addScaledVector(rel, Math.pow(2, this.zoom));
                 cam.quaternion.copy(this.qb).multiply(this.qa).multiply(this.baseQuat);
                 cam.fov = this.baseFov;
@@ -912,6 +936,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.up = new T.Vector3(0, 1, 0);
             this.pivot = new T.Vector3();
             this.rayDir = new T.Vector3();
+            this.oDir = new T.Vector3();
+            this.oRight = new T.Vector3();
+            this.oUp = new T.Vector3();
+            this.oA = new T.Vector3();
+            this.oB = new T.Vector3();
             this.e = [0, 1, 2, 3, 4, 5].map(() => new T.Vector3());
             this.paths = new Map();
             this.planners = new Map();
@@ -1164,6 +1193,30 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
         hitDistance(from, to, slack = 1.5) {
             return this.castRay(from, to, slack, false);
+        }
+
+        // Like hitDistance, but thin things (a checkpoint pole, the top of a gate, a sign's edge)
+        // don't count: four more rays offset around the first must mostly be blocked too.
+        occluder(from, to, slack) {
+            const hit = this.castRay(from, to, slack, false);
+            if (null == hit) return null;
+            const dir = this.oDir.subVectors(to, from).normalize();
+            const right = this.oRight.crossVectors(dir, this.up);
+            if (right.lengthSq() < 1e-6) right.set(1, 0, 0);
+            right.normalize();
+            const up = this.oUp.crossVectors(right, dir).normalize();
+            let blocked = 1;
+            for (const [a, b] of [[1, 0], [-1, 0], [0, 0.6], [0, -0.6]]) {
+                const f = this.oA.copy(from).addScaledVector(right, a).addScaledVector(up, b);
+                const g = this.oB.copy(to).addScaledVector(right, a).addScaledVector(up, b);
+                if (null != this.castRay(f, g, slack, true)) blocked++;
+            }
+            return blocked >= 3 ? hit : null;
+        }
+
+        // Whether a fixed camera loses sight of the car.
+        hides(cam, target) {
+            return null != this.occluder(cam, target, 1.5);
         }
 
         pathOf(run) {
