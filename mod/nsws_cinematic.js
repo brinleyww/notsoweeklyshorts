@@ -26,17 +26,17 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu > .col > .opt > .button { margin: 0; padding: 8px 14px; font-size: 18px; }
 .nsws-save-menu > .col > .opt > .button.off { opacity: 0.55; }
 .nsws-save-menu > .col > .opt > .button.wide { flex: 1; text-align: left; }
-.nsws-save-menu > .col > .vol { display: flex; align-items: center; margin: 2px 0 6px 0; padding: 0 10px; height: 34px; background-color: var(--button-color); }
+.nsws-save-menu > .col > .vol { display: flex; align-items: center; margin: 2px 0; padding: 0 18px 0 16px; height: 36px; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); }
 .nsws-save-menu > .col > .vol > span { margin-right: 10px; font-size: 16px; opacity: 0.8; white-space: nowrap; }
 .nsws-save-menu > .col > .vol > input { flex: 1; min-width: 0; }
 .nsws-save-menu > .col > .vol > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
 .nsws-save-menu > .col > .vol > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
 .nsws-save-menu > .col > .vol > b { margin-left: 10px; font-weight: normal; font-size: 15px; font-variant-numeric: tabular-nums; }
-.nsws-save-menu > .col > .vol > .button { margin: 0 -6px 0 8px; padding: 4px 10px; font-size: 15px; }
-.nsws-save-menu > .col > p.note { margin-top: 0; font-size: 14px; line-height: 1.3; opacity: 0.6; }
-.nsws-save-menu > .col > .songs { position: relative; flex-shrink: 0; margin: 2px 0; overflow: hidden; background-color: rgba(0, 0, 0, 0.2); touch-action: none; }
+.nsws-save-menu > .col > .vol > .button { margin: 0 -10px 0 8px; padding: 4px 10px; font-size: 15px; }
+.nsws-save-menu > .col > p.note { margin-top: 6px; font-size: 14px; line-height: 1.3; opacity: 0.6; }
+.nsws-save-menu > .col > .songs { position: relative; flex-shrink: 0; margin: 2px 0; overflow: hidden; background-color: rgba(0, 0, 0, 0.2); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); touch-action: none; }
 .nsws-save-menu > .col > .songs > div { will-change: transform; }
-.nsws-save-menu .col .song { display: flex; align-items: center; height: 34px; padding: 0 16px 0 12px; font-size: 17px; cursor: pointer; }
+.nsws-save-menu .col .song { display: flex; align-items: center; height: 34px; padding: 0 26px 0 16px; font-size: 17px; cursor: pointer; }
 .nsws-save-menu .col .song:hover { background-color: rgba(255, 255, 255, 0.08); }
 .nsws-save-menu .col .song.selected { background-color: var(--button-color); }
 .nsws-save-menu .col .song > .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -44,7 +44,7 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu .col .song > .del { margin: 0 -8px 0 6px; padding: 4px 8px; border: none; background: none; color: #fff; font: inherit; font-size: 15px; opacity: 0.55; cursor: pointer; }
 .nsws-save-menu .col .song > .del:hover, .nsws-save-menu .col .song > .del.sure { opacity: 1; }
 .nsws-save-menu .col .song > .del.sure { color: #ff8a80; }
-.nsws-save-menu > .col > .songs > i { position: absolute; right: 3px; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
+.nsws-save-menu > .col > .songs > i { position: absolute; right: 12px; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
 .nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
 .nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
 .nsws-export > div { pointer-events: auto; display: flex; flex-direction: column; min-width: 340px; max-width: 80vw; padding: 18px 24px; background: var(--surface-color); clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
