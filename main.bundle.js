@@ -44188,6 +44188,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             )),
             s.addFinishCallback((e => {
                 window.__nswsTraffic?.event("finishes", __nswsTrackId);
+                // The weekly bingo judges each run by its time (mod/nsws_bingo.js).
+                window.dispatchEvent(new CustomEvent("nsws-finish", { detail: { track: __nswsTrackId, seconds: e.getTime().time } }));
                 const t = e.getTime()
                   , i = e.getRecording()
                   , r = e.getCarStyle();
@@ -61807,6 +61809,13 @@ window.__nswsAutoGhostNote = function(trackId) {
     window.__nswsMedalTier = function (trackId) {
         var record = loadStore()[trackId];
         return record ? record.tier : null;
+    };
+    // The medal one run earns, for the weekly bingo: a tier id, null, or "failed" when the Author Time couldn't be read.
+    window.__nswsMedalForTime = function (trackId, seconds) {
+        if (!hasMedals(trackId)) return Promise.resolve(null);
+        return determineTierAsync(trackId, seconds).then(function (result) {
+            return result.fetchFailed ? "failed" : result.tier ? result.tier.id : null;
+        });
     };
 
     function fetchSettledPlacement(trackId) {

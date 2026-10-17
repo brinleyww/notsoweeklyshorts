@@ -391,15 +391,22 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   the player wears no tag or a smaller hours tag, and says so.
 - **Weekly bingo.** Every NSWS week has one 5x5 card with a free centre, the same
   for everyone. `mod/nsws_bingo.js` makes it from the week's tracks (seeded by the
-  week and its track ids): one column per track with an easy, a medium and a hard
-  square, and activities in the rest. The page checks squares itself (finishes,
-  medals, leaderboard place, things done on the site) and sends newly done ones
-  to `/nsws/bingo/mark` (`{userToken, week, squares}`), which only takes the
-  `CURRENT_WEEK` card (or the next one, for the gap between a site push and the
-  Worker deploy). `Accounts` keeps the marks as a 25-bit mask per account and week
-  (`bingo` table) and counts bingos, full rows, columns and diagonals, over every
-  week (`bingoLines`). `refer/me` and `bingo/mark` return it as `bingo`
-  (`{live, total, blackouts, cards}`). Bingo tags (`BINGO` 1, `DAUBER` 5,
+  week, the round and the track ids): one column per track with an easy, a medium
+  and a hard square (one column epic), and activities in the rest. Only finished
+  runs count: medal squares judge each run's own time (`nsws-finish` event +
+  `__nswsMedalForTime` in main.bundle.js), so restarting or opening menus marks
+  nothing. The page sends newly done squares to `/nsws/bingo/mark`
+  (`{userToken, week, round, squares}`), which only takes the `CURRENT_WEEK` card
+  (or the next one, for the gap between a site push and the Worker deploy) and
+  drops marks for another round (marks with no round, from pre-v2 pages, too).
+  `Accounts` keeps the marks as a 25-bit mask per account and week (`bingo` table)
+  and counts bingos, full rows, columns and diagonals, over every week
+  (`bingoLines`). A card with a bingo can be swapped with `/nsws/bingo/reset`
+  (`{userToken, week, round}`): its bingos and blackout move into `banked` /
+  `banked_full`, the marks clear and `round` goes up. The first cards (v9.50) had
+  other squares, so the migration that added those columns banked every old card
+  and cleared it. `refer/me`, `bingo/mark` and `bingo/reset` return it as `bingo`
+  (`{live, total, blackouts, cards: [{week, round, banked, marks}]}`). Bingo tags (`BINGO` 1, `DAUBER` 5,
   `FULL HOUSE` 15, `JACKPOT` 30, `CARD SHARK` 60) come with the total, and
   `BLACKOUT` with one whole card. Squares are the player's own word, like the
   hours: the tags are for fun, not for the boards. (An earlier weekly streak left
@@ -420,7 +427,7 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   message shows it.
 
 Player endpoints (`userToken` in a `text/plain` JSON body, site only):
-`/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`, `/nsws/bingo/mark`.
+`/nsws/refer/me`, `/nsws/refer/redeem`, `/nsws/tags/buy`, `/nsws/tags/equip`, `/nsws/bingo/mark`, `/nsws/bingo/reset`.
 Owner endpoints (owner key as `token`): `/nsws/tagadmin`,
 `/nsws/tagadmin/search` (any part of any name an account has been seen with;
 3+ letters also match letters in order), `/nsws/tagadmin/lookup` (by `userId`

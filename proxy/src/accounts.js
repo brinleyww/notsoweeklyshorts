@@ -175,10 +175,25 @@ export class Accounts extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS chat_links_user ON chat_links(user_id)");
         // Focused seconds on the site, credited in batches by TrafficStats from its beats.
         this.sql.exec("CREATE TABLE IF NOT EXISTS playtime (user_id TEXT PRIMARY KEY, seconds REAL NOT NULL)");
-        // Marked squares of each weekly bingo card (bit = row * 5 + column).
+        // Marked squares of each weekly bingo card (bit = row * 5 + column). A player who has a bingo
+        // can start a new card for the same week: round goes up, and the old card's bingos and
+        // blackout move into banked / banked_full.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS bingo (
             user_id TEXT NOT NULL, week INTEGER NOT NULL, marks INTEGER NOT NULL, at INTEGER NOT NULL,
+            round INTEGER NOT NULL DEFAULT 0, banked INTEGER NOT NULL DEFAULT 0, banked_full INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (user_id, week)) WITHOUT ROWID`);
+        const bingoColumns = this.sql.exec("PRAGMA table_info(bingo)").toArray().map((c) => c.name);
+        if (!bingoColumns.includes("round")) {
+            // The first cards (v9.50) had other squares, so their marks mean nothing on today's
+            // cards: bank their bingos and start everyone on a clean card.
+            this.sql.exec("ALTER TABLE bingo ADD COLUMN round INTEGER NOT NULL DEFAULT 0");
+            this.sql.exec("ALTER TABLE bingo ADD COLUMN banked INTEGER NOT NULL DEFAULT 0");
+            this.sql.exec("ALTER TABLE bingo ADD COLUMN banked_full INTEGER NOT NULL DEFAULT 0");
+            for (const row of this.sql.exec("SELECT user_id, week, marks FROM bingo").toArray()) {
+                this.sql.exec("UPDATE bingo SET banked = ?, banked_full = ?, marks = ? WHERE user_id = ? AND week = ?",
+                    bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, row.user_id, row.week);
+            }
+        }
         this.top = null;
     }
 
@@ -188,30 +203,56 @@ export class Accounts extends DurableObject {
 
     // Every card's marks, newest first, with the bingo count over all of them.
     bingoOf(userId) {
-        const cards = this.sql.exec("SELECT week, marks FROM bingo WHERE user_id = ? ORDER BY week DESC", userId).toArray();
+        const cards = this.sql.exec("SELECT week, marks, round, banked, banked_full FROM bingo WHERE user_id = ? ORDER BY week DESC", userId).toArray();
         let total = 0;
         let blackouts = 0;
         for (const c of cards) {
-            total += bingoLines(c.marks);
-            if ((c.marks | BINGO_FREE) === BINGO_FULL) blackouts++;
+            total += c.banked + bingoLines(c.marks);
+            blackouts += c.banked_full + ((c.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0);
         }
-        return { live: liveWeek(this.env), total, blackouts, cards: cards.slice(0, BINGO_HISTORY).map((c) => ({ week: c.week, marks: c.marks | BINGO_FREE })) };
+        return {
+            live: liveWeek(this.env), total, blackouts,
+            cards: cards.slice(0, BINGO_HISTORY).map((c) => ({ week: c.week, round: c.round, banked: c.banked, marks: c.marks | BINGO_FREE })),
+        };
+    }
+
+    bingoRow(userId, week) {
+        return this.sql.exec("SELECT marks, round FROM bingo WHERE user_id = ? AND week = ?", userId, week).toArray()[0] ?? null;
+    }
+
+    bingoOpen(week) {
+        const live = liveWeek(this.env);
+        return live != null && week >= live && week <= live + 1;
     }
 
     // Squares are only marked on the live week's card (or the next week's, between a site push and
-    // the Worker's CURRENT_WEEK bump), so old cards stay as they were.
-    markBingo(userId, week, squares) {
-        const live = liveWeek(this.env);
-        if (!Number.isSafeInteger(week) || !Array.isArray(squares) || squares.length > 25) return { error: "bad" };
-        if (live == null || week < live || week > live + 1) return { error: "closed" };
+    // the Worker's CURRENT_WEEK bump), so old cards stay as they were. Marks for an older round of
+    // the card (another tab, a slow request) are dropped; the reply tells the page the round.
+    markBingo(userId, week, round, squares) {
+        if (!Number.isSafeInteger(week) || !Number.isSafeInteger(round) || !Array.isArray(squares) || squares.length > 25) return { error: "bad" };
+        if (!this.bingoOpen(week)) return { error: "closed" };
         let add = 0;
         for (const i of squares) {
             if (!Number.isSafeInteger(i) || i < 0 || i >= 25) return { error: "bad" };
             add |= 1 << i;
         }
-        this.sql.exec(`INSERT INTO bingo (user_id, week, marks, at) VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id, week) DO UPDATE SET marks = marks | excluded.marks, at = excluded.at`,
-            userId, week, add | BINGO_FREE, Date.now());
+        if (round === (this.bingoRow(userId, week)?.round ?? 0)) {
+            this.sql.exec(`INSERT INTO bingo (user_id, week, marks, at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, week) DO UPDATE SET marks = marks | excluded.marks, at = excluded.at`,
+                userId, week, add | BINGO_FREE, Date.now());
+        }
+        return this.changed(userId);
+    }
+
+    // A new card for the same week, once this one has a bingo. Its bingos (and blackout) are kept.
+    resetBingo(userId, week, round) {
+        if (!Number.isSafeInteger(week) || !Number.isSafeInteger(round)) return { error: "bad" };
+        if (!this.bingoOpen(week)) return { error: "closed" };
+        const row = this.bingoRow(userId, week);
+        if (!row || row.round !== round || bingoLines(row.marks) < 1) return { error: "locked" };
+        this.sql.exec(`UPDATE bingo SET banked = banked + ?, banked_full = banked_full + ?, marks = ?, round = round + 1, at = ?
+            WHERE user_id = ? AND week = ?`,
+            bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, Date.now(), userId, week);
         return this.changed(userId);
     }
 

@@ -807,7 +807,7 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 }
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
-    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark"]);
+    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset"]);
 const HEX32 = /^[0-9a-f]{32}$/;
 
 // The chat only learns about a tag change here, so its players' next messages show the new tag.
@@ -868,8 +868,11 @@ async function handleAccounts(request, url, env, fromSite, origin) {
             result = await stub.redeem(userId, body.code, ip);
             break;
         }
-        case "bingo/mark": {
-            const marked = await stub.markBingo(userId, body.week, body.squares);
+        case "bingo/mark":
+        case "bingo/reset": {
+            // Pages from before rounds send none; their squares mean other things, so they mark nothing.
+            const round = body.round ?? -1;
+            const marked = path === "bingo/mark" ? await stub.markBingo(userId, body.week, round, body.squares) : await stub.resetBingo(userId, body.week, round);
             result = marked.error ? marked : marked.state;
             break;
         }
