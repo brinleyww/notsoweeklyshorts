@@ -36,7 +36,7 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu > .col > .vol > input { flex: 1; min-width: 0; }
 .nsws-save-menu > .col > .vol > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
 .nsws-save-menu > .col > .vol > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
-.nsws-save-menu > .col > .vol > b { margin-left: 10px; font-weight: normal; font-size: 15px; font-variant-numeric: tabular-nums; }
+.nsws-save-menu > .col > .vol > b { min-width: 4ch; text-align: right; margin-left: 10px; font-weight: normal; font-size: 15px; font-variant-numeric: tabular-nums; }
 .nsws-save-menu > .col > .vol > .button { margin: 0 -10px 0 8px; padding: 4px 10px; font-size: 15px; }
 .nsws-save-menu > .col > p.note { margin-top: 6px; font-size: 14px; line-height: 1.3; opacity: 0.6; }
 .nsws-save-menu > .col > .songs { position: relative; flex-shrink: 0; margin: 2px 0; overflow: hidden; background-color: rgba(0, 0, 0, 0.2); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); touch-action: none; }
@@ -2092,7 +2092,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     }
                 };
                 const vol = parseFloat(get("nsws_save_music_vol", "0.7"));
-                this.sound = { cars: get("nsws_save_cars", "1") !== "0", song: get("nsws_save_song", "") || null, volume: vol >= 0 && vol <= 1 ? vol : 0.7 };
+                const carVol = parseFloat(get("nsws_save_car_vol", "1"));
+                this.sound = { cars: get("nsws_save_cars", "1") !== "0", carVolume: carVol >= 0 && carVol <= 2 ? carVol : 1, song: get("nsws_save_song", "") || null, volume: vol >= 0 && vol <= 1 ? vol : 0.7 };
             }
             return this.sound;
         }
@@ -2100,6 +2101,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         saveSound() {
             try {
                 localStorage.setItem("nsws_save_cars", this.sound.cars ? "1" : "0");
+                localStorage.setItem("nsws_save_car_vol", String(this.sound.carVolume));
                 localStorage.setItem("nsws_save_song", this.sound.song ?? "");
                 localStorage.setItem("nsws_save_music_vol", String(this.sound.volume));
             } catch (e) {}
@@ -2120,10 +2122,38 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 cars.classList.toggle("off", !opt.cars);
             };
             showCars();
+            // How loud the cars are in the video, from silent to twice the normal level.
+            const carVolRow = el("label", "vol", menu);
+            el("span", "", carVolRow).textContent = "Car volume";
+            const carVol = el("input", "", carVolRow);
+            carVol.type = "range";
+            carVol.min = "0";
+            carVol.max = "2";
+            carVol.step = "0.05";
+            carVol.value = String(opt.carVolume);
+            const carVolText = el("b", "", carVolRow);
+            const showCarVol = () => {
+                carVolText.textContent = Math.round(opt.carVolume * 100) + "%";
+                carVolRow.style.opacity = opt.cars ? "" : "0.5";
+                carVol.disabled = !opt.cars;
+            };
+            showCarVol();
+            carVol.addEventListener("input", () => {
+                opt.carVolume = parseFloat(carVol.value);
+                showCarVol();
+                this.saveSound();
+            });
+            carVolRow.addEventListener("dblclick", () => {
+                opt.carVolume = 1;
+                carVol.value = "1";
+                showCarVol();
+                this.saveSound();
+            });
             cars.addEventListener("click", () => {
                 this.o.playClick?.();
                 opt.cars = !opt.cars;
                 showCars();
+                showCarVol();
                 this.saveSound();
             });
 
@@ -2676,7 +2706,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const dur = video.chunks.length / video.fps;
                     const cars = capture?.frames.length ? await VA.renderCars(capture, (name) => this.o.audio?.getBuffer?.(name) ?? null, dur) : null;
                     if (exp.cancel) return null;
-                    audio = await VA.encode(VA.mix(dur, cars, 1, song?.buffer ?? null, sound.volume, song?.start ?? 0), audioRate);
+                    audio = await VA.encode(VA.mix(dur, cars, sound.carVolume ?? 1, song?.buffer ?? null, sound.volume, song?.start ?? 0), audioRate);
                 }
                 const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: song?.name ?? null } : "failed" : null };
                 // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
