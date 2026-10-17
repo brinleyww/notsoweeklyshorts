@@ -747,7 +747,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 let best = null;
                 for (const strict of [true, false]) {
                     for (const c of cands) {
-                        if (best && c.base + 0.3 + 0.225 + 0.35 <= best.score) break;
+                        if (best && c.base + 0.3 + 0.225 + 0.2 <= best.score) break;
                         yield;
                         if (this.check(c, strict) && (!best || c.score > best.score || c.score === best.score && c.order < best.order)) best = c;
                     }
@@ -1000,13 +1000,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
         suitability(type, f, anchored) {
             const yawN = clamp(f.yaw / 1.2, 0, 1);
+            const crowd = Math.min(f.grp ?? 0, 3);
             switch (type) {
-            case "chase": return 0.5 + 0.4 * f.enc + 0.15 * yawN;
+            case "chase": return 0.5 + 0.4 * f.enc + 0.15 * yawN + 0.06 * crowd;
             case "orbit": return 0.42 + (f.spd < 170 ? 0.25 : 0) - 0.35 * f.enc;
-            case "heli": return 0.38 + 0.2 * yawN - 0.8 * f.enc;
+            case "heli": return 0.38 + 0.2 * yawN - 0.8 * f.enc + 0.04 * crowd;
             case "side": return 0.42 + 0.55 * f.air + (f.spd > 200 && f.yaw < 0.4 ? 0.2 : 0) - 0.4 * f.enc;
-            case "front": return 0.38 + (f.yaw < 0.35 ? 0.15 : 0) - 0.3 * yawN - 0.4 * f.enc;
-            case "pack": return f.grp < 0.6 ? -9 : 0.3 + 0.12 * Math.min(f.grp, 5) - 0.3 * f.enc;
+            case "front": return 0.38 + (f.yaw < 0.35 ? 0.15 : 0) - 0.3 * yawN - 0.4 * f.enc - 0.08 * crowd;
+            case "pack": return f.grp < 0.6 ? -9 : 0.28 + 0.05 * Math.min(f.grp, 4) - 0.3 * f.enc;
             case "tele": return 0.6 + 0.25 * anchored - 0.8 * f.enc;
             case "curb": return 0.48 + 0.3 * anchored - 0.8 * f.enc;
             }
@@ -1019,7 +1020,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             let shot;
             if (RIDE.has(type)) {
                 shot = { type, t0, ...this.rideParams(type, v, R), ...this.chooseEnd(t0, hardEnd, R) };
-                if (type === "pack") shot.front = this.packFront(t0, shot.t1);
+                // Ahead of the group looking back only now and then, not every time it would fit.
+                if (type === "pack") shot.front = this.packFront(t0, shot.t1) && R() < 0.3;
             }
             else {
                 shot = this.fixedShot(type, v, R, t0, hardEnd);
@@ -1177,7 +1179,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (strict && shot.comp < 0.12) return false;
             const cover = this.coverage(shot);
             shot.cover = cover ? cover.frac : null;
-            shot.score = shot.base + 0.3 * shot.vis + 0.45 * (shot.comp - 0.5) + (cover ? 0.35 * cover.frac * Math.min(1, cover.near / 2) : 0);
+            shot.score = shot.base + 0.3 * shot.vis + 0.45 * (shot.comp - 0.5) + (cover ? 0.2 * cover.frac * Math.min(1, cover.near / 2) : 0);
             return true;
         }
 
