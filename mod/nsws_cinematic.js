@@ -20,6 +20,10 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu > .col > .fname { display: flex; align-items: center; margin: 2px 0 8px 0; padding: 0 16px 0 14px; height: 40px; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); cursor: text; }
 .nsws-save-menu > .col > .fname > input { flex: 1; min-width: 0; padding: 0; border: none; outline: none; background: none; color: #fff; font: inherit; font-size: 17px; }
 .nsws-save-menu > .col > .fname > span { margin-left: 2px; font-size: 15px; opacity: 0.55; }
+.nsws-save-menu > .col > .est { display: flex; align-items: baseline; margin: 4px 0 6px 0; padding: 8px 16px 8px 14px; background-color: rgba(0, 0, 0, 0.2); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); white-space: nowrap; }
+.nsws-save-menu > .col > .est > b { font-weight: normal; font-size: 17px; }
+.nsws-save-menu > .col > .est > span { flex: 1; margin-left: 8px; font-size: 13px; text-align: right; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.nsws-save-menu > .col > .est.low > span { color: #ffd76a; opacity: 1; }
 .nsws-save-menu > .col > .button.go { display: flex; align-items: center; justify-content: center; margin: auto 0 0 0; padding: 16px 18px; font-size: 28px; text-align: center; }
 .nsws-save-menu > .col > .button.go > img { width: 30px; height: 30px; margin-right: 12px; }
 .nsws-save-menu::-webkit-scrollbar { width: 6px; }
@@ -54,7 +58,8 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu > .col > .ctrl > .button { margin: 0 4px 0 0; padding: 7px 11px; font-size: 16px; white-space: nowrap; }
 .nsws-save-menu > .col > .ctrl > .button.dim { opacity: 0.45; }
 .nsws-save-menu > .col > .ctrl > b { flex: 1; margin-right: 4px; font-weight: normal; font-size: 15px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.nsws-save-menu > .col > .songs > i { position: absolute; right: 12px; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
+.nsws-save-menu > .col > .songs > i { position: absolute; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
+.nsws-save-menu > .col > .songs > i.rail { background-color: rgba(255, 255, 255, 0.1); pointer-events: none; }
 .nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
 .nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
 .nsws-export > div { pointer-events: auto; display: flex; flex-direction: column; min-width: 340px; max-width: 80vw; padding: 18px 24px; background: var(--surface-color); clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
@@ -162,6 +167,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         { id: "10mb", label: "Under 10 MB (Discord)", cap: 9.6e6 }
     ];
     const LADDER = [[1920, 1080, 60], [1600, 900, 60], [1280, 720, 60], [1280, 720, 30], [960, 540, 30], [854, 480, 30], [640, 360, 30], [426, 240, 30]];
+    const audioRateFor = (size, withAudio) => !withAudio ? 0 : size.cap || (size.rate ?? 1) <= 0.25 ? 96000 : (size.rate ?? 1) >= 1 ? 160000 : 128000;
+    const videoRateFor = (size, D, audioRate) => size.cap ? Math.max(2e5, size.cap * 8 * 0.96 / D - audioRate) : BASE_RATE * (size.rate ?? 1);
 
     // The sharpest size and frame rate the bitrate can carry that this device can encode.
     async function encoderConfig(rate, strict) {
@@ -2090,11 +2097,26 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 localStorage.setItem("nsws_save_song", this.sound.song ?? "");
                 localStorage.setItem("nsws_save_music_vol", String(this.sound.volume));
             } catch (e) {}
+            this.onSoundChange?.();
         }
 
-        // Car sounds on or off, and music: the songs that come with the game, then the player's
-        // imported songs A-Z (kept on this device only), in a list that scrolls by itself once it
-        // is long; where the song starts, and how loud it is.
+        // Roughly what a save at this size comes out as, from the same bitrate, length and
+        // resolution choice the export makes (the encoder lands close to its bitrate).
+        estimate(size) {
+            const run = this.o.getRuns()[this.o.getFocus()];
+            const finish = (run?.settings.time?.numberOfFrames ?? 0) / 1000;
+            const total = this.o.totalTime?.() ?? 0;
+            const D = Math.min(finish + 4, total > 0 ? total : finish + 4) + 0.1;
+            const sound = window.__nswsVideoAudio && window.AudioEncoder && window.indexedDB ? this.soundOptions() : null;
+            const audioRate = audioRateFor(size, !!sound && (sound.cars || !!sound.song));
+            const rate = videoRateFor(size, D, audioRate);
+            const [, height, fps] = LADDER.find(([w, h, f]) => rate / (w * h * f) >= MIN_BPP) ?? LADDER[LADDER.length - 1];
+            return { bytes: (rate + audioRate) * D / 8, seconds: D, height, fps };
+        }
+
+        // Car sounds on or off, and music: the songs that come with the game and the player's
+        // imported ones (kept on this device only), together A-Z in a list that scrolls by itself
+        // once it is long; where the song starts, and how loud it is.
         soundMenu(menu) {
             const VA = window.__nswsVideoAudio;
             if (!VA || !window.AudioEncoder || !window.indexedDB) return;
@@ -2145,6 +2167,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             el("p", "", menu).textContent = "Music";
             const box = el("div", "songs", menu);
             const inner = el("div", "", box);
+            const rail = el("i", "rail", box);
             const thumb = el("i", "", box);
             const importRow = el("div", "opt", menu);
             const importBtn = el("button", "button wide", importRow);
@@ -2196,17 +2219,51 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
             const ROW = 34, ROWS = 5;
             let songs = [], sure = null, y = 0;
+            // The bar runs along the list's slanted right edge (8px across its height, like the
+            // game's buttons), so it is skewed to the same angle and moves sideways as it goes down.
+            const SLANT = 8, GAP = 5;
+            const alongEdge = (bar, top, h, W, H) => {
+                bar.style.top = top + "px";
+                bar.style.height = h + "px";
+                bar.style.left = (W - SLANT * (top + h / 2) / H - GAP - bar.offsetWidth) + "px";
+                bar.style.transform = "skewX(" + -Math.atan(SLANT / H) + "rad)";
+            };
             const layout = () => {
-                const H = box.clientHeight, full = inner.scrollHeight;
+                const W = box.clientWidth, H = box.clientHeight, full = inner.scrollHeight;
                 y = clamp(y, 0, Math.max(0, full - H));
-                inner.style.transform = "translateY(" + -Math.round(y) + "px)";
+                inner.style.transform = "translateY(" + -y.toFixed(2) + "px)";
                 const scrolls = full > H + 1;
-                thumb.style.display = scrolls ? "" : "none";
+                thumb.style.display = rail.style.display = scrolls ? "" : "none";
                 if (scrolls) {
                     const th = Math.max(22, H * H / full);
-                    thumb.style.height = th + "px";
-                    thumb.style.top = (y / (full - H) * (H - th)) + "px";
+                    alongEdge(rail, 0, H, W, H);
+                    alongEdge(thumb, y / (full - H) * (H - th), th, W, H);
                 }
+            };
+            // The wheel and a touch flick glide to where they aim (eased, the same at any frame rate);
+            // dragging follows the finger or mouse exactly.
+            let goal = 0, tau = 0.08, glideRaf = 0, last = 0;
+            const glide = (now) => {
+                glideRaf = 0;
+                if (!menu.isConnected) return;
+                goal = clamp(goal, 0, Math.max(0, inner.scrollHeight - box.clientHeight));
+                const dt = last ? Math.min(0.05, (now - last) / 1000) : 1 / 60;
+                last = now;
+                y = Math.abs(goal - y) < 0.3 ? goal : y + (goal - y) * (1 - Math.exp(-dt / tau));
+                layout();
+                if (y !== goal) glideRaf = requestAnimationFrame(glide);
+                else last = 0;
+            };
+            const glideTo = (v, t) => {
+                goal = v;
+                tau = t;
+                if (!glideRaf) glideRaf = requestAnimationFrame(glide);
+            };
+            const stopGlide = () => {
+                cancelAnimationFrame(glideRaf);
+                glideRaf = 0;
+                last = 0;
+                goal = y;
             };
             const selected = () => songs.find((x) => x.id === opt.song) ?? null;
             const fine = (t) => clock(t) + "." + Math.floor(t * 10 % 10);
@@ -2342,13 +2399,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const i = opt.song ? songs.findIndex((x) => x.id === opt.song) + 1 : 0;
                 if (i * ROW < y || (i + 1) * ROW > y + box.clientHeight) y = i * ROW - ROW * 2;
                 layout();
+                stopGlide();
             };
             const refresh = async () => {
                 let mine = [];
                 try {
                     mine = await VA.library.list();
                 } catch (e) {}
-                songs = [...VA.library.presets(), ...mine];
+                songs = [...VA.library.presets(), ...mine].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }) || a.id.localeCompare(b.id));
                 if (opt.song && !songs.some((x) => x.id === opt.song)) {
                     opt.song = null;
                     this.saveSound();
@@ -2362,18 +2420,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             box.addEventListener("wheel", (e) => {
                 if (inner.scrollHeight <= box.clientHeight + 1) return;
                 e.preventDefault();
-                y += e.deltaY * (e.deltaMode === 1 ? ROW : e.deltaMode === 2 ? box.clientHeight : 1);
-                layout();
+                const H = box.clientHeight;
+                glideTo(clamp((glideRaf ? goal : y) + e.deltaY * (e.deltaMode === 1 ? ROW : e.deltaMode === 2 ? H : 1), 0, Math.max(0, inner.scrollHeight - H)), 0.08);
             }, { passive: false });
             let drag = null, moved = false;
             thumb.addEventListener("pointerdown", (e) => {
                 e.preventDefault();
+                stopGlide();
                 drag = { id: e.pointerId, y: e.clientY, bar: true };
                 thumb.setPointerCapture(e.pointerId);
             });
             box.addEventListener("pointerdown", (e) => {
                 if (e.pointerType === "mouse" || drag) return;
-                drag = { id: e.pointerId, y: e.clientY, bar: false, from: e.clientY };
+                stopGlide();
+                drag = { id: e.pointerId, y: e.clientY, bar: false, from: e.clientY, v: 0, t: performance.now() };
                 moved = false;
             });
             const onMove = (e) => {
@@ -2385,11 +2445,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 else {
                     y -= dy;
                     if (Math.abs(e.clientY - drag.from) > 6) moved = true;
+                    const now = performance.now(), dt = Math.max(1, now - drag.t) / 1000;
+                    drag.v = drag.v * 0.4 + (-dy / dt) * 0.6;
+                    drag.t = now;
                 }
                 layout();
+                goal = y;
             };
             const onUp = (e) => {
-                if (drag && e.pointerId === drag.id) drag = null;
+                if (drag && e.pointerId === drag.id) {
+                    // A flick keeps going and slows down; a finger that stopped before letting go doesn't.
+                    if (!drag.bar && performance.now() - drag.t < 80 && Math.abs(drag.v) > 150) glideTo(y + drag.v * 0.3, 0.3);
+                    drag = null;
+                }
                 setTimeout(() => moved = false, 0);
             };
             window.addEventListener("pointermove", onMove);
@@ -2397,6 +2465,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.menuCleanup = () => {
                 window.removeEventListener("pointermove", onMove);
                 window.removeEventListener("pointerup", onUp);
+                cancelAnimationFrame(glideRaf);
             };
 
             let saveTimer = 0;
@@ -2481,6 +2550,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (this.menu) {
                 this.menuCleanup?.();
                 this.menuCleanup = null;
+                this.onSoundChange = null;
                 this.menu.remove();
                 this.menu = null;
                 window.removeEventListener("pointerdown", this.onMenuAway, true);
@@ -2507,9 +2577,23 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                         localStorage.setItem("nsws_save_size", size.id);
                     } catch (e) {}
                     sizeBtns.forEach((x, i) => x.classList.toggle("selected", SAVE_SIZES[i].id === chosen));
+                    showEstimate();
                 });
                 return b;
             });
+            el("p", "", right).textContent = "Estimated size";
+            const est = el("div", "est", right);
+            const estSize = el("b", "", est), estInfo = el("span", "", est);
+            const showEstimate = () => {
+                const e = this.estimate(SAVE_SIZES.find((sz) => sz.id === chosen) ?? SAVE_SIZES[0]);
+                const mb = e.bytes / 1048576;
+                estSize.textContent = "About " + (mb < 10 ? mb.toFixed(1) : Math.round(mb)) + " MB";
+                estInfo.textContent = e.height + "p, " + e.fps + " fps, " + Math.round(e.seconds) + " s";
+                est.classList.toggle("low", e.height < 720);
+                est.title = e.height < 720 ? "The resolution drops to fit this size; pick a bigger size for a sharper video." : "Estimated file size";
+            };
+            showEstimate();
+            this.onSoundChange = showEstimate;
             el("p", "", right).textContent = "File name";
             const nameRow = el("label", "fname", right);
             const nameInput = el("input", "", nameRow);
@@ -2688,8 +2772,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
             if (exp.cancel) return null;
             const wantAudio = !!sound && (sound.cars || !!song);
-            const audioRate = !wantAudio ? 0 : cap || (size.rate ?? 1) <= 0.25 ? 96000 : (size.rate ?? 1) >= 1 ? 160000 : 128000;
-            let rate = cap ? Math.max(2e5, cap * 8 * 0.96 / D - audioRate) : BASE_RATE * (size.rate ?? 1);
+            const audioRate = audioRateFor(size, wantAudio);
+            let rate = videoRateFor(size, D, audioRate);
             begin();
             let audio = null, capture = null;
             for (let pass = 0; pass < 3; pass++) {
