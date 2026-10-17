@@ -1,37 +1,43 @@
 // The owner's announcements: a chat-style "Name: message" at the top middle of everyone's screen
-// that fades away. They arrive with the traffic beat (nsws_traffic.js) or, for players with the
-// chat open, over the chat socket. The font follows each player's chat font setting.
+// that fades away. A poll gets its own card, which stays (across reloads too) until the player
+// closes it. They arrive with the traffic beat (nsws_traffic.js) or, for players with the chat
+// open, over the chat socket. The font follows each player's chat font setting.
 (function () {
     if (window.__nswsAnnounce) return;
 
     const SEEN_KEY = "nsws_ann_seen";
     const SEEN_KEPT = 30;
+    const POLL_KEY = "nsws_poll_open";
+    // Matches POLL_OPEN_MS in proxy/src/traffic.js.
+    const POLL_OPEN_MS = 7 * 86_400_000;
     const FADE_IN_MS = 450;
     const FADE_OUT_MS = 2800;
     const DEFAULT_COLOR = "#b3c1ff";
 
     const CSS = `
-#nsws-ann{position:fixed;left:0;right:0;top:calc(var(--safe-area-top-unscaled,0px) + 12px);z-index:10010;display:flex;justify-content:center;pointer-events:none;}
-#nsws-ann>.m{position:relative;max-width:min(820px,calc(100vw - 32px));padding:10px 22px 12px 32px;background:rgba(33,43,88,.93);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text,ForcedSquare,Arial),var(--nsws-chat-emoji,sans-serif),sans-serif;font-style:var(--nsws-chat-font-style,italic);font-size:clamp(18px,2.4vw,26px);line-height:1.35;overflow-wrap:anywhere;box-shadow:0 8px 28px rgba(0,0,0,.45);}
+#nsws-ann{position:fixed;left:0;right:0;top:calc(var(--safe-area-top-unscaled,0px) + 12px);z-index:10010;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;}
+#nsws-ann>.m{position:relative;box-sizing:border-box;max-width:min(820px,calc(100vw - 32px));padding:10px 22px 12px 32px;background:rgba(33,43,88,.93);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text,ForcedSquare,Arial),var(--nsws-chat-emoji,sans-serif),sans-serif;font-style:var(--nsws-chat-font-style,italic);font-size:clamp(18px,2.4vw,26px);line-height:1.35;overflow-wrap:anywhere;box-shadow:0 8px 28px rgba(0,0,0,.45);}
 #nsws-ann>.m::before{content:"";position:absolute;left:15px;top:11px;bottom:11px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
 #nsws-ann .nick{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
 #nsws-ann a{pointer-events:auto;color:#8cc4ff;text-decoration:underline;text-underline-offset:.15em;cursor:pointer;}
 #nsws-ann a:hover{color:#c4e0ff;}
 #nsws-ann .note{margin-left:.5em;font-size:.6em;opacity:.5;}
-#nsws-ann .m.poll{padding-right:46px;}
+#nsws-ann>.m.poll{order:1;padding-right:46px;max-height:calc(100vh - 40px);overflow-y:auto;pointer-events:auto;}
+body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
 #nsws-ann .x{pointer-events:auto;position:absolute;right:6px;top:4px;padding:2px 10px;background:none;border:none;color:inherit;font:inherit;font-style:normal;font-size:24px;line-height:1.2;opacity:.5;cursor:pointer;}
 #nsws-ann .x:hover{opacity:1;}
 #nsws-ann .opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
 #nsws-ann .opts .button{margin:0;padding:6px 18px;font-family:inherit;font-style:inherit;font-size:.8em;}
-#nsws-ann .res{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:.75em;}
-#nsws-ann .res .r{position:relative;display:flex;gap:12px;justify-content:space-between;padding:4px 12px;background:rgba(255,255,255,.06);}
-#nsws-ann .res .r>i{position:absolute;left:0;top:0;bottom:0;background:var(--c);opacity:.22;}
+#nsws-ann .res{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:.75em;min-width:min(460px,calc(100vw - 110px));}
+#nsws-ann .res .r{position:relative;display:flex;gap:12px;justify-content:space-between;padding:4px 12px;background:rgba(255,255,255,.06);border:none;color:inherit;font:inherit;text-align:left;}
+#nsws-ann .res button.r{cursor:pointer;}
+#nsws-ann .res button.r:hover{background:rgba(255,255,255,.12);}
+#nsws-ann .res .r>i{position:absolute;left:0;top:0;bottom:0;background:var(--c);opacity:.22;transition:width .4s ease-out;}
 #nsws-ann .res .r.mine>i{opacity:.45;}
 #nsws-ann .res .r>span{position:relative;}
-#nsws-ann .res .r>span:last-child{font-variant-numeric:tabular-nums;}
-#nsws-ann .res .total,#nsws-ann .msg{font-size:.65em;opacity:.6;margin-top:6px;}
+#nsws-ann .res .r>span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap;}
+#nsws-ann .total,#nsws-ann .msg{font-size:.65em;opacity:.6;margin-top:6px;}
 `;
-    const RESULTS_MS = 6000;
 
     function readSeen() {
         try {
@@ -55,12 +61,19 @@
     }
 
     function pollOf(a) {
-        return Array.isArray(a.poll) && a.poll.length >= 2 && a.poll.every((o) => typeof o === "string") ? a.poll : null;
+        return Array.isArray(a?.poll) && a.poll.length >= 2 && a.poll.every((o) => typeof o === "string") ? a.poll : null;
     }
 
     // Keep the game from treating a click on the banner as input.
     function ownClicks(node) {
         for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) node.addEventListener(type, (e) => e.stopPropagation());
+    }
+
+    function make(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
     }
 
     const LINK = /\b(?:https?:\/\/|www\.)[^\s<>"]+/gi;
@@ -82,11 +95,10 @@
             const url = href(raw);
             if (!url) continue;
             m.append(text.slice(last, match.index));
-            const a = document.createElement("a");
+            const a = make("a", null, raw);
             a.href = url;
             a.target = "_blank";
             a.rel = "noopener noreferrer";
-            a.textContent = raw;
             ownClicks(a);
             // Hold the banner while the pointer is on a link so it can't fade out from under the click.
             a.addEventListener("pointerenter", () => shown?.el.contains(a) && shown.anim?.playState === "running" && shown.anim.pause());
@@ -119,70 +131,71 @@
         } catch {}
     }
 
-    // shown: { a, el, preview, at, anim }. waiting: one that came in while the tab was hidden.
+    // shown: the message card { a, el, preview, at, anim }. poll: the poll card
+    // { a, el, preview, at, choice, votes, open, change, busy, error }. waiting: one that came in
+    // while the tab was hidden.
     let shown = null;
+    let poll = null;
     let waiting = null;
 
-    function addStyle() {
-        if (document.getElementById("nsws-ann-style")) return;
-        const style = document.createElement("style");
-        style.id = "nsws-ann-style";
-        style.textContent = CSS;
-        document.head.appendChild(style);
+    function stack() {
+        if (!document.getElementById("nsws-ann-style")) {
+            const style = make("style");
+            style.id = "nsws-ann-style";
+            style.textContent = CSS;
+            document.head.appendChild(style);
+        }
+        let box = document.getElementById("nsws-ann");
+        if (!box) {
+            box = make("div");
+            box.id = "nsws-ann";
+            box.setAttribute("role", "status");
+            document.body.appendChild(box);
+        }
+        // Players can move the race timer to the top middle; stay below it.
+        const timer = document.querySelector(".timer-ui.up:not(.hidden)");
+        const bottom = timer ? timer.getBoundingClientRect().bottom : 0;
+        box.style.top = bottom > 0 ? bottom + 10 + "px" : "";
+        return box;
+    }
+
+    function card(a, preview) {
+        const m = make("div", "m");
+        m.style.setProperty("--c", /^#[0-9a-f]{6}$/i.test(a.color) ? a.color : DEFAULT_COLOR);
+        m.append(make("span", "nick", a.name || "Owner"), ": ");
+        appendText(m, a.text);
+        if (preview) m.appendChild(make("span", "note", "preview, only you see this"));
+        return m;
+    }
+
+    function fadeOut(el, anim) {
+        const opacity = getComputedStyle(el).opacity;
+        anim?.cancel();
+        if (!el.animate) return el.remove();
+        el.animate([{ opacity }, { opacity: 0 }], { duration: 600, fill: "forwards" }).onfinish = () => el.remove();
     }
 
     function hide(now) {
         if (!shown) return;
         const { el, anim } = shown;
         shown = null;
-        const opacity = getComputedStyle(el).opacity;
-        anim?.cancel();
-        if (now || !el.animate) {
+        if (now) {
+            anim?.cancel();
             el.remove();
-            return;
+        } else {
+            fadeOut(el, anim);
         }
-        el.animate([{ opacity }, { opacity: 0 }], { duration: 600, fill: "forwards" }).onfinish = () => el.remove();
     }
 
     function show(a, preview) {
+        if (pollOf(a)) return showPoll({ a, preview: !!preview, choice: null, votes: null, open: true, change: !!a.change }, true);
         hide(true);
-        addStyle();
-        const el = document.createElement("div");
-        el.id = "nsws-ann";
-        el.setAttribute("role", "status");
-        const m = document.createElement("div");
-        m.className = "m";
-        m.style.setProperty("--c", /^#[0-9a-f]{6}$/i.test(a.color) ? a.color : DEFAULT_COLOR);
-        const nick = document.createElement("span");
-        nick.className = "nick";
-        nick.textContent = a.name || "Owner";
-        m.append(nick, ": ");
-        appendText(m, a.text);
-        if (preview) {
-            const note = document.createElement("span");
-            note.className = "note";
-            note.textContent = "preview, only you see this";
-            m.appendChild(note);
-        }
-        el.appendChild(m);
-        document.body.appendChild(el);
-        // Players can move the race timer to the top middle; stay below it.
-        const timer = document.querySelector(".timer-ui.up:not(.hidden)");
-        const bottom = timer ? timer.getBoundingClientRect().bottom : 0;
-        if (bottom > 0) el.style.top = bottom + 10 + "px";
-
+        const el = card(a, preview);
+        stack().appendChild(el);
         const hold = Math.max(3, Number(a.show) || 10) * 1000;
         const total = FADE_IN_MS + hold + FADE_OUT_MS;
         const entry = { a, el, preview: !!preview, at: performance.now(), anim: null };
-        const poll = pollOf(a);
-        if (poll) {
-            // A poll stays until the player answers or closes it.
-            addPoll(entry, m, poll);
-            entry.anim = el.animate?.([
-                { opacity: 0, transform: "translateY(-16px)" },
-                { opacity: 1, transform: "none" },
-            ], { duration: FADE_IN_MS, easing: "ease-out", fill: "forwards" }) ?? null;
-        } else if (el.animate) {
+        if (el.animate) {
             entry.anim = el.animate([
                 { opacity: 0, transform: "translateY(-16px)", easing: "ease-out" },
                 { opacity: 1, transform: "none", offset: FADE_IN_MS / total, easing: "linear" },
@@ -206,85 +219,180 @@
         }
     }
 
-    function addPoll(entry, m, poll) {
-        m.classList.add("poll");
-        const close = document.createElement("button");
-        close.className = "x";
-        close.title = "Close";
-        close.textContent = "\u00d7";
-        ownClicks(close);
-        close.addEventListener("click", () => shown === entry && hide(false));
-        const opts = document.createElement("div");
-        opts.className = "opts";
-        const msg = document.createElement("div");
-        msg.className = "msg";
-        const buttons = poll.map((text, choice) => {
-            const b = document.createElement("button");
-            b.className = "button";
-            b.textContent = text;
-            ownClicks(b);
-            b.addEventListener("click", () => vote(entry, m, poll, choice, buttons, msg));
-            return b;
-        });
-        opts.append(...buttons);
-        m.append(close, opts);
+    function savePoll() {
+        if (!poll || poll.preview) return;
+        try {
+            const { a, choice, votes, open, change } = poll;
+            localStorage.setItem(POLL_KEY, JSON.stringify({ a, choice, votes, open, change }));
+        } catch {}
     }
 
-    async function vote(entry, m, poll, choice, buttons, msg) {
-        for (const b of buttons) b.disabled = true;
-        msg.remove();
-        let votes;
+    function storedPoll() {
+        try {
+            const p = JSON.parse(localStorage.getItem(POLL_KEY));
+            if (!valid(p?.a) || !pollOf(p.a) || !(Date.now() < p.a.at + POLL_OPEN_MS + 86_400_000)) return null;
+            return {
+                a: p.a,
+                preview: false,
+                choice: Number.isSafeInteger(p.choice) ? p.choice : null,
+                votes: Array.isArray(p.votes) ? p.votes : null,
+                open: p.open !== false,
+                change: !!p.change,
+            };
+        } catch {
+            return null;
+        }
+    }
+
+    function showPoll(entry, fresh) {
+        if (poll) {
+            poll.el.remove();
+            poll = null;
+        }
+        entry.el = card(entry.a, entry.preview);
+        entry.el.classList.add("poll");
+        entry.at = performance.now();
+        ownClicks(entry.el);
+        const close = make("button", "x", "\u00d7");
+        close.title = "Close";
+        ownClicks(close);
+        close.addEventListener("click", () => closePoll(entry));
+        entry.el.appendChild(close);
+        entry.body = make("div");
+        entry.el.appendChild(entry.body);
+        stack().appendChild(entry.el);
+        poll = entry;
+        renderPoll();
+        if (fresh) {
+            entry.el.animate?.([
+                { opacity: 0, transform: "translateY(-16px)" },
+                { opacity: 1, transform: "none" },
+            ], { duration: FADE_IN_MS, easing: "ease-out" });
+            chime();
+        }
+        if (!entry.preview) {
+            markSeen(entry.a.id);
+            if (fresh) window.__nswsTraffic?.seen?.(entry.a.id);
+            savePoll();
+        }
+    }
+
+    function closePoll(entry) {
+        if (poll !== entry) return;
+        poll = null;
+        fadeOut(entry.el, null);
         if (entry.preview) {
-            votes = poll.map((_, i) => (i === choice ? 1 : 0));
+            // A preview only covered the real poll for a moment.
+            const real = storedPoll();
+            if (real) showPoll(real, false);
+            return;
+        }
+        try {
+            localStorage.removeItem(POLL_KEY);
+        } catch {}
+    }
+
+    function renderPoll() {
+        const entry = poll;
+        const options = pollOf(entry.a);
+        const body = entry.body;
+        body.textContent = "";
+        const voted = entry.choice != null;
+        if (!voted && entry.open) {
+            const opts = make("div", "opts");
+            options.forEach((text, i) => {
+                const b = make("button", "button", text);
+                b.disabled = entry.busy;
+                ownClicks(b);
+                b.addEventListener("click", () => vote(entry, i));
+                opts.appendChild(b);
+            });
+            body.appendChild(opts);
+        } else {
+            const votes = entry.votes ?? options.map(() => 0);
+            const sum = votes.reduce((s, n) => s + (n || 0), 0);
+            const canChange = voted && entry.open && entry.change;
+            const res = make("div", "res");
+            options.forEach((text, i) => {
+                const share = sum ? Math.round(((votes[i] || 0) / sum) * 100) : 0;
+                const row = make(canChange ? "button" : "div", "r" + (i === entry.choice ? " mine" : ""));
+                const bar = make("i");
+                bar.style.width = share + "%";
+                row.append(bar, make("span", null, text), make("span", null, share + "%"));
+                if (canChange) {
+                    row.disabled = entry.busy;
+                    ownClicks(row);
+                    row.addEventListener("click", () => i !== entry.choice && vote(entry, i));
+                }
+                res.appendChild(row);
+            });
+            const notes = [sum === 1 ? "1 vote" : sum + " votes"];
+            if (!entry.open) notes.push("voting has closed");
+            else if (canChange) notes.push("click another answer to change your vote");
+            res.appendChild(make("div", "total", notes.join(" \u00b7 ")));
+            body.appendChild(res);
+        }
+        if (entry.error) body.appendChild(make("div", "msg", entry.error));
+    }
+
+    async function vote(entry, choice) {
+        if (entry.busy) return;
+        entry.busy = true;
+        entry.error = null;
+        renderPoll();
+        if (entry.preview) {
+            const votes = entry.votes ?? pollOf(entry.a).map(() => 0);
+            if (entry.choice != null) votes[entry.choice]--;
+            votes[choice]++;
+            Object.assign(entry, { votes, choice, change: true });
         } else {
             try {
-                votes = await window.__nswsTraffic.vote(entry.a.id, choice);
+                const data = await window.__nswsTraffic.vote(entry.a.id, choice);
+                entry.votes = data.votes;
+                entry.choice = Number.isSafeInteger(data.choice) ? data.choice : choice;
             } catch (err) {
-                if (shown !== entry) return;
-                for (const b of buttons) b.disabled = false;
-                msg.textContent = err?.status === 409 ? "This poll has closed." : "Couldn't send your vote. Try again.";
-                m.appendChild(msg);
-                return;
+                if (err?.status === 409 && Array.isArray(err.votes)) {
+                    entry.open = false;
+                    entry.votes = err.votes;
+                } else {
+                    entry.error = err?.status === 409 ? "This poll has closed." : "Couldn't send your vote. Try again.";
+                }
             }
         }
-        if (shown !== entry) return;
-        m.querySelector(".opts")?.remove();
-        const res = document.createElement("div");
-        res.className = "res";
-        const sum = votes.reduce((s, n) => s + n, 0);
-        poll.forEach((text, i) => {
-            const share = sum ? Math.round((votes[i] / sum) * 100) : 0;
-            const row = document.createElement("div");
-            row.className = "r" + (i === choice ? " mine" : "");
-            const bar = document.createElement("i");
-            bar.style.width = share + "%";
-            const label = document.createElement("span");
-            label.textContent = text;
-            const pct = document.createElement("span");
-            pct.textContent = share + "%";
-            row.append(bar, label, pct);
-            res.appendChild(row);
-        });
-        const total = document.createElement("div");
-        total.className = "total";
-        total.textContent = sum === 1 ? "1 vote" : sum + " votes";
-        res.appendChild(total);
-        m.appendChild(res);
-        setTimeout(() => shown === entry && hide(false), RESULTS_MS);
+        entry.busy = false;
+        if (poll !== entry) return;
+        savePoll();
+        renderPoll();
+    }
+
+    // The beat's reply to a poll the player is looking at.
+    function pollUpdate(state) {
+        if (!poll || poll.preview || state?.id !== poll.a.id || !Array.isArray(state.votes)) return;
+        poll.votes = state.votes;
+        poll.open = !!state.open;
+        poll.change = !!state.change;
+        savePoll();
+        if (!poll.busy) renderPoll();
     }
 
     // The beat's reply carries the live announcement or null; a null (or a newer one) ends the
-    // one on screen, which is how the owner's Stop reaches players without the chat. `asked` is
-    // when the beat was sent: a reply to a beat from before the banner appeared is out of date.
+    // message on screen, which is how the owner's Stop reaches players without the chat. A poll
+    // stays until the player closes it. `asked` is when the beat was sent: a reply to a beat from
+    // before the banner appeared is out of date.
     function receive(a, asked) {
-        if (shown && asked < shown.at) return;
         if (!valid(a)) {
-            waiting = null;
+            if (shown && asked < shown.at) return;
+            if (waiting && !pollOf(waiting.a)) waiting = null;
             if (shown && !shown.preview) hide(false);
             return;
         }
-        if (shown && !shown.preview && shown.a.id !== a.id) hide(false);
-        if (shown?.a.id === a.id && !shown.preview) return;
+        if (pollOf(a)) {
+            if (poll?.a.id === a.id && !poll.preview) return;
+        } else {
+            if (shown && asked < shown.at) return;
+            if (shown && !shown.preview && shown.a.id !== a.id) hide(false);
+            if (shown?.a.id === a.id && !shown.preview) return;
+        }
         if (readSeen().includes(a.id)) return;
         if (document.visibilityState === "hidden") {
             waiting = { a, until: performance.now() + Math.max(0, a.until - a.at) };
@@ -305,9 +413,23 @@
         if (performance.now() < until && !readSeen().includes(a.id)) show(a, false);
     });
 
+    function restore() {
+        const entry = storedPoll();
+        if (entry) showPoll(entry, false);
+        else
+            try {
+                localStorage.removeItem(POLL_KEY);
+            } catch {}
+    }
+    if (document.body) restore();
+    else document.addEventListener("DOMContentLoaded", restore, { once: true });
+
     window.__nswsAnnounce = {
         receive,
         stop,
+        pollUpdate,
+        // The poll whose counts the next beat should ask for.
+        watching: () => (poll && !poll.preview ? poll.a.id : poll ? storedPoll()?.a.id ?? null : null),
         preview: (a) => show({ id: 0, ...a }, true),
     };
 })();

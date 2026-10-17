@@ -91,6 +91,8 @@
         };
         if (end) body.end = 1;
         if (seenAnn) body.an = seenAnn;
+        const watching = window.__nswsAnnounce?.watching?.();
+        if (watching) body.pl = watching;
         if (body.n === 0 && document.referrer) {
             try {
                 const host = new URL(document.referrer).host;
@@ -119,6 +121,7 @@
             if (response.status === 200) {
                 response.json().then((data) => {
                     if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
+                    if (data?.pv) window.__nswsAnnounce?.pollUpdate?.(data.pv);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
@@ -169,7 +172,7 @@
         seen(id) {
             seenAnn = id;
         },
-        // Resolves to the poll's counts after this vote, or rejects with { status }.
+        // Resolves to { votes, choice } (the vote that stands), or rejects with { status, error, votes }.
         async vote(id, choice) {
             const response = await fetch(API + "nsws/poll", {
                 method: "POST",
@@ -179,8 +182,8 @@
                 cache: "no-store",
             });
             const data = await response.json().catch(() => null);
-            if (!response.ok || !Array.isArray(data?.votes)) throw { status: response.status, error: data?.error };
-            return data.votes;
+            if (!response.ok || !Array.isArray(data?.votes)) throw { status: response.status, error: data?.error, votes: data?.votes };
+            return data;
         },
         // The beat reply carries the same online count Race Control shows.
         refreshOnline() {

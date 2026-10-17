@@ -311,13 +311,20 @@ chat font), stays for 6–30 s and fades out. `mod/nsws_announce.js` draws it.
   while the tab is hidden. The next beat reports it as seen (`an`), which the "Seen by" count
   sums once per session. A null in a beat reply ends the one on screen, which is how Stop
   reaches players without the chat.
-- **Polls:** an announcement can carry 2–4 answers (`poll`, 40 characters each). The banner then
-  shows them as buttons and stays until the player answers or closes it; after a vote it shows the
-  results for 6 s. `POST /nsws/poll` (`{v, id, c}`: visitor id, announcement id, answer) is open to
-  the site like the beat: the visitor must have sent a beat, a second vote moves the first, votes
-  count until 2 minutes after the poll stops or runs out, and one IP address gets 30 new votes per
-  poll. Votes are rows in `poll_votes`; the running counts live on the announcement row
-  (`votes`), so nothing ever sums the votes table. Race Control shows the counts.
+- **Polls:** an announcement can carry 2–10 answers (`poll`, 40 characters each). A poll gets its
+  own card under any message. It stays until the player closes it with ×, even across reloads
+  (`nsws_poll_open` in localStorage), and shows the percentages once they vote. "Players can change
+  their vote" (`poll_change`) is set per poll. Voting is open until the owner presses Close voting
+  (`/nsws/announce/close-poll`, `poll_closed`) or for 7 days.
+- **Votes:** `POST /nsws/poll` (`{v, id, c}`: visitor id, announcement id, answer) is open to the
+  site like the beat. The visitor must have sent a beat, and one IP address gets 30 new votes per
+  poll. A second vote moves the first only when changes are allowed; the reply always carries the
+  vote that stands. Votes are rows in `poll_votes`; the running counts live on the announcement row
+  (`votes`), so nothing ever sums the votes table.
+- **Live counts:** while a player has a poll card open, each beat sends its id (`pl`) and the reply
+  carries `pv` (`{id, votes, open, change}`). That costs no extra request, and recent poll rows are
+  cached in memory so it reads no rows. Clicking a poll in Race Control's Recent announcements opens
+  its results.
 
 ## Accounts (names and clips)
 
@@ -483,6 +490,8 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   entry back. Race Control -> Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in
   the game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
   shows under "Hidden from the boards", where Allow puts it up). The recording is dropped after either.
+  **Verify all** (`/nsws/anticheat/lobby/all`, click twice) verifies every PB still waiting, not only
+  the ones listed.
   While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
   A cup with player collisions never saves or uploads a time, so nothing from it reaches this queue.
   Cup finishes are checked on the organizer's page instead: each racer's finish carries its replay,

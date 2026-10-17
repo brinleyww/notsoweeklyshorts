@@ -936,13 +936,13 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         } catch (err) {
             console.error("traffic beat failed:", err && err.message);
         }
-        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null }, origin);
+        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null, pv: reply?.pv ?? null }, origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "poll") {
         const vote = readVote(text);
         if (!vote) return plain(400, "Bad request", origin);
         const result = await stub.vote(vote.visitor, vote.id, vote.choice, request.headers.get("CF-Connecting-IP"));
-        if (result.error) return json({ error: result.error }, origin, result.error === "busy" ? 429 : 409);
+        if (result.error) return json(result, origin, result.error === "busy" ? 429 : 409);
         return json(result, origin);
     }
 
@@ -974,6 +974,10 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         await chatBroadcast(env, { t: "ann", a: result.current });
         return json(result, origin);
     }
+    if (url.pathname === TRAFFIC_PREFIX + "announce/close-poll") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        return json(await stub.closePoll(body.id), origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "announce/stop") {
         const result = await stub.stopAnnouncement();
         if (result.stopped != null) await chatBroadcast(env, { t: "ann-stop", id: result.stopped });
@@ -1003,6 +1007,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.lobbyVerdict(body.id, body.verdict), origin);
     }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/lobby/all") return json(await anti.lobbyVerifyAll(), origin);
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/lobby/run") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         const run = await anti.lobbyRecording(body.id);

@@ -45416,7 +45416,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         this.__cupCollide = !!collide
                     }
                     C.get(this, _r, "m", $a).call(this),
-                    window.__nswsGhostLod?.(C.get(this, xa, "f").filter((e => !e.hasEnded && !ghostsHidden && null != e.car)).map((e => e.car)), C.get(this, wa, "f"), C.get(this, zr, "f").camera, 1),
+                    window.__nswsGhostLod?.(C.get(this, xa, "f").filter((e => !e.hasEnded && !ghostsHidden && null != e.car)).map((e => e.car)), C.get(this, wa, "f"), C.get(this, zr, "f").camera),
                     C.get(this, Ba, "f").update(e),
                     C.get(this, la, "f").setVisible(!C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").hasFinished() || !C.get(this, va, "f") || C.get(this, Wr, "f").touchEnabled || !C.get(this, Fr, "f").isCursorHidden || C.get(this, la, "f").hasFocus())
                 } else {

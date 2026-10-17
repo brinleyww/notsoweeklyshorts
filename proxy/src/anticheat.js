@@ -309,6 +309,15 @@ export class AntiCheat extends DurableObject {
         return { ok: true };
     }
 
+    // Every lobby PB still waiting, not only the ones the dashboard lists.
+    async lobbyVerifyAll() {
+        const rows = this.sql.exec("SELECT * FROM lobby_runs WHERE state = 'review'").toArray();
+        if (!rows.length) return { verified: 0 };
+        this.sql.exec("UPDATE lobby_runs SET state = 'verified', recording = NULL, at = ? WHERE state = 'review'", Date.now());
+        for (const row of rows) this.unhold(row);
+        return { verified: rows.length };
+    }
+
     async approve(id) {
         const row = this.sql.exec("SELECT track FROM runs WHERE id = ?", id).toArray()[0];
         if (!row) return { ok: false };

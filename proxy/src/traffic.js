@@ -41,10 +41,11 @@ const ANNOUNCE_REACH_MIN = new Set([5, 60, 1440]);
 const ANNOUNCE_NAME = 32;
 const ANNOUNCE_TEXT = 160;
 const ANNOUNCE_HISTORY = 20;
-const POLL_OPTIONS = 4;
+const POLL_OPTIONS = 10;
 const POLL_OPTION_TEXT = 40;
-// Votes still count this long after a poll ends, since it leaves screens only with each player's next beat.
-const POLL_GRACE_MS = 2 * 60_000;
+// A poll takes votes until the owner closes it, or for this long. It stays on a player's screen until they close it.
+const POLL_OPEN_MS = 7 * DAY_MS;
+const POLL_CACHE = 20;
 // New votes per IP address per poll. Schools share one address.
 const VOTES_PER_IP = 30;
 
@@ -56,6 +57,10 @@ function pollOptions(row) {
     } catch {
         return null;
     }
+}
+
+function pollOpen(row, now) {
+    return row.poll_closed == null && now < row.at + POLL_OPEN_MS;
 }
 
 function pollVotes(row, count) {
@@ -96,6 +101,8 @@ export class TrafficStats extends DurableObject {
         this.ann = null;
         // `${ip} ${poll id}` -> new votes, only in memory.
         this.votesByIp = new Map();
+        // Recent poll rows by id, so beats asking for counts read no rows.
+        this.polls = new Map();
         // All-time totals, loaded the first time the dashboard asks and then kept up by record().
         this.totals = null;
         // visitor -> focused seconds not yet handed to Accounts. Lost if the object is evicted first.
@@ -139,9 +146,14 @@ export class TrafficStats extends DurableObject {
         if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "cup"))
             this.sql.exec("ALTER TABLE announcements ADD COLUMN cup TEXT");
         // A poll's options and its running counts, both JSON arrays.
-        if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "poll")) {
+        const columns = new Set(this.sql.exec("PRAGMA table_info(announcements)").toArray().map((c) => c.name));
+        if (!columns.has("poll")) {
             this.sql.exec("ALTER TABLE announcements ADD COLUMN poll TEXT");
             this.sql.exec("ALTER TABLE announcements ADD COLUMN votes TEXT");
+        }
+        if (!columns.has("poll_change")) {
+            this.sql.exec("ALTER TABLE announcements ADD COLUMN poll_change INTEGER NOT NULL DEFAULT 0");
+            this.sql.exec("ALTER TABLE announcements ADD COLUMN poll_closed INTEGER");
         }
         this.sql.exec(`CREATE TABLE IF NOT EXISTS poll_votes (
             ann INTEGER NOT NULL, voter TEXT NOT NULL, choice INTEGER NOT NULL, at INTEGER NOT NULL,
@@ -252,7 +264,7 @@ export class TrafficStats extends DurableObject {
 
     async beat(b, meta) {
         const online = this.record(b, meta) ?? null;
-        return { online, ann: this.liveAnnouncement() };
+        return { online, ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null };
     }
 
     record(b, meta) {
@@ -346,30 +358,67 @@ export class TrafficStats extends DurableObject {
         if (!a || a.until <= Date.now()) return null;
         return {
             id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s, cup: a.cup ?? null,
-            poll: pollOptions(a),
+            poll: pollOptions(a), change: !!a.poll_change,
         };
     }
 
     announce(a) {
         const now = Date.now();
         this.sql.exec("UPDATE announcements SET stopped = ? WHERE stopped IS NULL AND until > ?", now, now);
-        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online, cup, poll, votes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online, cup, poll, votes, poll_change)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
             now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now), a.cup ?? null,
-            a.poll ? JSON.stringify(a.poll) : null, a.poll ? JSON.stringify(a.poll.map(() => 0)) : null).one();
+            a.poll ? JSON.stringify(a.poll) : null, a.poll ? JSON.stringify(a.poll.map(() => 0)) : null, a.pollChange ? 1 : 0).one();
+        if (a.poll) this.cachePoll(this.ann);
         return this.announcements();
     }
 
-    // One vote per visitor per poll; voting again moves it. `visitor` must have sent a beat.
+    cachePoll(row) {
+        this.polls.delete(row.id);
+        this.polls.set(row.id, row);
+        while (this.polls.size > POLL_CACHE) this.polls.delete(this.polls.keys().next().value);
+    }
+
+    pollRow(id) {
+        let row = this.polls.get(id);
+        if (row) return row;
+        row = this.sql.exec("SELECT * FROM announcements WHERE id = ?", id).toArray()[0];
+        if (row && pollOptions(row)) this.cachePoll(row);
+        return row;
+    }
+
+    // Counts for a player looking at a poll's results.
+    pollState(id) {
+        const row = this.pollRow(id);
+        const options = pollOptions(row);
+        if (!options) return null;
+        return { id, votes: pollVotes(row, options.length), open: pollOpen(row, Date.now()), change: !!row.poll_change };
+    }
+
+    closePoll(id) {
+        const row = this.pollRow(id);
+        if (!pollOptions(row)) return this.announcements();
+        if (row.poll_closed == null) {
+            row.poll_closed = Date.now();
+            this.sql.exec("UPDATE announcements SET poll_closed = ? WHERE id = ?", row.poll_closed, id);
+            if (this.ann?.id === id) this.ann.poll_closed = row.poll_closed;
+        }
+        return this.announcements();
+    }
+
+    // One vote per visitor per poll. Voting again moves it only if the owner allowed that;
+    // otherwise the reply carries the vote that stands.
     vote(visitor, id, choice, ip) {
         const now = Date.now();
-        const row = this.ann?.id === id ? this.ann : this.sql.exec("SELECT * FROM announcements WHERE id = ?", id).toArray()[0];
+        const row = this.pollRow(id);
         const options = pollOptions(row);
-        if (!options || choice >= options.length || now > (row.stopped ?? row.until) + POLL_GRACE_MS) return { error: "closed" };
-        if (!this.sql.exec("SELECT 1 FROM visitors WHERE id = ?", visitor).toArray().length) return { error: "unknown" };
+        if (!options || choice >= options.length) return { error: "closed" };
         const votes = pollVotes(row, options.length);
+        if (!pollOpen(row, now)) return { error: "closed", votes };
+        if (!this.sql.exec("SELECT 1 FROM visitors WHERE id = ?", visitor).toArray().length) return { error: "unknown" };
         const before = this.sql.exec("SELECT choice FROM poll_votes WHERE ann = ? AND voter = ?", id, visitor).toArray()[0]?.choice;
-        if (before === choice) return { votes };
+        if (before === choice) return { votes, choice };
+        if (before != null && !row.poll_change) return { votes, choice: before };
         if (before == null) {
             const key = (ip || "?") + " " + id;
             const used = this.votesByIp.get(key) ?? 0;
@@ -383,8 +432,9 @@ export class TrafficStats extends DurableObject {
         this.sql.exec(`INSERT INTO poll_votes (ann, voter, choice, at) VALUES (?, ?, ?, ?)
             ON CONFLICT(ann, voter) DO UPDATE SET choice = excluded.choice, at = excluded.at`, id, visitor, choice, now);
         row.votes = JSON.stringify(votes);
+        if (this.ann?.id === id) this.ann.votes = row.votes;
         this.sql.exec("UPDATE announcements SET votes = ? WHERE id = ?", row.votes, id);
-        return { votes };
+        return { votes, choice };
     }
 
     // Without an id, stops whatever is live (Race Control). With one, only that announcement, so a
@@ -410,6 +460,7 @@ export class TrafficStats extends DurableObject {
                     id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
                     online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
                     poll, votes: poll ? pollVotes(r, poll.length) : null,
+                    change: !!r.poll_change, open: !!poll && pollOpen(this.polls.get(r.id) ?? r, now),
                 };
             });
         return { current, list, online: this.onlineCount(now), now };
@@ -631,6 +682,7 @@ export function readBeat(text) {
         st: STATES.has(raw.st) ? raw.st : null,
         tk: typeof raw.tk === "string" && /^[0-9a-f]{64}$/.test(raw.tk) ? raw.tk : null,
         an: Number.isSafeInteger(raw.an) && raw.an > 0 ? raw.an : null,
+        pl: Number.isSafeInteger(raw.pl) && raw.pl > 0 ? raw.pl : null,
         ev,
         tr,
     };
@@ -655,6 +707,7 @@ export function readAnnouncement(body) {
         reach: ANNOUNCE_REACH_MIN.has(body.reach) ? body.reach : 5,
         cup: /^[A-HJ-NP-Z2-9]{5}$/.test(body.cup ?? "") ? body.cup : null,
         poll: readPoll(body.poll),
+        pollChange: body.pollChange === true,
     };
 }
 
@@ -663,7 +716,7 @@ function readPoll(raw) {
     if (!Array.isArray(raw)) return null;
     const options = [];
     const seen = new Set();
-    for (const value of raw.slice(0, 16)) {
+    for (const value of raw.slice(0, 40)) {
         const text = announceText(value, POLL_OPTION_TEXT);
         const key = text.toLowerCase();
         if (!text || seen.has(key)) continue;

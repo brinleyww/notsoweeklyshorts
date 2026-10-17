@@ -13,7 +13,7 @@
     const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
     const ANN_REACH = [[5, "Online now"], [60, "+ next hour"], [1440, "+ next day"]];
     const ANN_MAX = 160;
-    const POLL_MAX = 4;
+    const POLL_MAX = 10;
     const POLL_TEXT = 40;
     const LIVE_REFRESH_MS = 10000;
     const STATS_REFRESH_MS = 60000;
@@ -120,7 +120,7 @@
 .nrc-send{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
 .nrc-send .button{font-size:20px;padding:8px 20px;}
 .nrc-send .button.go{background:#3987e5;}
-.nrc-send .button.armed{color:${GOLD};box-shadow:inset 0 -3px 0 ${GOLD};}
+.nrc-send .button.armed,.nrc-card>.button.armed{color:${GOLD};box-shadow:inset 0 -3px 0 ${GOLD};}
 .nrc-annline{position:relative;font-size:20px;line-height:1.35;padding:10px 16px 10px 28px;background:var(--surface-tertiary-color);overflow-wrap:anywhere;font-family:var(--nsws-chat-text,ForcedSquare,Arial),sans-serif;font-style:var(--nsws-chat-font-style,italic);}
 .nrc-annline::before{content:"";position:absolute;left:13px;top:10px;bottom:10px;width:4px;border-radius:2px;background:var(--c);opacity:.8;}
 .nrc-annline b{color:var(--c);font-weight:var(--nsws-chat-name-weight,bold);}
@@ -132,6 +132,10 @@
 .nrc-opts .button{font-size:16px;padding:6px 14px;}
 .nrc-annline .nrc-bars{margin-top:10px;font-style:normal;}
 .nrc-table .poll{margin-left:8px;font-size:12px;color:rgba(255,255,255,.5);}
+.nrc-table tr.pick{cursor:pointer;}
+.nrc-table tr.sel td{background:rgba(179,193,255,.1);}
+.nrc-pollacts{display:flex;gap:8px;flex-wrap:wrap;}
+.nrc-pollacts .button{font-size:18px;}
 .nrc-find .button{margin:0;font-size:18px;padding:7px 16px;}
 .nrc-who{margin:14px 0 0;}
 .nrc-who h3{margin:0 0 4px;font-size:24px;font-weight:400;color:${ACCENT};}
@@ -501,10 +505,13 @@
         annList: null,
         annStatus: null,
         annPollBox: null,
+        annChangeField: null,
+        annDetail: null,
+        annPick: null,
         annShowField: null,
         annArmed: false,
         annArmTimer: 0,
-        annDraft: { text: "", show: 10, reach: 5, poll: false, options: ["", ""] },
+        annDraft: { text: "", show: 10, reach: 5, poll: false, options: ["", ""], pollChange: false },
         tagsRoot: null,
         tagsWho: null,
         tagsLists: null,
@@ -1128,6 +1135,30 @@
         const list = a.lobby || [];
         if (!list.length) box.appendChild(el("div", "nrc-empty", "Nothing waiting."));
         else {
+            const waiting = Math.max(counts.review || 0, list.length);
+            const label = "Verify all " + num(waiting);
+            const all = el("button", "button", label);
+            all.style.cssText = "font-size:16px;padding:6px 16px;margin:0 0 10px;";
+            let armTimer = 0;
+            all.addEventListener("click", async () => {
+                if (!all.classList.contains("armed")) {
+                    all.classList.add("armed");
+                    all.textContent = "Click again to put all " + num(waiting) + " on the boards";
+                    armTimer = setTimeout(() => {
+                        all.classList.remove("armed");
+                        all.textContent = label;
+                    }, 4000);
+                    return;
+                }
+                clearTimeout(armTimer);
+                all.disabled = true;
+                all.textContent = "Verifying…";
+                try {
+                    await post("anticheat/lobby/all", {});
+                } catch {}
+                loadAnti();
+            });
+            box.appendChild(all);
             const small = (text, onClick) => {
                 const b = el("button", "button", text);
                 b.style.cssText = "font-size:13px;padding:4px 12px;margin-left:4px;";
@@ -1245,7 +1276,7 @@
         button.disabled = true;
         annStatus("Sending…");
         try {
-            const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach, poll });
+            const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach, poll, pollChange: d.pollChange });
             ui.ann = data;
             d.text = textarea.value = "";
             count();
@@ -1273,6 +1304,38 @@
             annStatus("Couldn't stop it. Try again in a moment.");
         }
         renderAnnLists();
+    }
+
+    async function closeVoting(id, button) {
+        button.disabled = true;
+        try {
+            ui.ann = await post("announce/close-poll", { id });
+            annStatus("Voting closed. Players who still have the poll open see the final results.");
+        } catch {
+            annStatus("Couldn't close voting. Try again in a moment.");
+        }
+        renderAnnLists();
+    }
+
+    function pollActions(r, extra) {
+        const row = el("div", "nrc-pollacts");
+        if (extra) row.appendChild(extra);
+        if (r.open) {
+            const close = el("button", "button", "Close voting");
+            close.addEventListener("click", () => closeVoting(r.id, close));
+            row.appendChild(close);
+        }
+        return row;
+    }
+
+    function pollTiles(r) {
+        const sum = r.votes.reduce((s, n) => s + n, 0);
+        const tiles = el("div", "nrc-tiles");
+        tiles.style.cssText = "margin:12px 0;grid-template-columns:repeat(3,minmax(0,1fr));";
+        tiles.appendChild(tile("Votes", num(sum), num(r.seen) + " saw it"));
+        tiles.appendChild(tile("Voting", r.open ? "Open" : "Closed", r.open ? "until you close it, up to 7 days" : ""));
+        tiles.appendChild(tile("Changing votes", r.change ? "Allowed" : "Off"));
+        return tiles;
     }
 
     // The owner's name colour in the chat, so an announcement looks like their chat messages.
@@ -1307,7 +1370,7 @@
 
     function pollSummary(r) {
         const sum = r.votes.reduce((s, n) => s + n, 0);
-        const span = el("span", "poll", "poll · " + (sum === 1 ? "1 vote" : num(sum) + " votes"));
+        const span = el("span", "poll", "poll · " + (sum === 1 ? "1 vote" : num(sum) + " votes") + (r.open ? " · open" : ""));
         span.title = r.poll.map((o, i) => o + ": " + r.votes[i]).join("\n");
         return span;
     }
@@ -1317,6 +1380,7 @@
         const box = ui.annPollBox;
         if (!box) return;
         box.style.display = d.poll ? "" : "none";
+        if (ui.annChangeField) ui.annChangeField.style.display = d.poll ? "" : "none";
         if (ui.annShowField) ui.annShowField.style.display = d.poll ? "none" : "";
         const list = box.lastChild;
         list.textContent = "";
@@ -1356,7 +1420,7 @@
         const root = el("div");
         const grid = el("div", "nrc-compose");
 
-        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once. Links starting with https:// or www. can be clicked. Turn on Poll to ask a question with up to four answers.");
+        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once. Links starting with https:// or www. can be clicked. Turn on Poll to ask a question with up to ten answers.");
         const field = el("div", "nrc-field");
         const label = el("label");
         const counter = el("span");
@@ -1388,8 +1452,9 @@
             renderPollFields();
         }));
         ui.annPollBox = el("div", "nrc-field");
-        ui.annPollBox.append(el("label", null, "Answers (players pick one; it stays on screen until they answer or close it)"), el("div", "nrc-opts"));
+        ui.annPollBox.append(el("label", null, "Answers (players pick one; the poll stays on their screen until they close it)"), el("div", "nrc-opts"));
         form.appendChild(ui.annPollBox);
+        ui.annChangeField = option("Players can change their vote", toggle([[false, "Off"], [true, "On"]], d.pollChange, (k) => (d.pollChange = k)));
         ui.annShowField = option("On screen for", toggle(ANN_SHOW, d.show, (k) => (d.show = k)));
         option("Who gets it", toggle(ANN_REACH, d.reach, (k) => (d.reach = k)));
         renderPollFields();
@@ -1419,6 +1484,9 @@
         ui.annLive = card("On screen now", "graph");
         grid.append(form, ui.annLive);
         root.appendChild(grid);
+        ui.annDetail = card("Poll results", "graph");
+        ui.annDetail.style.marginBottom = "14px";
+        root.appendChild(ui.annDetail);
         ui.annList = card("Recent announcements", "list");
         root.appendChild(ui.annList);
         root.appendChild(el("div", "nrc-foot", "Owner only. Players with the chat open get it instantly; everyone else with their next beat, within a minute. A newer announcement replaces the live one."));
@@ -1427,7 +1495,7 @@
 
     function renderAnnLists() {
         if (!ui.annLive) return;
-        for (const box of [ui.annLive, ui.annList]) {
+        for (const box of [ui.annLive, ui.annList, ui.annDetail]) {
             while (box.children.length > 1) box.lastChild.remove();
         }
         if (!ui.ann) {
@@ -1448,7 +1516,20 @@
             const stop = el("button", "button", "Stop it");
             stop.style.fontSize = "18px";
             stop.addEventListener("click", () => stopAnnouncement(stop));
-            ui.annLive.appendChild(stop);
+            ui.annLive.appendChild(live.poll ? pollActions(live, stop) : stop);
+        }
+        const picked = a.list.find((r) => r.id === ui.annPick && r.poll);
+        ui.annDetail.style.display = picked ? "" : "none";
+        if (picked) {
+            ui.annDetail.appendChild(el("p", "nrc-sub", "Sent " + fmt.dateTime(picked.at) + (picked.live ? ", live now" : "")));
+            ui.annDetail.appendChild(annLine(picked));
+            ui.annDetail.appendChild(pollTiles(picked));
+            const hide = el("button", "button", "Hide");
+            hide.addEventListener("click", () => {
+                ui.annPick = null;
+                renderAnnLists();
+            });
+            ui.annDetail.appendChild(pollActions(picked, hide));
         }
         if (!a.list.length) {
             ui.annList.appendChild(el("div", "nrc-empty", "No announcements yet."));
@@ -1464,6 +1545,18 @@
                 if (r.poll) cell.append(msg, pollSummary(r));
                 return [fmt.dateTime(r.at), cell, r.poll ? "Poll" : r.show + "s", num(r.seen) + " / " + num(r.online), status];
             })));
+        ui.annList.querySelectorAll("tbody tr").forEach((tr, i) => {
+            const r = a.list[i];
+            if (!r?.poll) return;
+            tr.classList.add("pick");
+            if (r.id === ui.annPick) tr.classList.add("sel");
+            tr.title = "Click to see the results";
+            tr.addEventListener("click", () => {
+                ui.annPick = ui.annPick === r.id ? null : r.id;
+                renderAnnLists();
+                if (ui.annPick) ui.annDetail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            });
+        });
     }
 
     function renderAnnounce(body) {

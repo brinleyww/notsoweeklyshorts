@@ -1460,8 +1460,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     }
 
     // With many ghosts each car costs ~20 draw calls, twice over with its shadow, and most of that
-    // adds nothing: ghosts stacked in one spot, a few pixels tall, or too small to show their rims
-    // and suspension. So: stacked and tiny ghosts are hidden; small ones drop the exhaust and
+    // adds nothing: ghosts a few pixels tall, or too small to show their rims and suspension.
+    // So: tiny ghosts are hidden; small ones drop the exhaust and
     // suspension and draw each wheel (then the body) in one material; only the followed car and
     // the nearest few ghosts cast shadows or make sound, and only the first 16 runs leave skid marks
     // (they all drive the same line). `cars` are the cars the caller is
@@ -1534,8 +1534,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     // A ghost seen before only reappears (or drops out for being tiny) once that has been due
     // for this long, so one hovering at a threshold doesn't blink.
     const LOD_HOLD = 0.4;
+    // Ghosts are never hidden for being close to another car: that made them blink whenever two
+    // runs drove side by side. In a race the game itself fades ghosts near the player.
 
-    function ghostLod(cars, focusCar, cam, stackRadius = 1, now = performance.now() / 1000) {
+    function ghostLod(cars, focusCar, cam, now = performance.now() / 1000) {
         if (!cam || !cars.length) return;
         const camPos = lodScratch ??= cam.position.clone();
         cam.getWorldPosition(camPos);
@@ -1546,9 +1548,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const p = car.getPosition();
             list.push({ car, p, d: p.distanceTo(camPos), index });
         });
-        let fp = null;
         if (focusCar) {
-            fp = focusCar.getPosition();
             const st = lodState.get(focusCar);
             if (st) {
                 if (!st.cast) setCastShadow(focusCar, true);
@@ -1559,20 +1559,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
             lodState.set(focusCar, { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false });
         }
-        // Stacked ghosts are settled in run order, not by distance to the camera, so which of
-        // two stacked ghosts shows never swaps as the camera moves.
-        const kept = [];
-        for (const g of list) {
-            const was = lodState.get(g.car)?.vis ?? true;
-            g.stacked = !!fp && g.p.distanceTo(fp) < stackRadius * (was ? 1 : 1.3);
-            if (!g.stacked)
-                for (const k of kept)
-                    if (k.distanceTo(g.p) < (was ? 1 : 1.4)) {
-                        g.stacked = true;
-                        break;
-                    }
-            if (!g.stacked) kept.push(g.p);
-        }
         list.sort((a, b) => a.d - b.d);
         let shadows = 0, audible = 0;
         for (const g of list) {
@@ -1580,10 +1566,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const st = known ?? { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false };
             // Every test has hysteresis, so a ghost near a threshold doesn't flicker.
             const px = 4.5 * pxPerUnit / Math.max(g.d, 0.1);
-            let vis = !g.stacked && px >= (st.vis ? 5 : 7);
+            let vis = px >= (st.vis ? 5 : 7);
             let pending = null;
-            // Ghosts piling onto one spot hide at once; it is coming back that waits.
-            if (known && vis !== st.vis && !(st.vis && g.stacked)) {
+            if (known && vis !== st.vis) {
                 pending = null != st.pending && st.pending <= now ? st.pending : now;
                 if (now - pending < LOD_HOLD) vis = st.vis;
                 else pending = null;
@@ -1776,7 +1761,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.layer?.remove();
                 this.layer = null;
                 window.__PolyFX?.setCinematic?.(null);
-                this.resetOpacity();
                 this.o.restoreCamera();
             }
         }
@@ -1826,7 +1810,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (this.rec) this.stopRecording();
             this.viewer.dispose();
             resetGhostLod(this.o.getRuns().map((r) => r.car));
-            this.resetOpacity();
             document.body.classList.remove("nsws-cine-on");
             if (window.__nswsCinematic.current === this) window.__nswsCinematic.current = null;
             window.__PolyFX?.setCinematic?.(null);
@@ -3290,7 +3273,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.holding = false;
                 this.showWaiting(stalled);
                 if (!o.isSpectator()) this.viewer.apply(o.render.camera, pivot, o.render.camera === car.cameraCockpit);
-                ghostLod(runs.map((r) => r.car), car, o.render.camera, 1, this.clock());
+                ghostLod(runs.map((r) => r.car), car, o.render.camera, this.clock());
                 return;
             }
             const frame = car.getTime().numberOfFrames;
@@ -3329,8 +3312,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 correct: this.correct
             });
 
-            ghostLod(runs.map((r) => r.car), car, viewCam, 1, this.clock());
-            this.fadeCars(runs, focus, viewCam, P);
+            ghostLod(runs.map((r) => r.car), car, viewCam, this.clock());
             if (this.exporting) return;
             this.updateTags(runs, focus, viewCam);
             this.updatePanels(runs, focus, run, frame, speed);
@@ -3371,43 +3353,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             b.fov = a.fov + (b.fov - a.fov) * x;
             b.roll = a.roll + (b.roll - a.roll) * x;
             b.lens = a.lens + (b.lens - a.lens) * x;
-        }
-
-        // Other runs drive the same line, so they often sit right in front of the lens or between
-        // it and the followed car. Fade those out.
-        fadeCars(runs, focus, cam, P) {
-            const C = cam.getWorldPosition(this.v[5]);
-            const seg = this.v[6].subVectors(P, C);
-            const len2 = Math.max(1e-6, seg.lengthSq());
-            this.opacity ??= new Map();
-            for (let i = 0; i < runs.length; i++) {
-                const car = runs[i].car;
-                if (car.object3D && !car.object3D.visible) continue;
-                let op = 1;
-                if (i !== focus) {
-                    const Q = car.getPosition();
-                    op = clamp((Q.distanceTo(C) - 2) / 5, 0, 1);
-                    // A ghost running into the followed car fades out rather than vanishing.
-                    op = Math.min(op, clamp((Q.distanceTo(P) - 1) / 1.6, 0, 1));
-                    const k = clamp(this.v[7].subVectors(Q, C).dot(seg) / len2, 0, 1);
-                    if (k > 0 && k < 0.92) {
-                        const off = this.v[7].copy(C).addScaledVector(seg, k).distanceTo(Q);
-                        op = Math.min(op, clamp((off - 1.2) / 2.2, 0.18, 1));
-                    }
-                    op = Math.round(op * 10) / 10;
-                }
-                if (this.opacity.get(car) !== op) {
-                    this.opacity.set(car, op);
-                    car.setOpacity(op);
-                }
-            }
-        }
-
-        resetOpacity() {
-            if (!this.opacity) return;
-            for (const [car, op] of this.opacity)
-                if (op !== 1) car.setOpacity(1);
-            this.opacity.clear();
         }
 
         project(cam, p) {
