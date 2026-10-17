@@ -3161,7 +3161,40 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     A.pos.sub(from).multiplyScalar(Math.max(k, Math.min(1, MIN_VIEW_DISTANCE / Math.max(d, 1e-3)))).add(from);
                 }
             }
+            this.frameCar(A, P);
             return A;
+        }
+
+        // Keeps the followed car near the middle of the frame. Wherever a shot would put it close
+        // to an edge, the camera turns towards it, easing in so it never snaps: the car stays
+        // within about the middle 40% across and a third above or below the centre (16:9).
+        frameCar(view, P) {
+            const fr = this.fr ??= [0, 1, 2, 3].map(() => new this.T.Vector3());
+            const F = fr[0].subVectors(view.look, view.pos);
+            const dist = F.length();
+            if (dist < 1e-3) return;
+            F.divideScalar(dist);
+            const R = fr[1].crossVectors(F, view.up);
+            if (R.lengthSq() < 1e-8) return;
+            R.normalize();
+            const U = fr[2].crossVectors(R, F);
+            const v = fr[3].copy(P).addScaledVector(this.up, 0.4).sub(view.pos);
+            const z = v.dot(F);
+            if (z < 0.5) return;
+            const tv = Math.tan(view.fov * Math.PI / 360), th = tv * 16 / 9;
+            const x = v.dot(R) / z / th, y = v.dot(U) / z / tv;
+            const soft = (a, lo, hi) => {
+                const lo0 = lo * 0.6, hi0 = hi * 0.6;
+                if (a > hi0) return hi0 + (hi - hi0) * Math.tanh((a - hi0) / (hi - hi0));
+                if (a < lo0) return lo0 + (lo - lo0) * Math.tanh((a - lo0) / (lo - lo0));
+                return a;
+            };
+            const x2 = soft(x, -0.42, 0.42), y2 = soft(y, -0.36, 0.32);
+            if (x2 === x && y2 === y) return;
+            const yaw = Math.atan(x * th) - Math.atan(x2 * th), pitch = Math.atan(y * tv) - Math.atan(y2 * tv);
+            F.multiplyScalar(Math.cos(yaw)).addScaledVector(R, Math.sin(yaw));
+            F.multiplyScalar(Math.cos(pitch)).addScaledVector(U, Math.sin(pitch)).normalize();
+            view.look.copy(view.pos).addScaledVector(F, dist);
         }
 
         update(dt) {
