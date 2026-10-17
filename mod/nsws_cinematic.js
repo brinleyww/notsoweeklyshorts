@@ -17,6 +17,9 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu { position: fixed; z-index: 10000; display: flex; align-items: stretch; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
 .nsws-save-menu > .col { display: flex; flex-direction: column; width: 300px; }
 .nsws-save-menu > .col + .col { width: 230px; margin-left: 8px; }
+.nsws-save-menu > .col > .fname { display: flex; align-items: center; margin: 2px 0 8px 0; padding: 0 16px 0 14px; height: 40px; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); cursor: text; }
+.nsws-save-menu > .col > .fname > input { flex: 1; min-width: 0; padding: 0; border: none; outline: none; background: none; color: #fff; font: inherit; font-size: 17px; }
+.nsws-save-menu > .col > .fname > span { margin-left: 2px; font-size: 15px; opacity: 0.55; }
 .nsws-save-menu > .col > .button.go { display: flex; align-items: center; justify-content: center; margin: auto 0 0 0; padding: 16px 18px; font-size: 28px; text-align: center; }
 .nsws-save-menu > .col > .button.go > img { width: 30px; height: 30px; margin-right: 12px; }
 .nsws-save-menu::-webkit-scrollbar { width: 6px; }
@@ -2059,14 +2062,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         saveRecording(rec) {
             if (rec.saved || !rec.chunks.length) return;
             rec.saved = true;
-            this.download(new Blob(rec.chunks, { type: rec.mimeType.split(";")[0] }), rec.mimeType.startsWith("video/mp4") ? "mp4" : "webm", rec.name);
+            this.download(new Blob(rec.chunks, { type: rec.mimeType.split(";")[0] }), rec.mimeType.startsWith("video/mp4") ? "mp4" : "webm", this.defaultFileName());
         }
 
+        defaultFileName() {
+            const run = this.o.getRuns()[this.o.getFocus()];
+            return (this.o.trackName ? this.o.trackName + " - " : "") + (run?.settings.nickname ?? "run");
+        }
+
+        // `name` is the whole file name without the extension (the player can change it).
         download(blob, ext, name) {
-            const clean = (x) => String(x).replace(/[\\/:*?"<>|]+/g, "").trim();
+            const clean = (x) => String(x).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "").replace(new RegExp("\\." + ext + "$", "i"), "").trim().slice(0, 150);
             const a = document.createElement("a");
             a.href = URL.createObjectURL(blob);
-            a.download = clean((this.o.trackName ? this.o.trackName + " - " : "") + name) + "." + ext;
+            a.download = (clean(name) || "video") + "." + ext;
             document.body.appendChild(a);
             a.click();
             a.remove();
@@ -2474,14 +2483,32 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 });
                 return b;
             });
+            el("p", "", right).textContent = "File name";
+            const nameRow = el("label", "fname", right);
+            const nameInput = el("input", "", nameRow);
+            nameInput.type = "text";
+            nameInput.maxLength = 150;
+            nameInput.spellcheck = false;
+            // An edited name is kept while the menu is reopened, until the followed run changes.
+            const base = this.defaultFileName();
+            nameInput.value = this.fileName?.base === base ? this.fileName.value : base;
+            el("span", "", nameRow).textContent = ".mp4";
+            nameInput.addEventListener("input", () => this.fileName = { base, value: nameInput.value });
+            // Typing here mustn't reach the replay's shortcuts (Space pauses, and so on).
+            for (const type of ["keydown", "keyup", "keypress"])
+                nameInput.addEventListener(type, (e) => {
+                    e.stopPropagation();
+                    if (type === "keydown" && e.key === "Enter") go.click();
+                });
             const go = el("button", "button go", right);
             go.innerHTML = '<img src="images/save.svg">';
             go.appendChild(document.createTextNode("Save video"));
             go.addEventListener("click", () => {
                 this.o.playClick?.();
                 const size = SAVE_SIZES.find((sz) => sz.id === chosen) ?? SAVE_SIZES[0];
+                const name = nameInput.value.trim() || this.defaultFileName();
                 this.toggleSaveMenu();
-                this.exportVideo(size);
+                this.exportVideo(size, name);
             });
             const r = this.saveBtn.getBoundingClientRect();
             menu.style.maxHeight = Math.round(r.top - 14) + "px";
@@ -2537,7 +2564,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         // it straight to MP4: no screen capture, no waiting for it to play, and the same video
         // whatever size the window is. Overlays are drawn onto the frames. Browsers without
         // WebCodecs fall back to recording the tab.
-        async exportVideo(size) {
+        async exportVideo(size, fileName) {
             if (this.exp || this.rec) return;
             if (!window.VideoEncoder || !window.VideoFrame) return this.startRecording();
             const o = this.o;
@@ -2578,7 +2605,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
             if (!result) return ui.done("Couldn't save the video", error ? String(error.message ?? error) : "");
             const run = o.getRuns()[o.getFocus()];
-            this.download(result.blob, "mp4", run.settings.nickname ?? "run");
+            this.download(result.blob, "mp4", fileName || this.defaultFileName());
             const mb = (result.blob.size / 1048576).toFixed(1);
             let note = result.width + "\u00d7" + result.height + ", " + result.fps + " fps, " + mb + " MB";
             if (result.sound === "failed") note += ", no sound (this browser can't encode audio)";
