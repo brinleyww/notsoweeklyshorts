@@ -14,9 +14,11 @@ body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .time-bar-ui > .button.nsws-watch-inputs.off > svg { opacity: 0.35; }
 .time-bar-ui > .button.nsws-watch-save.on { background-color: #8a2a3a; }
 body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
-.nsws-save-menu { position: fixed; z-index: 10000; display: flex; align-items: flex-start; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
+.nsws-save-menu { position: fixed; z-index: 10000; display: flex; align-items: stretch; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
 .nsws-save-menu > .col { display: flex; flex-direction: column; width: 300px; }
 .nsws-save-menu > .col + .col { width: 230px; margin-left: 8px; }
+.nsws-save-menu > .col > .button.go { display: flex; align-items: center; justify-content: center; margin: auto 0 0 0; padding: 16px 18px; font-size: 28px; text-align: center; }
+.nsws-save-menu > .col > .button.go > img { width: 30px; height: 30px; margin-right: 12px; }
 .nsws-save-menu::-webkit-scrollbar { width: 6px; }
 .nsws-save-menu::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.4); }
 .nsws-save-menu > .col > p { margin: 4px 10px 8px 10px; font-size: 16px; opacity: 0.7; }
@@ -2457,18 +2459,30 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             el("p", "", left).textContent = "Save video";
             this.soundMenu(left);
             el("p", "", right).textContent = "Size";
-            for (const size of SAVE_SIZES) {
+            // Picking a size only selects it; the big button at the bottom saves.
+            if (!SAVE_SIZES.some((sz) => sz.id === chosen)) chosen = SAVE_SIZES[0].id;
+            const sizeBtns = SAVE_SIZES.map((size) => {
                 const b = el("button", "button" + (size.id === chosen ? " selected" : ""), right);
                 b.textContent = size.label;
                 b.addEventListener("click", () => {
                     this.o.playClick?.();
+                    chosen = size.id;
                     try {
                         localStorage.setItem("nsws_save_size", size.id);
                     } catch (e) {}
-                    this.toggleSaveMenu();
-                    this.exportVideo(size);
+                    sizeBtns.forEach((x, i) => x.classList.toggle("selected", SAVE_SIZES[i].id === chosen));
                 });
-            }
+                return b;
+            });
+            const go = el("button", "button go", right);
+            go.innerHTML = '<img src="images/save.svg">';
+            go.appendChild(document.createTextNode("Save video"));
+            go.addEventListener("click", () => {
+                this.o.playClick?.();
+                const size = SAVE_SIZES.find((sz) => sz.id === chosen) ?? SAVE_SIZES[0];
+                this.toggleSaveMenu();
+                this.exportVideo(size);
+            });
             const r = this.saveBtn.getBoundingClientRect();
             menu.style.maxHeight = Math.round(r.top - 14) + "px";
             menu.style.overflowY = "auto";
