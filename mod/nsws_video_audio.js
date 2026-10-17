@@ -337,28 +337,61 @@
         return { codec: opus ? "opus" : "aac", desc, sampleRate: SR, channels: 2, bitrate, chunks, preSkip };
     }
 
-    // Plays 10 s of the song from its start point, at the level it will have in the video.
-    let previewCtx = null, previewSrc = null;
-    async function preview(buf, start, volume) {
+    // Plays the song from `start` until stopped, at the level it will have in the video. The
+    // returned handle tells where playback is and follows the volume slider.
+    let previewCtx = null, preview = null;
+    const levels = new WeakMap();
+    async function play(buf, start, volume) {
         stopPreview();
         previewCtx ??= new AudioContext();
         await previewCtx.resume();
-        const src = previewSrc = previewCtx.createBufferSource();
+        const src = previewCtx.createBufferSource();
         src.buffer = buf;
         const g = previewCtx.createGain();
-        g.gain.value = clamp(volume, 0, 1) * 0.26 / Math.max(rms(buf), 1e-4) * 0.8;
+        let norm = levels.get(buf);
+        if (null == norm) levels.set(buf, norm = 0.26 / Math.max(rms(buf), 1e-4) * 0.8);
+        g.gain.value = clamp(volume, 0, 1) * norm;
         src.connect(g);
         g.connect(previewCtx.destination);
-        src.start(0, clamp(start, 0, buf.duration), 10);
-        return new Promise((r) => src.onended = r);
+        const from = clamp(start, 0, buf.duration), at = previewCtx.currentTime;
+        src.start(0, from);
+        const handle = preview = {
+            pos: () => Math.min(buf.duration, from + previewCtx.currentTime - at),
+            setVolume: (v) => g.gain.value = clamp(v, 0, 1) * norm,
+            stop: () => {
+                try {
+                    src.stop();
+                } catch (e) {}
+            },
+            done: new Promise((r) => src.onended = r)
+        };
+        handle.done.then(() => {
+            if (preview === handle) preview = null;
+        });
+        return handle;
     }
 
     function stopPreview() {
-        try {
-            previewSrc?.stop();
-        } catch (e) {}
-        previewSrc = null;
+        preview?.stop();
+        preview = null;
     }
 
-    window.__nswsVideoAudio = { SR, renderCars, library, mix, encode, preview, stopPreview };
+    // The loudest sample in each of n slices of the song, for drawing its waveform.
+    const peakCache = new WeakMap();
+    function peaks(buf, n) {
+        let p = peakCache.get(buf);
+        if (p?.length === n) return p;
+        p = new Float32Array(n);
+        const a = buf.getChannelData(0), b = buf.numberOfChannels > 1 ? buf.getChannelData(1) : a;
+        const per = a.length / n, stride = Math.max(1, Math.floor(per / 400));
+        for (let i = 0; i < n; i++) {
+            let m = 0;
+            for (let j = Math.floor(i * per), e = Math.min(a.length, Math.floor((i + 1) * per)); j < e; j += stride) m = Math.max(m, Math.abs(a[j]), Math.abs(b[j]));
+            p[i] = m;
+        }
+        peakCache.set(buf, p);
+        return p;
+    }
+
+    window.__nswsVideoAudio = { SR, renderCars, library, mix, encode, play, stopPreview, peaks };
 })();

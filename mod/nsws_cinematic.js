@@ -44,6 +44,11 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu .col .song > .del { margin: 0 -8px 0 6px; padding: 4px 8px; border: none; background: none; color: #fff; font: inherit; font-size: 15px; opacity: 0.55; cursor: pointer; }
 .nsws-save-menu .col .song > .del:hover, .nsws-save-menu .col .song > .del.sure { opacity: 1; }
 .nsws-save-menu .col .song > .del.sure { color: #ff8a80; }
+.nsws-save-menu > .col > .wave { position: relative; flex-shrink: 0; height: 52px; margin: 2px 0; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); cursor: pointer; touch-action: none; }
+.nsws-save-menu > .col > .wave > canvas { position: absolute; left: 14px; top: 4px; width: calc(100% - 28px); height: 44px; }
+.nsws-save-menu > .col > .ctrl > .button { margin: 0 4px 0 0; padding: 7px 11px; font-size: 16px; white-space: nowrap; }
+.nsws-save-menu > .col > .ctrl > .button.dim { opacity: 0.45; }
+.nsws-save-menu > .col > .ctrl > b { flex: 1; margin-right: 4px; font-weight: normal; font-size: 15px; text-align: center; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .nsws-save-menu > .col > .songs > i { position: absolute; right: 12px; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
 .nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
 .nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
@@ -2118,14 +2123,21 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const importRow = el("div", "opt", menu);
             const importBtn = el("button", "button wide", importRow);
             importBtn.textContent = "Import song\u2026";
-            const startRow = el("label", "vol", menu);
-            el("span", "", startRow).textContent = "Starts at";
-            const start = el("input", "", startRow);
-            start.type = "range";
-            start.step = "0.5";
-            const startText = el("b", "", startRow);
-            const play = el("button", "button", startRow);
-            play.title = "Preview";
+            // The chosen song's waveform: click or drag to set where it starts. Play listens from
+            // there; "Start here" moves the start to whatever is playing right now.
+            const wave = el("div", "wave", menu);
+            wave.title = "Click or drag to choose where the song starts";
+            const canvas = el("canvas", "", wave);
+            const ctrl = el("div", "opt ctrl", menu);
+            const play = el("button", "button", ctrl);
+            const back = el("button", "button", ctrl);
+            back.textContent = "\u22121s";
+            const startText = el("b", "", ctrl);
+            const fwd = el("button", "button", ctrl);
+            fwd.textContent = "+1s";
+            const here = el("button", "button", ctrl);
+            here.textContent = "Start here";
+            here.title = "Start the song at the moment playing now";
             const volRow = el("label", "vol", menu);
             el("span", "", volRow).textContent = "Music volume";
             const vol = el("input", "", volRow);
@@ -2136,6 +2148,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             vol.value = String(opt.volume);
             vol.addEventListener("input", () => {
                 opt.volume = parseFloat(vol.value);
+                playing?.setVolume(opt.volume);
                 this.saveSound();
             });
             const note = el("p", "note", menu);
@@ -2162,16 +2175,89 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 }
             };
             const selected = () => songs.find((x) => x.id === opt.song) ?? null;
+            const fine = (t) => clock(t) + "." + Math.floor(t * 10 % 10);
+            let audio = null, playing = null, raf = 0;
+            const draw = () => {
+                const sg = selected();
+                const W = canvas.clientWidth, H = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
+                if (!W || !sg) return;
+                if (canvas.width !== Math.round(W * dpr)) {
+                    canvas.width = Math.round(W * dpr);
+                    canvas.height = Math.round(H * dpr);
+                }
+                const g = canvas.getContext("2d");
+                g.setTransform(dpr, 0, 0, dpr, 0, 0);
+                g.clearRect(0, 0, W, H);
+                if (!audio || audio.id !== sg.id) {
+                    g.fillStyle = "rgba(255, 255, 255, 0.5)";
+                    g.font = "13px " + (getComputedStyle(menu).fontFamily || "sans-serif");
+                    g.fillText("Loading\u2026", 4, H / 2 + 4);
+                    return;
+                }
+                const n = Math.max(1, Math.floor(W / 2)), p = VA.peaks(audio.buffer, n);
+                let top = 0;
+                for (const v of p) top = Math.max(top, v);
+                const startX = (sg.start ?? 0) / sg.duration * W;
+                for (let i = 0; i < n; i++) {
+                    const x = i * 2, h = Math.max(1, p[i] / (top || 1) * (H - 4));
+                    g.fillStyle = x + 1 < startX ? "rgba(255, 255, 255, 0.25)" : "rgba(255, 255, 255, 0.8)";
+                    g.fillRect(x, (H - h) / 2, 1.4, h);
+                }
+                g.fillStyle = "#7fe08a";
+                g.fillRect(Math.round(startX) - 1, 0, 2, H);
+                if (playing) {
+                    g.fillStyle = "#ffd76a";
+                    g.fillRect(Math.round(playing.pos() / sg.duration * W), 0, 1.5, H);
+                }
+            };
+            const showTime = () => {
+                const sg = selected();
+                if (!sg) return;
+                startText.textContent = fine(playing ? playing.pos() : sg.start ?? 0);
+                startText.style.color = playing ? "#ffd76a" : "#7fe08a";
+                startText.title = playing ? "Playing" : "The song starts here";
+                play.textContent = playing ? "\u25a0" : "\u25b6";
+                here.classList.toggle("dim", !playing);
+            };
+            const stopPlaying = () => {
+                cancelAnimationFrame(raf);
+                VA.stopPreview();
+                playing = null;
+                showTime();
+                draw();
+            };
+            const tick = () => {
+                if (!playing || !menu.isConnected) return;
+                showTime();
+                draw();
+                raf = requestAnimationFrame(tick);
+            };
+            const playFrom = async (t) => {
+                const sg = selected();
+                if (!sg || !audio || audio.id !== sg.id) return;
+                cancelAnimationFrame(raf);
+                const h = playing = await VA.play(audio.buffer, t, opt.volume);
+                h.done.then(() => {
+                    if (playing === h) stopPlaying();
+                });
+                tick();
+            };
             const showStart = () => {
                 const sg = selected();
-                startRow.style.display = sg ? "" : "none";
-                VA.stopPreview();
-                play.textContent = "\u25b6";
+                wave.style.display = ctrl.style.display = sg ? "" : "none";
+                stopPlaying();
                 if (!sg) return;
-                start.min = "0";
-                start.max = String(Math.max(0, Math.floor(sg.duration - 1)));
-                start.value = String(sg.start ?? 0);
-                startText.textContent = clock(sg.start ?? 0);
+                if (audio?.id !== sg.id) {
+                    audio = null;
+                    VA.library.load(sg.id).then((song) => {
+                        if (song && selected()?.id === sg.id) {
+                            audio = { id: sg.id, buffer: song.buffer };
+                            draw();
+                        }
+                    }).catch(() => {});
+                }
+                showTime();
+                draw();
             };
             const render = () => {
                 inner.innerHTML = "";
@@ -2276,30 +2362,52 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             };
 
             let saveTimer = 0;
-            start.addEventListener("input", () => {
+            const setStart = (t) => {
                 const sg = selected();
                 if (!sg) return;
-                sg.start = parseFloat(start.value);
-                startText.textContent = clock(sg.start);
+                sg.start = Math.round(clamp(t, 0, Math.max(0, sg.duration - 0.5)) * 10) / 10;
                 clearTimeout(saveTimer);
                 saveTimer = setTimeout(() => VA.library.setStart(sg.id, sg.start).catch(() => {}), 300);
+                showTime();
+                draw();
+            };
+            let scrub = null;
+            const timeAt = (e) => {
+                const r = canvas.getBoundingClientRect(), sg = selected();
+                return sg ? clamp((e.clientX - r.left) / r.width, 0, 1) * sg.duration : 0;
+            };
+            wave.addEventListener("pointerdown", (e) => {
+                if (!selected()) return;
+                e.preventDefault();
+                scrub = e.pointerId;
+                wave.setPointerCapture(e.pointerId);
+                setStart(timeAt(e));
             });
-            play.addEventListener("click", async () => {
+            wave.addEventListener("pointermove", (e) => {
+                if (scrub === e.pointerId) setStart(timeAt(e));
+            });
+            const endScrub = (e) => {
+                if (scrub !== e.pointerId) return;
+                scrub = null;
+                if (playing) playFrom(selected()?.start ?? 0);
+            };
+            wave.addEventListener("pointerup", endScrub);
+            wave.addEventListener("pointercancel", endScrub);
+            play.addEventListener("click", () => {
                 this.o.playClick?.();
-                if (this.previewing) {
-                    VA.stopPreview();
-                    return;
-                }
-                const sg = selected();
-                if (!sg) return;
-                this.previewing = true;
-                play.textContent = "\u25a0";
-                try {
-                    const song = await VA.library.load(sg.id);
-                    if (song && this.menu === menu) await VA.preview(song.buffer, sg.start ?? 0, opt.volume);
-                } catch (e) {}
-                this.previewing = false;
-                if (this.menu === menu) play.textContent = "\u25b6";
+                if (playing) stopPlaying();
+                else playFrom(selected()?.start ?? 0);
+            });
+            for (const [b, d] of [[back, -1], [fwd, 1]])
+                b.addEventListener("click", () => {
+                    this.o.playClick?.();
+                    setStart((selected()?.start ?? 0) + d);
+                    if (playing) playFrom(selected()?.start ?? 0);
+                });
+            here.addEventListener("click", () => {
+                if (!playing) return;
+                this.o.playClick?.();
+                setStart(playing.pos());
             });
             importBtn.addEventListener("click", () => {
                 this.o.playClick?.();
