@@ -1,6 +1,6 @@
 (() => {
-    // Sound for saved videos: the cars as a trackside microphone would hear them, and a song the
-    // player imported from their own device.
+    // Sound for saved videos: the cars as a trackside microphone would hear them, and a song that
+    // comes with the game or one the player imported from their own device.
     const SR = 48000;
     const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
     const SOUND_SPEED = 343;
@@ -160,7 +160,25 @@
         return ctx.startRendering();
     }
 
-    // ---------- the player's songs ----------
+    // ---------- songs ----------
+
+    // Songs that come with the game (audio/songs), credited in the list. Where each one starts is
+    // kept on this device.
+    const PRESETS = [
+        { id: "preset:nocturne", name: "Not So Weekly Nocturne", by: "@LBpiano", file: "not-so-weekly-nocturne.mp3", duration: 51.6 },
+        { id: "preset:cut-through", name: "Cut Through", by: "The Big GPT", file: "cut-through.mp3", duration: 93.6 },
+        { id: "preset:slide", name: "Slide Through The Turn", by: "The Big GPT", file: "slide-through-the-turn.mp3", duration: 61.5 },
+        { id: "preset:drift-brutal", name: "Drift Brutal", by: "The Big GPT", file: "drift-brutal.mp3", duration: 150 },
+        { id: "preset:final-drop", name: "Final Drop", by: "The Big GPT", file: "final-drop.mp3", duration: 174.8 },
+        { id: "preset:triumph", name: "Triumph in Motion", by: "The Big GPT", file: "triumph-in-motion.mp3", duration: 186.4 }
+    ];
+    const presetStarts = () => {
+        try {
+            return JSON.parse(localStorage.getItem("nsws_song_starts") || "{}") || {};
+        } catch (e) {
+            return {};
+        }
+    };
 
     // Songs a player imports stay in this browser (IndexedDB), never uploaded, listed per profile:
     // the owner key is a hash of the profile's token, so the token itself is never stored here.
@@ -187,6 +205,10 @@
         };
         let ownerP = null, ownerFor = null;
         return {
+            presets() {
+                const starts = presetStarts();
+                return PRESETS.map(({ id, name, by, duration }) => ({ id, name, by, duration, start: starts[id] ?? 0, preset: true }));
+            },
             async owner() {
                 const token = window.__nswsAccounts?.profileToken?.() ?? null;
                 if (ownerP && ownerFor === token) return ownerP;
@@ -215,6 +237,12 @@
                 return { id, name, duration: buffer.duration, start: 0, size: file.size };
             },
             async setStart(id, start) {
+                if (PRESETS.some((p) => p.id === id)) {
+                    const starts = presetStarts();
+                    starts[id] = start;
+                    localStorage.setItem("nsws_song_starts", JSON.stringify(starts));
+                    return;
+                }
                 await tx("readwrite", (st) => {
                     const req = st.get(id);
                     req.onsuccess = () => {
@@ -226,17 +254,24 @@
                 decoded.delete(id);
                 await tx("readwrite", (st) => st.delete(id));
             },
-            // { name, start, buffer } or null.
+            // { name, by, start, buffer } or null.
             async load(id) {
-                const row = await tx("readonly", (st) => st.get(id));
-                if (!row) return null;
+                const preset = PRESETS.find((p) => p.id === id);
+                const row = preset ? null : await tx("readonly", (st) => st.get(id));
+                if (!preset && !row) return null;
                 let buffer = decoded.get(id);
                 if (!buffer) {
-                    buffer = await decodeSong(row.data);
+                    let data = row?.data;
+                    if (preset) {
+                        const res = await fetch("audio/songs/" + preset.file);
+                        if (!res.ok) throw new Error("HTTP " + res.status);
+                        data = await res.blob();
+                    }
+                    buffer = await decodeSong(data);
                     decoded.clear();
                     decoded.set(id, buffer);
                 }
-                return { name: row.name, start: row.start ?? 0, buffer };
+                return preset ? { name: preset.name, by: preset.by, start: presetStarts()[id] ?? 0, buffer } : { name: row.name, by: null, start: row.start ?? 0, buffer };
             }
         };
     })();

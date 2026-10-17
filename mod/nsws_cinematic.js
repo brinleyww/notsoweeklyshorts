@@ -2092,9 +2092,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             } catch (e) {}
         }
 
-        // Car sounds on or off, and music from the songs the player imported (kept on this device
-        // only): an A-Z list that scrolls by itself once it is long, where the song starts, and
-        // how loud it is.
+        // Car sounds on or off, and music: the songs that come with the game, then the player's
+        // imported songs A-Z (kept on this device only), in a list that scrolls by itself once it
+        // is long; where the song starts, and how loud it is.
         soundMenu(menu) {
             const VA = window.__nswsVideoAudio;
             if (!VA || !window.AudioEncoder || !window.indexedDB) return;
@@ -2183,7 +2183,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             });
             const note = el("p", "note", menu);
             const LOCAL = "Imported songs are saved on this device only. They are never uploaded.";
-            note.textContent = LOCAL;
+            let failed = "";
+            const showNote = () => {
+                const sg = selected();
+                note.textContent = failed ? failed + LOCAL : sg?.by ? "Music by " + sg.by : LOCAL;
+            };
             const picker = el("input", "", menu);
             picker.type = "file";
             picker.accept = "audio/*";
@@ -2274,6 +2278,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             };
             const showStart = () => {
                 const sg = selected();
+                showNote();
                 wave.style.display = ctrl.style.display = sg ? "" : "none";
                 stopPlaying();
                 if (!sg) return;
@@ -2282,6 +2287,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     VA.library.load(sg.id).then((song) => {
                         if (song && selected()?.id === sg.id) {
                             audio = { id: sg.id, buffer: song.buffer };
+                            sg.duration = song.buffer.duration;
                             draw();
                         }
                     }).catch(() => {});
@@ -2296,8 +2302,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 for (const sg of rows) {
                     const row = el("div", "song" + (sg.id === opt.song ? " selected" : ""), inner);
                     el("span", "name", row).textContent = sg.name;
-                    if (sg.id) {
-                        el("span", "len", row).textContent = clock(sg.duration);
+                    if (sg.by) row.title = sg.name + " by " + sg.by;
+                    if (sg.id) el("span", "len", row).textContent = clock(sg.duration);
+                    if (sg.id && !sg.preset) {
                         const del = el("button", "del" + (sure === sg.id ? " sure" : ""), row);
                         del.textContent = sure === sg.id ? "Remove?" : "\u00d7";
                         del.title = "Remove from this device";
@@ -2322,6 +2329,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                         if (moved) return;
                         this.o.playClick?.();
                         sure = null;
+                        failed = "";
                         opt.song = sg.id;
                         this.saveSound();
                         render();
@@ -2336,11 +2344,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 layout();
             };
             const refresh = async () => {
+                let mine = [];
                 try {
-                    songs = await VA.library.list();
-                } catch (e) {
-                    songs = [];
-                }
+                    mine = await VA.library.list();
+                } catch (e) {}
+                songs = [...VA.library.presets(), ...mine];
                 if (opt.song && !songs.some((x) => x.id === opt.song)) {
                     opt.song = null;
                     this.saveSound();
@@ -2447,14 +2455,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const files = [...(picker.files ?? [])];
                 picker.value = "";
                 if (!files.length) return;
-                const failed = [];
+                const bad = [];
                 let last = null;
                 importBtn.textContent = "Importing\u2026";
                 for (const f of files) {
                     try {
                         last = await VA.library.add(f);
                     } catch (e) {
-                        failed.push(f.name);
+                        bad.push(f.name);
                     }
                 }
                 importBtn.textContent = "Import song\u2026";
@@ -2462,7 +2470,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     opt.song = last.id;
                     this.saveSound();
                 }
-                note.textContent = failed.length ? "Couldn't read " + failed.join(", ") + ". " + LOCAL : LOCAL;
+                failed = bad.length ? "Couldn't read " + bad.join(", ") + ". " : "";
                 await refresh();
             });
             refresh();
@@ -2697,7 +2705,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     if (exp.cancel) return null;
                     audio = await VA.encode(VA.mix(dur, cars, sound.carVolume ?? 1, song?.buffer ?? null, sound.volume, song?.start ?? 0), audioRate);
                 }
-                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: song?.name ?? null } : "failed" : null };
+                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: song ? song.name + (song.by ? " by " + song.by : "") : null } : "failed" : null };
                 // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
                 if (cap && out.blob.size > cap && pass < 2) {
                     rate *= cap / out.blob.size * 0.9;
