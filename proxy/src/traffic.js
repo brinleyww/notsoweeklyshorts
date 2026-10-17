@@ -41,6 +41,30 @@ const ANNOUNCE_REACH_MIN = new Set([5, 60, 1440]);
 const ANNOUNCE_NAME = 32;
 const ANNOUNCE_TEXT = 160;
 const ANNOUNCE_HISTORY = 20;
+const POLL_OPTIONS = 4;
+const POLL_OPTION_TEXT = 40;
+// Votes still count this long after a poll ends, since it leaves screens only with each player's next beat.
+const POLL_GRACE_MS = 2 * 60_000;
+// New votes per IP address per poll. Schools share one address.
+const VOTES_PER_IP = 30;
+
+function pollOptions(row) {
+    if (!row?.poll) return null;
+    try {
+        const list = JSON.parse(row.poll);
+        return Array.isArray(list) && list.length >= 2 ? list : null;
+    } catch {
+        return null;
+    }
+}
+
+function pollVotes(row, count) {
+    let list = [];
+    try {
+        list = JSON.parse(row.votes);
+    } catch {}
+    return Array.from({ length: count }, (_, i) => (Number.isSafeInteger(list?.[i]) && list[i] > 0 ? list[i] : 0));
+}
 
 function clampNumber(value, max) {
     const n = Number(value);
@@ -70,6 +94,8 @@ export class TrafficStats extends DurableObject {
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
         this.ann = null;
+        // `${ip} ${poll id}` -> new votes, only in memory.
+        this.votesByIp = new Map();
         // All-time totals, loaded the first time the dashboard asks and then kept up by record().
         this.totals = null;
         // visitor -> focused seconds not yet handed to Accounts. Lost if the object is evicted first.
@@ -112,6 +138,14 @@ export class TrafficStats extends DurableObject {
         // An official cup's announcement carries its code, for a Join button.
         if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "cup"))
             this.sql.exec("ALTER TABLE announcements ADD COLUMN cup TEXT");
+        // A poll's options and its running counts, both JSON arrays.
+        if (!this.sql.exec("PRAGMA table_info(announcements)").toArray().some((c) => c.name === "poll")) {
+            this.sql.exec("ALTER TABLE announcements ADD COLUMN poll TEXT");
+            this.sql.exec("ALTER TABLE announcements ADD COLUMN votes TEXT");
+        }
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS poll_votes (
+            ann INTEGER NOT NULL, voter TEXT NOT NULL, choice INTEGER NOT NULL, at INTEGER NOT NULL,
+            PRIMARY KEY (ann, voter)) WITHOUT ROWID`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
     }
 
@@ -310,16 +344,47 @@ export class TrafficStats extends DurableObject {
     liveAnnouncement() {
         const a = this.ann;
         if (!a || a.until <= Date.now()) return null;
-        return { id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s, cup: a.cup ?? null };
+        return {
+            id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s, cup: a.cup ?? null,
+            poll: pollOptions(a),
+        };
     }
 
     announce(a) {
         const now = Date.now();
         this.sql.exec("UPDATE announcements SET stopped = ? WHERE stopped IS NULL AND until > ?", now, now);
-        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online, cup)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
-            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now), a.cup ?? null).one();
+        this.ann = this.sql.exec(`INSERT INTO announcements (at, until, name, color, text, show_s, online, cup, poll, votes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+            now, now + a.reach * 60_000, a.name, a.color, a.text, a.show, this.onlineCount(now), a.cup ?? null,
+            a.poll ? JSON.stringify(a.poll) : null, a.poll ? JSON.stringify(a.poll.map(() => 0)) : null).one();
         return this.announcements();
+    }
+
+    // One vote per visitor per poll; voting again moves it. `visitor` must have sent a beat.
+    vote(visitor, id, choice, ip) {
+        const now = Date.now();
+        const row = this.ann?.id === id ? this.ann : this.sql.exec("SELECT * FROM announcements WHERE id = ?", id).toArray()[0];
+        const options = pollOptions(row);
+        if (!options || choice >= options.length || now > (row.stopped ?? row.until) + POLL_GRACE_MS) return { error: "closed" };
+        if (!this.sql.exec("SELECT 1 FROM visitors WHERE id = ?", visitor).toArray().length) return { error: "unknown" };
+        const votes = pollVotes(row, options.length);
+        const before = this.sql.exec("SELECT choice FROM poll_votes WHERE ann = ? AND voter = ?", id, visitor).toArray()[0]?.choice;
+        if (before === choice) return { votes };
+        if (before == null) {
+            const key = (ip || "?") + " " + id;
+            const used = this.votesByIp.get(key) ?? 0;
+            if (used >= VOTES_PER_IP) return { error: "busy" };
+            if (this.votesByIp.size > 5000) this.votesByIp.clear();
+            this.votesByIp.set(key, used + 1);
+        } else if (votes[before] > 0) {
+            votes[before]--;
+        }
+        votes[choice]++;
+        this.sql.exec(`INSERT INTO poll_votes (ann, voter, choice, at) VALUES (?, ?, ?, ?)
+            ON CONFLICT(ann, voter) DO UPDATE SET choice = excluded.choice, at = excluded.at`, id, visitor, choice, now);
+        row.votes = JSON.stringify(votes);
+        this.sql.exec("UPDATE announcements SET votes = ? WHERE id = ?", row.votes, id);
+        return { votes };
     }
 
     // Without an id, stops whatever is live (Race Control). With one, only that announcement, so a
@@ -339,10 +404,14 @@ export class TrafficStats extends DurableObject {
         const now = Date.now();
         const current = this.liveAnnouncement();
         const list = this.sql.exec("SELECT * FROM announcements ORDER BY id DESC LIMIT ?", ANNOUNCE_HISTORY).toArray()
-            .map((r) => ({
-                id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
-                online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
-            }));
+            .map((r) => {
+                const poll = pollOptions(r);
+                return {
+                    id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
+                    online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
+                    poll, votes: poll ? pollVotes(r, poll.length) : null,
+                };
+            });
         return { current, list, online: this.onlineCount(now), now };
     }
 
@@ -585,7 +654,37 @@ export function readAnnouncement(body) {
         show: ANNOUNCE_SHOW_S.has(body.show) ? body.show : 10,
         reach: ANNOUNCE_REACH_MIN.has(body.reach) ? body.reach : 5,
         cup: /^[A-HJ-NP-Z2-9]{5}$/.test(body.cup ?? "") ? body.cup : null,
+        poll: readPoll(body.poll),
     };
+}
+
+// A poll's answers: 2 to POLL_OPTIONS different ones, or null for a plain announcement.
+function readPoll(raw) {
+    if (!Array.isArray(raw)) return null;
+    const options = [];
+    const seen = new Set();
+    for (const value of raw.slice(0, 16)) {
+        const text = announceText(value, POLL_OPTION_TEXT);
+        const key = text.toLowerCase();
+        if (!text || seen.has(key)) continue;
+        seen.add(key);
+        options.push(text);
+        if (options.length === POLL_OPTIONS) break;
+    }
+    return options.length >= 2 ? options : null;
+}
+
+// A player's vote: { visitor, id, choice }, or null.
+export function readVote(text) {
+    let raw;
+    try {
+        raw = JSON.parse(text);
+    } catch {
+        return null;
+    }
+    if (!/^[0-9a-f]{32}$/.test(raw?.v ?? "") || !Number.isSafeInteger(raw.id) || raw.id <= 0) return null;
+    if (!Number.isSafeInteger(raw.c) || raw.c < 0 || raw.c >= POLL_OPTIONS) return null;
+    return { visitor: raw.v, id: raw.id, choice: raw.c };
 }
 
 // Coarse labels only; the raw user agent is never stored.

@@ -81,7 +81,7 @@
     }
 
     function siteLink() {
-        return location.origin + location.pathname.replace(/index\.html$/, "");
+        return window.__nswsShareBase || location.origin + location.pathname.replace(/index\.html$/, "");
     }
 
     function shareLink() {

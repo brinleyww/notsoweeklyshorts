@@ -18,7 +18,20 @@
 #nsws-ann a{pointer-events:auto;color:#8cc4ff;text-decoration:underline;text-underline-offset:.15em;cursor:pointer;}
 #nsws-ann a:hover{color:#c4e0ff;}
 #nsws-ann .note{margin-left:.5em;font-size:.6em;opacity:.5;}
+#nsws-ann .m.poll{padding-right:46px;}
+#nsws-ann .x{pointer-events:auto;position:absolute;right:6px;top:4px;padding:2px 10px;background:none;border:none;color:inherit;font:inherit;font-style:normal;font-size:24px;line-height:1.2;opacity:.5;cursor:pointer;}
+#nsws-ann .x:hover{opacity:1;}
+#nsws-ann .opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+#nsws-ann .opts .button{margin:0;padding:6px 18px;font-family:inherit;font-style:inherit;font-size:.8em;}
+#nsws-ann .res{display:flex;flex-direction:column;gap:6px;margin-top:10px;font-size:.75em;}
+#nsws-ann .res .r{position:relative;display:flex;gap:12px;justify-content:space-between;padding:4px 12px;background:rgba(255,255,255,.06);}
+#nsws-ann .res .r>i{position:absolute;left:0;top:0;bottom:0;background:var(--c);opacity:.22;}
+#nsws-ann .res .r.mine>i{opacity:.45;}
+#nsws-ann .res .r>span{position:relative;}
+#nsws-ann .res .r>span:last-child{font-variant-numeric:tabular-nums;}
+#nsws-ann .res .total,#nsws-ann .msg{font-size:.65em;opacity:.6;margin-top:6px;}
 `;
+    const RESULTS_MS = 6000;
 
     function readSeen() {
         try {
@@ -39,6 +52,15 @@
 
     function valid(a) {
         return !!a && Number.isSafeInteger(a.id) && typeof a.text === "string" && a.text.length > 0;
+    }
+
+    function pollOf(a) {
+        return Array.isArray(a.poll) && a.poll.length >= 2 && a.poll.every((o) => typeof o === "string") ? a.poll : null;
+    }
+
+    // Keep the game from treating a click on the banner as input.
+    function ownClicks(node) {
+        for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) node.addEventListener(type, (e) => e.stopPropagation());
     }
 
     const LINK = /\b(?:https?:\/\/|www\.)[^\s<>"]+/gi;
@@ -65,8 +87,7 @@
             a.target = "_blank";
             a.rel = "noopener noreferrer";
             a.textContent = raw;
-            // Keep the game from treating the click as input.
-            for (const type of ["pointerdown", "mousedown", "touchstart", "click"]) a.addEventListener(type, (e) => e.stopPropagation());
+            ownClicks(a);
             // Hold the banner while the pointer is on a link so it can't fade out from under the click.
             a.addEventListener("pointerenter", () => shown?.el.contains(a) && shown.anim?.playState === "running" && shown.anim.pause());
             a.addEventListener("pointerleave", () => shown?.el.contains(a) && shown.anim?.playState === "paused" && shown.anim.play());
@@ -153,7 +174,15 @@
         const hold = Math.max(3, Number(a.show) || 10) * 1000;
         const total = FADE_IN_MS + hold + FADE_OUT_MS;
         const entry = { a, el, preview: !!preview, at: performance.now(), anim: null };
-        if (el.animate) {
+        const poll = pollOf(a);
+        if (poll) {
+            // A poll stays until the player answers or closes it.
+            addPoll(entry, m, poll);
+            entry.anim = el.animate?.([
+                { opacity: 0, transform: "translateY(-16px)" },
+                { opacity: 1, transform: "none" },
+            ], { duration: FADE_IN_MS, easing: "ease-out", fill: "forwards" }) ?? null;
+        } else if (el.animate) {
             entry.anim = el.animate([
                 { opacity: 0, transform: "translateY(-16px)", easing: "ease-out" },
                 { opacity: 1, transform: "none", offset: FADE_IN_MS / total, easing: "linear" },
@@ -175,6 +204,73 @@
             markSeen(a.id);
             window.__nswsTraffic?.seen?.(a.id);
         }
+    }
+
+    function addPoll(entry, m, poll) {
+        m.classList.add("poll");
+        const close = document.createElement("button");
+        close.className = "x";
+        close.title = "Close";
+        close.textContent = "\u00d7";
+        ownClicks(close);
+        close.addEventListener("click", () => shown === entry && hide(false));
+        const opts = document.createElement("div");
+        opts.className = "opts";
+        const msg = document.createElement("div");
+        msg.className = "msg";
+        const buttons = poll.map((text, choice) => {
+            const b = document.createElement("button");
+            b.className = "button";
+            b.textContent = text;
+            ownClicks(b);
+            b.addEventListener("click", () => vote(entry, m, poll, choice, buttons, msg));
+            return b;
+        });
+        opts.append(...buttons);
+        m.append(close, opts);
+    }
+
+    async function vote(entry, m, poll, choice, buttons, msg) {
+        for (const b of buttons) b.disabled = true;
+        msg.remove();
+        let votes;
+        if (entry.preview) {
+            votes = poll.map((_, i) => (i === choice ? 1 : 0));
+        } else {
+            try {
+                votes = await window.__nswsTraffic.vote(entry.a.id, choice);
+            } catch (err) {
+                if (shown !== entry) return;
+                for (const b of buttons) b.disabled = false;
+                msg.textContent = err?.status === 409 ? "This poll has closed." : "Couldn't send your vote. Try again.";
+                m.appendChild(msg);
+                return;
+            }
+        }
+        if (shown !== entry) return;
+        m.querySelector(".opts")?.remove();
+        const res = document.createElement("div");
+        res.className = "res";
+        const sum = votes.reduce((s, n) => s + n, 0);
+        poll.forEach((text, i) => {
+            const share = sum ? Math.round((votes[i] / sum) * 100) : 0;
+            const row = document.createElement("div");
+            row.className = "r" + (i === choice ? " mine" : "");
+            const bar = document.createElement("i");
+            bar.style.width = share + "%";
+            const label = document.createElement("span");
+            label.textContent = text;
+            const pct = document.createElement("span");
+            pct.textContent = share + "%";
+            row.append(bar, label, pct);
+            res.appendChild(row);
+        });
+        const total = document.createElement("div");
+        total.className = "total";
+        total.textContent = sum === 1 ? "1 vote" : sum + " votes";
+        res.appendChild(total);
+        m.appendChild(res);
+        setTimeout(() => shown === entry && hide(false), RESULTS_MS);
     }
 
     // The beat's reply carries the live announcement or null; a null (or a newer one) ends the

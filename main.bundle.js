@@ -1707,7 +1707,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         })).catch(() => {});
     }
     function _clipLink(shareId) {
-        return location.origin + location.pathname + "?clip=" + shareId;
+        return (window.__nswsShareBase || location.origin + location.pathname) + "?clip=" + shareId;
     }
     function createClipsMenu(onClose) {
         openClipsMenu = () => createClipsMenu(onClose);

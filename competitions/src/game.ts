@@ -167,6 +167,7 @@ export interface SiteKeys {
 export const site = window as unknown as {
   __nswsCup?: Bridge;
   __nswsApiBase?: string;
+  __nswsShareBase?: string;
   __nswsSocket?: typeof WebSocket;
   __nswsCupKeys?: SiteKeys;
   __nswsKeyBindCapturing?: boolean;

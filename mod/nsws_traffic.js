@@ -169,6 +169,19 @@
         seen(id) {
             seenAnn = id;
         },
+        // Resolves to the poll's counts after this vote, or rejects with { status }.
+        async vote(id, choice) {
+            const response = await fetch(API + "nsws/poll", {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ v: visitorId, id, c: choice }),
+                credentials: "omit",
+                cache: "no-store",
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !Array.isArray(data?.votes)) throw { status: response.status, error: data?.error };
+            return data.votes;
+        },
         // The beat reply carries the same online count Race Control shows.
         refreshOnline() {
             if (performance.now() - lastBeat >= MIN_GAP_MS) beat(false);

@@ -311,6 +311,13 @@ chat font), stays for 6–30 s and fades out. `mod/nsws_announce.js` draws it.
   while the tab is hidden. The next beat reports it as seen (`an`), which the "Seen by" count
   sums once per session. A null in a beat reply ends the one on screen, which is how Stop
   reaches players without the chat.
+- **Polls:** an announcement can carry 2–4 answers (`poll`, 40 characters each). The banner then
+  shows them as buttons and stays until the player answers or closes it; after a vote it shows the
+  results for 6 s. `POST /nsws/poll` (`{v, id, c}`: visitor id, announcement id, answer) is open to
+  the site like the beat: the visitor must have sent a beat, a second vote moves the first, votes
+  count until 2 minutes after the poll stops or runs out, and one IP address gets 30 new votes per
+  poll. Votes are rows in `poll_votes`; the running counts live on the announcement row
+  (`votes`), so nothing ever sums the votes table. Race Control shows the counts.
 
 ## Accounts (names and clips)
 

@@ -6,6 +6,7 @@ import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS,
 import { player, standings, type CupState, isFinalist } from '../state.ts';
 import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { nameColor } from './hud.ts';
+import { site } from '../game.ts';
 
 type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
 
@@ -868,7 +869,7 @@ export class Panel {
   }
 
   #link() {
-    const url = new URL(location.href);
+    const url = new URL(site.__nswsShareBase || location.href);
     url.search = '';
     url.hash = '';
     url.searchParams.set('cup', this.app.code ?? '');

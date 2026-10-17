@@ -709,7 +709,7 @@
     }
 
     function refLink(code) {
-        return location.origin + location.pathname + "?ref=" + code;
+        return (window.__nswsShareBase || location.origin + location.pathname) + "?ref=" + code;
     }
 
     function stopKeys(e) {

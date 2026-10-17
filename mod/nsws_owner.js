@@ -13,6 +13,8 @@
     const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
     const ANN_REACH = [[5, "Online now"], [60, "+ next hour"], [1440, "+ next day"]];
     const ANN_MAX = 160;
+    const POLL_MAX = 4;
+    const POLL_TEXT = 40;
     const LIVE_REFRESH_MS = 10000;
     const STATS_REFRESH_MS = 60000;
     const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -126,6 +128,10 @@
 .nrc-find{display:flex;gap:8px;}
 .nrc-find input{flex:1;min-width:0;margin:0;padding:8px 14px;border:none;outline:none;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);background:var(--surface-tertiary-color);color:var(--text-color);font-size:20px;user-select:text;}
 .nrc-find input.small{flex:0 0 110px;}
+.nrc-opts{display:flex;flex-direction:column;gap:6px;}
+.nrc-opts .button{font-size:16px;padding:6px 14px;}
+.nrc-annline .nrc-bars{margin-top:10px;font-style:normal;}
+.nrc-table .poll{margin-left:8px;font-size:12px;color:rgba(255,255,255,.5);}
 .nrc-find .button{margin:0;font-size:18px;padding:7px 16px;}
 .nrc-who{margin:14px 0 0;}
 .nrc-who h3{margin:0 0 4px;font-size:24px;font-weight:400;color:${ACCENT};}
@@ -494,9 +500,11 @@
         annLive: null,
         annList: null,
         annStatus: null,
+        annPollBox: null,
+        annShowField: null,
         annArmed: false,
         annArmTimer: 0,
-        annDraft: { text: "", show: 10, reach: 5 },
+        annDraft: { text: "", show: 10, reach: 5, poll: false, options: ["", ""] },
         tagsRoot: null,
         tagsWho: null,
         tagsLists: null,
@@ -1199,11 +1207,31 @@
         button.textContent = "Send to everyone";
     }
 
+    // The draft's poll answers, or null when it isn't a poll. Throws a message when it can't be sent.
+    function annPoll() {
+        const d = ui.annDraft;
+        if (!d.poll) return null;
+        const options = [];
+        for (const o of d.options) {
+            const text = o.trim();
+            if (text && !options.some((x) => x.toLowerCase() === text.toLowerCase())) options.push(text);
+        }
+        if (options.length < 2) throw "A poll needs at least two different answers.";
+        return options;
+    }
+
     async function sendAnnouncement(button, textarea, count) {
         const d = ui.annDraft;
         const text = d.text.trim();
         if (!text) {
-            annStatus("Write a message first.");
+            annStatus(d.poll ? "Write the question first." : "Write a message first.");
+            return;
+        }
+        let poll;
+        try {
+            poll = annPoll();
+        } catch (problem) {
+            annStatus(problem);
             return;
         }
         if (!ui.annArmed) {
@@ -1217,10 +1245,14 @@
         button.disabled = true;
         annStatus("Sending…");
         try {
-            const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach });
+            const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach, poll });
             ui.ann = data;
             d.text = textarea.value = "";
             count();
+            if (poll) {
+                d.options = ["", ""];
+                renderPollFields();
+            }
             annStatus("Sent. " + (data.online === 1 ? "1 player is" : num(data.online) + " players are") + " online; they get it within a minute, instantly with the chat open.");
             window.__nswsAnnounce?.receive(data.current);
         } catch (err) {
@@ -1252,7 +1284,71 @@
         const line = el("div", "nrc-annline");
         line.style.setProperty("--c", a.color || ACCENT);
         line.append(el("b", null, a.name), ": " + a.text);
+        if (a.poll) line.appendChild(pollBars(a));
         return line;
+    }
+
+    function pollBars(a) {
+        const sum = a.votes.reduce((s, n) => s + n, 0);
+        const list = el("div", "nrc-bars");
+        a.poll.forEach((option, i) => {
+            const r = el("div", "nrc-bar");
+            const lab = el("div", "lab", option);
+            lab.title = option;
+            const track = el("div", "track");
+            const fill = el("div", "fill");
+            fill.style.width = (sum ? (a.votes[i] / sum) * 100 : 0) + "%";
+            track.appendChild(fill);
+            r.append(lab, track, el("div", "val", num(a.votes[i]) + (sum ? " · " + Math.round((a.votes[i] / sum) * 100) + "%" : "")));
+            list.appendChild(r);
+        });
+        return list;
+    }
+
+    function pollSummary(r) {
+        const sum = r.votes.reduce((s, n) => s + n, 0);
+        const span = el("span", "poll", "poll · " + (sum === 1 ? "1 vote" : num(sum) + " votes"));
+        span.title = r.poll.map((o, i) => o + ": " + r.votes[i]).join("\n");
+        return span;
+    }
+
+    function renderPollFields() {
+        const d = ui.annDraft;
+        const box = ui.annPollBox;
+        if (!box) return;
+        box.style.display = d.poll ? "" : "none";
+        if (ui.annShowField) ui.annShowField.style.display = d.poll ? "none" : "";
+        const list = box.lastChild;
+        list.textContent = "";
+        d.options.forEach((value, i) => {
+            const row = el("div", "nrc-find");
+            const input = el("input");
+            input.maxLength = POLL_TEXT;
+            input.placeholder = "Answer " + (i + 1);
+            input.value = value;
+            input.addEventListener("input", () => (d.options[i] = input.value));
+            for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+            row.appendChild(input);
+            if (d.options.length > 2) {
+                const remove = el("button", "button", "Remove");
+                remove.addEventListener("click", () => {
+                    d.options.splice(i, 1);
+                    renderPollFields();
+                });
+                row.appendChild(remove);
+            }
+            list.appendChild(row);
+        });
+        if (d.options.length < POLL_MAX) {
+            const add = el("button", "button", "Add an answer");
+            add.style.alignSelf = "flex-start";
+            add.addEventListener("click", () => {
+                d.options.push("");
+                renderPollFields();
+                list.querySelectorAll("input")[d.options.length - 1]?.focus();
+            });
+            list.appendChild(add);
+        }
     }
 
     function buildAnnounce() {
@@ -1260,7 +1356,7 @@
         const root = el("div");
         const grid = el("div", "nrc-compose");
 
-        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once. Links starting with https:// or www. can be clicked.");
+        const form = card("New announcement", "invite", "Shows at the top of every player's screen like a chat message from you, then fades away. Each player sees it once. Links starting with https:// or www. can be clicked. Turn on Poll to ask a question with up to four answers.");
         const field = el("div", "nrc-field");
         const label = el("label");
         const counter = el("span");
@@ -1285,17 +1381,32 @@
             const f = el("div", "nrc-field");
             f.append(el("label", null, title), picker);
             form.appendChild(f);
+            return f;
         };
-        option("On screen for", toggle(ANN_SHOW, d.show, (k) => (d.show = k)));
+        option("Poll", toggle([[false, "Off"], [true, "On"]], d.poll, (k) => {
+            d.poll = k;
+            renderPollFields();
+        }));
+        ui.annPollBox = el("div", "nrc-field");
+        ui.annPollBox.append(el("label", null, "Answers (players pick one; it stays on screen until they answer or close it)"), el("div", "nrc-opts"));
+        form.appendChild(ui.annPollBox);
+        ui.annShowField = option("On screen for", toggle(ANN_SHOW, d.show, (k) => (d.show = k)));
         option("Who gets it", toggle(ANN_REACH, d.reach, (k) => (d.reach = k)));
+        renderPollFields();
 
         const buttons = el("div", "nrc-send");
         const preview = el("button", "button", "Preview");
         preview.addEventListener("click", async () => {
             const text = d.text.trim();
-            if (!text) return annStatus("Write a message first.");
-            window.__nswsAnnounce?.preview({ name: annName(), color: await annColor(), text, show: d.show });
-            annStatus("Only you can see a preview.");
+            if (!text) return annStatus(d.poll ? "Write the question first." : "Write a message first.");
+            let poll;
+            try {
+                poll = annPoll();
+            } catch (problem) {
+                return annStatus(problem);
+            }
+            window.__nswsAnnounce?.preview({ name: annName(), color: await annColor(), text, show: d.show, poll });
+            annStatus("Only you can see a preview" + (poll ? "; a vote in it isn't counted." : "."));
         });
         const send = el("button", "button go", "Send to everyone");
         send.addEventListener("click", () => sendAnnouncement(send, textarea, count));
@@ -1349,7 +1460,9 @@
                 const msg = el("span", null, r.text);
                 msg.title = r.text;
                 const status = r.live ? "Live" : r.stopped != null && r.stopped < r.until ? "Stopped" : "Ended";
-                return [fmt.dateTime(r.at), msg, r.show + "s", num(r.seen) + " / " + num(r.online), status];
+                const cell = r.poll ? el("span") : msg;
+                if (r.poll) cell.append(msg, pollSummary(r));
+                return [fmt.dateTime(r.at), cell, r.poll ? "Poll" : r.show + "s", num(r.seen) + " / " + num(r.online), status];
             })));
     }
 
