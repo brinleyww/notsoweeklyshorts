@@ -14,21 +14,37 @@ body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .time-bar-ui > .button.nsws-watch-inputs.off > svg { opacity: 0.35; }
 .time-bar-ui > .button.nsws-watch-save.on { background-color: #8a2a3a; }
 body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
-.nsws-save-menu { position: fixed; z-index: 10000; display: flex; flex-direction: column; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
-.nsws-save-menu > p { margin: 4px 10px 8px 10px; font-size: 16px; opacity: 0.7; }
-.nsws-save-menu > .button { margin: 2px 0; padding: 9px 18px; font-size: 19px; text-align: left; white-space: nowrap; }
-.nsws-save-menu > .button.selected { background-color: var(--button-hover-color); }
-.nsws-save-menu > .opt { display: flex; align-items: center; margin: 2px 0; }
-.nsws-save-menu > .opt > select { flex: 1; min-width: 0; height: 40px; margin: 0 4px 0 0; padding: 0 10px; border: none; outline: none; background-color: var(--button-color); color: #fff; font: inherit; font-size: 18px; }
-.nsws-save-menu > .opt > select > option { background-color: var(--surface-color); }
-.nsws-save-menu > .opt > .button { margin: 0; padding: 8px 14px; font-size: 18px; }
-.nsws-save-menu > .opt > .button.off { opacity: 0.55; }
-.nsws-save-menu > .opt > .button.wide { flex: 1; text-align: left; }
-.nsws-save-menu > .vol { display: flex; align-items: center; margin: 2px 0 6px 0; padding: 0 10px; height: 34px; background-color: var(--button-color); }
-.nsws-save-menu > .vol > span { margin-right: 10px; font-size: 16px; opacity: 0.8; white-space: nowrap; }
-.nsws-save-menu > .vol > input { flex: 1; min-width: 0; }
-.nsws-save-menu > .vol > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
-.nsws-save-menu > .vol > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
+.nsws-save-menu { position: fixed; z-index: 10000; display: flex; align-items: flex-start; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
+.nsws-save-menu > .col { display: flex; flex-direction: column; width: 300px; }
+.nsws-save-menu > .col + .col { width: 230px; margin-left: 8px; }
+.nsws-save-menu::-webkit-scrollbar { width: 6px; }
+.nsws-save-menu::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.4); }
+.nsws-save-menu > .col > p { margin: 4px 10px 8px 10px; font-size: 16px; opacity: 0.7; }
+.nsws-save-menu > .col > .button { margin: 2px 0; padding: 9px 18px; font-size: 19px; text-align: left; white-space: nowrap; }
+.nsws-save-menu > .col > .button.selected { background-color: var(--button-hover-color); }
+.nsws-save-menu > .col > .opt { display: flex; align-items: center; margin: 2px 0; }
+.nsws-save-menu > .col > .opt > .button { margin: 0; padding: 8px 14px; font-size: 18px; }
+.nsws-save-menu > .col > .opt > .button.off { opacity: 0.55; }
+.nsws-save-menu > .col > .opt > .button.wide { flex: 1; text-align: left; }
+.nsws-save-menu > .col > .vol { display: flex; align-items: center; margin: 2px 0 6px 0; padding: 0 10px; height: 34px; background-color: var(--button-color); }
+.nsws-save-menu > .col > .vol > span { margin-right: 10px; font-size: 16px; opacity: 0.8; white-space: nowrap; }
+.nsws-save-menu > .col > .vol > input { flex: 1; min-width: 0; }
+.nsws-save-menu > .col > .vol > input::-webkit-slider-runnable-track { height: 6px; background-color: rgba(255, 255, 255, 0.25); }
+.nsws-save-menu > .col > .vol > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
+.nsws-save-menu > .col > .vol > b { margin-left: 10px; font-weight: normal; font-size: 15px; font-variant-numeric: tabular-nums; }
+.nsws-save-menu > .col > .vol > .button { margin: 0 -6px 0 8px; padding: 4px 10px; font-size: 15px; }
+.nsws-save-menu > .col > p.note { margin-top: 0; font-size: 14px; line-height: 1.3; opacity: 0.6; }
+.nsws-save-menu > .col > .songs { position: relative; flex-shrink: 0; margin: 2px 0; overflow: hidden; background-color: rgba(0, 0, 0, 0.2); touch-action: none; }
+.nsws-save-menu > .col > .songs > div { will-change: transform; }
+.nsws-save-menu .col .song { display: flex; align-items: center; height: 34px; padding: 0 16px 0 12px; font-size: 17px; cursor: pointer; }
+.nsws-save-menu .col .song:hover { background-color: rgba(255, 255, 255, 0.08); }
+.nsws-save-menu .col .song.selected { background-color: var(--button-color); }
+.nsws-save-menu .col .song > .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nsws-save-menu .col .song > .len { margin-left: 8px; font-size: 14px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+.nsws-save-menu .col .song > .del { margin: 0 -8px 0 6px; padding: 4px 8px; border: none; background: none; color: #fff; font: inherit; font-size: 15px; opacity: 0.55; cursor: pointer; }
+.nsws-save-menu .col .song > .del:hover, .nsws-save-menu .col .song > .del.sure { opacity: 1; }
+.nsws-save-menu .col .song > .del.sure { color: #ff8a80; }
+.nsws-save-menu > .col > .songs > i { position: absolute; right: 3px; width: 5px; background-color: rgba(255, 255, 255, 0.5); cursor: grab; }
 .nsws-export { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); color: #fff; pointer-events: auto; }
 .nsws-export.done { align-items: flex-start; padding-top: 12vh; background: none; pointer-events: none; }
 .nsws-export > div { pointer-events: auto; display: flex; flex-direction: column; min-width: 340px; max-width: 80vw; padding: 18px 24px; background: var(--surface-color); clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); }
@@ -1783,6 +1799,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         dispose() {
             this.disposed = true;
             if (this.exp) this.exp.cancel = true;
+            this.menuCleanup?.();
             this.menu?.remove();
             this.menu = null;
             this.notice?.remove();
@@ -2059,9 +2076,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     }
                 };
                 const vol = parseFloat(get("nsws_save_music_vol", "0.7"));
-                this.sound = { cars: get("nsws_save_cars", "1") !== "0", music: get("nsws_save_music", "none"), volume: vol >= 0 && vol <= 1 ? vol : 0.7 };
-                const VA = window.__nswsVideoAudio;
-                if (this.sound.music === "song" || !VA?.STYLES.some((st) => st.id === this.sound.music)) this.sound.music = "none";
+                this.sound = { cars: get("nsws_save_cars", "1") !== "0", song: get("nsws_save_song", "") || null, volume: vol >= 0 && vol <= 1 ? vol : 0.7 };
             }
             return this.sound;
         }
@@ -2069,22 +2084,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         saveSound() {
             try {
                 localStorage.setItem("nsws_save_cars", this.sound.cars ? "1" : "0");
-                localStorage.setItem("nsws_save_music", this.sound.music === "song" ? "none" : this.sound.music);
+                localStorage.setItem("nsws_save_song", this.sound.song ?? "");
                 localStorage.setItem("nsws_save_music_vol", String(this.sound.volume));
             } catch (e) {}
         }
 
-        musicSeed() {
-            const run = this.o.getRuns()[this.o.getFocus()];
-            return window.__nswsVideoAudio.hashString((this.o.trackId ?? "") + "|" + (run?.settings.nickname ?? ""));
-        }
-
-        // Car sounds on or off, the background music (a generated style or a song from this
-        // device) with a preview, and its volume.
+        // Car sounds on or off, and music from the songs the player imported (kept on this device
+        // only): an A-Z list that scrolls by itself once it is long, where the song starts, and
+        // how loud it is.
         soundMenu(menu) {
             const VA = window.__nswsVideoAudio;
-            if (!VA || !window.AudioEncoder) return;
+            if (!VA || !window.AudioEncoder || !window.indexedDB) return;
             const opt = this.soundOptions();
+            const clock = (t) => Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0");
             const carsRow = el("div", "opt", menu);
             const cars = el("button", "button wide", carsRow);
             const showCars = () => {
@@ -2099,69 +2111,21 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.saveSound();
             });
 
-            const musicRow = el("div", "opt", menu);
-            const select = el("select", "", musicRow);
-            select.title = "Music";
-            const fill = () => {
-                select.innerHTML = "";
-                const add = (value, text) => {
-                    const o = el("option", "", select);
-                    o.value = value;
-                    o.textContent = text;
-                };
-                add("none", "No music");
-                for (const st of VA.STYLES) add(st.id, "Music: " + st.label);
-                if (this.song) add("song", "Song: " + this.song.name);
-                add("file", "Your own song\u2026");
-                select.value = opt.music;
-            };
-            fill();
-            const play = el("button", "button", musicRow);
+            el("p", "", menu).textContent = "Music";
+            const box = el("div", "songs", menu);
+            const inner = el("div", "", box);
+            const thumb = el("i", "", box);
+            const importRow = el("div", "opt", menu);
+            const importBtn = el("button", "button wide", importRow);
+            importBtn.textContent = "Import song\u2026";
+            const startRow = el("label", "vol", menu);
+            el("span", "", startRow).textContent = "Starts at";
+            const start = el("input", "", startRow);
+            start.type = "range";
+            start.step = "0.5";
+            const startText = el("b", "", startRow);
+            const play = el("button", "button", startRow);
             play.title = "Preview";
-            const showPlay = (on) => play.textContent = on ? "\u25a0" : "\u25b6";
-            showPlay(false);
-            const picker = el("input", "", menu);
-            picker.type = "file";
-            picker.accept = "audio/*";
-            picker.style.display = "none";
-            picker.addEventListener("change", async () => {
-                const f = picker.files?.[0];
-                if (!f) return;
-                try {
-                    this.song = { name: f.name.replace(/\.[^.]+$/, ""), buffer: await VA.decodeSong(f) };
-                    opt.music = "song";
-                } catch (e) {
-                    opt.music = "none";
-                }
-                fill();
-                this.saveSound();
-            });
-            select.addEventListener("change", () => {
-                VA.stopPreview();
-                showPlay(false);
-                if (select.value === "file") {
-                    select.value = opt.music;
-                    picker.click();
-                    return;
-                }
-                opt.music = select.value;
-                this.saveSound();
-            });
-            play.addEventListener("click", async () => {
-                if (this.previewing) {
-                    VA.stopPreview();
-                    return;
-                }
-                if (opt.music === "none") return;
-                this.previewing = true;
-                showPlay(true);
-                try {
-                    await VA.preview(opt.music, this.musicSeed(), opt.music === "song" ? this.song?.buffer : null, opt.volume);
-                } catch (e) {}
-                this.previewing = false;
-                if (this.menu === menu) showPlay(false);
-            });
-
             const volRow = el("label", "vol", menu);
             el("span", "", volRow).textContent = "Music volume";
             const vol = el("input", "", volRow);
@@ -2174,11 +2138,203 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 opt.volume = parseFloat(vol.value);
                 this.saveSound();
             });
+            const note = el("p", "note", menu);
+            const LOCAL = "Imported songs are saved on this device only. They are never uploaded.";
+            note.textContent = LOCAL;
+            const picker = el("input", "", menu);
+            picker.type = "file";
+            picker.accept = "audio/*";
+            picker.multiple = true;
+            picker.style.display = "none";
+
+            const ROW = 34, ROWS = 5;
+            let songs = [], sure = null, y = 0;
+            const layout = () => {
+                const H = box.clientHeight, full = inner.scrollHeight;
+                y = clamp(y, 0, Math.max(0, full - H));
+                inner.style.transform = "translateY(" + -Math.round(y) + "px)";
+                const scrolls = full > H + 1;
+                thumb.style.display = scrolls ? "" : "none";
+                if (scrolls) {
+                    const th = Math.max(22, H * H / full);
+                    thumb.style.height = th + "px";
+                    thumb.style.top = (y / (full - H) * (H - th)) + "px";
+                }
+            };
+            const selected = () => songs.find((x) => x.id === opt.song) ?? null;
+            const showStart = () => {
+                const sg = selected();
+                startRow.style.display = sg ? "" : "none";
+                VA.stopPreview();
+                play.textContent = "\u25b6";
+                if (!sg) return;
+                start.min = "0";
+                start.max = String(Math.max(0, Math.floor(sg.duration - 1)));
+                start.value = String(sg.start ?? 0);
+                startText.textContent = clock(sg.start ?? 0);
+            };
+            const render = () => {
+                inner.innerHTML = "";
+                const rows = [{ id: null, name: "No music" }, ...songs];
+                box.style.height = Math.min(rows.length, ROWS) * ROW + "px";
+                for (const sg of rows) {
+                    const row = el("div", "song" + (sg.id === opt.song ? " selected" : ""), inner);
+                    el("span", "name", row).textContent = sg.name;
+                    if (sg.id) {
+                        el("span", "len", row).textContent = clock(sg.duration);
+                        const del = el("button", "del" + (sure === sg.id ? " sure" : ""), row);
+                        del.textContent = sure === sg.id ? "Remove?" : "\u00d7";
+                        del.title = "Remove from this device";
+                        del.addEventListener("click", async (e) => {
+                            e.stopPropagation();
+                            this.o.playClick?.();
+                            if (sure !== sg.id) {
+                                sure = sg.id;
+                                render();
+                                return;
+                            }
+                            sure = null;
+                            await VA.library.remove(sg.id).catch(() => {});
+                            if (opt.song === sg.id) {
+                                opt.song = null;
+                                this.saveSound();
+                            }
+                            await refresh();
+                        });
+                    }
+                    row.addEventListener("click", () => {
+                        if (moved) return;
+                        this.o.playClick?.();
+                        sure = null;
+                        opt.song = sg.id;
+                        this.saveSound();
+                        render();
+                        showStart();
+                    });
+                }
+                layout();
+            };
+            const reveal = () => {
+                const i = opt.song ? songs.findIndex((x) => x.id === opt.song) + 1 : 0;
+                if (i * ROW < y || (i + 1) * ROW > y + box.clientHeight) y = i * ROW - ROW * 2;
+                layout();
+            };
+            const refresh = async () => {
+                try {
+                    songs = await VA.library.list();
+                } catch (e) {
+                    songs = [];
+                }
+                if (opt.song && !songs.some((x) => x.id === opt.song)) {
+                    opt.song = null;
+                    this.saveSound();
+                }
+                render();
+                showStart();
+                reveal();
+            };
+
+            // Scrolling the list: the wheel, dragging the bar, or dragging the list on a touch screen.
+            box.addEventListener("wheel", (e) => {
+                if (inner.scrollHeight <= box.clientHeight + 1) return;
+                e.preventDefault();
+                y += e.deltaY * (e.deltaMode === 1 ? ROW : e.deltaMode === 2 ? box.clientHeight : 1);
+                layout();
+            }, { passive: false });
+            let drag = null, moved = false;
+            thumb.addEventListener("pointerdown", (e) => {
+                e.preventDefault();
+                drag = { id: e.pointerId, y: e.clientY, bar: true };
+                thumb.setPointerCapture(e.pointerId);
+            });
+            box.addEventListener("pointerdown", (e) => {
+                if (e.pointerType === "mouse" || drag) return;
+                drag = { id: e.pointerId, y: e.clientY, bar: false, from: e.clientY };
+                moved = false;
+            });
+            const onMove = (e) => {
+                if (!drag || e.pointerId !== drag.id) return;
+                const dy = e.clientY - drag.y;
+                drag.y = e.clientY;
+                const H = box.clientHeight, full = inner.scrollHeight, th = thumb.offsetHeight;
+                if (drag.bar) y += dy * (full - H) / Math.max(1, H - th);
+                else {
+                    y -= dy;
+                    if (Math.abs(e.clientY - drag.from) > 6) moved = true;
+                }
+                layout();
+            };
+            const onUp = (e) => {
+                if (drag && e.pointerId === drag.id) drag = null;
+                setTimeout(() => moved = false, 0);
+            };
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+            this.menuCleanup = () => {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+            };
+
+            let saveTimer = 0;
+            start.addEventListener("input", () => {
+                const sg = selected();
+                if (!sg) return;
+                sg.start = parseFloat(start.value);
+                startText.textContent = clock(sg.start);
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(() => VA.library.setStart(sg.id, sg.start).catch(() => {}), 300);
+            });
+            play.addEventListener("click", async () => {
+                this.o.playClick?.();
+                if (this.previewing) {
+                    VA.stopPreview();
+                    return;
+                }
+                const sg = selected();
+                if (!sg) return;
+                this.previewing = true;
+                play.textContent = "\u25a0";
+                try {
+                    const song = await VA.library.load(sg.id);
+                    if (song && this.menu === menu) await VA.preview(song.buffer, sg.start ?? 0, opt.volume);
+                } catch (e) {}
+                this.previewing = false;
+                if (this.menu === menu) play.textContent = "\u25b6";
+            });
+            importBtn.addEventListener("click", () => {
+                this.o.playClick?.();
+                picker.click();
+            });
+            picker.addEventListener("change", async () => {
+                const files = [...(picker.files ?? [])];
+                picker.value = "";
+                if (!files.length) return;
+                const failed = [];
+                let last = null;
+                importBtn.textContent = "Importing\u2026";
+                for (const f of files) {
+                    try {
+                        last = await VA.library.add(f);
+                    } catch (e) {
+                        failed.push(f.name);
+                    }
+                }
+                importBtn.textContent = "Import song\u2026";
+                if (last) {
+                    opt.song = last.id;
+                    this.saveSound();
+                }
+                note.textContent = failed.length ? "Couldn't read " + failed.join(", ") + ". " + LOCAL : LOCAL;
+                await refresh();
+            });
+            refresh();
         }
 
         toggleSaveMenu() {
             window.__nswsVideoAudio?.stopPreview();
             if (this.menu) {
+                this.menuCleanup?.();
+                this.menuCleanup = null;
                 this.menu.remove();
                 this.menu = null;
                 window.removeEventListener("pointerdown", this.onMenuAway, true);
@@ -2189,11 +2345,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 chosen = localStorage.getItem("nsws_save_size") ?? "auto";
             } catch (e) {}
             const menu = this.menu = el("div", "nsws-save-menu", document.body);
-            el("p", "", menu).textContent = "Save video";
-            this.soundMenu(menu);
-            el("p", "", menu).textContent = "Size";
+            const left = el("div", "col", menu), right = el("div", "col", menu);
+            el("p", "", left).textContent = "Save video";
+            this.soundMenu(left);
+            el("p", "", right).textContent = "Size";
             for (const size of SAVE_SIZES) {
-                const b = el("button", "button" + (size.id === chosen ? " selected" : ""), menu);
+                const b = el("button", "button" + (size.id === chosen ? " selected" : ""), right);
                 b.textContent = size.label;
                 b.addEventListener("click", () => {
                     this.o.playClick?.();
@@ -2346,8 +2503,15 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const cap = size.cap ?? null;
             const VA = window.__nswsVideoAudio;
             const sound = VA && window.AudioEncoder ? this.soundOptions() : null;
-            const music = !sound || sound.music === "none" || sound.music === "song" && !this.song ? null : sound.music;
-            const wantAudio = !!sound && (sound.cars || !!music);
+            let song = null;
+            if (sound?.song) {
+                ui.set("Loading the song", null);
+                try {
+                    song = await VA.library.load(sound.song);
+                } catch (e) {}
+            }
+            if (exp.cancel) return null;
+            const wantAudio = !!sound && (sound.cars || !!song);
             const audioRate = !wantAudio ? 0 : cap || (size.rate ?? 1) <= 0.25 ? 96000 : (size.rate ?? 1) >= 1 ? 160000 : 128000;
             let rate = cap ? Math.max(2e5, cap * 8 * 0.96 / D - audioRate) : BASE_RATE * (size.rate ?? 1);
             begin();
@@ -2363,11 +2527,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const dur = video.chunks.length / video.fps;
                     const cars = capture?.frames.length ? await VA.renderCars(capture, (name) => this.o.audio?.getBuffer?.(name) ?? null, dur) : null;
                     if (exp.cancel) return null;
-                    const tune = music === "song" ? this.song.buffer : music ? await VA.renderMusic(music, dur, this.musicSeed()) : null;
-                    if (exp.cancel) return null;
-                    audio = await VA.encode(VA.mix(dur, cars, 1, tune, sound.volume), audioRate);
+                    audio = await VA.encode(VA.mix(dur, cars, 1, song?.buffer ?? null, sound.volume, song?.start ?? 0), audioRate);
                 }
-                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: music === "song" ? this.song.name : music ? VA.STYLES.find((st) => st.id === music).label : null } : "failed" : null };
+                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: song?.name ?? null } : "failed" : null };
                 // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
                 if (cap && out.blob.size > cap && pass < 2) {
                     rate *= cap / out.blob.size * 0.9;
