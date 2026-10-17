@@ -6079,6 +6079,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                     const n = parseFloat(t);
                     return n > 0 ? n : 1 / 0
                 }
+                // Full-strength fog is opaque at its distance, so nothing past it can be seen.
+                getFogHiddenDistance() {
+                    const e = i.get(this, x, "f");
+                    if (null == e || null != i.get(this, S, "f") || !e.getSettingBoolean(W.A.FogEnabled))
+                        return 1 / 0;
+                    const t = parseFloat(e.getSetting(W.A.FogStrength))
+                      , n = parseFloat(e.getSetting(W.A.FogDistance));
+                    return (Number.isFinite(t) ? t : 1) < 1 || !(n > 0 && n < b.maxViewDistance) ? 1 / 0 : Math.max(n, 10) * Math.max(window.__PolyFX?.fogDistanceMult ?? 1, 1)
+                }
+                getTrackCullDistance() {
+                    return Math.min(this.getTrackViewDistance(), this.getFogHiddenDistance())
+                }
                 isShadowQualitySupported(e) {
                     return !Number.isSafeInteger(e) || e <= 0 || e > 5 || i.get(this, k, "f").capabilities.maxTextureSize >= i.get(this, y, "m", B).call(this, e)
                 }
@@ -31531,15 +31543,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                 const t = (null != e.index ? e.index.count : e.attributes.position.count) / 3;
                 return Math.max(32, Math.floor(24e3 / Math.max(t, 1)))
             }
-            // Splits parts into spatially compact groups of at most n (median splits on the longest axis).
-            function splitTrackParts(e, t) {
+            // Splits parts into spatially compact groups of at most t parts (median splits on the longest axis),
+            // and, with a span, no wider than span tiles unless only a few parts are left.
+            function splitTrackParts(e, t, span=1 / 0) {
                 const n = []
                   , i = e.slice()
                   , r = [0, i.length];
                 for (; r.length > 0; ) {
                     const e = r.pop()
                       , a = r.pop();
-                    if (e - a <= t) {
+                    if (e - a <= t && (e - a <= (window.__tMin ?? 16) || span == 1 / 0)) {
                         n.push(i.slice(a, e));
                         continue
                     }
@@ -31553,6 +31566,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                         const e = i[t];
                         s = Math.min(s, e.x), o = Math.min(o, e.y), l = Math.min(l, e.z),
                         c = Math.max(c, e.x), h = Math.max(h, e.y), d = Math.max(d, e.z)
+                    }
+                    if (e - a <= t && Math.max(c - s, h - o, d - l) <= span) {
+                        n.push(i.slice(a, e));
+                        continue
                     }
                     const u = c - s >= d - l && c - s >= h - o ? "x" : d - l >= h - o ? "z" : "y"
                       , p = a + e >> 1;
@@ -31626,6 +31643,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.attributes = {},
                 e.dispose()
             }
+            // Half the cull distance, in 5 m tiles, so far chunks drop out instead of staying drawn for one close part.
+            function trackChunkSpan(e) {
+                return (e.getTrackCullDistance?.() ?? 1 / 0) / (window.__tSpanDiv ?? 10)
+            }
+            function wantsTrackSplit(e) {
+                return (e.isTrackCullingEnabled?.() ?? !1) || Number.isFinite(e.getTrackCullDistance?.() ?? 1 / 0)
+            }
             function trackRenderState(e) {
                 let t = trackRenderStates.get(e);
                 return null == t && trackRenderStates.set(e, t = {
@@ -31651,7 +31675,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         t.mesh.frustumCulled = e.culledAfterWarmUp, null != t.shadow && (t.shadow.frustumCulled = t.shadowCulled);
                     e.culledAfterWarmUp = null
                 }
-                const i = t.getTrackViewDistance();
+                const i = t.getTrackCullDistance();
                 if (!Number.isFinite(i)) {
                     if (e.distanceCulled) {
                         for (const t of e.meshes)
@@ -31665,14 +31689,17 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , a = r[12]
                   , s = r[13]
                   , o = r[14];
+                const near = e => {
+                    const t = e.center.x - a
+                      , n = e.center.y - s
+                      , r = e.center.z - o
+                      , l = i + e.radius;
+                    return t * t + n * n + r * r < l * l
+                };
                 for (const t of e.meshes) {
-                    const e = t.mesh.boundingSphere
-                      , n = e.center.x - a
-                      , r = e.center.y - s
-                      , l = e.center.z - o
-                      , c = i + e.radius
-                      , h = n * n + r * r + l * l < c * c;
-                    t.mesh.visible = h, null != t.shadow && (t.shadow.visible = h)
+                    const e = near(t.mesh.boundingSphere);
+                    t.mesh.visible = e,
+                    null != t.shadow && (t.shadow.visible = null != t.shadow.boundingSphere ? near(t.shadow.boundingSphere) : e)
                 }
                 e.distanceCulled = !0
             }
@@ -31853,6 +31880,12 @@ window.__nswsAutoGhostNote = function(trackId) {
                 getBounds() {
                     return m.get(this, d, "f")
                 }
+                // Fog changes live in Settings; the track only needs rebuilding when they change how parts are split.
+                refreshCulling() {
+                    const e = m.get(this, r, "f")
+                      , t = trackRenderStates.get(this);
+                    (wantsTrackSplit(e) != (t?.split ?? !1) || wantsTrackSplit(e) && trackChunkSpan(e) != t.span) && this.generateMeshes()
+                }
                 generateMeshes() {
                     m.get(this, i, "m", p).call(this);
                     const e = m.get(this, o, "f").getSunPosition()
@@ -31885,10 +31918,12 @@ window.__nswsAutoGhostNote = function(trackId) {
                     m.get(this, a, "f").getSettingBoolean(k.A.LowPerformanceMode) && (c = null);
                     // Track culling splits each part type into spatial chunks the camera and shadow passes can skip.
                     const d = m.get(this, r, "f")
-                      , f = d.isTrackCullingEnabled?.() ?? !1
-                      , A = f || Number.isFinite(d.getTrackViewDistance?.() ?? 1 / 0)
+                      , A = wantsTrackSplit(d)
+                      , span = trackChunkSpan(d)
                       , v = trackRenderState(this)
                       , y = new Map;
+                    v.split = A,
+                    v.span = span;
                     for (const e of m.get(this, l, "f")) {
                         let t = e.color;
                         t == TrackPartColorId.Default && (t = n);
@@ -31911,13 +31946,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 continue;
                             if (null == n)
                                 throw new Error("Mesh is not loaded");
-                            for (const e of A ? splitTrackParts(i, maxPartsPerMesh(n.geometry)) : [i]) {
+                            for (const e of A ? splitTrackParts(i, maxPartsPerMesh(n.geometry), span) : [i]) {
                                 const a = A ? shareGeometry(n.geometry) : n.geometry
                                   , t = new THREE.InstancedMesh(a,n.material,e.length);
                                 A && v.geometries.push(a);
                                 t.matrixAutoUpdate = !1,
                                 t.matrixWorldAutoUpdate = !1,
-                                t.frustumCulled = f,
+                                t.frustumCulled = A,
                                 t.castShadow = h,
                                 t.receiveShadow = !0;
                                 for (let n = 0; n < e.length; ++n)
@@ -31933,7 +31968,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                     i.matrixAutoUpdate = !1,
                                     i.matrixWorldAutoUpdate = !1,
                                     i.renderOrder = -1,
-                                    i.frustumCulled = f && setFlatShadowBounds(t, w, i),
+                                    i.frustumCulled = A && setFlatShadowBounds(t, w, i),
                                     m.get(this, r, "f").scene.add(i),
                                     m.get(this, u, "f").push(i)
                                 }
@@ -31946,7 +31981,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         }
                     A && null != d.trackCullers && (v.cull ?? (v.cull = e => cullTrackByDistance(v, d, e)),
                     v.warm = !1,
-                    v.culledAfterWarmUp = f,
+                    v.culledAfterWarmUp = A,
                     d.trackCullers.add(v.cull)),
                     m.get(this, i, "m", g).call(this)
                 }
@@ -32374,7 +32409,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 envmap_pars_vertex: "#ifdef USE_ENVMAP\n\t#if defined( USE_BUMPMAP ) || defined( USE_NORMALMAP ) || defined( PHONG ) || defined( LAMBERT )\n\t\t#define ENV_WORLDPOS\n\t#endif\n\t#ifdef ENV_WORLDPOS\n\t\t\n\t\tvarying vec3 vWorldPosition;\n\t#else\n\t\tvarying vec3 vReflect;\n\t\tuniform float refractionRatio;\n\t#endif\n#endif",
                 envmap_physical_pars_fragment: "#ifdef USE_ENVMAP\n\tvec3 getIBLIrradiance( const in vec3 normal ) {\n\t\t#ifdef ENVMAP_TYPE_CUBE_UV\n\t\t\tvec3 worldNormal = inverseTransformDirection( normal, viewMatrix );\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, envMapRotation * worldNormal, 1.0 );\n\t\t\treturn PI * envMapColor.rgb * envMapIntensity;\n\t\t#else\n\t\t\treturn vec3( 0.0 );\n\t\t#endif\n\t}\n\tvec3 getIBLRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness ) {\n\t\t#ifdef ENVMAP_TYPE_CUBE_UV\n\t\t\tvec3 reflectVec = reflect( - viewDir, normal );\n\t\t\treflectVec = normalize( mix( reflectVec, normal, pow4( roughness ) ) );\n\t\t\treflectVec = inverseTransformDirection( reflectVec, viewMatrix );\n\t\t\tvec4 envMapColor = textureCubeUV( envMap, envMapRotation * reflectVec, roughness );\n\t\t\treturn envMapColor.rgb * envMapIntensity;\n\t\t#else\n\t\t\treturn vec3( 0.0 );\n\t\t#endif\n\t}\n\t#ifdef USE_ANISOTROPY\n\t\tvec3 getIBLAnisotropyRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness, const in vec3 bitangent, const in float anisotropy ) {\n\t\t\t#ifdef ENVMAP_TYPE_CUBE_UV\n\t\t\t\tvec3 bentNormal = cross( bitangent, viewDir );\n\t\t\t\tbentNormal = normalize( cross( bentNormal, bitangent ) );\n\t\t\t\tbentNormal = normalize( mix( bentNormal, normal, pow2( pow2( 1.0 - anisotropy * ( 1.0 - roughness ) ) ) ) );\n\t\t\t\treturn getIBLRadiance( viewDir, bentNormal, roughness );\n\t\t\t#else\n\t\t\t\treturn vec3( 0.0 );\n\t\t\t#endif\n\t\t}\n\t#endif\n#endif",
                 envmap_vertex: "#ifdef USE_ENVMAP\n\t#ifdef ENV_WORLDPOS\n\t\tvWorldPosition = worldPosition.xyz;\n\t#else\n\t\tvec3 cameraToVertex;\n\t\tif ( isOrthographic ) {\n\t\t\tcameraToVertex = normalize( vec3( - viewMatrix[ 0 ][ 2 ], - viewMatrix[ 1 ][ 2 ], - viewMatrix[ 2 ][ 2 ] ) );\n\t\t} else {\n\t\t\tcameraToVertex = normalize( worldPosition.xyz - cameraPosition );\n\t\t}\n\t\tvec3 worldNormal = inverseTransformDirection( transformedNormal, viewMatrix );\n\t\t#ifdef ENVMAP_MODE_REFLECTION\n\t\t\tvReflect = reflect( cameraToVertex, worldNormal );\n\t\t#else\n\t\t\tvReflect = refract( cameraToVertex, worldNormal, refractionRatio );\n\t\t#endif\n\t#endif\n#endif",
-                fog_vertex: "#ifdef USE_FOG\n\tvFogDepth = - mvPosition.z;\n#endif",
+                fog_vertex: "#ifdef USE_FOG\n\tvFogDepth = length( mvPosition.xyz );\n#endif",
                 fog_pars_vertex: "#ifdef USE_FOG\n\tvarying float vFogDepth;\n#endif",
                 fog_fragment: "#ifdef USE_FOG\n\t#ifdef FOG_EXP2\n\t\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );\n\t#else\n\t\tfloat fogFactor = smoothstep( fogNear, fogFar, vFogDepth ) * ( 1.0 - fogFade );\n\t\tif ( fogCullFar > 0.0 ) fogFactor = max( fogFactor, smoothstep( fogCullNear, fogCullFar, vFogDepth ) );\n\t#endif\n\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );\n#endif",
                 fog_pars_fragment: "#ifdef USE_FOG\n\tuniform vec3 fogColor;\n\tvarying float vFogDepth;\n\t#ifdef FOG_EXP2\n\t\tuniform float fogDensity;\n\t#else\n\t\tuniform float fogNear;\n\t\tuniform float fogFar;\n\t\tuniform float fogFade;\n\t\tuniform float fogCullNear;\n\t\tuniform float fogCullFar;\n\t#endif\n#endif",
@@ -51724,7 +51759,10 @@ window.__nswsAutoGhostNote = function(trackId) {
             }, {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
-            }], R.A.FogEnabled),
+            }], R.A.FogEnabled, ( () => {
+                C.get(this, ws, "f").refreshCulling()
+            }
+            )),
             ( () => {
                 const pending = C.get(this, Ps, "f")
                   , settings = C.get(this, bs, "f")
@@ -51751,6 +51789,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         show()
                     }
                     )),
+                    input.addEventListener("change", ( () => C.get(this, ws, "f").refreshCulling())),
                     show(),
                     row.appendChild(input),
                     container.appendChild(row)
@@ -56846,6 +56885,13 @@ window.__nswsAutoGhostNote = function(trackId) {
             masks: ["26d75a8f9ea520fd", "3b9131a566afe78b", "cb716d86c08fadf4", "033a60409cf58f11"],
             file: "tracks/community/week9.track",
             tracks: [{ id: "fb0e6e3eabadceda88926131ba9546e147950f92dcb3b261bc81317b72235efb", name: "1 - Dingo", short: "Dingo", author: "BonnieBeans", env: "Winter", thumb: "tracks/community/thumbnails/week9_1.png" }, { id: "5fcafe469a15c8a53eb4e21d44352f2e4ef6f489dff7021107025c3748a978c8", name: "2 - iluvtrees", short: "Trees", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_2.png" }, { id: "7a68599bd6ae497ac21e49f44c4320f7bc2e7cb3aacfcc17f52316e26be5830d", name: "3 - Maze Running", short: "Maze", author: "HummusHere", env: "Summer", thumb: "tracks/community/thumbnails/week9_3.png", noFreecam: true }, { id: "a4a694cfe98f65bf4a01d10c662e8b33c37c5dadbac4b183d2f451489ea6785f", name: "4 - Not Buttery", short: "Butr", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week9_4.png" }, { id: "7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c", name: "5 - Royale", short: "Royal", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week9_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
+        },
+        {
+            week: 10,
+            chunks: ["1b4d0bf36e3ba668", "5a4514b67470eddd", "6d862c01e865cec4", "cb784a94e88eac0b"],
+            masks: ["4a4f1a3edaa0bafc", "93e0d9b0353e04f8", "6ea6e66d40f30ed2", "e6b5d615db0d9121"],
+            file: "tracks/community/week10.track",
+            tracks: [{ id: "4d1706081b6f519ed84ee6440314f7c470eb96e57ccc8a1b18fb9919cb2aa761", name: "1 - NyQuill is yummy", short: "NyQ", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week10_1.png" }, { id: "d182cdf7da064f274c33eb7e121e4f73703177db482b231f1a8e01711d52f660", name: "2 - chezbug", short: "Chez", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week10_2.png" }, { id: "bc2173bacc5a4bcaa72d0f1caea34bc0c718c82403f2026fad587526e25e43b5", name: "3 - ICE", short: "ICE", author: "Cookedbyapringle & Mask", env: "Summer", thumb: "tracks/community/thumbnails/week10_3.png" }, { id: "6cb8877fa603b233efbcba84764432229e719c7e8b23bf5e74a0151b9a229593", name: "4 - OneDrift", short: "1Drft", author: "Cookedbyapringle", env: "Winter", thumb: "tracks/community/thumbnails/week10_4.png" }, { id: "0ab0606d9eea87674aef901ee7ddd820c8705516157a35dffde3066eea48a23d", name: "5 - Thank u next", short: "TUN", author: "Simo_900", env: "Summer", thumb: "tracks/community/thumbnails/week10_5.png" }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
