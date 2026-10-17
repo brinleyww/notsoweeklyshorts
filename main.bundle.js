@@ -6307,6 +6307,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 } else
                     e ? (a.near = Number.isFinite(t) ? .5 * t : 0, a.far = Number.isFinite(t) ? t : b.maxViewDistance, a.fade = 0) : (a.near = 0, a.far = 1, a.fade = 1);
                 // A shortened draw distance always ends in fog (fogCullNear/Far in fog_fragment), so far parts fade out instead of popping.
+                a.skyBand = e && null == o && a.far < b.maxViewDistance ? Math.min(Math.max(60 / a.far, .02), .7) : 0,
                 a.cullNear = limited ? .5 * t : 0,
                 a.cullFar = limited ? t : 0,
                 a.color.setHex(FOG_COLORS[color] ?? FOG_COLORS.sky),
@@ -31544,7 +31545,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 return Math.max(32, Math.floor(24e3 / Math.max(t, 1)))
             }
             // Splits parts into spatially compact groups of at most t parts (median splits on the longest axis),
-            // and, with a span, no wider than span tiles unless only a few parts are left.
+            // and, with a span, no wider than span tiles unless the group is down to a third of t.
             function splitTrackParts(e, t, span=1 / 0) {
                 const n = []
                   , i = e.slice()
@@ -31552,7 +31553,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 for (; r.length > 0; ) {
                     const e = r.pop()
                       , a = r.pop();
-                    if (e - a <= t && (e - a <= (window.__tMin ?? 16) || span == 1 / 0)) {
+                    if (e - a <= t && (e - a <= t / 3 || span == 1 / 0)) {
                         n.push(i.slice(a, e));
                         continue
                     }
@@ -31643,9 +31644,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.attributes = {},
                 e.dispose()
             }
-            // Half the cull distance, in 5 m tiles, so far chunks drop out instead of staying drawn for one close part.
+            // Chunk width in 5 m tiles (5/3 of the cull distance), so far chunks drop out instead of staying drawn for one close part.
             function trackChunkSpan(e) {
-                return (e.getTrackCullDistance?.() ?? 1 / 0) / (window.__tSpanDiv ?? 10)
+                return (e.getTrackCullDistance?.() ?? 1 / 0) / 3
             }
             function wantsTrackSplit(e) {
                 return (e.isTrackCullingEnabled?.() ?? !1) || Number.isFinite(e.getTrackCullDistance?.() ?? 1 / 0)
@@ -31675,8 +31676,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                         t.mesh.frustumCulled = e.culledAfterWarmUp, null != t.shadow && (t.shadow.frustumCulled = t.shadowCulled);
                     e.culledAfterWarmUp = null
                 }
-                const i = t.getTrackCullDistance();
-                if (!Number.isFinite(i)) {
+                const i = t.getTrackViewDistance()
+                  , fogEnd = t.getFogHiddenDistance();
+                if (!Number.isFinite(Math.min(i, fogEnd))) {
                     if (e.distanceCulled) {
                         for (const t of e.meshes)
                             t.mesh.visible = !0, null != t.shadow && (t.shadow.visible = !0);
@@ -31689,15 +31691,29 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , a = r[12]
                   , s = r[13]
                   , o = r[14];
-                const near = e => {
-                    const t = e.center.x - a
-                      , n = e.center.y - s
-                      , r = e.center.z - o
-                      , l = i + e.radius;
-                    return t * t + n * n + r * r < l * l
+                // Past the fog distance a part is pure fog colour, which only hides it against fogged ground or the
+                // sky's fog band (fogSky), so it stays drawn if any of it can rise above that band.
+                const sky = t.scene.userData.fogSky
+                  , band = null != sky && sky.visible ? t.scene.fog?.skyBand ?? 0 : 0
+                  , near = (e, t) => {
+                    let n, r;
+                    if (null != t) {
+                        const e = Math.max(t.min.x - a, 0, a - t.max.x)
+                          , i = Math.max(t.min.y - s, 0, s - t.max.y)
+                          , l = Math.max(t.min.z - o, 0, o - t.max.z);
+                        n = Math.sqrt(e * e + i * i + l * l),
+                        r = t.max.y - s
+                    } else {
+                        const t = e.center.x - a
+                          , i = e.center.y - s
+                          , l = e.center.z - o;
+                        n = Math.max(Math.sqrt(t * t + i * i + l * l) - e.radius, 0),
+                        r = i + e.radius
+                    }
+                    return n < i && (n < fogEnd || r > band * n)
                 };
                 for (const t of e.meshes) {
-                    const e = near(t.mesh.boundingSphere);
+                    const e = near(t.mesh.boundingSphere, t.mesh.boundingBox);
                     t.mesh.visible = e,
                     null != t.shadow && (t.shadow.visible = null != t.shadow.boundingSphere ? near(t.shadow.boundingSphere) : e)
                 }
@@ -31957,7 +31973,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 t.receiveShadow = !0;
                                 for (let n = 0; n < e.length; ++n)
                                     t.setMatrixAt(n, e[n].matrix);
-                                A && t.computeBoundingSphere(),
+                                A && (t.computeBoundingSphere(),
+                                t.computeBoundingBox()),
                                 m.get(this, r, "f").scene.add(t),
                                 m.get(this, u, "f").push(t);
                                 let i = null;
@@ -57734,10 +57751,19 @@ window.__nswsAutoGhostNote = function(trackId) {
                         },
                         sunPosition: {
                             value: new THREE.Vector3
+                        },
+                        skyFogColor: {
+                            value: new THREE.Color
+                        },
+                        skyFogBand: {
+                            value: 0
+                        },
+                        skyFogAmount: {
+                            value: 0
                         }
                     },
                     vertexShader: "\n\t\t\t\tvarying vec3 fPos;\n\t\t\t\t\n\t\t\t\tvoid main() {\n\t\t\t\t\tvec4 modelViewPosition = modelViewMatrix * vec4(position, 1.0);\n\t\t\t\t\tgl_Position = projectionMatrix * modelViewPosition;\n\t\t\t\t\tgl_Position.z = 0.0;\n\t\t\t\t\tfPos = position;\n\t\t\t\t}\n\t\t\t",
-                    fragmentShader: "\n\t\t\t\tvarying vec3 fPos;\n\n\t\t\t\tuniform vec2 offset;\n\t\t\t\tuniform vec2 scrollA;\n\t\t\t\tuniform vec2 scrollB;\n\t\t\t\tuniform sampler2D sampler;\n\n\t\t\t\tuniform float cloudDensity;\n\t\t\t\tuniform vec3 cloudLight;\n\n\t\t\t\tuniform vec3 sunPosition;\n\n\t\t\t\tvoid main()\n\t\t\t\t{\n\t\t\t\t\t#ifdef CLOUDS_ENABLED\n\t\t\t\t\t\tfloat c00 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) - scrollB.x * 0.981, fPos.z / ((fPos.y + 0.06) / 0.1) - scrollB.y * 1.041) + scrollA).r;\n\t\t\t\t\t\tfloat c10 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) + scrollB.x * 0.821, fPos.z / ((fPos.y + 0.06) / 0.1) - scrollB.y * 0.951) + scrollA).r;\n\t\t\t\t\t\tfloat c01 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) - scrollB.x * 1.043, fPos.z / ((fPos.y + 0.06) / 0.1) + scrollB.y * 0.899) + scrollA).r;\n\t\t\t\t\t\tfloat c11 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) + scrollB.x * 0.901, fPos.z / ((fPos.y + 0.06) / 0.1) + scrollB.y * 1.045) + scrollA).r;\n\t\t\t\t\t\tfloat cloud = min(1.0, max(0.0, (c00 + c10 + c01 + c11) / 4.0 - (1.0 - cloudDensity)) * 3.0);\n\n\t\t\t\t\t\tvec3 cloudColor = vec3(min(1.0, (c00 + c10 + c01 + c11) / 4.0 - (1.0 - cloudDensity)) * 4.0 + cloudDensity) * cloudLight;\n\t\t\t\t\t\tfloat cloudIntensity = cloud * min(1.0, max(0.0, fPos.y * 2.0 / 1000000.0));\n\t\t\t\t\t#else\n\t\t\t\t\t\tvec3 cloudColor = vec3(0.0);\n\t\t\t\t\t\tfloat cloudIntensity = 0.0;\n\t\t\t\t\t#endif\n\t\t\t\t\t\n\t\t\t\t\tvec3 horizonColor = vec3(255.0 / 255.0, 255.0 / 255.0, 255.0 / 255.0);\n\t\t\t\t\tvec3 zenithColor = vec3(5.0 / 255.0, 140.0 / 255.0, 255.0 / 255.0);\n\t\t\t\t\tfloat h = pow(clamp(fPos.y / 1000000.0, 0.01, 1.0), 0.2);\n\t\t\t\t\tvec3 skyColor = zenithColor * h + horizonColor * (1.0 - h);\n\n\t\t\t\t\tvec3 normal = normalize(-fPos);\n\t\t\t\t\tfloat sun = pow(max(0.0, max(0.0, dot(normal, sunPosition)) - 0.999), 4.0) * 60000000000.0;\n\t\t\t\t\tvec3 sunColor = vec3(20.0 * sun, 20.0 * sun, 19.0 * sun);\n\n\t\t\t\t\tgl_FragColor = vec4((skyColor * (1.0 - cloudIntensity) + cloudColor * cloudIntensity) * max(vec3(0.0), vec3(1.0) - sunColor) + sunColor, 1.0);\n\t\t\t\t}\n\t\t\t"
+                    fragmentShader: "\n\t\t\t\tvarying vec3 fPos;\n\n\t\t\t\tuniform vec2 offset;\n\t\t\t\tuniform vec2 scrollA;\n\t\t\t\tuniform vec2 scrollB;\n\t\t\t\tuniform sampler2D sampler;\n\n\t\t\t\tuniform float cloudDensity;\n\t\t\t\tuniform vec3 cloudLight;\n\n\t\t\t\tuniform vec3 sunPosition;\n\t\t\t\tuniform vec3 skyFogColor;\n\t\t\t\tuniform float skyFogBand;\n\t\t\t\tuniform float skyFogAmount;\n\n\t\t\t\tvoid main()\n\t\t\t\t{\n\t\t\t\t\t#ifdef CLOUDS_ENABLED\n\t\t\t\t\t\tfloat c00 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) - scrollB.x * 0.981, fPos.z / ((fPos.y + 0.06) / 0.1) - scrollB.y * 1.041) + scrollA).r;\n\t\t\t\t\t\tfloat c10 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) + scrollB.x * 0.821, fPos.z / ((fPos.y + 0.06) / 0.1) - scrollB.y * 0.951) + scrollA).r;\n\t\t\t\t\t\tfloat c01 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) - scrollB.x * 1.043, fPos.z / ((fPos.y + 0.06) / 0.1) + scrollB.y * 0.899) + scrollA).r;\n\t\t\t\t\t\tfloat c11 = texture2D(sampler, vec2(fPos.x / ((fPos.y + 0.06) / 0.1) + scrollB.x * 0.901, fPos.z / ((fPos.y + 0.06) / 0.1) + scrollB.y * 1.045) + scrollA).r;\n\t\t\t\t\t\tfloat cloud = min(1.0, max(0.0, (c00 + c10 + c01 + c11) / 4.0 - (1.0 - cloudDensity)) * 3.0);\n\n\t\t\t\t\t\tvec3 cloudColor = vec3(min(1.0, (c00 + c10 + c01 + c11) / 4.0 - (1.0 - cloudDensity)) * 4.0 + cloudDensity) * cloudLight;\n\t\t\t\t\t\tfloat cloudIntensity = cloud * min(1.0, max(0.0, fPos.y * 2.0 / 1000000.0));\n\t\t\t\t\t#else\n\t\t\t\t\t\tvec3 cloudColor = vec3(0.0);\n\t\t\t\t\t\tfloat cloudIntensity = 0.0;\n\t\t\t\t\t#endif\n\t\t\t\t\t\n\t\t\t\t\tvec3 horizonColor = vec3(255.0 / 255.0, 255.0 / 255.0, 255.0 / 255.0);\n\t\t\t\t\tvec3 zenithColor = vec3(5.0 / 255.0, 140.0 / 255.0, 255.0 / 255.0);\n\t\t\t\t\tfloat h = pow(clamp(fPos.y / 1000000.0, 0.01, 1.0), 0.2);\n\t\t\t\t\tvec3 skyColor = zenithColor * h + horizonColor * (1.0 - h);\n\n\t\t\t\t\tvec3 normal = normalize(-fPos);\n\t\t\t\t\tfloat sun = pow(max(0.0, max(0.0, dot(normal, sunPosition)) - 0.999), 4.0) * 60000000000.0;\n\t\t\t\t\tvec3 sunColor = vec3(20.0 * sun, 20.0 * sun, 19.0 * sun);\n\n\t\t\t\t\tgl_FragColor = vec4((skyColor * (1.0 - cloudIntensity) + cloudColor * cloudIntensity) * max(vec3(0.0), vec3(1.0) - sunColor) + sunColor, 1.0);\n\t\t\t\t\tif (skyFogAmount > 0.0) gl_FragColor.rgb = mix(gl_FragColor.rgb, skyFogColor, skyFogAmount * (1.0 - smoothstep(skyFogBand, 2.0 * skyFogBand, normalize(fPos).y)));\n\t\t\t\t}\n\t\t\t"
                 });
                 a.side = THREE.BackSide,
                 a.depthWrite = !1,
@@ -57745,7 +57771,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 C.get(this, Td, "f").renderOrder = -3,
                 C.get(this, Td, "f").matrixAutoUpdate = !1,
                 C.get(this, Td, "f").updateMatrix(),
-                e.scene.add(C.get(this, Td, "f"))
+                e.scene.add(C.get(this, Td, "f")),
+                e.scene.userData.fogSky = C.get(this, Td, "f")
             }
             update(e, t, n) {
                 C.get(this, Ed, "f").getSettingBoolean(R.A.CloudsEnabled) ? (C.get(this, Md, "f").x += .00226 * e,
@@ -57755,7 +57782,12 @@ window.__nswsAutoGhostNote = function(trackId) {
                 1 != C.get(this, Td, "f").material.defines.CLOUDS_ENABLED && (C.get(this, Td, "f").material.defines.CLOUDS_ENABLED = !0,
                 C.get(this, Td, "f").material.needsUpdate = !0)) : 0 != C.get(this, Td, "f").material.defines.CLOUDS_ENABLED && (C.get(this, Td, "f").material.defines.CLOUDS_ENABLED = !1,
                 C.get(this, Td, "f").material.needsUpdate = !0);
-                const i = n.getSunPosition();
+                const i = n.getSunPosition()
+                  , fog = C.get(this, Td, "f").parent?.fog
+                  , u = C.get(this, Td, "f").material.uniforms;
+                u.skyFogAmount.value = fog?.skyBand > 0 ? 1 - (fog.fade ?? 0) : 0,
+                u.skyFogBand.value = fog?.skyBand ?? 0,
+                null != fog && u.skyFogColor.value.copy(fog.color),
                 C.get(this, Td, "f").material.uniforms.sunPosition.value.copy(i.negate()),
                 C.get(this, Td, "f").position.copy(t.position),
                 C.get(this, Td, "f").updateMatrix()
