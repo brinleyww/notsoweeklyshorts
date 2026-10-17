@@ -2,6 +2,11 @@
     const STYLE = `
 .time-bar-ui > .button.nsws-cine-button.on { background-color: var(--button-hover-color); }
 .time-bar-ui > .button.nsws-cine-button.on::after { width: 100%; }
+.time-bar-ui > .button.nsws-drone-button { display: none; }
+body.nsws-cine-on .time-bar-ui > .button.nsws-drone-button { display: block; }
+.time-bar-ui > .button.nsws-drone-button.on { background-color: var(--button-hover-color); }
+.time-bar-ui > .button.nsws-drone-button.on::after { width: 100%; }
+.time-bar-ui > .button.nsws-drone-button > svg { width: 26px; height: 26px; vertical-align: middle; }
 .time-bar-ui > .nsws-cine-bright { display: none; align-items: center; margin: 6px 0; padding: 0 16px 0 14px; height: 40px; box-sizing: border-box; background-color: var(--button-color); clip-path: polygon(8px 0, 100% 0, calc(100% - 8px) 100%, 0 100%); pointer-events: auto; }
 body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .nsws-cine-bright > svg { flex-shrink: 0; margin-right: 10px; width: 22px; height: 22px; }
@@ -356,14 +361,18 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     // and the camera at any moment is a function of the playback time alone.
     const STEP = 10;
     const DT = STEP / 1000;
-    const RIDE = new Set(["chase", "orbit", "heli", "side", "front", "pack"]);
+    const RIDE = new Set(["chase", "orbit", "heli", "side", "front", "pack", "dchase", "dfpv", "dside", "dtop", "dorbit"]);
     const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack"];
-    const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1 };
-    const LAMBDA = { heli: 1.6, pack: 2 };
+    // Drone only mode flies these instead: high chase, FPV, tracking beside, straight down, orbit.
+    const DRONE_TYPES = ["dchase", "dfpv", "dside", "dtop", "dorbit"];
+    const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1, dchase: 1, dfpv: 1, dside: 2, dtop: 1, dorbit: 1 };
+    const LAMBDA = { heli: 1.6, pack: 2, dchase: 1.4, dfpv: 2.6, dside: 1.4, dtop: 1.2, dorbit: 1.6 };
+    // How far a drone banks into a turn: roll per unit of yaw rate, and the most it leans.
+    const BANK = { dchase: [0.07, 0.16], dfpv: [0.11, 0.3], dside: [0.05, 0.1], dtop: [0, 0], dorbit: [0.04, 0.08] };
     // Camera shake, in radians: trackside cameras rumble as the car passes close by, and cameras
     // riding with the car only jolt when it lands a jump.
     const PASS_SHAKE = { curb: 0.02, tele: 0.005, finish: 0.006 };
-    const LAND_SHAKE = { chase: 0.012, front: 0.01, side: 0.008, orbit: 0.004, heli: 0.004, pack: 0.005 };
+    const LAND_SHAKE = { chase: 0.012, front: 0.01, side: 0.008, orbit: 0.004, heli: 0.004, pack: 0.005, dfpv: 0.01, dchase: 0.004 };
     const HOLD = { type: "chase", t0: 0, t1: Infinity, d: 5.8, h: 1.5, s: 0, high: false };
     // Loop shots start this long before the car starts up the loop.
     const LOOP_LEAD = 0.35;
@@ -662,6 +671,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.run = runs[focus];
             this.path = cine.pathOf(this.run);
             this.seed = seed;
+            this.drone = !!cine.drone;
+            this.types = this.drone ? DRONE_TYPES : TYPES;
+            // Drone shots last longer, with slower swoops between them.
+            this.stretch = this.drone ? 1.5 : 1;
             this.shots = [];
             this.done = false;
             this.total = Math.max(...runs.map((r) => r.settings.time?.numberOfFrames ?? 0)) / 1000 + 10;
@@ -715,7 +728,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             // A run that starts in (or right before) a loop starts on the loop shot instead.
             const first = this.nextLoop(0);
             const introEnd = first ? Math.min(3.2, first.t0 - LOOP_LEAD) : 3.2;
-            this.push(introEnd < 1.5 ? this.loopShot(first, 0, 0, this.path.finish) : this.intro(introEnd));
+            this.push(introEnd < 1.5 ? this.loopShot(first, 0, 0, this.path.finish) : this.drone ? this.droneIntro(introEnd) : this.intro(introEnd));
             yield;
             for (;;) {
                 const t0 = this.plannedTo;
@@ -741,9 +754,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const idx = this.shots.length;
                 const cands = [];
                 const lastType = this.shots[idx - 1].type;
-                for (let ti = 0; ti < TYPES.length; ti++)
-                    for (let v = 0; TYPES[ti] !== lastType && v < VARIANTS[TYPES[ti]]; v++) {
-                        const c = this.candidate(TYPES[ti], v, rng(this.seed, idx, ti, v), t0, hardEnd);
+                const types = this.types;
+                for (let ti = 0; ti < types.length; ti++)
+                    for (let v = 0; types[ti] !== lastType && v < VARIANTS[types[ti]]; v++) {
+                        const c = this.candidate(types[ti], v, rng(this.seed, idx, ti, v), t0, hardEnd);
                         if (c) {
                             c.order = ti * 4 + v;
                             cands.push(c);
@@ -762,7 +776,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 }
                 if (!best) {
                     const R = rng(this.seed, idx, 99);
-                    best = { type: "chase", t0, ...this.rideParams("chase", 0, R), ...this.chooseEnd(t0, hardEnd, R) };
+                    const type = this.drone ? "dfpv" : "chase";
+                    best = { type, t0, ...this.rideParams(type, 0, R), ...this.chooseEnd(t0, hardEnd, R) };
                 }
                 this.push(best);
                 yield;
@@ -779,9 +794,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         linkBlend(shot) {
             const prev = this.shots[this.shots.length - 1];
             shot.blend = shot.prev = null;
-            if (prev && RIDE.has(prev.type) && RIDE.has(shot.type) && !shot.end && isFinite(shot.t1)) {
+            if (prev && RIDE.has(prev.type) && RIDE.has(shot.type) && (shot.fly || !shot.end && isFinite(shot.t1))) {
                 const R = rng(this.seed, this.shots.length, 77);
-                shot.blend = Math.min(0.9 + R() * 0.7, 0.45 * (shot.t1 - shot.t0));
+                const span = isFinite(shot.t1) ? shot.t1 - shot.t0 : 3;
+                shot.blend = Math.min(this.drone ? 1.4 + R() * 0.8 : 0.9 + R() * 0.7, 0.45 * span);
                 shot.prev = prev;
             }
         }
@@ -798,7 +814,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return { type: "chase", t0: 0, t1, d: 6, h: 1.5, s: 0, high: false };
         }
 
+        // Drone only: take off high behind the start line and come down into the chase.
+        droneIntro(t1) {
+            const side = rng(this.seed, 0, 1)() < 0.5 ? -1 : 1;
+            for (const shot of [{ type: "dchase", t0: 0, t1, minLen: 1.2, back: 9, up: 4.5, s: side * 2, drop: 9 }, { type: "dchase", t0: 0, t1, minLen: 1.2, back: 9, up: 4.5, s: 0 },
+                { type: "dfpv", t0: 0, t1, minLen: 1.2, d: 5, h: 1.8, s: 0 }])
+                if (this.check(shot, false)) return shot;
+            return { type: "dfpv", t0: 0, t1, d: 5, h: 1.8, s: 0 };
+        }
+
         finishShot(finish) {
+            if (this.drone) return this.droneFinish(finish);
             const P = this.path, w = this.w, up = this.c.up;
             const Q = P.pos(finish, w[0]).clone();
             const Tq = P.heading(finish, 6, w[1]).clone();
@@ -814,6 +840,33 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (bad === 0) return { type: "finish", t0: finish, t1: Infinity, cam: C };
             }
             return { type: "orbit", end: true, t0: finish, t1: Infinity, dist: 7.5, h: 1.8, theta: 0.6, omega: 0.22, fov: 50 };
+        }
+
+        // Drone only: swoop round the car past the line and climb away, from whichever side and
+        // height keeps it in sight (else stay behind it).
+        droneFinish(finish) {
+            const side = rng(this.seed, 1e5)() < 0.5 ? -1 : 1;
+            const shots = [];
+            for (const [dist, h, h1] of [[9, 3, 8], [7, 2, 4.5], [6, 1.6, 2.6]])
+                for (const th of [0.6, 2.2])
+                    for (const sd of [side, -side])
+                        shots.push({ type: "orbit", end: true, fly: true, t0: finish, t1: Infinity, dist, h, h1, theta: sd * th, omega: -sd * 0.25, fov: 55 });
+            shots.push({ type: "dchase", end: true, fly: true, t0: finish, t1: Infinity, back: 8, up: 3.5, s: 0 });
+            let best = null, bestOk = -1;
+            for (const shot of shots) {
+                let ok = 0, n = 0;
+                for (let t = finish; t <= finish + 3; t += 0.25, n++) {
+                    const P = this.path.pos(t, this.fp ??= new this.c.T.Vector3());
+                    const view = this.c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+                    if (!this.lost(view.pos, t)) ok++;
+                }
+                if (ok === n) return shot;
+                if (ok > bestOk) {
+                    best = shot;
+                    bestOk = ok;
+                }
+            }
+            return best;
         }
 
         // The next upside-down stretch not over by t, including one still under way where the
@@ -871,7 +924,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         rideParams(type, v, R) {
             const p = this.rideShape(type, v, R);
             p.ph = R() * 1000;
-            if (type !== "chase" && type !== "pack" && R() < 0.6) p.dutch = (R() < 0.5 ? -1 : 1) * (0.03 + R() * 0.05);
+            if (type !== "chase" && type !== "pack" && !DRONE_TYPES.includes(type) && R() < 0.6) p.dutch = (R() < 0.5 ? -1 : 1) * (0.03 + R() * 0.05);
             return p;
         }
 
@@ -890,6 +943,16 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 return { dist: 7 + R() * 3, h: 1.3 + R() * 0.8, s: side * (0.6 + R() * 1.6) };
             case "pack":
                 return { back: 7 + R() * 3, up: 2.5 + R() * 2.5, s: side * R() * 4 };
+            case "dchase":
+                return { back: 8 + R() * 4, up: 3.5 + R() * 2.5, s: side * R() * 2.5 };
+            case "dfpv":
+                return { d: 4.6 + R() * 1.4, h: 1.6 + R() * 0.8, s: (R() - 0.5) * 1.2 };
+            case "dside":
+                return { side: v === 0 ? -1 : 1, dist: 8 + R() * 3, h: 3.5 + R() * 2.5, lead0: -4 + R() * 2, lead1: R() * 3 };
+            case "dtop":
+                return { back: 2 + R() * 1.5, up: 9 + R() * 4, spin: side * (0.1 + R() * 0.15) };
+            case "dorbit":
+                return { dist: 9 + R() * 3, h: 4.5 + R() * 3, theta: side * (0.4 + R() * 1.2), omega: -side * (0.2 + R() * 0.15) };
             }
             return {};
         }
@@ -914,13 +977,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
 
         chooseEnd(t0, hardEnd, R) {
-            if (hardEnd - t0 < 3.7) return { t1: hardEnd, aligned: 1 };
-            const lo = t0 + 2.2, hi = Math.min(t0 + 6.5, hardEnd - 1.5);
+            const L = this.stretch;
+            if (hardEnd - t0 < 3.7 * L) return { t1: hardEnd, aligned: 1 };
+            const lo = t0 + 2.2 * L, hi = Math.min(t0 + 6.5 * L, hardEnd - 1.5);
             if (hi <= lo) return { t1: hardEnd, aligned: 1 };
-            let best = { t1: Math.min(t0 + 3.6 + R() * 1.4, hi), aligned: 0 };
-            let bestS = durFit(best.t1 - t0);
+            let best = { t1: Math.min(t0 + (3.6 + R() * 1.4) * L, hi), aligned: 0 };
+            let bestS = durFit((best.t1 - t0) / L);
             for (const c of this.cuts(lo, hi)) {
-                const s = durFit(c - t0) + 0.3;
+                const s = durFit((c - t0) / L) + 0.3;
                 if (s > bestS) {
                     bestS = s;
                     best = { t1: c, aligned: 1 };
@@ -1017,6 +1081,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "pack": return f.grp < 0.6 ? -9 : 0.28 + 0.05 * Math.min(f.grp, 4) - 0.3 * f.enc;
             case "tele": return 0.6 + 0.25 * anchored - 0.8 * f.enc;
             case "curb": return 0.48 + 0.3 * anchored - 0.8 * f.enc;
+            case "dchase": return 0.55 - 0.7 * f.enc + 0.12 * crowd;
+            case "dfpv": return 0.42 + 0.5 * f.enc + 0.15 * yawN - 0.2 * crowd;
+            case "dside": return 0.4 + (f.spd > 200 && f.yaw < 0.4 ? 0.15 : 0) + 0.2 * f.air - 0.6 * f.enc - 0.05 * crowd;
+            case "dtop": return 0.26 + 0.25 * yawN - 0.9 * f.enc + 0.02 * crowd;
+            case "dorbit": return 0.36 + (f.spd < 170 ? 0.2 : 0) - 0.6 * f.enc - 0.05 * crowd;
             }
             return 0;
         }
@@ -1052,7 +1121,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         // Fixed cameras hold for about 3 s, cameras riding along for about 4 s.
         fit(shot) {
             const d = shot.t1 - shot.t0;
-            return RIDE.has(shot.type) ? durFit(d) : clamp(1 - Math.abs(d - 3) / 2.5, 0, 1);
+            return RIDE.has(shot.type) ? durFit(d / this.stretch) : clamp(1 - Math.abs(d - 3) / 2.5, 0, 1);
         }
 
         // A camera fixed beside the track, aimed so the car comes towards it and past.
@@ -1183,6 +1252,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 shot.vis = sum / Math.max(1, n);
             }
             shot.comp = this.composition(shot);
+            if (shot.type === "dtop") shot.comp = Math.max(shot.comp, 0.45);
             if (strict && shot.comp < 0.12) return false;
             const cover = this.coverage(shot);
             shot.cover = cover ? cover.frac : null;
@@ -1662,6 +1732,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.setEnabled(!this.enabled);
             });
 
+            // Drone only: the cinematic flies drone shots and nothing else. Remembered on this device.
+            this.drone = false;
+            try {
+                this.drone = localStorage.getItem("nsws_cine_drone") === "1";
+            } catch (e) {}
+            this.droneBtn = document.createElement("button");
+            this.droneBtn.className = "button nsws-drone-button" + (this.drone ? " on" : "");
+            this.droneBtn.title = "Drone shots only";
+            this.droneBtn.innerHTML = '<svg viewBox="0 0 24 24"><g fill="#fff"><rect x="9" y="9.5" width="6" height="5" rx="1.5"/><rect x="5.2" y="5.6" width="2.4" height="5" rx="1" transform="rotate(-45 6.4 8.1)"/><rect x="16.4" y="5.6" width="2.4" height="5" rx="1" transform="rotate(45 17.6 8.1)"/><rect x="5.2" y="13.4" width="2.4" height="5" rx="1" transform="rotate(45 6.4 15.9)"/><rect x="16.4" y="13.4" width="2.4" height="5" rx="1" transform="rotate(-45 17.6 15.9)"/></g><g fill="none" stroke="#fff" stroke-width="1.6"><ellipse cx="5" cy="5" rx="3.6" ry="1.3"/><ellipse cx="19" cy="5" rx="3.6" ry="1.3"/><ellipse cx="5" cy="19" rx="3.6" ry="1.3"/><ellipse cx="19" cy="19" rx="3.6" ry="1.3"/></g></svg>';
+            this.droneBtn.addEventListener("click", () => {
+                o.playClick?.();
+                this.setDrone(!this.drone);
+            });
+
             // Brightness for the cinematic look, remembered on this device.
             this.exposure = 1;
             try {
@@ -1746,7 +1830,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
-            for (const b of [this.button, this.inputsBtn, this.saveBtn, this.bright]) {
+            for (const b of [this.button, this.droneBtn, this.inputsBtn, this.saveBtn, this.bright]) {
                 if (seek) bar.insertBefore(b, seek);
                 else bar?.appendChild(b);
             }
@@ -1772,6 +1856,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 window.__PolyFX?.setCinematic?.(null);
                 this.o.restoreCamera();
             }
+        }
+
+        // Switching drone only on or off plans the edit again from the start.
+        setDrone(on) {
+            this.drone = !!on;
+            this.droneBtn.classList.toggle("on", this.drone);
+            try {
+                localStorage.setItem("nsws_cine_drone", this.drone ? "1" : "0");
+            } catch (e) {}
+            this.planners.clear();
+            this.viewer.reset();
         }
 
         buildLayer() {
@@ -1811,6 +1906,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.layer?.remove();
             this.layer = null;
             this.button.remove();
+            this.droneBtn.remove();
             this.bright.remove();
             this.inputsBtn.remove();
             this.saveBtn.remove();
@@ -3139,7 +3235,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             let p = this.planners.get(run);
             if (!p) {
                 const id = (r) => (r.settings.nickname ?? "") + ":" + (r.settings.time?.numberOfFrames ?? 0);
-                const seed = hashString((this.o.trackId ?? this.o.trackName ?? "") + "|" + runs.map(id).join(",") + "|" + id(run));
+                const seed = hashString((this.o.trackId ?? this.o.trackName ?? "") + "|" + runs.map(id).join(",") + "|" + id(run) + (this.drone ? "|drone" : ""));
                 this.planners.set(run, p = new Planner(this, runs, focus, seed));
             }
             return p;
@@ -3237,6 +3333,58 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out.lens = 0.25;
                 break;
             }
+            case "dchase": {
+                // High behind the car like a chase drone. With cars close behind, it backs off and
+                // climbs to keep them in the shot too (soft weights, so it never jumps).
+                let extra = 0;
+                for (const r of this.o.getRuns()) {
+                    if (r === path.run) continue;
+                    const q = this.pathOf(r).pos(t, e[3]).sub(P);
+                    const lat = Math.abs(q.dot(right));
+                    const wt = clamp((35 - q.length()) / 15, 0, 1) * clamp((14 - lat) / 6, 0, 1);
+                    extra = Math.max(extra, wt * clamp(-q.dot(Hs), 0, 18));
+                }
+                const drop = shot.drop ? shot.drop * (1 - smootherstep(k)) : 0;
+                const back = shot.back + extra * 0.75 + drop * 0.5;
+                pos.copy(P).addScaledVector(Hs, -back).addScaledVector(up, shot.up + extra * 0.3 + drop).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(Hs, 6 + back * 0.15).addScaledVector(up, 0.5);
+                out.fov = 60 + Math.min(speed, 500) * 0.012;
+                out.lens = 0.3;
+                break;
+            }
+            case "dfpv": {
+                // An FPV drone just behind the car: low, wide lens, banking hard into turns.
+                const steep = clamp((0.94 - path.carUp(t, e[4]).y) / 0.5, 0, 1);
+                const D = steep > 0 && path.tangent3(t, e[3], e[4]) ? e[3].multiplyScalar(steep).addScaledVector(Hs, 1 - steep).normalize() : Hs;
+                pos.copy(P).addScaledVector(D, -shot.d - Math.min(speed, 600) * 0.004).addScaledVector(carUp, shot.h).addScaledVector(right, shot.s);
+                look.copy(P).addScaledVector(D, 6).addScaledVector(carUp, 0.3);
+                out.fov = 84 + Math.min(speed, 500) * 0.02;
+                out.lens = 0.35;
+                out.up.copy(carUp);
+                break;
+            }
+            case "dside":
+                pos.copy(P).addScaledVector(right, shot.side * shot.dist).addScaledVector(up, shot.h).addScaledVector(Hs, shot.lead0 + (shot.lead1 - shot.lead0) * smootherstep(k));
+                look.copy(P).addScaledVector(Hs, 2.5).addScaledVector(up, 0.3);
+                out.fov = 52;
+                out.lens = 0.45;
+                break;
+            case "dtop":
+                // Straight down from high up, the car driving up the frame as it slowly turns.
+                pos.copy(P).addScaledVector(Hs, -shot.back).addScaledVector(up, shot.up * (1 + 0.15 * Math.sin(Math.PI * k)));
+                look.copy(P).addScaledVector(Hs, 1.5);
+                out.up.copy(Hs).applyAxisAngle(up, shot.spin * (t - shot.t0));
+                out.fov = 55;
+                out.lens = 0.2;
+                break;
+            case "dorbit": {
+                const back = e[3].copy(Hs).multiplyScalar(-1).applyAxisAngle(up, shot.theta + shot.omega * (t - shot.t0));
+                pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(up, shot.h + 0.6 * Math.sin(Math.PI * k));
+                look.copy(P).addScaledVector(up, 0.4);
+                out.fov = 52;
+                out.lens = 0.5;
+                break;
+            }
             case "loop":
                 if (shot.side) {
                     // Drifting along beside the loop, the frame leaning towards the car.
@@ -3284,6 +3432,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out.roll += Math.sin(t * 9.7 + ph * 3.1) * amp * 0.6;
             }
             if (shot.dutch) out.roll += shot.dutch * smootherstep(k);
+            const bank = BANK[shot.type];
+            if (bank) {
+                // A drone never hangs perfectly still: a slow bob and sway, and it banks into turns.
+                const ph = shot.ph ?? 0;
+                pos.addScaledVector(up, (Math.sin(t * 1.3 + ph) * 0.6 + Math.sin(t * 0.7 + ph * 1.9) * 0.4) * 0.18);
+                pos.addScaledVector(right, (Math.sin(t * 0.9 + ph * 2.7) * 0.6 + Math.sin(t * 1.9 + ph * 0.3) * 0.4) * 0.15);
+                out.roll += clamp(path.yawRate(t) * bank[0], -bank[1], bank[1]);
+            }
             return out;
         }
 
