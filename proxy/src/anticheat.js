@@ -59,6 +59,44 @@ export class AntiCheat extends DurableObject {
             user_id TEXT, nickname TEXT, frames INTEGER NOT NULL, lobby TEXT, car_style TEXT, recording TEXT,
             state TEXT NOT NULL DEFAULT 'review', at INTEGER NOT NULL)`);
         this.sql.exec("CREATE INDEX IF NOT EXISTS lobby_runs_state ON lobby_runs(state, at)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS lobby_runs_track ON lobby_runs(track)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS runs_state_at ON runs(state, at)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS rejects_last ON rejects(last)");
+        this.migrateTallies();
+    }
+
+    // The dashboard's totals. Counting the tables on every refresh read every row each time, which
+    // used up the free plan's daily reads, so triggers keep the counts instead.
+    migrateTallies() {
+        const fresh = !this.sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tallies'").toArray().length;
+        const bump = (key, by) => `INSERT INTO tallies (k, n) VALUES (${key}, ${by}) ON CONFLICT(k) DO UPDATE SET n = n + excluded.n;`;
+        const run = (row) => `'run|' || ${row}.source || '|' || ${row}.state`;
+        const lobby = (row) => `'lobby|' || ${row}.state`;
+        this.ctx.storage.transactionSync(() => {
+            this.sql.exec("CREATE TABLE IF NOT EXISTS tallies (k TEXT PRIMARY KEY, n INTEGER NOT NULL) WITHOUT ROWID");
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS runs_tally_add AFTER INSERT ON runs BEGIN ${bump(run("NEW"), 1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS runs_tally_move AFTER UPDATE OF source, state ON runs
+                WHEN OLD.source IS NOT NEW.source OR OLD.state IS NOT NEW.state BEGIN ${bump(run("OLD"), -1)} ${bump(run("NEW"), 1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS runs_tally_drop AFTER DELETE ON runs BEGIN ${bump(run("OLD"), -1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS rejects_tally_add AFTER INSERT ON rejects BEGIN
+                ${bump("'rejects'", 1)} ${bump("'reject_attempts'", "NEW.attempts")} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS rejects_tally_attempts AFTER UPDATE OF attempts ON rejects BEGIN
+                ${bump("'reject_attempts'", "NEW.attempts - OLD.attempts")} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS rejects_tally_drop AFTER DELETE ON rejects BEGIN
+                ${bump("'rejects'", -1)} ${bump("'reject_attempts'", "-OLD.attempts")} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS boards_tally_add AFTER INSERT ON boards BEGIN ${bump("'boards'", 1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS boards_tally_drop AFTER DELETE ON boards BEGIN ${bump("'boards'", -1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS lobby_tally_add AFTER INSERT ON lobby_runs BEGIN ${bump(lobby("NEW"), 1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS lobby_tally_move AFTER UPDATE OF state ON lobby_runs
+                WHEN OLD.state IS NOT NEW.state BEGIN ${bump(lobby("OLD"), -1)} ${bump(lobby("NEW"), 1)} END`);
+            this.sql.exec(`CREATE TRIGGER IF NOT EXISTS lobby_tally_drop AFTER DELETE ON lobby_runs BEGIN ${bump(lobby("OLD"), -1)} END`);
+            if (!fresh) return;
+            this.sql.exec("INSERT INTO tallies (k, n) SELECT 'run|' || source || '|' || state, COUNT(*) FROM runs GROUP BY source, state");
+            this.sql.exec("INSERT INTO tallies (k, n) SELECT 'lobby|' || state, COUNT(*) FROM lobby_runs GROUP BY state");
+            this.sql.exec("INSERT INTO tallies (k, n) SELECT 'rejects', COUNT(*) FROM rejects");
+            this.sql.exec("INSERT INTO tallies (k, n) SELECT 'reject_attempts', COALESCE(SUM(attempts), 0) FROM rejects");
+            this.sql.exec("INSERT INTO tallies (k, n) SELECT 'boards', COUNT(*) FROM boards");
+        });
     }
 
     board(track, week, entries) {
@@ -86,8 +124,12 @@ export class AntiCheat extends DurableObject {
     }
 
     saveRun(track, week, entry, state, source, reason) {
-        this.sql.exec(`INSERT OR REPLACE INTO runs (id, track, week, user_id, nickname, frames, state, source, reason, at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        // An upsert, not INSERT OR REPLACE: a replace deletes the old row without firing the tally trigger.
+        this.sql.exec(`INSERT INTO runs (id, track, week, user_id, nickname, frames, state, source, reason, at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET track = excluded.track, week = excluded.week, user_id = excluded.user_id,
+                nickname = excluded.nickname, frames = excluded.frames, state = excluded.state, source = excluded.source,
+                reason = excluded.reason, at = excluded.at`,
             entry.id, track, week, entry.userId ?? null, entry.nickname ?? null, entry.frames, state, source, reason ?? null, Date.now());
         const run = { state, source };
         this.boards.get(track)?.runs.set(entry.id, run);
@@ -332,18 +374,24 @@ export class AntiCheat extends DurableObject {
 
     async summary() {
         const tracks = this.sql.exec("SELECT id, week, updated FROM tracks ORDER BY week, id").toArray();
-        const counts = this.sql.exec("SELECT source, state, COUNT(*) AS n FROM runs GROUP BY source, state").toArray();
+        const tallies = new Map(this.sql.exec("SELECT k, n FROM tallies").toArray().map((r) => [r.k, r.n]));
+        const counts = [];
+        const lobbyCounts = [];
+        for (const [k, n] of tallies) {
+            const [kind, a, b] = k.split("|");
+            if (n > 0 && kind === "run") counts.push({ source: a, state: b, n });
+            if (n > 0 && kind === "lobby") lobbyCounts.push({ state: a, n });
+        }
         const queue = this.sql.exec(`SELECT COUNT(*) AS n,
                 COALESCE(SUM(CASE WHEN track IN (SELECT id FROM tracks) THEN 0 ELSE 1 END), 0) AS waiting
             FROM queue`).one();
         const rejects = this.sql.exec("SELECT * FROM rejects ORDER BY last DESC LIMIT ?", LOG_LIMIT).toArray();
-        const rejectTotals = this.sql.exec("SELECT COUNT(*) AS runs, COALESCE(SUM(attempts), 0) AS attempts FROM rejects").one();
+        const rejectTotals = { runs: tallies.get("rejects") ?? 0, attempts: tallies.get("reject_attempts") ?? 0 };
         const blocked = this.sql.exec(`SELECT id, track, week, user_id, nickname, frames, source, reason, at FROM runs
             WHERE state = 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
-        const boards = this.sql.exec("SELECT COUNT(*) AS n FROM boards").one().n;
+        const boards = tallies.get("boards") ?? 0;
         const lobby = this.sql.exec(`SELECT id, upload_id, track, week, user_id, nickname, frames, lobby, at FROM lobby_runs
             WHERE state = 'review' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
-        const lobbyCounts = this.sql.exec("SELECT state, COUNT(*) AS n FROM lobby_runs GROUP BY state").toArray();
         return { tracks, counts, queue, rejects, rejectTotals, blocked, boards, lobby, lobbyCounts };
     }
 }

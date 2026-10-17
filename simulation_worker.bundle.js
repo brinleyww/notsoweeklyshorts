@@ -13306,9 +13306,18 @@
                 t.ccall("free", "void", ["number"], [l]),
                 __royaleInit(e, s)
             }
-            // Royale tracks: each checkpoint order has two gates. Crossing one moves the respawn
-            // point to the other, which starts the next segment facing its rotation's travel direction.
-            const __royaleTrackIds = new Set(["7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c"]);
+            // Royale tracks: crossing a checkpoint moves the respawn point to the gate of the same order
+            // that starts the next segment, facing its rotation's travel direction. With two gates per order
+            // (null here) that is the other one; tracks with more list each order's next gate by tile.
+            const __royaleTracks = new Map([
+                ["7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c", null],
+                ["0ab0606d9eea87674aef901ee7ddd820c8705516157a35dffde3066eea48a23d", new Map([
+                    [0, { x: 0, y: 30, z: -70 }],
+                    [1, { x: 0, y: 30, z: -130 }],
+                    // A wall gate (top facing -z) above the quarter-pipe: the car spawns nose down on it.
+                    [2, { x: 0, y: 52, z: -182, q: [0, -Math.SQRT1_2, Math.SQRT1_2, 0], d: [0, 1.35, -.35] }]
+                ])]
+            ]);
             const __royaleCars = new Map();
             // Spawn rotation n (yaw n*90°) as quaternion and the physics' respawn offset (0, 0.35, -1.35) turned by it.
             const __royaleSpawn = [
@@ -13337,8 +13346,9 @@
             }
             function __royaleInit(id, track) {
                 if (__royaleCars.delete(id),
-                !__royaleTrackIds.has(track.getId()))
+                !__royaleTracks.has(track.getId()))
                     return;
+                const next = __royaleTracks.get(track.getId());
                 const gates = new Map;
                 track.forEachPart(( (x, y, z, part, rotation, axis, color, order) => {
                     null != order && (gates.has(order) || gates.set(order, []),
@@ -13346,7 +13356,7 @@
                 }
                 ));
                 const car = __royaleCarPointer(id);
-                0 != car && __royaleCars.set(id, { car, gates, passed: 0 })
+                0 != car && __royaleCars.set(id, { car, gates, next, passed: 0 })
             }
             // Car struct (byte offsets): 176 checkpoints passed, 180 respawn record. Record: position xyz, pad,
             // quaternion xyzw (floats), then the checkpoint count restored on respawn (int).
@@ -13359,16 +13369,24 @@
                     return void (royale.passed = passed);
                 royale.passed = passed;
                 const pair = royale.gates.get(passed - 1);
-                if (null == pair || 2 != pair.length)
+                let target;
+                if (null != royale.next) {
+                    const at = royale.next.get(passed - 1);
+                    if (null == at || null == pair || !(target = pair.find((g => g.x == at.x && g.y == at.y && g.z == at.z))))
+                        return;
+                    null != at.q && (target = { ...target, spawn: { q: at.q, dx: at.d[0], dy: at.d[1], dz: at.d[2] } })
+                } else {
+                    if (null == pair || 2 != pair.length)
+                        return;
+                    // Car state buffer: position follows car id(4), frames(3), speed(4), flags(1), finish frames(3, if finished), checkpoint(2).
+                    const state = new DataView(t.HEAPU8.buffer,n,s)
+                      , p = 14 + (2 & state.getUint8(11) ? 3 : 0)
+                      , d = g => (5 * g.x - state.getFloat32(p, !0)) ** 2 + (5 * g.y - state.getFloat32(p + 4, !0)) ** 2 + (5 * g.z - state.getFloat32(p + 8, !0)) ** 2;
+                    target = d(pair[0]) <= d(pair[1]) ? pair[1] : pair[0]
+                }
+                if (null == target.spawn && 0 != target.axis)
                     return;
-                // Car state buffer: position follows car id(4), frames(3), speed(4), flags(1), finish frames(3, if finished), checkpoint(2).
-                const state = new DataView(t.HEAPU8.buffer,n,s)
-                  , p = 14 + (2 & state.getUint8(11) ? 3 : 0)
-                  , d = g => (5 * g.x - state.getFloat32(p, !0)) ** 2 + (5 * g.y - state.getFloat32(p + 4, !0)) ** 2 + (5 * g.z - state.getFloat32(p + 8, !0)) ** 2
-                  , target = d(pair[0]) <= d(pair[1]) ? pair[1] : pair[0];
-                if (0 != target.axis)
-                    return;
-                const spawn = __royaleSpawn[(target.rotation + 2) % 4];
+                const spawn = target.spawn ?? __royaleSpawn[(target.rotation + 2) % 4];
                 let record = new Uint32Array(t.HEAPU8.buffer)[royale.car + 180 >> 2];
                 if (0 == record || new Int32Array(t.HEAPU8.buffer)[(record >> 2) + 8] != passed) {
                     if (record = t.ccall("malloc", "number", ["number"], [36]),
@@ -13379,7 +13397,7 @@
                 const F = t.HEAPF32
                   , o = record >> 2;
                 F[o] = 5 * target.x + spawn.dx,
-                F[o + 1] = 5 * target.y + .35,
+                F[o + 1] = 5 * target.y + (spawn.dy ?? .35),
                 F[o + 2] = 5 * target.z + spawn.dz,
                 F[o + 3] = 0,
                 F.set(spawn.q, o + 4),

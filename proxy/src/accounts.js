@@ -406,8 +406,8 @@ export class Accounts extends DurableObject {
 
     // Called by the Worker after an upload to an NSWS board: the upload confirms a referral.
     uploaded(userId) {
-        this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
-        this.top = null;
+        const cursor = this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
+        if (cursor.rowsWritten > 0) this.top = null;
     }
 
     setEquipped(userId, tag) {

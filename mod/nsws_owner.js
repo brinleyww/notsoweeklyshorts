@@ -15,8 +15,11 @@
     const ANN_MAX = 160;
     const POLL_MAX = 10;
     const POLL_TEXT = 40;
-    const LIVE_REFRESH_MS = 10000;
-    const STATS_REFRESH_MS = 60000;
+    // Every request costs the Worker reads on Cloudflare's free plan, so Race Control never refreshes by
+    // itself: each tab shows what this browser last fetched until Refresh is pressed.
+    const CACHE_KEY = "_nswsRaceControl";
+    // How long the runtime odometer keeps counting on from the last numbers before it waits for a Refresh.
+    const ODO_GUESS_S = 120;
     const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const REASONS = {
         "no-finish": "Doesn't cross the finish on its time",
@@ -43,6 +46,8 @@
 .nrc-chips{display:flex;gap:6px;}
 .nrc-chip.button{font-size:18px;padding:7px 16px;}
 .nrc-chip.button.on{background:var(--button-hover-color);box-shadow:inset 0 -3px 0 ${ACCENT};}
+.nrc-refresh{display:flex;align-items:center;gap:10px;font-size:13px;color:rgba(255,255,255,.5);}
+.nrc-refresh .button{font-size:18px;padding:7px 16px;}
 .nrc-close.button{font-size:22px;padding:6px 16px;}
 .nrc-tabs{display:flex;gap:6px;padding:10px 24px 0;background:var(--surface-secondary-color);flex-shrink:0;overflow-x:auto;}
 .nrc-tab.button{font-size:20px;padding:9px 22px;background:var(--surface-tertiary-color);}
@@ -489,7 +494,10 @@
         liveAt: 0,
         liveClockOffset: 0,
         error: null,
-        timers: [],
+        // cache key -> when its data was fetched
+        fetchedAt: {},
+        refreshBtn: null,
+        updatedText: null,
         raf: 0,
         charts: [],
         runtimeMode: "total",
@@ -542,18 +550,60 @@
         return response.json();
     }
 
-    function acceptLive(live) {
+    function cacheAll() {
+        try {
+            return JSON.parse(localStorage.getItem(CACHE_KEY)) || {};
+        } catch {
+            return {};
+        }
+    }
+
+    function cacheGet(key) {
+        const hit = cacheAll()[key];
+        if (!hit || hit.data == null) return null;
+        ui.fetchedAt[key] = hit.at;
+        return hit.data;
+    }
+
+    function cachePut(key, data) {
+        const at = Date.now();
+        ui.fetchedAt[key] = at;
+        try {
+            const all = cacheAll();
+            all[key] = { at, data };
+            localStorage.setItem(CACHE_KEY, JSON.stringify(all));
+        } catch {}
+    }
+
+    function statsKey() {
+        return "stats:" + ui.range + ":" + -new Date().getTimezoneOffset();
+    }
+
+    // The cache key whose data the open tab shows.
+    function tabKey() {
+        if (ui.tab === "live") return "live";
+        if (ui.tab === "anticheat") return "anti";
+        if (ui.tab === "announce") return "ann";
+        if (ui.tab === "tags") return "tags";
+        return statsKey();
+    }
+
+    function acceptLive(live, at = Date.now()) {
         ui.live = live;
-        ui.liveAt = performance.now();
-        ui.liveClockOffset = Date.now() - live.now;
+        ui.liveAt = performance.now() - Math.min(Date.now() - at, ODO_GUESS_S * 1000);
+        ui.liveClockOffset = at - live.now;
+        if (!ui.liveDot) return;
         ui.liveDot.classList.toggle("off", !live.online);
         ui.liveText.textContent = live.online === 1 ? "1 online" : num(live.online) + " online";
     }
 
     async function loadStats() {
         const ticket = ++ui.loading;
+        const key = statsKey();
         try {
             const data = await post("stats", { range: ui.range, tz: -new Date().getTimezoneOffset() });
+            cachePut(key, data);
+            cachePut("live", data.live);
             if (ticket !== ui.loading || !ui.overlay) return;
             ui.stats = data;
             ui.error = null;
@@ -568,6 +618,7 @@
     async function loadAnti() {
         try {
             ui.anti = await post("anticheat", {});
+            cachePut("anti", ui.anti);
             ui.antiError = null;
         } catch (err) {
             ui.antiError = err;
@@ -578,10 +629,69 @@
     async function loadLive() {
         try {
             const live = await post("live", {});
+            cachePut("live", live);
             if (!ui.overlay) return;
             acceptLive(live);
             if (ui.tab === "live") render();
         } catch {}
+    }
+
+    function setAnn(data) {
+        ui.ann = data;
+        cachePut("ann", data);
+    }
+
+    // Shows the open tab from memory or this browser's cache, and asks the Worker only when neither has it.
+    function ensureTab() {
+        if (!ui.live) {
+            const live = cacheGet("live");
+            if (live) acceptLive(live, ui.fetchedAt.live);
+        }
+        const loads = [];
+        if (ui.tab === "anticheat") {
+            ui.anti ??= cacheGet("anti");
+            if (!ui.anti) loads.push(loadAnti);
+        } else if (ui.tab === "announce") {
+            ui.ann ??= cacheGet("ann");
+            if (!ui.ann) loads.push(loadAnnouncements);
+        } else if (ui.tab === "tags") {
+            ui.tags ??= cacheGet("tags");
+            if (!ui.tags) loads.push(loadTags);
+        } else {
+            if (!ui.stats) {
+                ui.stats = cacheGet(statsKey());
+                if (ui.stats && !ui.live) acceptLive(ui.stats.live, ui.fetchedAt[statsKey()]);
+            }
+            if (!ui.stats) loads.push(loadStats);
+            else if (ui.tab === "live" && !ui.live) loads.push(loadLive);
+        }
+        render();
+        return Promise.all(loads.map((load) => load()));
+    }
+
+    async function refreshTab() {
+        if (!ui.refreshBtn || ui.refreshBtn.disabled) return;
+        ui.refreshBtn.disabled = true;
+        ui.refreshBtn.textContent = "Refreshing…";
+        const tab = ui.tab;
+        if (tab === "live") await loadLive();
+        else if (tab === "anticheat") await loadAnti();
+        else if (tab === "announce") await loadAnnouncements();
+        else if (tab === "tags") await loadTags();
+        else await loadStats();
+        if (!ui.refreshBtn) return;
+        ui.refreshBtn.disabled = false;
+        ui.refreshBtn.textContent = "Refresh";
+    }
+
+    function updatedLabel() {
+        const at = ui.fetchedAt[tabKey()];
+        if (!at) return "";
+        const s = Math.max(0, (Date.now() - at) / 1000);
+        if (s < 60) return "Updated just now";
+        if (s < 3600) return "Updated " + Math.floor(s / 60) + " min ago";
+        if (s < 86400) return "Updated " + Math.floor(s / 3600) + " h ago";
+        return "Updated " + fmt.dateTime(at);
     }
 
     function seriesPoints(stats, pick, cumulative) {
@@ -601,7 +711,7 @@
     function odometerSeconds() {
         const live = ui.live;
         if (!live) return 0;
-        return live.totalRuntime + live.pending + live.online * ((performance.now() - ui.liveAt) / 1000);
+        return live.totalRuntime + live.pending + live.online * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
     }
 
     function odometerText(seconds) {
@@ -617,6 +727,10 @@
         if (odo) {
             const html = odometerText(odometerSeconds());
             if (odo.innerHTML !== html) odo.innerHTML = html;
+        }
+        if (ui.updatedText) {
+            const label = updatedLabel();
+            if (ui.updatedText.textContent !== label) ui.updatedText.textContent = label;
         }
         const now = Date.now() - ui.liveClockOffset;
         for (const e of ui.body?.querySelectorAll("[data-since]") || []) {
@@ -1120,7 +1234,7 @@
                 })));
         }
         body.appendChild(blocked);
-        body.appendChild(el("div", "nrc-foot", "Owner only. Refreshes every minute while this tab is open."));
+        body.appendChild(el("div", "nrc-foot", "Owner only. Press Refresh for new numbers."));
         renderLobbyRuns(body, a, blocked);
     }
 
@@ -1201,7 +1315,6 @@
         const back = () => {
             ui.tab = "anticheat";
             open();
-            loadAnti();
         };
         const started = await window.__nswsWatchRun({ trackId: run.track, recording: run.recording, frames: run.frames, nickname: run.nickname, carStyle: run.carStyle }, back);
         if (!started) back();
@@ -1219,7 +1332,7 @@
 
     async function loadAnnouncements() {
         try {
-            ui.ann = await post("announce/list", {});
+            setAnn(await post("announce/list", {}));
             ui.annError = null;
         } catch (err) {
             ui.annError = err;
@@ -1277,7 +1390,7 @@
         annStatus("Sending…");
         try {
             const data = await post("announce", { name: annName(), color: await annColor(), text, show: d.show, reach: d.reach, poll, pollChange: d.pollChange });
-            ui.ann = data;
+            setAnn(data);
             d.text = textarea.value = "";
             count();
             if (poll) {
@@ -1297,7 +1410,7 @@
         button.disabled = true;
         try {
             const data = await post("announce/stop", {});
-            ui.ann = data;
+            setAnn(data);
             if (data.stopped != null) window.__nswsAnnounce?.stop(data.stopped);
             annStatus("Stopped. Nobody new will get it, and it leaves screens with their next beat.");
         } catch {
@@ -1309,7 +1422,7 @@
     async function closeVoting(id, button) {
         button.disabled = true;
         try {
-            ui.ann = await post("announce/close-poll", { id });
+            setAnn(await post("announce/close-poll", { id }));
             annStatus("Voting closed. Players who still have the poll open see the final results.");
         } catch {
             annStatus("Couldn't close voting. Try again in a moment.");
@@ -1575,6 +1688,7 @@
     async function loadTags() {
         try {
             ui.tags = await post("tagadmin", {});
+            cachePut("tags", ui.tags);
             ui.tagsError = null;
         } catch (err) {
             ui.tagsError = err;
@@ -1937,7 +2051,7 @@
 
         const foot = el("div", "nrc-foot",
             "Owner only. Times are in your time zone. Visitors are anonymous ids kept in each browser, so one person on two devices counts twice. " +
-            (ui.error ? "Last refresh failed; showing the previous numbers." : "Refreshes every minute."));
+            (ui.error ? "Last refresh failed; showing the previous numbers." : "Press Refresh for new numbers."));
         body.appendChild(foot);
         for (const draw of ui.charts) draw();
         body.scrollTop = scroll;
@@ -1966,26 +2080,10 @@
         ui.tagsRoot = ui.tagsWho = ui.tagsLists = ui.tagsHitsBox = ui.tagsInput = null;
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
-        for (const t of ui.timers) clearInterval(t);
-        ui.timers = [];
+        ui.refreshBtn = ui.updatedText = ui.liveDot = ui.liveText = null;
         cancelAnimationFrame(ui.raf);
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("resize", onResize);
-        document.removeEventListener("visibilitychange", onVisibility);
-    }
-
-    // Every refresh costs the Worker reads on Cloudflare's free plan, so nothing refreshes while
-    // the tab is hidden, and coming back catches up at once.
-    function shown() {
-        return document.visibilityState !== "hidden";
-    }
-
-    function onVisibility() {
-        if (!shown() || !ui.overlay) return;
-        loadLive();
-        loadStats();
-        if (ui.tab === "anticheat") loadAnti();
-        if (ui.tab === "announce") loadAnnouncements();
     }
 
     function open() {
@@ -2020,12 +2118,19 @@
                 if (ui.range === key) return;
                 ui.range = key;
                 ui.stats = null;
-                render();
-                loadStats();
+                ui.error = null;
+                ensureTab();
             });
             chips.appendChild(b);
         }
         head.appendChild(chips);
+        const refresh = el("div", "nrc-refresh");
+        ui.updatedText = el("span", null, "");
+        ui.refreshBtn = el("button", "button", "Refresh");
+        ui.refreshBtn.addEventListener("click", refreshTab);
+        refresh.appendChild(ui.updatedText);
+        refresh.appendChild(ui.refreshBtn);
+        head.appendChild(refresh);
         const closeBtn = el("button", "button nrc-close", "✕");
         closeBtn.setAttribute("aria-label", "Close");
         closeBtn.addEventListener("click", close);
@@ -2039,10 +2144,7 @@
             b.addEventListener("click", () => {
                 ui.tab = key;
                 ui.body.scrollTop = 0;
-                render();
-                if (key === "anticheat") loadAnti();
-                if (key === "announce") loadAnnouncements();
-                if (key === "tags") loadTags();
+                ensureTab();
             });
             tabs.appendChild(b);
         }
@@ -2060,14 +2162,9 @@
 
         window.addEventListener("keydown", onKey, true);
         window.addEventListener("resize", onResize);
-        document.addEventListener("visibilitychange", onVisibility);
-        ui.timers.push(setInterval(() => shown() && loadLive(), LIVE_REFRESH_MS));
-        ui.timers.push(setInterval(() => shown() && loadStats(), STATS_REFRESH_MS));
-        ui.timers.push(setInterval(() => shown() && ui.tab === "anticheat" && loadAnti(), STATS_REFRESH_MS));
-        ui.timers.push(setInterval(() => shown() && ui.tab === "announce" && loadAnnouncements(), LIVE_REFRESH_MS));
         ui.raf = requestAnimationFrame(tick);
-        render();
-        loadStats();
+        ui.live = null;
+        ensureTab();
     }
 
     window.__nswsOwnerPanel = { open, close };

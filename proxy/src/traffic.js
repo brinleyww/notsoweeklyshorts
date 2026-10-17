@@ -17,15 +17,18 @@ const OPENS_PER_IP_HOUR = 120;
 const EVENT_NAMES = ["attempts", "finishes", "uploads", "replays", "clips", "editor", "garage", "standings"];
 const STATES = new Set(["menu", "race", "editor", "watch", "garage"]);
 
-// The free plan allows 5M SQLite rows read a day, and every stats query scans its whole range,
-// so a longer range is recomputed less often.
+// The free plan allows 5M SQLite rows read a day, and every stats query scans its whole range, so
+// Race Control keeps what it fetched in the owner's browser and only asks again on Refresh.
 const RANGES = {
-    day: { ms: DAY_MS, step: 600, ttl: 2 * 60_000 },
-    "3d": { ms: 3 * DAY_MS, step: 1800, ttl: 5 * 60_000 },
-    week: { ms: 7 * DAY_MS, step: 3600, ttl: 10 * 60_000 },
-    month: { ms: 30 * DAY_MS, step: 6 * 3600, ttl: 30 * 60_000 },
-    all: { ms: null, step: 86_400, ttl: 60 * 60_000 },
+    day: { ms: DAY_MS, step: 600 },
+    "3d": { ms: 3 * DAY_MS, step: 1800 },
+    week: { ms: 7 * DAY_MS, step: 3600 },
+    month: { ms: 30 * DAY_MS, step: 6 * 3600 },
+    all: { ms: null, step: 86_400 },
 };
+// Sessions this recent are put back online when the object restarts; older ones that still beat
+// come back with their next beat.
+const RESTORE_MS = 3 * 60 * 60_000;
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
@@ -95,7 +98,6 @@ export class TrafficStats extends DurableObject {
         this.online = new Map();
         // Most players online in each recent minute, oldest first: [minute, count].
         this.ring = [];
-        this.statsCache = new Map();
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
         this.ann = null;
@@ -200,7 +202,7 @@ export class TrafficStats extends DurableObject {
             Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
         const rows = this.sql.exec(
             "SELECT * FROM sessions WHERE start > ? AND last > ? AND ended = 0",
-            now - 2 * DAY_MS, now - MAX_BEAT_S * 1000).toArray();
+            now - RESTORE_MS, now - MAX_BEAT_S * 1000).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, start: row.start, last: row.last,
@@ -507,14 +509,7 @@ export class TrafficStats extends DurableObject {
     async stats(rangeKey, tzOffsetMin) {
         const range = RANGES[rangeKey] ?? RANGES.day;
         const tz = Math.max(-840, Math.min(840, Math.trunc(tzOffsetMin) || 0)) * 60;
-        const cacheKey = rangeKey + "|" + tz;
-        const hit = this.statsCache.get(cacheKey);
-        const now = Date.now();
-        if (hit && now - hit.at < range.ttl) return { ...hit.data, live: await this.liveStats() };
-
-        const data = this.computeStats(range, tz, now);
-        this.statsCache.set(cacheKey, { at: now, data });
-        return { ...data, live: await this.liveStats() };
+        return { ...this.computeStats(range, tz, Date.now()), live: await this.liveStats() };
     }
 
     computeStats(range, tz, now) {
@@ -522,25 +517,35 @@ export class TrafficStats extends DurableObject {
         const startT = Math.floor(startMs / 1000 / BUCKET_S);
         const step = range.step;
 
-        const series = this.sql.exec(`SELECT CAST((t * ${BUCKET_S} + ?) / ? AS INTEGER) AS g,
-                SUM(runtime) AS runtime, SUM(focus) AS focus, SUM(driving) AS driving, SUM(opens) AS opens,
-                SUM(new_visitors) AS newVisitors, MAX(peak) AS peak, SUM(attempts) AS attempts,
-                SUM(finishes) AS finishes, SUM(uploads) AS uploads
-            FROM buckets WHERE t >= ? GROUP BY g ORDER BY g`, tz, step, startT).toArray();
-
-        const totals = this.sql.exec(`SELECT COALESCE(SUM(runtime), 0) AS runtime, COALESCE(SUM(focus), 0) AS focus,
-                COALESCE(SUM(driving), 0) AS driving, COALESCE(SUM(opens), 0) AS opens,
-                COALESCE(SUM(new_visitors), 0) AS newVisitors, COALESCE(MAX(peak), 0) AS peak,
-                COALESCE(SUM(attempts), 0) AS attempts, COALESCE(SUM(finishes), 0) AS finishes,
-                COALESCE(SUM(uploads), 0) AS uploads, COALESCE(SUM(replays), 0) AS replays,
-                COALESCE(SUM(clips), 0) AS clips, COALESCE(SUM(editor), 0) AS editor,
-                COALESCE(SUM(garage), 0) AS garage, COALESCE(SUM(standings), 0) AS standings
-            FROM buckets WHERE t >= ?`, startT).one();
-
-        // Sunday = 0. Epoch day 0 was a Thursday.
-        const heat = this.sql.exec(`SELECT (CAST((t * ${BUCKET_S} + ?) / 86400 AS INTEGER) + 4) % 7 AS wd,
-                CAST(((t * ${BUCKET_S} + ?) % 86400) / 3600 AS INTEGER) AS h, SUM(runtime) AS runtime, SUM(opens) AS opens
-            FROM buckets WHERE t >= ? GROUP BY wd, h`, tz, tz, startT).toArray();
+        // One pass over the range's buckets for the series, the totals and the heat map.
+        const SUMMED = ["runtime", "focus", "driving", "opens", "newVisitors", "attempts", "finishes", "uploads",
+            "replays", "clips", "editor", "garage", "standings"];
+        const totals = Object.fromEntries(SUMMED.map((k) => [k, 0]));
+        totals.peak = 0;
+        const series = [];
+        const heatCells = new Map();
+        for (const b of this.sql.exec("SELECT * FROM buckets WHERE t >= ? ORDER BY t", startT)) {
+            b.newVisitors = b.new_visitors;
+            for (const k of SUMMED) totals[k] += b[k];
+            totals.peak = Math.max(totals.peak, b.peak);
+            const local = b.t * BUCKET_S + tz;
+            const g = Math.trunc(local / step);
+            let row = series[series.length - 1];
+            if (!row || row.g !== g) {
+                row = { g, runtime: 0, focus: 0, driving: 0, opens: 0, newVisitors: 0, peak: b.peak, attempts: 0, finishes: 0, uploads: 0 };
+                series.push(row);
+            }
+            for (const k of ["runtime", "focus", "driving", "opens", "newVisitors", "attempts", "finishes", "uploads"]) row[k] += b[k];
+            row.peak = Math.max(row.peak, b.peak);
+            // Sunday = 0. Epoch day 0 was a Thursday.
+            const wd = (Math.trunc(local / 86400) + 4) % 7;
+            const h = Math.trunc((local % 86400) / 3600);
+            const cell = heatCells.get(wd * 24 + h) ?? { wd, h, runtime: 0, opens: 0 };
+            cell.runtime += b.runtime;
+            cell.opens += b.opens;
+            heatCells.set(wd * 24 + h, cell);
+        }
+        const heat = [...heatCells.keys()].sort((a, b) => a - b).map((k) => heatCells.get(k));
 
         const firstBucket = this.sql.exec("SELECT MIN(t) AS t FROM buckets").one().t;
         const { peak: peakEver, visitors: visitorsEver } = this.loadTotals();
