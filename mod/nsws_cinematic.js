@@ -2187,8 +2187,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             vol.max = "1";
             vol.step = "0.05";
             vol.value = String(opt.volume);
+            const volText = el("b", "", volRow);
+            const showVol = () => volText.textContent = Math.round(opt.volume * 100) + "%";
+            showVol();
             vol.addEventListener("input", () => {
                 opt.volume = parseFloat(vol.value);
+                showVol();
                 playing?.setVolume(opt.volume);
                 this.saveSound();
             });
