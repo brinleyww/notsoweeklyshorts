@@ -485,6 +485,23 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return Math.atan2(ax * this.tz - az * this.tx, ax * this.tx + az * this.tz) / (10 * DT);
         }
 
+        // How far the nose points away from where the car is going (rad), 0 when slow or airborne.
+        slip(i) {
+            i = clamp(i, 0, this.n - 1);
+            if (this.spd[i] < 40 || this.air[i]) return 0;
+            const nx = this.nose[2 * i], nz = this.nose[2 * i + 1], l = Math.hypot(nx, nz);
+            if (l < 0.3) return 0;
+            this.tangent(i);
+            return Math.acos(clamp((nx * this.tx + nz * this.tz) / l, -1, 1));
+        }
+
+        // Driving on a wall: the car's up tipped well over to the side, but not upside down.
+        onWall(i) {
+            i = clamp(i, 0, this.n - 1);
+            const uy = this.u[3 * i + 1];
+            return !this.air[i] && uy < 0.6 && uy > -0.2 ? 1 : 0;
+        }
+
         value(kind, i, out) {
             if (kind === 0) {
                 this.tangent(i);
@@ -950,7 +967,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "dside":
                 return { side: v === 0 ? -1 : 1, dist: 8 + R() * 3, h: 3.5 + R() * 2.5, lead0: -4 + R() * 2, lead1: R() * 3 };
             case "dtop":
-                return { back: 2 + R() * 1.5, up: 9 + R() * 4, spin: side * (0.1 + R() * 0.15) };
+                return { up: 9 + R() * 4 };
             case "dorbit":
                 return { dist: 9 + R() * 3, h: 4.5 + R() * 3, theta: side * (0.4 + R() * 1.2), omega: -side * (0.2 + R() * 0.15) };
             }
@@ -1054,10 +1071,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
 
         features(a, b) {
-            let n = 0, spd = 0, yaw = 0, air = 0, bat = 0, enc = 0, grp = 0;
+            let n = 0, spd = 0, yaw = 0, air = 0, bat = 0, enc = 0, grp = 0, drift = 0, wall = 0;
             const P = this.path;
             for (let t = a; t <= b; t += 0.1, n++) {
                 const i = Math.round(t / DT);
+                drift += clamp((P.slip(i) - 0.12) / 0.25, 0, 1);
+                wall += P.onWall(i);
                 spd += P.spd[Math.min(i, P.n - 1)];
                 yaw += Math.abs(P.yawRaw(i));
                 air += P.air[Math.min(i, P.n - 1)];
@@ -1066,7 +1085,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 enc += this.enclosed(t);
             }
             n = Math.max(1, n);
-            return { spd: spd / n, yaw: yaw / n, air: air / n, bat: bat / n, grp: grp / n, enc: enc / n };
+            return { spd: spd / n, yaw: yaw / n, air: air / n, bat: bat / n, grp: grp / n, enc: enc / n, drift: drift / n, wall: wall / n };
         }
 
         suitability(type, f, anchored) {
@@ -1084,7 +1103,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             case "dchase": return 0.55 - 0.7 * f.enc + 0.12 * crowd;
             case "dfpv": return 0.42 + 0.5 * f.enc + 0.15 * yawN - 0.2 * crowd;
             case "dside": return 0.4 + (f.spd > 200 && f.yaw < 0.4 ? 0.15 : 0) + 0.2 * f.air - 0.6 * f.enc - 0.05 * crowd;
-            case "dtop": return 0.26 + 0.25 * yawN - 0.9 * f.enc + 0.02 * crowd;
+            // Looking down only pays off with something to see from up there: a drift, a long
+            // sweeping turn or a wall ride. On a straight it is just the car on flat ground.
+            case "dtop": return f.drift < 0.25 && yawN < 0.45 && f.wall < 0.35 ? -9 : 0.3 + 0.3 * f.drift + 0.2 * yawN + 0.2 * f.wall - 0.9 * f.enc + 0.02 * crowd;
             case "dorbit": return 0.36 + (f.spd < 170 ? 0.2 : 0) - 0.6 * f.enc - 0.05 * crowd;
             }
             return 0;
@@ -1213,11 +1234,30 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
         }
 
+        // Share of the shot spent looking steeply down (over ~60 degrees) at a car that is on flat
+        // ground: a map view of the car, dull to watch. On a wall that is square on to the car.
+        steepShare(shot) {
+            const span = (isFinite(shot.t1) ? shot.t1 : shot.t0 + 3) - shot.t0;
+            const dir = this.sd ??= new this.c.T.Vector3();
+            let steep = 0, n = 0;
+            for (const k of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+                const t = shot.t0 + span * k;
+                const P = this.path.pos(t, this.w[1]);
+                const view = this.c.viewOf(shot, t, P, this.path, this.view, this.view2, false);
+                dir.subVectors(view.look, view.pos);
+                const l = dir.length();
+                n++;
+                if (l > 1e-3 && dir.y / l < -0.86 && this.path.carUp(t, this.w[2]).y > 0.6) steep++;
+            }
+            return steep / n;
+        }
+
         check(shot, strict) {
             const P = this.path, w = this.w, up = this.c.up;
             const step = 0.15;
             if (RIDE.has(shot.type)) this.linkBlend(shot);
             this.liftOverRailing(shot);
+            if (this.steepShare(shot) > 0.15) return false;
             if (!RIDE.has(shot.type)) {
                 let ok = 0, n = 0;
                 for (let t = shot.t0; t <= shot.t1 + 1e-6; t += step, n++)
@@ -3369,14 +3409,26 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out.fov = 52;
                 out.lens = 0.45;
                 break;
-            case "dtop":
-                // Straight down from high up, the car driving up the frame as it slowly turns.
-                pos.copy(P).addScaledVector(Hs, -shot.back).addScaledVector(up, shot.up * (1 + 0.15 * Math.sin(Math.PI * k)));
-                look.copy(P).addScaledVector(Hs, 1.5);
-                out.up.copy(Hs).applyAxisAngle(up, shot.spin * (t - shot.t0));
+            case "dtop": {
+                // High up, behind the car and out towards the outside of the turn, looking down at
+                // about 55 degrees (never straight down at the ground). On a wall ride it swings
+                // round to face the wall square on instead.
+                const lift = shot.up * (1 + 0.1 * Math.sin(Math.PI * k));
+                const inside = clamp(path.pos(t + 0.5, e[3]).sub(P).dot(right) / 3, -1, 1);
+                const D = e[4].copy(up).multiplyScalar(lift).addScaledVector(Hs, -0.7 * lift).addScaledVector(right, -inside * 0.35 * lift);
+                const a = path.smooth(t, 2, 1, path.acc);
+                const U = e[3].set(a[0], a[1], a[2]);
+                if (U.lengthSq() > 1e-6) {
+                    U.normalize();
+                    const wall = clamp((0.8 - U.y) / 0.5, 0, 1) * clamp((U.y + 0.2) / 0.2, 0, 1);
+                    if (wall > 0) D.lerp(U.multiplyScalar(0.9 * lift).addScaledVector(Hs, -0.4 * lift), wall);
+                }
+                pos.copy(P).add(D);
+                look.copy(P).addScaledVector(Hs, 4.5);
                 out.fov = 55;
                 out.lens = 0.2;
                 break;
+            }
             case "dorbit": {
                 const back = e[3].copy(Hs).multiplyScalar(-1).applyAxisAngle(up, shot.theta + shot.omega * (t - shot.t0));
                 pos.copy(P).addScaledVector(back, shot.dist).addScaledVector(up, shot.h + 0.6 * Math.sin(Math.PI * k));
