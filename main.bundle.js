@@ -31507,12 +31507,14 @@ window.__nswsAutoGhostNote = function(trackId) {
             TrackEnvironment = __webpack_require__(5169).A,
             SunDirection = __webpack_require__(7680).A,
             TrackPartTransform = __webpack_require__(5735), 
-            k = __webpack_require__(3476), 
-            E = __webpack_require__(8739);
+            k = __webpack_require__(3476),
+            E = __webpack_require__(8739),
+            Part = __webpack_require__(2203).A;
             // Loading a track skips the parts-by-tile map, which only the editor reads; it is built on first use.
             const staleTileMaps = new WeakSet
               , lowestTileYs = new WeakMap
-              , trackRenderStates = new WeakMap;
+              , trackRenderStates = new WeakMap
+              , blockMerges = new WeakMap;
             function lowestTileY(e, t, n) {
                 let i = lowestTileYs.get(e);
                 null == i && lowestTileYs.set(e, i = new Map);
@@ -31644,6 +31646,187 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.attributes = {},
                 e.dispose()
             }
+            // Plain Blocks are drawn as merged faces instead of instances: a face against another Block is dropped and
+            // coplanar faces of one colour become rectangles (no longer than `grid` tiles). The exact same surface is
+            // drawn, with about a third of the triangles on big deco tracks. Blocks whose box is off the tile grid
+            // stay instanced. `blocks` holds [part, resolved colour] pairs.
+            function mergeBlockFaces(blocks, type, grid) {
+                const quads = []
+                  , rest = []
+                  , src = [...type.colors.values()].find(e => null != e)?.geometry
+                  , attrs = null == src ? [] : Object.keys(src.attributes).sort().join();
+                if ("color,normal,position" != attrs)
+                    return { quads, rest: blocks };
+                null === src.boundingBox && src.computeBoundingBox();
+                const S = M.partSize
+                  , boxes = new Map
+                  , placed = [];
+                let x0 = 1 / 0, y0 = 1 / 0, z0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, z1 = -1 / 0;
+                for (const b of blocks) {
+                    const e = b[0]
+                      , k = 8 * e.rotation + e.rotationAxis;
+                    let o = boxes.get(k);
+                    if (void 0 === o) {
+                        const m = (new THREE.Matrix4).makeRotationFromQuaternion(TrackPartTransform.rotationAndAxisToQuaternion(e.rotation, e.rotationAxis))
+                          , n = src.boundingBox.clone().applyMatrix4(m);
+                        o = [n.min.x, n.min.y, n.min.z, n.max.x, n.max.y, n.max.z].map(e => e / S),
+                        o.every(e => Math.abs(e - Math.round(e)) < 1e-3) ? o = o.map(Math.round) : o = null,
+                        boxes.set(k, o)
+                    }
+                    if (null == o) {
+                        rest.push(b);
+                        continue
+                    }
+                    const p = [e.x + o[0], e.y + o[1], e.z + o[2], e.x + o[3], e.y + o[4], e.z + o[5], b[1]];
+                    placed.push(p),
+                    x0 = Math.min(x0, p[0]), y0 = Math.min(y0, p[1]), z0 = Math.min(z0, p[2]),
+                    x1 = Math.max(x1, p[3]), y1 = Math.max(y1, p[4]), z1 = Math.max(z1, p[5])
+                }
+                if (0 == placed.length)
+                    return { quads, rest };
+                const NX = x1 - x0
+                  , NZ = z1 - z0
+                  , layers = new Array(y1 - y0)
+                  , colors = [0]
+                  , at = (x, y, z) => {
+                    if (x < x0 || y < y0 || z < z0 || x >= x1 || y >= y1 || z >= z1)
+                        return 0;
+                    const L = layers[y - y0];
+                    return void 0 === L ? 0 : L[(x - x0) * NZ + z - z0]
+                };
+                for (const p of placed) {
+                    let c = colors.indexOf(p[6]);
+                    c < 0 && (c = colors.push(p[6]) - 1),
+                    p[6] = c;
+                    for (let y = p[1]; y < p[4]; y++) {
+                        const L = layers[y - y0] ?? (layers[y - y0] = new Uint8Array(NX * NZ));
+                        for (let x = p[0]; x < p[3]; x++)
+                            L.fill(c, (x - x0) * NZ + p[2] - z0, (x - x0) * NZ + p[5] - z0)
+                    }
+                }
+                // Exposed cell faces grouped by axis, side, plane, colour and greedy-grid square; cells are packed square-local.
+                const groups = new Map;
+                let lastKey = NaN
+                  , last = null;
+                const add = (a, d, plane, col, u, v) => {
+                    const cu = Math.floor(u / grid)
+                      , cv = Math.floor(v / grid)
+                      , k = (((plane + 32768) * 256 + col) * 8 + 2 * a + (d > 0 ? 1 : 0)) * 4194304 + (cu + 1024) * 2048 + cv + 1024;
+                    k !== lastKey && (lastKey = k, last = groups.get(k), null == last && groups.set(k, last = {a, d, plane, col, cu, cv, cells: [], sorted: !0}));
+                    const e = (u - cu * grid) * grid + v - cv * grid
+                      , c = last.cells;
+                    last.sorted && c.length > 0 && e < c[c.length - 1] && (last.sorted = !1),
+                    c.push(e)
+                };
+                for (const p of placed) {
+                    const col = p[6];
+                    for (let d = -1; d <= 1; d += 2) {
+                        const plane = d > 0 ? p[3] : p[0]
+                          , x = d > 0 ? plane - 1 : plane
+                          , open = x + d < x0 || x + d >= x1;
+                        for (let y = p[1]; y < p[4]; y++) {
+                            const L = layers[y - y0];
+                            for (let z = p[2], i = (x - x0) * NZ + z - z0; z < p[5]; z++, i++)
+                                L[i] == col && (open || 0 == L[i + d * NZ]) && add(0, d, plane, col, y, z)
+                        }
+                    }
+                    for (let d = -1; d <= 1; d += 2) {
+                        const plane = d > 0 ? p[4] : p[1]
+                          , y = d > 0 ? plane - 1 : plane
+                          , L = layers[y - y0]
+                          , N = layers[y + d - y0];
+                        for (let z = p[2]; z < p[5]; z++)
+                            for (let x = p[0], i = (x - x0) * NZ + z - z0; x < p[3]; x++, i += NZ)
+                                L[i] == col && (void 0 === N || 0 == N[i]) && add(1, d, plane, col, z, x)
+                    }
+                    for (let d = -1; d <= 1; d += 2) {
+                        const plane = d > 0 ? p[5] : p[2]
+                          , z = d > 0 ? plane - 1 : plane
+                          , open = z + d < z0 || z + d >= z1;
+                        for (let x = p[0]; x < p[3]; x++) {
+                            const i = (x - x0) * NZ + z - z0;
+                            for (let y = p[1]; y < p[4]; y++) {
+                                const L = layers[y - y0];
+                                L[i] == col && (open || 0 == L[i + d]) && add(2, d, plane, col, x, y)
+                            }
+                        }
+                    }
+                }
+                // Greedy rectangles: the first set cell in order starts one, as wide along v and then as long along u as fits.
+                const bitmap = new Uint8Array(grid * grid)
+                  , take = (s, e) => {
+                    const lu = e / grid | 0
+                      , lv = e - lu * grid;
+                    let w = 1;
+                    for (; lv + w < grid && bitmap[e + w]; )
+                        w++;
+                    let h = 1;
+                    e: for (; lu + h < grid; h++) {
+                        const t = e + h * grid;
+                        for (let n = 0; n < w; n++)
+                            if (!bitmap[t + n])
+                                break e
+                    }
+                    for (let t = 0; t < h; t++)
+                        bitmap.fill(0, e + t * grid, e + t * grid + w);
+                    const u = s.cu * grid + lu
+                      , v = s.cv * grid + lv
+                      , q = {a: s.a, d: s.d, plane: s.plane, color: colors[s.col], u0: u, v0: v, u1: u + h, v1: v + w, x: 0, y: 0, z: 0}
+                      , m = [0, 0, 0];
+                    m[s.a] = s.plane, m[(s.a + 1) % 3] = u + h / 2, m[(s.a + 2) % 3] = v + w / 2,
+                    q.x = m[0], q.y = m[1], q.z = m[2],
+                    quads.push(q)
+                };
+                for (const s of groups.values()) {
+                    let lo = 1 / 0
+                      , hi = -1;
+                    for (const e of s.cells)
+                        bitmap[e] = 1, e < lo && (lo = e), e > hi && (hi = e);
+                    if (s.sorted)
+                        for (const e of s.cells)
+                            bitmap[e] && take(s, e);
+                    else
+                        for (let e = lo; e <= hi; e++)
+                            bitmap[e] && take(s, e)
+                }
+                return { quads, rest }
+            }
+            // One geometry for merged Block quads of one colour, with the same attributes as the Block's own geometry.
+            function blockQuadGeometry(quads, colorGeometry) {
+                const S = M.partSize
+                  , n = quads.length
+                  , pos = new Float32Array(12 * n)
+                  , nor = new Float32Array(12 * n)
+                  , col = new Float32Array(12 * n)
+                  , index = 4 * n > 65535 ? new Uint32Array(6 * n) : new Uint16Array(6 * n)
+                  , ca = colorGeometry.attributes.color
+                  , r = ca.getX(0), g = ca.getY(0), b = ca.getZ(0)
+                  , p = [0, 0, 0];
+                for (let i = 0; i < n; i++) {
+                    const q = quads[i]
+                      , ua = (q.a + 1) % 3
+                      , va = (q.a + 2) % 3
+                      , corners = q.d > 0 ? [[q.u0, q.v0], [q.u1, q.v0], [q.u1, q.v1], [q.u0, q.v1]] : [[q.u0, q.v0], [q.u0, q.v1], [q.u1, q.v1], [q.u1, q.v0]];
+                    for (let k = 0; k < 4; k++) {
+                        const o = 12 * i + 3 * k;
+                        p[q.a] = q.plane * S, p[ua] = corners[k][0] * S, p[va] = corners[k][1] * S,
+                        pos[o] = p[0], pos[o + 1] = p[1], pos[o + 2] = p[2],
+                        nor[o + q.a] = q.d,
+                        col[o] = r, col[o + 1] = g, col[o + 2] = b
+                    }
+                    const o = 6 * i, v = 4 * i;
+                    index[o] = v, index[o + 1] = v + 1, index[o + 2] = v + 2,
+                    index[o + 3] = v, index[o + 4] = v + 2, index[o + 5] = v + 3
+                }
+                const t = new THREE.BufferGeometry;
+                return t.setAttribute("position", new THREE.BufferAttribute(pos,3)),
+                t.setAttribute("normal", new THREE.BufferAttribute(nor,3)),
+                t.setAttribute("color", new THREE.BufferAttribute(col,3)),
+                t.setIndex(new THREE.BufferAttribute(index,1)),
+                t.computeBoundingBox(),
+                t.computeBoundingSphere(),
+                t
+            }
             // Chunk width in 5 m tiles (5/3 of the cull distance), so far chunks drop out instead of staying drawn for one close part.
             function trackChunkSpan(e) {
                 return (e.getTrackCullDistance?.() ?? 1 / 0) / 3
@@ -31656,6 +31839,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 return null == t && trackRenderStates.set(e, t = {
                     meshes: [],
                     geometries: [],
+                    ownGeometries: [],
                     flatMaterial: null,
                     cull: null,
                     distanceCulled: !1,
@@ -31771,6 +31955,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     m.set(this, o, e.clone(), "f")
                 }
                 clear() {
+                    blockMerges.delete(this),
                     m.get(this, l, "f").length = 0,
                     m.get(this, c, "f").clear(),
                     m.get(this, h, "f").clear(),
@@ -31818,7 +32003,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , g = new THREE.Vector3(e * M.partSize,t * M.partSize,n * M.partSize)
                       , v = (new THREE.Matrix4).compose(g, f, new THREE.Vector3(1,1,1))
                       , y = new T(e,t,n,r,a,o,p,v,d,u);
-                    if (m.get(this, l, "f").push(y),
+                    if (blockMerges.delete(this),
+                    m.get(this, l, "f").push(y),
                     t + lowestTileY(p.configuration.tiles, r, a) < 0)
                         throw new Error("Track part below ground");
                     staleTileMaps.has(this) || addPartTiles(m.get(this, c, "f"), y);
@@ -31940,14 +32126,35 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , y = new Map;
                     v.split = A,
                     v.span = span;
+                    const blocks = [];
                     for (const e of m.get(this, l, "f")) {
                         let t = e.color;
                         t == TrackPartColorId.Default && (t = n);
+                        if (e.type.configuration.id == Part.Block) {
+                            blocks.push([e, t]);
+                            continue
+                        }
                         let i = y.get(e.type);
                         null == i && y.set(e.type, i = new Map);
                         const r = i.get(t);
                         null == r ? i.set(t, [e]) : r.push(e)
                     }
+                    const blockType = blocks.length > 0 ? m.get(this, s, "f").getPart(Part.Block) : null
+                      , blockGrid = Math.max(16, Math.floor(Math.min(64, span)));
+                    let merged = null;
+                    null != blockType && (merged = blockMerges.get(this),
+                    (null == merged || merged.grid != blockGrid || merged.color != n) && blockMerges.set(this, merged = {
+                        grid: blockGrid,
+                        color: n,
+                        ...mergeBlockFaces(blocks, blockType, blockGrid)
+                    }));
+                    if (null != merged)
+                        for (const [e,t] of merged.rest) {
+                            let i = y.get(e.type);
+                            null == i && y.set(e.type, i = new Map);
+                            const r = i.get(t);
+                            null == r ? i.set(t, [e]) : r.push(e)
+                        }
                     let w = null;
                     null != c && (v.flatMaterial = new THREE.MeshBasicMaterial({
                         color: c,
@@ -31996,6 +32203,48 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 })
                             }
                         }
+                    if (null != merged && merged.quads.length > 0) {
+                        const byColor = new Map;
+                        for (const e of merged.quads) {
+                            const t = byColor.get(e.color);
+                            null == t ? byColor.set(e.color, [e]) : t.push(e)
+                        }
+                        for (const [e,c] of byColor) {
+                            const n = blockType.colors.get(e);
+                            if (null == n)
+                                throw new Error("Mesh is not loaded");
+                            // About 8k triangles per mesh, so culling and the cinematic camera's rays still work per area.
+                            for (const e of splitTrackParts(c, 4e3, A ? span : 1 / 0)) {
+                                const a = blockQuadGeometry(e, n.geometry)
+                                  , t = new THREE.InstancedMesh(a,n.material,1);
+                                v.ownGeometries.push(a),
+                                t.matrixAutoUpdate = !1,
+                                t.matrixWorldAutoUpdate = !1,
+                                t.frustumCulled = A,
+                                t.castShadow = h,
+                                t.receiveShadow = !0,
+                                t.setMatrixAt(0, x.identity()),
+                                t.computeBoundingSphere(),
+                                t.computeBoundingBox(),
+                                m.get(this, r, "f").scene.add(t),
+                                m.get(this, u, "f").push(t);
+                                let i = null;
+                                null != w && (i = new THREE.InstancedMesh(a,v.flatMaterial,1),
+                                i.setMatrixAt(0, w),
+                                i.matrixAutoUpdate = !1,
+                                i.matrixWorldAutoUpdate = !1,
+                                i.renderOrder = -1,
+                                i.frustumCulled = A && setFlatShadowBounds(t, w, i),
+                                m.get(this, r, "f").scene.add(i),
+                                m.get(this, u, "f").push(i)),
+                                A && v.meshes.push({
+                                    mesh: t,
+                                    shadow: i,
+                                    shadowCulled: null != i && i.frustumCulled
+                                })
+                            }
+                        }
+                    }
                     A && null != d.trackCullers && (v.cull ?? (v.cull = e => cullTrackByDistance(v, d, e)),
                     v.warm = !1,
                     v.culledAfterWarmUp = A,
@@ -32141,6 +32390,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.flatMaterial = null,
                 e.geometries.forEach(releaseSharedGeometry),
                 e.geometries = [],
+                e.ownGeometries.forEach(e => e.dispose()),
+                e.ownGeometries = [],
                 e.meshes = [],
                 e.distanceCulled = !1,
                 m.get(this, r, "f").trackCullers?.delete(e.cull))
@@ -32151,6 +32402,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e < 0 || e >= m.get(this, l, "f").length)
                     throw new Error("Track part index out of bounds");
                 const t = m.get(this, l, "f")[e];
+                blockMerges.delete(this),
                 m.get(this, l, "f").splice(e, 1);
                 t.type.configuration.tiles.rotated(t.rotation, t.rotationAxis).forEach(( (e, n, i) => {
                     const r = (t.x + e).toString() + "|" + (t.y + n).toString() + "|" + (t.z + i).toString()
@@ -56908,7 +57160,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             chunks: ["1b4d0bf36e3ba668", "5a4514b67470eddd", "6d862c01e865cec4", "cb784a94e88eac0b"],
             masks: ["4a4f1a3edaa0bafc", "93e0d9b0353e04f8", "6ea6e66d40f30ed2", "e6b5d615db0d9121"],
             file: "tracks/community/week10.track",
-            tracks: [{ id: "4d1706081b6f519ed84ee6440314f7c470eb96e57ccc8a1b18fb9919cb2aa761", name: "1 - NyQuill is yummy", short: "NyQ", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week10_1.png" }, { id: "d182cdf7da064f274c33eb7e121e4f73703177db482b231f1a8e01711d52f660", name: "2 - chezbug", short: "Chez", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week10_2.png" }, { id: "bc2173bacc5a4bcaa72d0f1caea34bc0c718c82403f2026fad587526e25e43b5", name: "3 - ICE", short: "ICE", author: "Cookedbyapringle & Mask", env: "Summer", thumb: "tracks/community/thumbnails/week10_3.png" }, { id: "6cb8877fa603b233efbcba84764432229e719c7e8b23bf5e74a0151b9a229593", name: "4 - OneDrift", short: "1Drft", author: "Cookedbyapringle", env: "Winter", thumb: "tracks/community/thumbnails/week10_4.png" }, { id: "0ab0606d9eea87674aef901ee7ddd820c8705516157a35dffde3066eea48a23d", name: "5 - Thank u next", short: "TUN", author: "Simo_900", env: "Summer", thumb: "tracks/community/thumbnails/week10_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
+            tracks: [{ id: "4d1706081b6f519ed84ee6440314f7c470eb96e57ccc8a1b18fb9919cb2aa761", name: "1 - NyQuill is yummy", short: "NyQ", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week10_1.png" }, { id: "d182cdf7da064f274c33eb7e121e4f73703177db482b231f1a8e01711d52f660", name: "2 - chezbug", short: "Chez", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week10_2.png" }, { id: "bc2173bacc5a4bcaa72d0f1caea34bc0c718c82403f2026fad587526e25e43b5", name: "3 - ICE", short: "ICE", author: "Cookedbyapringle & Mask", env: "Summer", thumb: "tracks/community/thumbnails/week10_3.png" }, { id: "6cb8877fa603b233efbcba84764432229e719c7e8b23bf5e74a0151b9a229593", name: "4 - OneDrift", short: "1Drft", author: "Cookedbyapringle", env: "Winter", thumb: "tracks/community/thumbnails/week10_4.png" }, { id: "53c1ab56218454d4beb08db5c5d39e6b0efb08173cb8656d2e70443a881d3926", name: "5 - Thank u next", short: "TUN", author: "Simo_900", env: "Summer", thumb: "tracks/community/thumbnails/week10_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;

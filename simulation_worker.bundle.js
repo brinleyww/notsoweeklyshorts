@@ -13311,7 +13311,7 @@
             // (null here) that is the other one; tracks with more list each order's next gate by tile.
             const __royaleTracks = new Map([
                 ["7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c", null],
-                ["0ab0606d9eea87674aef901ee7ddd820c8705516157a35dffde3066eea48a23d", new Map([
+                ["53c1ab56218454d4beb08db5c5d39e6b0efb08173cb8656d2e70443a881d3926", new Map([
                     [0, { x: 0, y: 30, z: -70 }],
                     [1, { x: 0, y: 30, z: -130 }],
                     // A wall gate (top facing -z) above the quarter-pipe: the car spawns nose down on it.
