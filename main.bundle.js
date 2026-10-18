@@ -52560,6 +52560,36 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 _container.appendChild(_row);
             }
             )(),
+            ( () => {
+                const _media = window.__nswsChat && window.__nswsChat.media;
+                if (!_media) return;
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Images and GIFs";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _buttons = [];
+                for (const _mode of _media.modes) {
+                    const _btn = document.createElement("button");
+                    _btn.className = _mode.id === _media.get() ? "button selected" : "button";
+                    _btn.textContent = _mode.title;
+                    _btn.addEventListener("click", ( () => {
+                        C.get(this, vs, "f").playUIClick();
+                        for (const _b of _buttons) _b.className = "button";
+                        _btn.className = "button selected";
+                        _media.set(_mode.id);
+                    }
+                    ));
+                    _wrap.appendChild(_btn);
+                    _buttons.push(_btn);
+                }
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
+            )(),
             C.get(this, ms, "m", Ds).call(this, "Clips"),
             ( () => {
                 const _container = C.get(this, ks, "f");

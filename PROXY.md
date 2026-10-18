@@ -293,6 +293,37 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   delete anyone's), censors edits like new messages, keeps the original pings so an edit can't
   notify anyone, and allows 8 edits per player per 20 s. Reply quotes show the original's
   current text while it is still in the chat.
+- **Images and GIFs:** the (+) button, pasting or dropping a file attaches an image; the GIF
+  button opens a picker with Favourites and KLIPY's Trending and search. A message carries
+  `media: { f: id }` (an upload) or `media: { g: { url, prev, slug, w, h, title } }` (a KLIPY
+  GIF) and may have no text. Settings → Chat → "Images and GIFs" can hide other players'
+  images behind a "Show" button. The owner's moderation tools add "Ban this image/GIF", which
+  deletes every message showing it and refuses it for good.
+- **Uploads** go to `POST /nsws/chat/upload` (text/plain body: 4-byte header length, header JSON
+  `{v, key}`, then the file) and are stored in the main `ChatRoom` under the first 32 hex of their
+  SHA-256, in 1 MB parts, while a message shows them (or 15 minutes after upload). `GET
+  /nsws/chat/file/<id>` serves them with no Origin check, since `<img>` sends none. The page
+  redraws non-GIF images as WebP (at most 1600 px, which also drops photo metadata); GIFs go up
+  as they are. Limits: 6 MB GIFs, 4 MB other images, 5 uploads a minute and 40 a day per player,
+  200 a day per network. Cup chats take no images.
+- **Checking uploads** (`proxy/src/chatmedia.js`, Workers AI binding `AI`): Clef-flash rates
+  nudity/sexual content, hate symbols and gore, and Moondream reads out any text, which goes
+  through the chat's slur filter (Clef doesn't flag slurs written in an image). A GIF is decoded
+  in the Durable Object and 16 evenly spaced frames go to Clef as four 2x2 grids; the middle one
+  goes to Moondream. Anything above 0.5 is refused. Verdicts are kept by hash for 30 days, so
+  re-posting a file costs no check. The chat runs at most 300 checks a day (about the free
+  Workers AI allowance; a Moondream read alone is ~21 neurons) and refuses uploads, not lets them
+  through, when the models can't be reached. The owner's uploads skip the check.
+- **KLIPY GIFs:** KLIPY's terms say requests must come from the player's browser, not a server,
+  and results must not be filtered or reordered by us. So the page calls KLIPY itself with the
+  app key in `window.__nswsKlipyKey` (index.html; no key = no search, favourites still work),
+  with `content_filter=low` (up to PG-13, the same as the key's Partner Panel setting), and refuses to search terms on its own sexual-word list or the
+  chat's slur list (loaded from `proxy/src/chatfilter.js`). The search box must say "Search
+  KLIPY". The Worker only accepts KLIPY media URLs (`static*.klipy.com`) and censors the title.
+  Extra blocked search terms and keywords can be set per key in KLIPY's Partner Panel.
+- **Favourites** are in `localStorage` (`_nswsChatGifStars`, up to 100). A starred upload also keeps
+  a copy of the file in IndexedDB (`nsws-chat`), since uploads leave the server; sending it uploads
+  it again, which the hash makes cheap.
 
 ## Announcements
 

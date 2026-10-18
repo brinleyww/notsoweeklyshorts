@@ -21,6 +21,23 @@
     const POLL_ABORT_MS = 35000;
     const SEND_ABORT_MS = 15000;
     const EMOJI_URL = "mod/nsws_emoji.json";
+    // Uploaded images, served by the Worker after its model has checked them (proxy/src/chatmedia.js).
+    const FILE_URL = API + "nsws/chat/file/";
+    const MAX_UPLOAD = 6 * 1024 * 1024;
+    // Other images are redrawn as WebP at most this many pixels across, which also drops their metadata.
+    const STILL_SIDE = 1600;
+    // GIF search comes from KLIPY, called straight from the page as their terms require. The key
+    // (window.__nswsKlipyKey, index.html) is a public app key; without one only favourites show.
+    const KLIPY_KEY = window.__nswsKlipyKey || "";
+    const KLIPY_API = "https://api.klipy.com/api/v1/";
+    const KLIPY_URL = /^https:\/\/static[12]?\.klipy\.com\/[A-Za-z0-9._~\/-]{1,250}(\?[A-Za-z0-9._~=&%-]{0,200})?$/;
+    const GIF_PAGE = 24;
+    const GIF_STARS_KEY = "_nswsChatGifStars";
+    const MAX_STARS = 100;
+    const MEDIA_KEY = "_nswsChatMedia";
+    const MEDIA_MODES = [{ id: "show", title: "Show" }, { id: "click", title: "Click to show" }];
+    // Searches the page won't send, on top of KLIPY's PG-13 filter and the chat's slur list.
+    const GIF_BLOCKED = /(?:^|[^a-z])(?:porn\w*|sex(?:y|ier|iest|ual\w*|ting|t|ts)?|nsfw|nudes?|nudity|naked|hentai|boobs?|boobies|tits|titty|titties|dicks?|cocks?|penis\w*|vagina\w*|puss(?:y|ies)|cum(?:s|ming|shot\w*)?|horny|onlyfans|rule ?34|milfs?|thots?|strip(?:per|pers|ping|tease)|xxx+|erotic\w*|fetish\w*|bdsm|nipples?|orgasm\w*|blowjob\w*|handjob\w*|anal|dildos?|vibrators?|lingerie|twerk\w*|booty|ahegao|futa\w*|lewd\w*|kinky?|bondage|camgirls?|thicc|jerk ?off|masturbat\w*|genital\w*|seductive|sensual)(?![a-z])/;
     const MAX_TEXT = 200;
     const MAX_ITEMS = 200;
     const KEEPALIVE_MS = 30000;
@@ -53,6 +70,9 @@
     const DELETE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V4h6v3"/></svg>';
     const REPLY_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 7 5 12l5 5"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/></svg>';
     const ADD_REACTION_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.6 13.4A9 9 0 1 1 13 3.1"/><path d="M8.5 14.5s1.2 1.6 3.5 1.6 3.5-1.6 3.5-1.6"/><path d="M9 9.5h.01M15 9.5h.01"/><path d="M19 2.5v6M16 5.5h6"/></svg>';
+    const STAR_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.8z"/></svg>';
+    const STARRED_ICON = STAR_ICON.replace('fill="none"', 'fill="currentColor"');
+    const ATTACH_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>';
     const TAB_ICONS = [0x1f600, 0x1f44b, 0x1f43b, 0x1f354, 0x1f697, 0x26bd, 0x1f4a1, 0x1f523, 0x1f3c1];
 
     // A font only downloads once something on screen uses it. Credits: mod/fonts/LICENSES.txt.
@@ -203,6 +223,53 @@
 #nsws-chat-feed input{flex:1;font:inherit;font-size:16px;color:var(--text-color,#fff);background:#141a38;border:none;outline:none;padding:7px 10px;}
 @keyframes nsws-feed-fade{0%,80%{opacity:1;}100%{opacity:0;}}
 #nsws-chat>.grip{position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,.35) 50%);}
+#nsws-chat .m>.media{position:relative;width:fit-content;max-width:100%;margin:4px 0 2px;}
+#nsws-chat .m>.media>img{display:block;max-width:100%;height:auto;border-radius:6px;background:rgba(0,0,0,.25);cursor:zoom-in;}
+#nsws-chat .m>.media>.star{position:absolute;top:5px;right:5px;display:none;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:rgba(17,32,82,.85);color:#fff;cursor:pointer;}
+#nsws-chat .m>.media:hover>.star,#nsws-chat .m.open>.media>.star{display:flex;}
+#nsws-chat .m>.media>.star.on{display:flex;color:#f0b232;}
+#nsws-chat .m>.media>.star:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat .m>.media>.reveal{padding:10px 14px;border:0;border-radius:6px;background:rgba(0,0,0,.25);color:inherit;font:inherit;font-size:.85em;cursor:pointer;}
+#nsws-chat .m>.media>.reveal:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat .m>.media>.gone{padding:8px 12px;border-radius:6px;background:rgba(0,0,0,.2);font-size:.8em;font-style:italic;opacity:.6;}
+#nsws-chat>form>button.icon-button{display:flex;align-items:center;justify-content:center;padding:0 6px;background:transparent;opacity:.75;}
+#nsws-chat>form>button.icon-button:hover,#nsws-chat>form>button.icon-button.on{background:transparent;opacity:1;}
+#nsws-chat>form>button.gif-button{padding:0 5px;background:transparent;opacity:.75;}
+#nsws-chat>form>button.gif-button>span{display:block;padding:1px 4px;border:2px solid currentColor;border-radius:4px;font-family:Arial,sans-serif;font-style:normal;font-size:11px;font-weight:bold;line-height:1.2;}
+#nsws-chat>form>button.gif-button:hover,#nsws-chat>form>button.gif-button.on{background:transparent;opacity:1;}
+#nsws-chat>.attach{display:none;flex-shrink:0;align-items:center;gap:10px;padding:6px 6px 0 8px;font-size:14px;}
+#nsws-chat>.attach.on{display:flex;}
+#nsws-chat>.attach>img{width:48px;height:48px;flex-shrink:0;object-fit:cover;border-radius:6px;background:rgba(0,0,0,.25);}
+#nsws-chat>.attach>.what{flex:1;min-width:0;}
+#nsws-chat>.attach>.what>div{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+#nsws-chat>.attach>.what>.state{font-size:.85em;opacity:.7;}
+#nsws-chat>.attach>.what>.state.bad{color:#f38b8d;opacity:1;}
+#nsws-chat>.attach>button{flex-shrink:0;width:30px;height:30px;padding:0;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;cursor:pointer;}
+#nsws-chat>.attach>button:hover{background:#da373c;}
+#nsws-chat.has-attach>.suggest,#nsws-chat.has-attach>.emoji-panel,#nsws-chat.has-attach>.gif-panel{bottom:102px;}
+#nsws-chat.has-attach.has-reply>.suggest,#nsws-chat.has-attach.has-reply>.emoji-panel,#nsws-chat.has-attach.has-reply>.gif-panel{bottom:134px;}
+#nsws-chat.has-reply>.gif-panel{bottom:80px;}
+#nsws-chat.drop::after{content:"Drop an image or GIF to attach it";position:absolute;inset:36px 0 0 0;z-index:7;display:flex;align-items:center;justify-content:center;border:2px dashed rgba(255,255,255,.6);background:rgba(17,32,82,.85);font-size:15px;pointer-events:none;}
+#nsws-chat>.gif-panel{position:absolute;right:6px;bottom:48px;z-index:3;display:none;flex-direction:column;width:min(420px,calc(100% - 12px));height:min(420px,calc(100% - 90px));background:var(--surface-tertiary-color,#192042);box-shadow:0 -4px 20px rgba(0,0,0,.5);}
+#nsws-chat>.gif-panel.on{display:flex;}
+#nsws-chat>.gif-panel>input{flex-shrink:0;margin:8px 8px 6px;padding:6px 8px;border:0;outline:0;background:var(--surface-secondary-color,#212b58);color:inherit;font:inherit;font-size:15px;user-select:text;}
+#nsws-chat>.gif-panel>.tabs{display:flex;flex-shrink:0;gap:4px;padding:0 8px 6px;}
+#nsws-chat>.gif-panel>.tabs>button{padding:4px 10px;border:0;background:transparent;color:inherit;font:inherit;font-size:14px;cursor:pointer;opacity:.7;}
+#nsws-chat>.gif-panel>.tabs>button:hover,#nsws-chat>.gif-panel>.tabs>button.on{background:var(--button-hover-color,#334b77);opacity:1;}
+#nsws-chat>.gif-panel>.grid{flex:1;min-height:0;overflow-y:auto;padding:0 8px 8px;touch-action:pan-y;}
+#nsws-chat>.gif-panel>.grid>.cols{display:flex;align-items:flex-start;gap:6px;}
+#nsws-chat>.gif-panel>.grid>.cols>.col{flex:1;min-width:0;}
+#nsws-chat>.gif-panel .tile{position:relative;margin-bottom:6px;border-radius:6px;background:rgba(255,255,255,.06);cursor:pointer;overflow:hidden;}
+#nsws-chat>.gif-panel .tile>img{display:block;width:100%;height:auto;}
+#nsws-chat>.gif-panel .tile:hover{outline:2px solid #fff;}
+#nsws-chat>.gif-panel .tile>.star{position:absolute;top:4px;right:4px;display:none;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:rgba(17,32,82,.85);color:#fff;cursor:pointer;}
+#nsws-chat>.gif-panel .tile:hover>.star,#nsws-chat>.gif-panel .tile>.star.on{display:flex;}
+#nsws-chat>.gif-panel .tile>.star.on{color:#f0b232;}
+#nsws-chat>.gif-panel>.grid>.note{padding:24px 12px;text-align:center;font-size:14px;opacity:.65;}
+#nsws-chat>.gif-panel>.foot{flex-shrink:0;padding:4px 10px 6px;font-size:11px;text-align:right;opacity:.55;}
+#nsws-chat-lightbox{position:fixed;inset:0;z-index:10005;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.82);cursor:zoom-out;}
+#nsws-chat-lightbox>img{max-width:92vw;max-height:84vh;object-fit:contain;}
+#nsws-chat-lightbox>a{color:#c9cdfb;font:14px Arial,sans-serif;font-style:normal;}
 `;
 
     function currentFont() {
@@ -383,6 +450,20 @@
     // The message the emoji panel is picking a reaction for, or null while it types into the box.
     let reactTarget = null;
     let lastPointer = "mouse";
+    // The image waiting in the composer: { blob, name, url, state: "working" | "ready" | "bad",
+    // file (the Worker's { id, type, w, h } once uploaded), error, send (send when ready) }.
+    let attachment = null;
+    let lastAttachment = null;
+    let attachBar = null;
+    let attachButton = null;
+    let fileInput = null;
+    let gifButton = null;
+    let gifPanel = null;
+    // What the GIF panel shows: tab "stars" | "trending" | "search", and the pages loaded so far.
+    let gifView = null;
+    // A GIF picked while slow mode still holds the last message.
+    let queuedGif = null;
+    let lightbox = null;
 
     function loadEmoji() {
         if (emoji || emojiLoading) return emojiLoading;
@@ -594,7 +675,8 @@
         const who = document.createElement("b");
         who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
-        toast.append(who, m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ", m.text.length > 90 ? m.text.slice(0, 90) + "..." : m.text);
+        const text = lineText(m);
+        toast.append(who, m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ", text.length > 90 ? text.slice(0, 90) + "..." : text);
         document.body.appendChild(toast);
         const bar = root.getBoundingClientRect();
         const below = bar.bottom + 6 + toast.offsetHeight <= window.innerHeight;
@@ -901,6 +983,7 @@
         }
         if (!panel) buildPanel();
         hideSuggest();
+        closeGifPanel();
         reactTarget = forReaction;
         panel.querySelector("input").value = "";
         panel.querySelector("input").placeholder = forReaction != null ? "Pick a reaction" : "Find the perfect emoji";
@@ -910,6 +993,592 @@
         panel.querySelector(".grid").scrollTop = 0;
         panel.querySelector("input").focus();
         document.addEventListener("pointerdown", outsidePanel, true);
+    }
+
+    function mediaMode() {
+        return storageGet(MEDIA_KEY) === "click" ? "click" : "show";
+    }
+
+    function mediaLabel(m) {
+        if (m?.media?.g) return "GIF";
+        if (m?.media?.f) return m.media.f.type === "image/gif" ? "GIF" : "Image";
+        return "";
+    }
+
+    // A message as one line of text, for places that show no images (toasts, race previews, Cuppa).
+    function lineText(m) {
+        const label = mediaLabel(m);
+        if (!label) return m.text;
+        return m.text ? m.text + " [" + label + "]" : "[" + label + "]";
+    }
+
+    function mediaSource(media) {
+        if (media.g) return { src: media.g.url, w: media.g.w, h: media.g.h, gif: true, title: media.g.title || "GIF" };
+        const gif = media.f.type === "image/gif";
+        return { src: FILE_URL + media.f.id, w: media.f.w, h: media.f.h, gif, title: gif ? "GIF" : "Image" };
+    }
+
+    // The space is held before the image loads, so the log doesn't jump.
+    function sizeImage(img, w, h, maxW, maxH) {
+        const scale = Math.min(1, maxW / w, maxH / h);
+        img.width = Math.max(1, Math.round(w * scale));
+        img.height = Math.max(1, Math.round(h * scale));
+        img.style.aspectRatio = w + " / " + h;
+    }
+
+    function mediaElement(m) {
+        const box = document.createElement("div");
+        box.className = "media";
+        const source = mediaSource(m.media);
+        const show = () => {
+            box.textContent = "";
+            const img = document.createElement("img");
+            img.alt = source.title;
+            img.decoding = "async";
+            img.referrerPolicy = "no-referrer";
+            sizeImage(img, source.w, source.h, 300, 240);
+            img.addEventListener("error", () => {
+                const gone = document.createElement("div");
+                gone.className = "gone";
+                gone.textContent = source.gif ? "GIF unavailable" : "Image unavailable";
+                img.replaceWith(gone);
+            });
+            img.addEventListener("click", () => openLightbox(source));
+            img.src = source.src;
+            box.appendChild(img);
+            if (source.gif) box.appendChild(starButton(starFor(m.media)));
+        };
+        if (mediaMode() === "click" && m.uid !== me?.uid) {
+            const reveal = document.createElement("button");
+            reveal.type = "button";
+            reveal.className = "reveal";
+            reveal.textContent = "Show " + mediaLabel(m);
+            reveal.addEventListener("click", show);
+            box.appendChild(reveal);
+        } else {
+            show();
+        }
+        return box;
+    }
+
+    function openLightbox(source) {
+        closeLightbox();
+        lightbox = document.createElement("div");
+        lightbox.id = "nsws-chat-lightbox";
+        const img = document.createElement("img");
+        img.alt = source.title;
+        img.referrerPolicy = "no-referrer";
+        img.src = source.src;
+        const link = document.createElement("a");
+        link.href = source.src;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Open original";
+        link.addEventListener("click", stop);
+        lightbox.append(img, link);
+        lightbox.addEventListener("click", (e) => {
+            e.stopPropagation();
+            closeLightbox();
+        });
+        for (const type of ["pointerdown", "mousedown", "mouseup", "touchstart", "touchend", "wheel", "contextmenu"]) lightbox.addEventListener(type, stop);
+        document.body.appendChild(lightbox);
+        window.addEventListener("keydown", lightboxKey, true);
+    }
+
+    function lightboxKey(e) {
+        if (e.key !== "Escape" && e.code !== "Escape") return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        closeLightbox();
+    }
+
+    function closeLightbox() {
+        lightbox?.remove();
+        lightbox = null;
+        window.removeEventListener("keydown", lightboxKey, true);
+    }
+
+    // Favourite GIFs, newest first: KLIPY ones by their URLs, uploads by id with a copy of the file
+    // in IndexedDB, since an upload leaves the server once the chat has moved on.
+    function loadStars() {
+        try {
+            const list = JSON.parse(storageGet(GIF_STARS_KEY));
+            return Array.isArray(list) ? list.filter((s) => s && (s.k === "g" ? KLIPY_URL.test(s.url) && KLIPY_URL.test(s.prev) : /^[0-9a-f]{32}$/.test(s.id))) : [];
+        } catch {
+            return [];
+        }
+    }
+
+    function starKey(s) {
+        return s.k === "g" ? "g:" + s.slug : "f:" + s.id;
+    }
+
+    function starFor(media) {
+        if (media.g) return { k: "g", url: media.g.url, prev: media.g.prev, slug: media.g.slug, w: media.g.w, h: media.g.h, title: media.g.title || "" };
+        return { k: "f", id: media.f.id, w: media.f.w, h: media.f.h };
+    }
+
+    function isStarred(star, list = loadStars()) {
+        const key = starKey(star);
+        return list.some((s) => starKey(s) === key);
+    }
+
+    let gifDb = null;
+    function idb(op, key, value) {
+        gifDb = gifDb || new Promise((resolve, reject) => {
+            const req = indexedDB.open("nsws-chat", 1);
+            req.onupgradeneeded = () => req.result.createObjectStore("gifs");
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        }).catch((err) => {
+            gifDb = null;
+            throw err;
+        });
+        return gifDb.then((db) => new Promise((resolve, reject) => {
+            const store = db.transaction("gifs", op === "get" ? "readonly" : "readwrite").objectStore("gifs");
+            const req = op === "get" ? store.get(key) : op === "put" ? store.put(value, key) : store.delete(key);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        }));
+    }
+
+    async function toggleStar(star) {
+        const list = loadStars();
+        const key = starKey(star);
+        if (isStarred(star, list)) {
+            storageSet(GIF_STARS_KEY, JSON.stringify(list.filter((s) => starKey(s) !== key)));
+            if (star.k === "f") idb("delete", star.id).catch(() => {});
+            return;
+        }
+        if (star.k === "f") {
+            try {
+                const res = await fetch(FILE_URL + star.id);
+                if (!res.ok) throw new Error();
+                await idb("put", star.id, await res.blob());
+            } catch {
+                addSystem("Couldn't save that GIF on this device.");
+                return;
+            }
+        }
+        if (list.length >= MAX_STARS) addSystem("You have " + MAX_STARS + " favourite GIFs, so the oldest one was dropped.");
+        storageSet(GIF_STARS_KEY, JSON.stringify([star, ...list].slice(0, MAX_STARS)));
+    }
+
+    function paintStar(b, on) {
+        b.classList.toggle("on", on);
+        b.innerHTML = on ? STARRED_ICON : STAR_ICON;
+        b.title = on ? "Remove from favourites" : "Add to favourites";
+    }
+
+    function starButton(star) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "star";
+        b.dataset.star = starKey(star);
+        paintStar(b, isStarred(star));
+        b.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            await toggleStar(star);
+            const keys = new Set(loadStars().map(starKey));
+            for (const other of root?.querySelectorAll("button.star") ?? []) paintStar(other, keys.has(other.dataset.star));
+        });
+        return b;
+    }
+
+    // GIFs keep their animation and bytes (and are checked frame by frame on the server). Anything
+    // else is redrawn as a still WebP, which also strips metadata such as where a photo was taken.
+    async function prepareUpload(file) {
+        const head = new Uint8Array(await file.slice(0, 6).arrayBuffer());
+        if (String.fromCharCode(...head.slice(0, 4)) === "GIF8") {
+            if (file.size > MAX_UPLOAD) throw new Error("GIFs can be up to 6 MB.");
+            return file;
+        }
+        if (!/^image\//.test(file.type)) throw new Error("Only images and GIFs can be posted.");
+        let bitmap;
+        try {
+            bitmap = await createImageBitmap(file);
+        } catch {
+            throw new Error("Couldn't read that image.");
+        }
+        const scale = Math.min(1, STILL_SIDE / Math.max(bitmap.width, bitmap.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        bitmap.close?.();
+        const encode = (type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+        let blob = await encode("image/webp", 0.9);
+        // Browsers without a WebP encoder hand back a PNG instead.
+        if (!blob || blob.type !== "image/webp" || blob.size > 4 * 1024 * 1024) blob = await encode("image/jpeg", 0.85);
+        if (!blob) throw new Error("Couldn't read that image.");
+        return blob;
+    }
+
+    // A text/plain body, like the chat's other requests, so there is no CORS preflight.
+    async function uploadBlob(blob) {
+        const head = { v: visitorId() };
+        const key = await ownerKey();
+        if (key) head.key = key;
+        const header = new TextEncoder().encode(JSON.stringify(head));
+        const size = new Uint8Array(4);
+        new DataView(size.buffer).setUint32(0, header.length, true);
+        let res;
+        try {
+            res = await fetch(HTTP_URL + "upload", {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: new Blob([size, header, blob], { type: "text/plain" }),
+                cache: "no-store",
+            });
+        } catch {
+            throw new Error("Couldn't upload that. Check your connection.");
+        }
+        if (res.status === 413) throw new Error("That file is too big (6 MB at most).");
+        const data = await res.json().catch(() => null);
+        if (data?.error) throw new Error(data.error);
+        if (!res.ok || !data?.file) throw new Error("Couldn't upload that. Try again.");
+        return data.file;
+    }
+
+    async function attachFile(file) {
+        if (!root) return;
+        setAttachment(null);
+        const item = { name: file.name || "Pasted image", state: "working", url: null, file: null, error: null, send: false };
+        try {
+            item.url = URL.createObjectURL(file);
+        } catch {}
+        setAttachment(item);
+        input?.focus();
+        try {
+            const blob = await prepareUpload(file);
+            if (attachment !== item) return;
+            item.file = await uploadBlob(blob);
+            if (attachment !== item) return;
+            item.state = "ready";
+        } catch (err) {
+            if (attachment !== item) return;
+            item.state = "bad";
+            item.error = err.message;
+            item.send = false;
+        }
+        updateAttachBar();
+        if (item.send) trySend();
+    }
+
+    function setAttachment(item) {
+        if (attachment?.url && attachment !== lastAttachment && attachment !== item) URL.revokeObjectURL(attachment.url);
+        attachment = item;
+        updateAttachBar();
+    }
+
+    function updateAttachBar() {
+        if (!attachBar) return;
+        root.classList.toggle("has-attach", !!attachment);
+        attachBar.classList.toggle("on", !!attachment);
+        if (!attachment) return;
+        const [thumb, what] = attachBar.children;
+        thumb.src = attachment.url || "";
+        what.firstChild.textContent = attachment.name;
+        const state = what.lastChild;
+        state.classList.toggle("bad", attachment.state === "bad");
+        state.textContent = attachment.state === "bad" ? attachment.error
+            : attachment.state === "ready" ? "Ready to send"
+                : attachment.send ? "Uploading... it sends when it's ready" : "Uploading and checking...";
+    }
+
+    function imageFrom(files) {
+        for (const f of files || []) if (f && (/^image\//.test(f.type) || /\.gif$/i.test(f.name || ""))) return f;
+        return null;
+    }
+
+    // Sends a GIF on its own, like Discord, leaving whatever is typed in the box.
+    function sendMedia(media) {
+        if (!connected()) return addSystem("Not connected yet.");
+        const wait = me.owner ? 0 : readyAt - Date.now();
+        if (wait > 0) {
+            if (timedOut) return showWait();
+            const first = !queuedGif;
+            queuedGif = media;
+            if (first) {
+                setTimeout(() => {
+                    const next = queuedGif;
+                    queuedGif = null;
+                    if (next) sendMedia(next);
+                }, wait);
+            }
+            return;
+        }
+        lastText = "";
+        lastReply = replyTo;
+        lastAttachment = null;
+        const data = { t: "msg", text: "", nick: readNickname(), media };
+        if (replyTo) data.reply = { id: replyTo.id, ping: replyTo.ping && replyTo.uid !== me.uid };
+        send(data);
+        cancelReply();
+        readyAt = Date.now() + SLOW_MS;
+    }
+
+    let klipyId = null;
+    async function klipyCustomer() {
+        if (!klipyId) {
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nsws-klipy:" + visitorId()));
+            klipyId = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+        }
+        return klipyId;
+    }
+
+    function klipyStar(item) {
+        const f = item?.file;
+        if (!f || typeof item.slug !== "string") return null;
+        const pick = (sizes) => {
+            for (const size of sizes) {
+                for (const format of ["webp", "gif"]) {
+                    const x = f[size]?.[format];
+                    if (x && KLIPY_URL.test(x.url ?? "") && x.width > 0 && x.height > 0) return x;
+                }
+            }
+            return null;
+        };
+        const full = pick(["md", "hd", "sm"]);
+        const prev = pick(["sm", "xs", "md"]);
+        if (!full || !prev) return null;
+        return { k: "g", url: full.url, prev: prev.url, slug: item.slug, w: full.width, h: full.height, title: typeof item.title === "string" ? item.title.slice(0, 100) : "" };
+    }
+
+    async function klipyPage(kind, query, page) {
+        const params = new URLSearchParams({ page: String(page), per_page: String(GIF_PAGE), customer_id: await klipyCustomer(), content_filter: "low", format_filter: "webp,gif" });
+        if (kind === "search") params.set("q", query);
+        const res = await fetch(KLIPY_API + encodeURIComponent(KLIPY_KEY) + "/gifs/" + kind + "?" + params, { referrerPolicy: "no-referrer" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = (await res.json())?.data;
+        const list = (Array.isArray(data?.data) ? data.data : []).map(klipyStar).filter(Boolean);
+        return { list, more: !!data?.has_next && list.length > 0 };
+    }
+
+    // KLIPY ranks GIFs by what gets sent.
+    function klipyShared(slug, query) {
+        klipyCustomer().then((id) => fetch(KLIPY_API + encodeURIComponent(KLIPY_KEY) + "/gifs/share/" + encodeURIComponent(slug), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ customer_id: id, q: query || "" }),
+            referrerPolicy: "no-referrer",
+        })).catch(() => {});
+    }
+
+    // The chat's own slur list (the same file the Worker censors with), loaded on first search.
+    let slurCheck = null;
+    async function blockedSearch(query) {
+        const q = query.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
+        const leet = q.replace(/[0134578@$]/g, (c) => ({ 0: "o", 1: "i", 3: "e", 4: "a", 5: "s", 7: "t", 8: "b", "@": "a", "$": "s" })[c]);
+        if (GIF_BLOCKED.test(q) || GIF_BLOCKED.test(leet) || GIF_BLOCKED.test(leet.replace(/[^a-z]+/g, ""))) return true;
+        slurCheck = slurCheck || import(new URL("proxy/src/chatfilter.js", document.baseURI).href).then((m) => m.findSlurs).catch(() => () => []);
+        return (await slurCheck)(query).length > 0;
+    }
+
+    function gifNote(text) {
+        const note = document.createElement("div");
+        note.className = "note";
+        note.textContent = text;
+        gifPanel.querySelector(".grid").appendChild(note);
+    }
+
+    function gifTile(star) {
+        const tile = document.createElement("div");
+        tile.className = "tile";
+        tile.title = star.title || "";
+        const img = document.createElement("img");
+        img.alt = star.title || "GIF";
+        img.loading = "lazy";
+        img.referrerPolicy = "no-referrer";
+        sizeImage(img, star.w, star.h, 200, 4000);
+        if (star.k === "g") {
+            img.src = star.prev;
+        } else {
+            idb("get", star.id).then((blob) => {
+                if (!blob) throw new Error();
+                const url = URL.createObjectURL(blob);
+                img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+                img.src = url;
+            }).catch(() => {
+                img.src = FILE_URL + star.id;
+            });
+        }
+        tile.append(img, starButton(star));
+        tile.addEventListener("click", () => pickGif(star));
+        return tile;
+    }
+
+    // Two columns, each tile going to the shorter one, so GIFs of any shape pack without gaps.
+    function addGifTiles(list) {
+        const grid = gifPanel.querySelector(".grid");
+        let cols = grid.querySelector(".cols");
+        if (!cols) {
+            cols = document.createElement("div");
+            cols.className = "cols";
+            for (let i = 0; i < 2; i++) {
+                const col = document.createElement("div");
+                col.className = "col";
+                col.dataset.h = "0";
+                cols.appendChild(col);
+            }
+            grid.prepend(cols);
+        }
+        for (const star of list) {
+            const [a, b] = cols.children;
+            const col = Number(a.dataset.h) <= Number(b.dataset.h) ? a : b;
+            col.dataset.h = String(Number(col.dataset.h) + star.h / star.w);
+            col.appendChild(gifTile(star));
+        }
+    }
+
+    async function pickGif(star) {
+        const query = gifView?.tab === "search" ? gifView.query : "";
+        closeGifPanel();
+        input?.focus();
+        if (star.k === "g") {
+            sendMedia({ g: { url: star.url, prev: star.prev, slug: star.slug, w: star.w, h: star.h, title: star.title } });
+            if (KLIPY_KEY) klipyShared(star.slug, query);
+            return;
+        }
+        // The server keeps one copy per file and remembers its check, so sending it again is cheap.
+        let blob = await idb("get", star.id).catch(() => null);
+        if (!blob) {
+            try {
+                const res = await fetch(FILE_URL + star.id);
+                if (res.ok) blob = await res.blob();
+            } catch {}
+        }
+        if (!blob) return addSystem("That GIF isn't saved on this device any more.");
+        setStatus("Sending GIF...");
+        try {
+            const file = await uploadBlob(blob);
+            if (connected()) setStatus("");
+            sendMedia({ f: file.id });
+        } catch (err) {
+            if (connected()) setStatus("");
+            addSystem(err.message);
+        }
+    }
+
+    function showGifs(tab, query) {
+        gifView = { tab, query, page: 0, more: tab !== "stars", loading: false };
+        for (const b of gifPanel.querySelectorAll(".tabs>button")) b.classList.toggle("on", b.dataset.tab === tab);
+        const grid = gifPanel.querySelector(".grid");
+        grid.textContent = "";
+        grid.scrollTop = 0;
+        if (tab === "stars") {
+            const stars = loadStars();
+            if (!stars.length) gifNote("Star a GIF in the chat" + (KLIPY_KEY ? " or in search" : "") + " to keep it here.");
+            addGifTiles(stars);
+            return;
+        }
+        loadMoreGifs();
+    }
+
+    async function loadMoreGifs() {
+        const view = gifView;
+        if (!view || !view.more || view.loading) return;
+        view.loading = true;
+        let page;
+        try {
+            if (view.tab === "search" && view.page === 0 && await blockedSearch(view.query)) {
+                page = { list: [], more: false };
+            } else {
+                page = await klipyPage(view.tab === "search" ? "search" : "trending", view.query, view.page + 1);
+            }
+        } catch {
+            page = null;
+        }
+        if (gifView !== view) return;
+        view.loading = false;
+        if (!page) {
+            view.more = false;
+            return gifNote("Couldn't load GIFs. Try again in a moment.");
+        }
+        view.page++;
+        view.more = page.more;
+        if (view.page === 1 && !page.list.length) gifNote("No GIFs found.");
+        const grid = gifPanel.querySelector(".grid");
+        addGifTiles(page.list);
+        // A short first page can't be scrolled, and only scrolling asks for more.
+        if (view.more && grid.scrollHeight <= grid.clientHeight + 200) loadMoreGifs();
+    }
+
+    function buildGifPanel() {
+        gifPanel = document.createElement("div");
+        gifPanel.className = "gif-panel";
+        const search = document.createElement("input");
+        search.type = "text";
+        search.placeholder = "Search KLIPY";
+        search.autocomplete = "off";
+        search.spellcheck = false;
+        search.maxLength = 50;
+        const tabs = document.createElement("div");
+        tabs.className = "tabs";
+        for (const [tab, label] of [["stars", "Favourites"], ["trending", "Trending"]]) {
+            if (tab === "trending" && !KLIPY_KEY) continue;
+            const b = document.createElement("button");
+            b.type = "button";
+            b.dataset.tab = tab;
+            b.textContent = label;
+            b.addEventListener("click", () => {
+                search.value = "";
+                showGifs(tab, "");
+            });
+            tabs.appendChild(b);
+        }
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        const foot = document.createElement("div");
+        foot.className = "foot";
+        foot.textContent = KLIPY_KEY ? "Powered by KLIPY" : "GIF search isn't set up on this site yet.";
+        if (!KLIPY_KEY) search.style.display = "none";
+        gifPanel.append(search, tabs, grid, foot);
+        let timer = null;
+        search.addEventListener("input", () => {
+            clearTimeout(timer);
+            timer = setTimeout(() => {
+                const query = search.value.trim();
+                if (query) showGifs("search", query);
+                else showGifs(loadStars().length ? "stars" : "trending", "");
+            }, 350);
+        });
+        search.addEventListener("keydown", (e) => {
+            if (e.key !== "Escape") return;
+            e.preventDefault();
+            closeGifPanel();
+            input.focus();
+        });
+        grid.addEventListener("scroll", () => {
+            if (grid.scrollHeight - grid.scrollTop - grid.clientHeight < 300) loadMoreGifs();
+        }, { passive: true });
+        root.appendChild(gifPanel);
+    }
+
+    function outsideGifPanel(e) {
+        if (!gifPanel.contains(e.target) && !gifButton.contains(e.target)) closeGifPanel();
+    }
+
+    function closeGifPanel() {
+        if (!gifPanel?.classList.contains("on")) return;
+        gifPanel.classList.remove("on");
+        gifButton.classList.remove("on");
+        gifView = null;
+        document.removeEventListener("pointerdown", outsideGifPanel, true);
+    }
+
+    function toggleGifPanel() {
+        if (gifPanel?.classList.contains("on")) return closeGifPanel();
+        closePanel();
+        hideSuggest();
+        if (!gifPanel) buildGifPanel();
+        const search = gifPanel.querySelector("input");
+        search.value = "";
+        gifPanel.classList.add("on");
+        gifButton.classList.add("on");
+        showGifs(loadStars().length || !KLIPY_KEY ? "stars" : "trending", "");
+        if (KLIPY_KEY) search.focus();
+        document.addEventListener("pointerdown", outsideGifPanel, true);
     }
 
     function setStatus(text) {
@@ -948,6 +1617,7 @@
         add("Mute 1h", { t: "mute", uid: m.uid, minutes: 60 });
         add("Mute 1d", { t: "mute", uid: m.uid, minutes: 1440 });
         add("Delete all theirs", { t: "clear", uid: m.uid });
+        if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : "image"), { t: "ban", id: m.id });
         el.after(tools);
     }
 
@@ -1039,7 +1709,14 @@
             quote.textContent = "Original message was deleted";
         } else {
             // The original's current text when it is still here, so edits show in the quote.
-            quote.textContent = items.find((item) => item.kind === "msg" && item.m.id === r.id)?.m.text ?? r.text;
+            const live = items.find((item) => item.kind === "msg" && item.m.id === r.id)?.m;
+            const text = live ? live.text : r.text;
+            if (!text && (live?.media || r.media)) {
+                quote.classList.add("gone");
+                quote.textContent = "Click to see attachment";
+            } else {
+                quote.textContent = text;
+            }
         }
         ref.append(who, quote);
         ref.addEventListener("click", () => jumpTo(r.id));
@@ -1129,7 +1806,7 @@
         if (editing?.id === m.id) {
             el.classList.add("editing");
             el.appendChild(editorElement());
-        } else {
+        } else if (m.text || !m.media) {
             const text = document.createElement("div");
             text.className = isJumbo(m.text) ? "text jumbo" : "text";
             appendText(text, m.text, m.pings);
@@ -1142,6 +1819,7 @@
             }
             el.appendChild(text);
         }
+        if (m.media) el.appendChild(mediaElement(m));
         if (m.reactions?.length) {
             const row = document.createElement("div");
             row.className = "reactions";
@@ -1245,7 +1923,7 @@
         const text = [...replaceShortcodes(editing.draft).replace(/\s+/g, " ").trim()].slice(0, MAX_TEXT).join("");
         stopEdit();
         if (!m) return;
-        if (!text) return confirmDelete(m, false);
+        if (!text && !m.media) return confirmDelete(m, false);
         if (text !== m.text) send({ t: "edit", id: m.id, text });
     }
 
@@ -1272,7 +1950,7 @@
         nick.style.color = nickColor(m.uid);
         nick.textContent = m.nick;
         preview.appendChild(nick);
-        appendText(preview, m.text, m.pings);
+        appendText(preview, lineText(m), m.pings);
         const tip = document.createElement("div");
         tip.className = "tip";
         const pro = document.createElement("b");
@@ -1444,6 +2122,8 @@
                     updateReplyBar();
                 }
             }
+            if (!attachment && lastAttachment) setAttachment(lastAttachment);
+            lastAttachment = null;
             readyAt = Math.max(readyAt, Date.now() + Number(data.ms || SLOW_MS));
             if (data.t === "timeout") {
                 timedOut = true;
@@ -1652,6 +2332,7 @@
         } catch {
             if (http !== session || data.t !== "msg") return;
             if (input && !input.value) input.value = data.text;
+            if (data.media?.f && !attachment && lastAttachment) setAttachment(lastAttachment);
             addSystem("Couldn't send that. Try again.");
         }
     }
@@ -1678,9 +2359,15 @@
         clearTimeout(sendTimer);
         if (!input) return;
         const text = replaceShortcodes(input.value).replace(/\s+/g, " ").trim();
-        if (!text) return;
+        if (!text && !attachment) return;
+        if (attachment?.state === "bad") return addSystem(attachment.error + " Remove the attachment to send.");
         if (!connected()) {
             addSystem("Not connected yet.");
+            return;
+        }
+        if (attachment?.state === "working") {
+            attachment.send = true;
+            updateAttachBar();
             return;
         }
         const wait = me.owner ? 0 : readyAt - Date.now();
@@ -1692,10 +2379,13 @@
         }
         lastText = [...text].slice(0, MAX_TEXT).join("");
         lastReply = replyTo;
+        lastAttachment = attachment;
         const data = { t: "msg", text: lastText, nick: readNickname() };
         if (replyTo) data.reply = { id: replyTo.id, ping: replyTo.ping && replyTo.uid !== me.uid };
+        if (attachment) data.media = { f: attachment.file.id };
         send(data);
         input.value = "";
+        setAttachment(null);
         cancelReply();
         hideSuggest();
         readyAt = Date.now() + SLOW_MS;
@@ -1743,7 +2433,7 @@
         const who = document.createElement("b");
         who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
-        line.append(who, m.text);
+        line.append(who, lineText(m));
         line.addEventListener("animationend", () => line.remove());
         el.insertBefore(line, feedInput?.parentElement ?? null);
         const lines = el.querySelectorAll(".line");
@@ -1908,8 +2598,51 @@
         const sendButton = document.createElement("button");
         sendButton.type = "submit";
         sendButton.textContent = "Send";
-        form.append(input, emojiButton, sendButton);
+        fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = "image/*";
+        fileInput.style.display = "none";
+        fileInput.addEventListener("change", () => {
+            const file = imageFrom(fileInput.files);
+            fileInput.value = "";
+            if (file) attachFile(file);
+        });
+        attachButton = document.createElement("button");
+        attachButton.type = "button";
+        attachButton.className = "icon-button";
+        attachButton.title = "Upload an image or GIF";
+        attachButton.innerHTML = ATTACH_ICON;
+        attachButton.addEventListener("click", () => fileInput.click());
+        gifButton = document.createElement("button");
+        gifButton.type = "button";
+        gifButton.className = "gif-button";
+        gifButton.title = "GIFs";
+        const gifLabel = document.createElement("span");
+        gifLabel.textContent = "GIF";
+        gifButton.appendChild(gifLabel);
+        gifButton.addEventListener("click", toggleGifPanel);
+        form.append(fileInput, attachButton, input, gifButton, emojiButton, sendButton);
         form.addEventListener("submit", submit);
+
+        attachBar = document.createElement("div");
+        attachBar.className = "attach";
+        const attachThumb = document.createElement("img");
+        attachThumb.alt = "";
+        const attachWhat = document.createElement("div");
+        attachWhat.className = "what";
+        const attachName = document.createElement("div");
+        const attachState = document.createElement("div");
+        attachState.className = "state";
+        attachWhat.append(attachName, attachState);
+        const attachRemove = document.createElement("button");
+        attachRemove.type = "button";
+        attachRemove.title = "Remove attachment";
+        attachRemove.textContent = icon(0x2715);
+        attachRemove.addEventListener("click", () => {
+            setAttachment(null);
+            input.focus();
+        });
+        attachBar.append(attachThumb, attachWhat, attachRemove);
 
         replyBar = document.createElement("div");
         replyBar.className = "replying";
@@ -1938,7 +2671,7 @@
         grip.className = "grip";
         suggestBox = document.createElement("div");
         suggestBox.className = "suggest";
-        root.append(bar, log, statusLine, suggestBox, replyBar, form, grip);
+        root.append(bar, log, statusLine, suggestBox, attachBar, replyBar, form, grip);
 
         // The game listens for keys and clicks on window; none of the chat's should reach it.
         for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
@@ -1954,8 +2687,34 @@
         input.addEventListener("keydown", (e) => {
             if (e.key !== "Escape") return;
             if (panel?.classList.contains("on")) closePanel();
+            else if (gifPanel?.classList.contains("on")) closeGifPanel();
             else if (replyTo) cancelReply();
             else input.blur();
+        });
+        input.addEventListener("paste", (e) => {
+            const file = imageFrom(e.clipboardData?.files);
+            if (!file) return;
+            e.preventDefault();
+            attachFile(file);
+        });
+        const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+        root.addEventListener("dragover", (e) => {
+            if (!hasFiles(e) || layout.min) return;
+            e.preventDefault();
+            e.stopPropagation();
+            root.classList.add("drop");
+        });
+        root.addEventListener("dragleave", (e) => {
+            if (!root.contains(e.relatedTarget)) root.classList.remove("drop");
+        });
+        root.addEventListener("drop", (e) => {
+            root.classList.remove("drop");
+            if (!hasFiles(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const file = imageFrom(e.dataTransfer.files);
+            if (file) attachFile(file);
+            else addSystem("Only images and GIFs can be posted.");
         });
         input.addEventListener("input", onInput);
         input.addEventListener("click", updateSuggest);
@@ -2006,6 +2765,10 @@
     function disable() {
         disconnect();
         closePanel();
+        closeGifPanel();
+        closeLightbox();
+        setAttachment(null);
+        lastAttachment = queuedGif = null;
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("keydown", quickKey, true);
         window.removeEventListener("resize", applyLayout);
@@ -2018,6 +2781,7 @@
         replyTo = lastReply = null;
         editing = confirmBox = null;
         minButton = fullButton = bellButton = emojiButton = suggestBox = panel = toast = null;
+        attachBar = attachButton = fileInput = gifButton = gifPanel = null;
         items = [];
         suggest = { kind: null, items: [], index: 0 };
         unread = mentions = 0;
@@ -2056,6 +2820,15 @@
             storageSet(FONT_KEY, id);
             applyFont();
         },
+        // Settings > Chat > "Images and GIFs".
+        media: {
+            modes: MEDIA_MODES,
+            get: mediaMode,
+            set(id) {
+                storageSet(MEDIA_KEY, id === "click" ? "click" : "show");
+                renderLog();
+            },
+        },
         setEnabled(on) {
             storageSet(ENABLED_KEY, on ? "true" : "false");
             on ? enable() : disable();
@@ -2064,10 +2837,11 @@
         feed: {
             active: () => !!root,
             uid: () => me?.uid ?? null,
-            recent: () => items.filter((item) => item.kind === "msg").slice(-40).map((item) => item.m),
+            recent: () => items.filter((item) => item.kind === "msg").slice(-40).map((item) => item.m.media ? { ...item.m, text: lineText(item.m) } : item.m),
             subscribe(fn) {
-                feedListeners.add(fn);
-                return () => feedListeners.delete(fn);
+                const listener = (m) => fn(m.media ? { ...m, text: lineText(m) } : m);
+                feedListeners.add(listener);
+                return () => feedListeners.delete(listener);
             },
             post: postText,
             color: nickColor,

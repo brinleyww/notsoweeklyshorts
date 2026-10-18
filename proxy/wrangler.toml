@@ -53,6 +53,10 @@ type = "Data"
 globs = ["**/*.bin"]
 fallthrough = true
 
+# Workers AI: checks every image or GIF players upload to the chat (src/chatmedia.js).
+[ai]
+binding = "AI"
+
 # Site traffic for the owner dashboard (src/traffic.js).
 [[durable_objects.bindings]]
 name = "TRAFFIC"

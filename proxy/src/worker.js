@@ -41,7 +41,9 @@ const MIN_SALT_LENGTH = 16;
 const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
-const MAX_CHAT_BODY = 4096;
+const MAX_CHAT_BODY = 6144;
+// A chat image or GIF upload: the 6 MB file plus a small header (see ChatRoom.upload).
+const MAX_CHAT_UPLOAD = 6 * 1024 * 1024 + 4096;
 // Big tracks reach ~470 KB; the stored payload must stay under Durable Object SQLite's 2 MB value limit.
 const MAX_TRACK_SYNC_BODY = 1_500_000;
 const MAX_ACCOUNT_BODY = 400_000;
@@ -1119,7 +1121,30 @@ function connectSocket(env, request, target) {
 // networks whose firewall blocks WebSockets; the page sends them as text/plain so no preflight
 // is needed.
 async function handleChat(request, url, env, fromSite, origin) {
+    // Uploaded images load in plain <img> tags, which send no Origin. Their ids are hashes, so only
+    // someone who saw one in the chat can ask for it.
+    const file = /^\/nsws\/chat\/file\/([0-9a-f]{32})$/.exec(url.pathname);
+    if (file && request.method === "GET") {
+        if (!env.CHAT) return new Response("Not found", { status: 404 });
+        return env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/file/" + file[1]));
+    }
     if (!fromSite) return forbidden();
+    if (url.pathname === TRAFFIC_PREFIX + "chat/upload") {
+        if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+        if (request.method !== "POST") return plain(405, "Method not allowed", origin);
+        if (!env.CHAT) return plain(503, "Chat is off", origin);
+        if (Number(request.headers.get("Content-Length")) > MAX_CHAT_UPLOAD) return plain(413, "Too large", origin);
+        const body = await request.arrayBuffer();
+        if (body.byteLength > MAX_CHAT_UPLOAD) return plain(413, "Too large", origin);
+        const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+        const reply = await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/upload", {
+            method: "POST", headers: { "X-Chat-Ip": ip }, body,
+        }));
+        return new Response(reply.body, {
+            status: reply.status,
+            headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(origin) },
+        });
+    }
     const isSocket = url.pathname === TRAFFIC_PREFIX + "chat";
     if (isSocket && (request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return forbidden();
     if (!isSocket && url.pathname !== TRAFFIC_PREFIX + "chat/poll" && url.pathname !== TRAFFIC_PREFIX + "chat/send") {

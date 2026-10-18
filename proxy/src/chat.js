@@ -6,13 +6,14 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { censor, cleanText } from "./chatfilter.js";
+import { sniffImage, moderate } from "./chatmedia.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
 // Characters of the answered message that a reply keeps to show above itself.
 const REPLY_QUOTE = 100;
 const MAX_NICK = 32;
-const MAX_FRAME = 1024;
+const MAX_FRAME = 2048;
 // A whole school shares one IP address, so the per-address cap is only there to stop one
 // machine opening thousands of sockets. The real per-player cap (one per tab) is on the uid.
 const SOCKETS_PER_IP = 100;
@@ -65,6 +66,26 @@ const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 const CUP_MUTE_MS = 24 * 3600_000;
 const CUP_KEEP_MS = 24 * 3600_000;
 
+// Uploaded images and GIFs (main room only). A file is kept while a message shows it, and for
+// PENDING_MS after its upload so the message can follow. Stored in parts because a SQLite value
+// can be at most 2 MB.
+const MAX_UPLOAD = 6 * 1024 * 1024;
+const MAX_STILL = 4 * 1024 * 1024;
+const PART = 1_000_000;
+const PENDING_MS = 15 * 60_000;
+const UPLOADS_PER_MINUTE = 5;
+const UPLOADS_PER_DAY = 40;
+const UPLOADS_PER_IP_DAY = 200;
+// Model checks a day for the whole chat, to stay inside the free Workers AI allowance.
+const AI_CHECKS_PER_DAY = 300;
+// A verdict is remembered by the file's hash, so posting the same file again costs no check.
+const VERDICT_MS = 30 * 86400_000;
+const FILE_ID = /^[0-9a-f]{32}$/;
+// GIFs from KLIPY's search, which the page calls itself. Only KLIPY media URLs are accepted, so a
+// message can't make everyone's browser load an image from anywhere else.
+const KLIPY_URL = /^https:\/\/static[12]?\.klipy\.com\/[A-Za-z0-9._~\/-]{1,250}(\?[A-Za-z0-9._~=&%-]{0,200})?$/;
+const KLIPY_SLUG = /^[A-Za-z0-9_-]{1,120}$/;
+
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX32 = /^[0-9a-f]{32}$/;
 function ownerHashes(value) {
@@ -86,8 +107,13 @@ function jsonReply(data, status = 200) {
     });
 }
 
-async function sha256Hex(text) {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+// What "You just sent that" compares: the text and whatever image or GIF came with it.
+function repeatKey(text, file, gif) {
+    return file || gif ? text + "\u0000" + (file || gif) : text;
+}
+
+async function sha256Hex(data) {
+    const digest = await crypto.subtle.digest("SHA-256", typeof data === "string" ? new TextEncoder().encode(data) : data);
     return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -113,7 +139,7 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
-        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT"]) {
+        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT", "media TEXT", "file TEXT", "gif TEXT"]) {
             try {
                 this.sql.exec("ALTER TABLE messages ADD COLUMN " + column);
             } catch {
@@ -124,6 +150,16 @@ export class ChatRoom extends DurableObject {
         this.sql.exec("CREATE TABLE IF NOT EXISTS timeouts (uid TEXT PRIMARY KEY, until INTEGER NOT NULL, level INTEGER NOT NULL)");
         this.sql.exec(`CREATE TABLE IF NOT EXISTS reactions (msg INTEGER NOT NULL, emoji TEXT NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (msg, emoji, uid))`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, hash TEXT NOT NULL, type TEXT NOT NULL,
+            w INTEGER NOT NULL, h INTEGER NOT NULL, size INTEGER NOT NULL, at INTEGER NOT NULL)`);
+        this.sql.exec("CREATE TABLE IF NOT EXISTS file_parts (id TEXT NOT NULL, part INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, part))");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS verdicts (hash TEXT PRIMARY KEY, ok INTEGER NOT NULL, why TEXT, at INTEGER NOT NULL)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS uploads (at INTEGER NOT NULL, uid TEXT NOT NULL, ip TEXT NOT NULL)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS uploads_uid ON uploads (uid, at)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS uploads_ip ON uploads (ip, at)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS uploads_at ON uploads (at)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS ai_days (day TEXT PRIMARY KEY, checks INTEGER NOT NULL)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS banned_gifs (slug TEXT PRIMARY KEY, at INTEGER NOT NULL)");
     }
 
     async alarm() {
@@ -138,7 +174,12 @@ export class ChatRoom extends DurableObject {
     // Called by the Worker with the socket's upgrade request, after it has checked the origin.
     async fetch(request) {
         const ipHash = request.headers.get("X-Chat-Ip") || "";
-        if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") return this.http(request, ipHash);
+        if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
+            const path = new URL(request.url).pathname;
+            if (path.includes("/file/")) return this.file(path.slice(path.lastIndexOf("/") + 1));
+            if (path.endsWith("/upload")) return this.upload(request, ipHash);
+            return this.http(request, ipHash);
+        }
         const open = this.ctx.getWebSockets().filter((ws) => ws.deserializeAttachment()?.ip === ipHash);
         if (ipHash && open.length >= SOCKETS_PER_IP) return new Response("Too many chat windows", { status: 429 });
         const pair = new WebSocketPair();
@@ -305,10 +346,146 @@ export class ChatRoom extends DurableObject {
         return jsonReply({ replies });
     }
 
+    // GET /file/<id>: an uploaded image, while a message (or a pending upload) still has it.
+    file(id) {
+        const row = FILE_ID.test(id) ? this.sql.exec("SELECT type FROM files WHERE id = ?", id).toArray()[0] : null;
+        if (!row) return new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+        const parts = this.sql.exec("SELECT data FROM file_parts WHERE id = ? ORDER BY part", id).toArray().map((r) => new Uint8Array(r.data));
+        return new Response(new Blob(parts), {
+            headers: {
+                "Content-Type": row.type,
+                // The id is the file's hash, so its bytes never change.
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+                "Access-Control-Allow-Origin": "*",
+            },
+        });
+    }
+
+    // POST /upload: [4-byte little-endian header length][header JSON: v, key][file bytes]. The file
+    // is checked by the model, stored under its hash and answered with { file: { id, type, w, h } }.
+    // A message then shows it with media: { f: id }.
+    async upload(request, ipHash) {
+        if (request.method !== "POST") return jsonReply({ error: "Method not allowed" }, 405);
+        const body = new Uint8Array(await request.arrayBuffer());
+        if (body.length < 8 || body.length > MAX_UPLOAD + 4096) return jsonReply({ error: "That file is too big (6 MB at most)." }, 413);
+        const headerLength = new DataView(body.buffer).getUint32(0, true);
+        if (headerLength > 4096 || 4 + headerLength >= body.length) return jsonReply({ error: "Bad request" }, 400);
+        let header;
+        try {
+            header = JSON.parse(new TextDecoder().decode(body.subarray(4, 4 + headerLength)));
+        } catch {
+            return jsonReply({ error: "Bad request" }, 400);
+        }
+        const me = await this.identify(header);
+        if (!me) return jsonReply({ error: "Bad request" }, 400);
+        const bytes = body.subarray(4 + headerLength);
+        const now = Date.now();
+        const until = this.mutedUntil(me.uid);
+        if (until) return jsonReply({ error: "You're muted for " + duration(until - now) + "." });
+        if (!me.owner) {
+            const timeout = this.sql.exec("SELECT until FROM timeouts WHERE uid = ?", me.uid).toArray()[0];
+            if (timeout && timeout.until > now) return jsonReply({ error: "You're timed out for " + duration(timeout.until - now) + "." });
+        }
+        const info = sniffImage(bytes);
+        if (!info) return jsonReply({ error: "That isn't an image the chat can show (GIF, PNG, JPEG or WebP)." });
+        if (info.animated && info.type !== "image/gif") return jsonReply({ error: "Animated images have to be GIFs." });
+        if (info.type !== "image/gif" && bytes.length > MAX_STILL) return jsonReply({ error: "That image is too big (4 MB at most)." });
+
+        this.sql.exec("DELETE FROM uploads WHERE at < ?", now - 86400_000);
+        if (!me.owner) {
+            const count = (where, ...args) => this.sql.exec("SELECT COUNT(*) AS n FROM uploads WHERE " + where, ...args).one().n;
+            if (count("uid = ? AND at > ?", me.uid, now - 60_000) >= UPLOADS_PER_MINUTE) return jsonReply({ error: "Slow down on the uploads." });
+            if (count("uid = ? AND at > ?", me.uid, now - 86400_000) >= UPLOADS_PER_DAY) return jsonReply({ error: "That's all the uploads for today. GIF search still works." });
+            if (ipHash && count("ip = ? AND at > ?", ipHash, now - 86400_000) >= UPLOADS_PER_IP_DAY) return jsonReply({ error: "Your network has hit today's upload limit." });
+        }
+        this.sql.exec("INSERT INTO uploads (at, uid, ip) VALUES (?, ?, ?)", now, me.uid, ipHash);
+
+        const hash = await sha256Hex(bytes);
+        const id = hash.slice(0, 32);
+        this.dropPendingFiles(now);
+        const stored = this.sql.exec("SELECT id FROM files WHERE id = ?", id).toArray()[0];
+        let verdict = this.sql.exec("SELECT ok, why FROM verdicts WHERE hash = ? AND at > ?", hash, now - VERDICT_MS).toArray()[0];
+        if (verdict && !verdict.ok) return jsonReply({ error: "That image isn't allowed in the chat (" + (verdict.why || "blocked") + ")." });
+        if (!verdict && !stored && !me.owner) {
+            const day = new Date(now).toISOString().slice(0, 10);
+            const used = this.sql.exec("SELECT checks FROM ai_days WHERE day = ?", day).toArray()[0]?.checks ?? 0;
+            if (used >= AI_CHECKS_PER_DAY || !this.env.AI) return jsonReply({ error: "Image uploads are paused for today. GIF search still works." });
+            this.sql.exec("INSERT INTO ai_days (day, checks) VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET checks = checks + 1", day);
+            this.sql.exec("DELETE FROM ai_days WHERE day < ?", new Date(now - 7 * 86400_000).toISOString().slice(0, 10));
+            let result;
+            try {
+                result = await moderate(this.env.AI, bytes, info);
+            } catch (err) {
+                console.error("image check failed:", err && err.message);
+                return jsonReply({ error: err?.message === "too big" ? "That GIF is too big to check." : "Couldn't check that image. Try again later." });
+            }
+            verdict = { ok: result.ok ? 1 : 0, why: result.why ?? null };
+            this.sql.exec("INSERT OR REPLACE INTO verdicts (hash, ok, why, at) VALUES (?, ?, ?, ?)", hash, verdict.ok, verdict.why, now);
+            this.sql.exec("DELETE FROM verdicts WHERE at < ?", now - VERDICT_MS);
+            if (!verdict.ok) return jsonReply({ error: "That image isn't allowed in the chat (" + verdict.why + ")." });
+        }
+        if (stored) {
+            this.sql.exec("UPDATE files SET at = ? WHERE id = ?", now, id);
+        } else {
+            this.sql.exec("INSERT INTO files (id, hash, type, w, h, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)", id, hash, info.type, info.w, info.h, bytes.length, now);
+            for (let i = 0, part = 0; i < bytes.length; i += PART, part++) {
+                this.sql.exec("INSERT INTO file_parts (id, part, data) VALUES (?, ?, ?)", id, part, bytes.slice(i, i + PART).buffer);
+            }
+        }
+        return jsonReply({ file: { id, type: info.type, w: info.w, h: info.h } });
+    }
+
+    // Drops files that no message shows: all of them, or only those in `ids`. Unless `now` is null,
+    // uploads newer than PENDING_MS stay, since their message may still be on its way.
+    dropPendingFiles(now, ids) {
+        let where = "id NOT IN (SELECT file FROM messages WHERE file IS NOT NULL)";
+        const args = [];
+        if (ids) {
+            if (!ids.length) return;
+            where += " AND id IN (" + ids.map(() => "?").join(",") + ")";
+            args.push(...ids);
+        }
+        if (now != null) {
+            where += " AND at < ?";
+            args.push(now - PENDING_MS);
+        }
+        for (const { id } of this.sql.exec("SELECT id FROM files WHERE " + where, ...args).toArray()) {
+            this.sql.exec("DELETE FROM file_parts WHERE id = ?", id);
+            this.sql.exec("DELETE FROM files WHERE id = ?", id);
+        }
+    }
+
+    // Deletes messages, and any uploads only they showed (at once when `now` is null).
+    deleteMessages(now, where, ...args) {
+        const files = this.sql.exec("SELECT DISTINCT file FROM messages WHERE file IS NOT NULL AND " + where, ...args).toArray().map((r) => r.file);
+        this.sql.exec("DELETE FROM messages WHERE " + where, ...args);
+        this.dropPendingFiles(now, files);
+    }
+
+    // The checked form of a message's media, or a string saying why it can't be posted.
+    mediaFor(media) {
+        if (media == null) return null;
+        if (typeof media !== "object") return "Bad attachment.";
+        if (media.f != null) {
+            const row = FILE_ID.test(media.f ?? "") ? this.sql.exec("SELECT id, type, w, h FROM files WHERE id = ?", media.f).toArray()[0] : null;
+            return row ? { f: { id: row.id, type: row.type, w: row.w, h: row.h } } : "That upload has expired. Attach it again.";
+        }
+        const g = media.g;
+        const size = (n) => Number.isSafeInteger(n) && n > 0 && n <= 4096;
+        if (!g || !KLIPY_URL.test(g.url ?? "") || !KLIPY_URL.test(g.prev ?? "") || !KLIPY_SLUG.test(g.slug ?? "") || !size(g.w) || !size(g.h)) {
+            return "Bad attachment.";
+        }
+        if (this.sql.exec("SELECT 1 FROM banned_gifs WHERE slug = ?", g.slug).toArray().length) return "That GIF isn't allowed in the chat.";
+        return { g: { url: g.url, prev: g.prev, slug: g.slug, w: g.w, h: g.h, title: censor(cleanText(g.title, 100)) } };
+    }
+
     history() {
-        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited, tag FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
-            .toArray().reverse().map(({ reply_to, ...m }) => ({
+        const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited, tag, media FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
+            .toArray().reverse().map(({ reply_to, media, ...m }) => ({
                 ...m, owner: !!m.owner, pings: m.pings ? JSON.parse(m.pings) : [], reply: reply_to ? JSON.parse(reply_to) : null, reactions: [],
+                ...(media ? { media: JSON.parse(media) } : {}),
             }));
         if (!messages.length) return messages;
         const byId = new Map(messages.map((m) => [m.id, m]));
@@ -326,8 +503,11 @@ export class ChatRoom extends DurableObject {
     // the original is deleted or has scrolled out of the history.
     quote(replyTo) {
         if (!Number.isSafeInteger(replyTo?.id)) return null;
-        const row = this.sql.exec("SELECT id, uid, nick, text FROM messages WHERE id = ?", replyTo.id).toArray()[0];
-        return row ? { id: row.id, uid: row.uid, nick: row.nick, text: [...row.text].slice(0, REPLY_QUOTE).join("") } : null;
+        const row = this.sql.exec("SELECT id, uid, nick, text, media FROM messages WHERE id = ?", replyTo.id).toArray()[0];
+        if (!row) return null;
+        const quoted = { id: row.id, uid: row.uid, nick: row.nick, text: [...row.text].slice(0, REPLY_QUOTE).join("") };
+        if (row.media) quoted.media = true;
+        return quoted;
     }
 
     // The same emoji can arrive with or without the invisible "show as emoji" selector (U+FE0F);
@@ -429,12 +609,12 @@ export class ChatRoom extends DurableObject {
     // lost whenever the room hibernates, which a quiet few seconds is enough for.
     recentActivity(uid, now) {
         const s = { last: 0, recent: [], text: "", textAt: 0, pings: [], reacts: [], edits: [] };
-        const rows = this.sql.exec("SELECT at, text, pings FROM messages WHERE uid = ? AND at > ? ORDER BY id",
+        const rows = this.sql.exec("SELECT at, text, pings, file, gif FROM messages WHERE uid = ? AND at > ? ORDER BY id",
             uid, now - Math.max(SPAM_WINDOW_MS, PING_WINDOW_MS, REPEAT_MS)).toArray();
         for (const row of rows) {
             s.last = row.at;
             if (now - row.at < SPAM_WINDOW_MS) s.recent.push(row.at);
-            s.text = row.text;
+            s.text = repeatKey(row.text, row.file, row.gif);
             s.textAt = row.at;
             for (const p of row.pings ? JSON.parse(row.pings) : []) s.pings.push({ uid: p.uid, at: row.at });
         }
@@ -519,9 +699,10 @@ export class ChatRoom extends DurableObject {
     // message. Pings stay as they were sent, so an edit can't notify anyone.
     edit(reply, me, msg) {
         const text = cleanText(msg.text, MAX_TEXT);
-        if (!text || !Number.isSafeInteger(msg.id)) return;
-        const row = this.sql.exec("SELECT uid, text FROM messages WHERE id = ?", msg.id).toArray()[0];
-        if (!row || row.uid !== me.uid) return;
+        if (!Number.isSafeInteger(msg.id)) return;
+        const row = this.sql.exec("SELECT uid, text, media FROM messages WHERE id = ?", msg.id).toArray()[0];
+        // A message with an image or GIF may lose its text; any other needs some.
+        if (!row || row.uid !== me.uid || (!text && !row.media)) return;
         const now = Date.now();
         const until = this.mutedUntil(me.uid);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
@@ -547,7 +728,7 @@ export class ChatRoom extends DurableObject {
         if (msg?.t === "del" && Number.isSafeInteger(msg.id)) {
             const row = this.sql.exec("SELECT uid FROM messages WHERE id = ?", msg.id).toArray()[0];
             if (!row || (row.uid !== me.uid && !me.owner)) return;
-            this.sql.exec("DELETE FROM messages WHERE id = ?", msg.id);
+            this.deleteMessages(null, "id = ?", msg.id);
             this.sql.exec("DELETE FROM reactions WHERE msg = ?", msg.id);
             this.broadcast({ t: "del", id: msg.id });
             return;
@@ -555,11 +736,16 @@ export class ChatRoom extends DurableObject {
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
-            if (!text) return;
+            if (msg.media != null && me.cup) return reply({ t: "err", text: "Images and GIFs only go in the main chat." });
+            const media = this.mediaFor(msg.media);
+            if (typeof media === "string") return reply({ t: "err", text: media });
+            if (!text && !media) return;
             const until = this.mutedUntil(me.uid);
             if (until) return reply({ t: "err", text: me.cup ? "The organizer muted you for this cup." : "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
-            const refused = me.owner ? null : this.checkSpam(me.uid, text, now);
+            const file = media?.f?.id ?? null;
+            const gif = media?.g?.slug ?? null;
+            const refused = me.owner ? null : this.checkSpam(me.uid, repeatKey(text, file, gif), now);
             if (refused) return reply(refused);
 
             const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
@@ -580,10 +766,11 @@ export class ChatRoom extends DurableObject {
             if (quoted) quoted.ping = pings.some((p) => p.uid === quoted.uid);
             const tag = TAG_ID.test(me.tag ?? "") ? me.tag : null;
             const message = { at: now, uid: me.uid, nick, owner: me.owner, tag, text: censor(text), pings, reply: quoted, reactions: [] };
-            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to, tag) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            if (media) message.media = media;
+            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to, tag, media, file, gif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null,
-                quoted ? JSON.stringify(quoted) : null, tag).one().id;
-            this.sql.exec("DELETE FROM messages WHERE id <= ?", message.id - HISTORY);
+                quoted ? JSON.stringify(quoted) : null, tag, media ? JSON.stringify(media) : null, file, gif).one().id;
+            this.deleteMessages(now, "id <= ?", message.id - HISTORY);
             this.sql.exec("DELETE FROM reactions WHERE msg <= ?", message.id - HISTORY);
             this.broadcast({ t: "msg", m: message });
             return;
@@ -601,9 +788,29 @@ export class ChatRoom extends DurableObject {
             this.sql.exec("DELETE FROM mutes WHERE until < ?", Date.now());
             reply({ t: "err", text: "Muted for " + msg.minutes + " minutes." });
         } else if (msg?.t === "clear") {
-            this.sql.exec("DELETE FROM messages WHERE uid = ?", String(msg.uid ?? ""));
+            this.deleteMessages(null, "uid = ?", String(msg.uid ?? ""));
             this.sql.exec("DELETE FROM reactions WHERE uid = ? OR msg NOT IN (SELECT id FROM messages)", String(msg.uid ?? ""));
             this.broadcast({ t: "clear", uid: msg.uid });
+        } else if (msg?.t === "ban" && Number.isSafeInteger(msg.id)) {
+            // Bans a message's image or GIF for good, and takes down every message showing it.
+            const row = this.sql.exec("SELECT file, gif FROM messages WHERE id = ?", msg.id).toArray()[0];
+            if (!row?.file && !row?.gif) return;
+            const now = Date.now();
+            if (row.file) {
+                const hash = this.sql.exec("SELECT hash FROM files WHERE id = ?", row.file).toArray()[0]?.hash;
+                // Dated far ahead so the verdict never expires.
+                if (hash) this.sql.exec("INSERT OR REPLACE INTO verdicts (hash, ok, why, at) VALUES (?, 0, 'removed by the owner', ?)", hash, now + 10 * 365 * 86400_000);
+            } else {
+                this.sql.exec("INSERT OR REPLACE INTO banned_gifs (slug, at) VALUES (?, ?)", row.gif, now);
+            }
+            const column = row.file ? "file" : "gif";
+            const ids = this.sql.exec("SELECT id FROM messages WHERE " + column + " = ?", row.file || row.gif).toArray().map((r) => r.id);
+            this.deleteMessages(null, column + " = ?", row.file || row.gif);
+            for (const id of ids) {
+                this.sql.exec("DELETE FROM reactions WHERE msg = ?", id);
+                this.broadcast({ t: "del", id });
+            }
+            reply({ t: "err", text: "Banned. It can't be posted again." });
         }
     }
 
