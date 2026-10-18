@@ -101,6 +101,7 @@ window.__nswsAutoGhostNote = function(trackId) {
     // The replay session on screen (the game's "Watch" view), or null when not
     // watching. Set and cleared by that session's own constructor/dispose.
     let watchSession = null;
+    window.__nswsWatching = () => null != watchSession;
     (function() {
         var style = document.createElement("style");
         style.id = "_bw-clip-hud-css";
@@ -42479,7 +42480,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 this.nswsFreecam && this.nswsFreecam.hidden !== !e && (this.nswsFreecam.hidden = !e)
             }
             setResetCheckpointAvailable(e) {
-                e ? C.get(this, Et, "f").classList.add("checkpoint-available") : C.get(this, Et, "f").classList.remove("checkpoint-available")
+                C.get(this, Et, "f").classList.toggle("checkpoint-available", !!e)
             }
             dispose() {
                 C.get(this, kt, "f").parentElement?.removeChild(C.get(this, kt, "f")),
@@ -43975,8 +43976,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 e ?? "top" == t ? C.get(this, ui, "f").classList.add("down") : C.get(this, ui, "f").classList.remove("down")
             }
             update(e) {
-                C.get(this, pi, "f").textContent = Math.floor(100 * e).toString() + "%",
-                e >= 1 ? C.get(this, ui, "f").classList.add("hide") : C.get(this, ui, "f").classList.remove("hide")
+                const text = Math.floor(100 * e).toString() + "%";
+                C.get(this, pi, "f").textContent !== text && (C.get(this, pi, "f").textContent = text),
+                C.get(this, ui, "f").classList.toggle("hide", e >= 1)
             }
         }
         ;
@@ -44782,8 +44784,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             const e = C.get(this, Dr, "f").profileSlot
                               , n = C.get(this, Br, "f").getRecordTime(e, C.get(this, Yr, "f").getId());
                             if (null == n || t.lessThan(n)) {
-                                const n = "official" == C.get(this, Zr, "f") || "community" == C.get(this, Zr, "f");
-                                return C.get(this, Br, "f").setRecord(e, C.get(this, Yr, "f").getId(), n, t, i)
+                                const n = "official" == C.get(this, Zr, "f") || "community" == C.get(this, Zr, "f")
+                                  , upload = C.get(this, Br, "f").setRecord(e, C.get(this, Yr, "f").getId(), n, t, i);
+                                window.dispatchEvent(new CustomEvent("nsws-new-pb", { detail: { track: C.get(this, Yr, "f").getId(), seconds: t.time, upload: upload } }));
+                                return upload
                             }
                         }
                         return Promise.resolve(null)
@@ -52053,6 +52057,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const label = document.createElement("span");
                     label.textContent = preset.title;
                     button.appendChild(label);
+                    "ultra" == preset.id && ultraBlockReason(renderer) && (button.disabled = !0,
+                    button.title = "Ultra can freeze or crash this device");
                     button.addEventListener("click", ( () => {
                         C.get(this, vs, "f").playUIClick();
                         for (const [k, v] of devicePresetSettings(preset, renderer))
@@ -52286,15 +52292,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }, {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Medium"),
                 value: "3",
-                available: C.get(this, ys, "f").isShadowQualitySupported(3)
+                available: C.get(this, ys, "f").isShadowQualitySupported(3) && !ultraBlockReason(C.get(this, ys, "f"))
             }, {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "High"),
                 value: "4",
-                available: C.get(this, ys, "f").isShadowQualitySupported(4)
+                available: C.get(this, ys, "f").isShadowQualitySupported(4) && !ultraBlockReason(C.get(this, ys, "f"))
             }, {
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Ultra"),
                 value: "5",
-                available: C.get(this, ys, "f").isShadowQualitySupported(5)
+                available: C.get(this, ys, "f").isShadowQualitySupported(5) && !ultraBlockReason(C.get(this, ys, "f"))
             }], R.A.ShadowQuality, ( () => {
                 C.get(this, ws, "f").generateMeshes()
             }
@@ -52811,6 +52817,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 for (const [_title, _value] of _options) {
                     const _btn = document.createElement("button");
                     _btn.className = _value === _current ? "button selected" : "button";
+                    _btn.disabled = ["2", "3", "4"].includes(_value) && !!ultraBlockReason(C.get(this, ys, "f"));
                     _btn.textContent = _title;
                     _btn.addEventListener("click", ( () => {
                         for (const _b of _buttons) _b.className = "button";
@@ -53150,6 +53157,47 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             showGraphicsNote("Graphics are set to Low End Device because this device has less than 16 GB of memory. You can change it at the top of Settings.");
             return !0;
         }
+        // Anything above High End Device (Medium shadows or more, PolyFX Enhanced or more) can freeze a weak
+        // GPU or crash the tab before any guard gets a chance, so it isn't offered there at all.
+        // localStorage _nswsAllowUltra = "1" lets a device that is caught by mistake use it anyway.
+        let ultraBlockCache;
+        function ultraBlockReason(renderer) {
+            if (void 0 !== ultraBlockCache)
+                return ultraBlockCache;
+            try {
+                if ("1" == localStorage.getItem("_nswsAllowUltra"))
+                    return ultraBlockCache = null;
+            } catch (e) {}
+            const ua = navigator.userAgent || "";
+            if (navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || ("MacIntel" == navigator.platform && navigator.maxTouchPoints > 1))
+                return ultraBlockCache = "mobile";
+            const memory = navigator.deviceMemory;
+            if ("number" == typeof memory && memory > 0 && memory < 8)
+                return ultraBlockCache = "memory";
+            const cores = navigator.hardwareConcurrency;
+            if ("number" == typeof cores && cores > 0 && cores <= 2)
+                return ultraBlockCache = "cpu";
+            let gpu = ""
+              , maxTexture = 0;
+            try {
+                const canvas = renderer?.canvas
+                  , gl = canvas && (canvas.getContext("webgl2") || canvas.getContext("webgl"));
+                if (gl) {
+                    const info = gl.getExtension("WEBGL_debug_renderer_info");
+                    gpu = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "").toLowerCase();
+                    maxTexture = gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0;
+                }
+            } catch (e) {}
+            if (maxTexture > 0 && maxTexture < 8192)
+                return ultraBlockCache = "gpu";
+            if (/swiftshader|llvmpipe|softpipe|software|basic render/.test(gpu) || /mali|adreno|powervr|videocore|vivante|tegra/.test(gpu))
+                return ultraBlockCache = "gpu";
+            // Integrated graphics share the system's memory: Intel (but not Arc cards), AMD APUs, small NVIDIA chips.
+            if (/intel/.test(gpu) && !/\barc\b/.test(gpu) || /radeon(\(tm\))? graphics|vega \d+ graphics|radeon r[2-7] |radeon \d{3}m\b/.test(gpu) || /geforce (mx|gt) ?\d/.test(gpu))
+                return ultraBlockCache = "gpu";
+            return ultraBlockCache = null;
+        }
+        window.__nswsUltraBlocked = () => !!ultraBlockCache;
         // Ultra can be more than a weak GPU or a small amount of memory can take: a render throws, the
         // WebGL context is lost (the canvas goes black or white), or the whole tab crashes. Each case
         // lowers the graphics one step instead of leaving the game broken.
@@ -53166,7 +53214,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         function graphicsLevel(settings) {
             const shadows = settings.getSettingInteger(R.A.ShadowQuality);
             const fx = parseInt(getPolyFxPreset(), 10) || 0;
-            if (shadows > 2 || fx > 1)
+            if (shadows > 2 || fx >= 2 && fx <= 4)
                 return 2;
             if (shadows > 0 || fx > 0 || !settings.getSettingBoolean(R.A.LowPerformanceMode) || settings.getSettingBoolean(R.A.CloudsEnabled) || settings.getSettingBoolean(R.A.ParticlesEnabled))
                 return 1;
@@ -53179,7 +53227,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return null;
             if (2 == level) {
                 settings.updateSettings([[R.A.ShadowQuality, Math.min(settings.getSettingInteger(R.A.ShadowQuality), 2).toString()]]);
-                setPolyFxPreset(Math.min(parseInt(getPolyFxPreset(), 10) || 0, 1).toString());
+                const fx = parseInt(getPolyFxPreset(), 10) || 0;
+                fx >= 2 && fx <= 4 && setPolyFxPreset("1");
             } else {
                 const low = DEVICE_PRESETS[0];
                 const scale = settings.getSettingFloat(R.A.RenderScale) <= parseFloat(low.renderScale) ? settings.getSetting(R.A.RenderScale) : low.renderScale;
@@ -53229,6 +53278,38 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             if (graphicsGuard)
                 return;
             graphicsGuard = {};
+            if (ultraBlockReason(renderer) && 2 == graphicsLevel(settings)) {
+                const step = lowerGraphics(renderer, settings, meshes);
+                step && (pendingGraphicsNote = "Ultra graphics can freeze or crash this device, so they were lowered to " + step + ".");
+            }
+            // A device the check above misses can still be far too slow: about 6 s under 15 fps on Ultra lowers it once.
+            // The median ignores the shader compiles on a track's first frames.
+            const frameTimes = [];
+            let lastFrameAt = 0
+              , slowChecked = 0
+              , slowLowered = !1;
+            const watchFrames = now => {
+                if (slowLowered)
+                    return;
+                requestAnimationFrame(watchFrames);
+                const dt = now - lastFrameAt;
+                lastFrameAt = now;
+                if ("visible" != document.visibilityState || dt <= 0 || dt > 1000)
+                    return;
+                frameTimes.push(dt);
+                frameTimes.length > 90 && frameTimes.shift();
+                if (now - slowChecked < 2000 || frameTimes.length < 90 || now < 15000)
+                    return;
+                slowChecked = now;
+                if (2 != graphicsLevel(settings) || [...frameTimes].sort( (a, b) => a - b)[45] < 66)
+                    return;
+                const step = lowerGraphics(renderer, settings, meshes);
+                if (!step)
+                    return;
+                slowLowered = !0;
+                graphicsMessage("Ultra graphics are too heavy for this device, so they were lowered to " + step + ". You can change this at the top of Settings.", "Ok", null);
+            };
+            requestAnimationFrame(watchFrames);
             const tabId = Math.random().toString(36).slice(2);
             (async () => {
                 let held = null;
@@ -53328,6 +53409,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const hint = document.createElement("span");
                 hint.className = "hint";
                 hint.textContent = preset.hint;
+                "ultra" == preset.id && ultraBlockReason(renderer) && (button.disabled = !0,
+                hint.textContent = "Not available on this device");
                 button.appendChild(hint);
                 button.addEventListener("click", ( () => {
                     audio.playUIClick();
@@ -56254,7 +56337,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     window.__nswsStandingsLoad = stLoad;
                     if (stRefreshInterval == null) {
                         stRefreshInterval = setInterval(() => {
-                            if (overlay.style.display !== "none" && stCurrentWeek === window.__nswsMaxWeek) stLoad(stCurrentWeek);
+                            if (document.visibilityState === "visible" && overlay.style.display !== "none" && stCurrentWeek === window.__nswsMaxWeek) stLoad(stCurrentWeek);
                         }, 60000);
                     }
                 }
@@ -59651,8 +59734,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             getLeaderboard(e, t, n, i, r) {
                 let a = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString() + window.__nswsTrackQuery(t);
-                return this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e)),
-                new Promise(( (t, n) => {
+                this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e));
+                const __nswsBoard = new Promise(( (t, n) => {
                     const i = new XMLHttpRequest;
                     i.timeout = C.get(this, wu, "f"),
                     i.overrideMimeType("text/plain"),
@@ -59768,7 +59851,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     i.open("GET", a, !0),
                     i.send()
                 }
-                ))
+                ));
+                return window.__nswsBoardRequested?.(a, __nswsBoard),
+                __nswsBoard
             }
             getLeaderboardUserEntry(e, t, n) {
                 const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false" + window.__nswsTrackQuery(t); window.__nswsUserToken = encodeURIComponent(e);
@@ -61941,8 +62026,6 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
     var PROFILE_KEY_PREFIX = "polytrack_v5_prod_user_";
     var ENTRY_URL = window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&onlyVerified=false";
     var LB_URL = window.__nswsApiBase + "v6/leaderboard?version=0.6.2&onlyVerified=false";
-    var SUBMIT_DELAY_MS = 0;
-    var PLACEMENT_SETTLE_DELAY_MS = 1200;
 
     // Bumped on every reset, respawn and track change. A finish whose placement fetch
     // resolves after the id has moved on is for a run that is gone: no banner for it.
@@ -62029,14 +62112,60 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
     var FETCH_FAILED = {};
 
     var benchmarkCache = {};
+    var benchmarkInflight = {};
     // Last pb/at/tier per track, shown in the badge's hover tooltip.
     var lastDebugInfo = {};
+
+    // The first page of a board the game itself read, with this player's entry. The badge reuses it
+    // instead of asking again, and an Author Time on it saves the scan.
+    var BOARD_REUSE_MS = 20000;
+    var boardReads = {};
+    window.__nswsBoardRequested = function (url, promise) {
+        var q;
+        try {
+            q = new URL(url).searchParams;
+        } catch (e) {
+            return;
+        }
+        var trackId = q.get("trackId");
+        if (!trackId || q.get("skip") !== "0" || q.get("onlyVerified") !== "false" || !q.get("userTokenHash")) return;
+        boardReads[trackId] = { at: Date.now(), promise: promise };
+        promise.then(function (board) {
+            seedAuthorTime(trackId, board);
+        }, function () {});
+    };
+
+    function seedAuthorTime(trackId, board) {
+        var target = benchmarkNicknameForTrack(trackId).trim().toLowerCase();
+        var entries = board && Array.isArray(board.entries) ? board.entries : [];
+        for (var i = 0; i < entries.length; i++) {
+            var e = entries[i];
+            if (e && typeof e.nickname === "string" && e.nickname.trim().toLowerCase() === target) {
+                if (e.hidden !== true && e.time) benchmarkCache[trackId] = { value: e.time.time, ts: Date.now() };
+                return;
+            }
+        }
+    }
+
+    // A read started at or after `since` (the screen's own, up to waitMs from now), else one from the last few seconds.
+    function boardRead(trackId, since, waitMs) {
+        var until = Date.now() + waitMs;
+        return new Promise(function (resolve) {
+            (function look() {
+                var read = boardReads[trackId];
+                if (read && read.at >= since) return resolve(read.promise);
+                if (Date.now() < until) return void setTimeout(look, 100);
+                resolve(read && Date.now() - read.at < BOARD_REUSE_MS ? read.promise : null);
+            })();
+        });
+    }
 
     function fetchBenchmarkAT(trackId) {
         var cached = benchmarkCache[trackId];
         if (cached && (Date.now() - cached.ts) < BENCHMARK_CACHE_TTL_MS) {
             return Promise.resolve(cached.value);
         }
+        if (benchmarkInflight[trackId]) return benchmarkInflight[trackId];
         var target = benchmarkNicknameForTrack(trackId).trim().toLowerCase();
 
         function fetchPage(skip) {
@@ -62068,7 +62197,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             });
         }
 
-        return scan(0).then(function (at) {
+        var pending = scan(0).then(function (at) {
             benchmarkCache[trackId] = { value: at, ts: Date.now() };
             console.debug("[nsws] benchmark AT for track", trackId, "=", at);
             return at;
@@ -62078,6 +62207,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             console.debug("[nsws] benchmark AT fetch FAILED for track", trackId, err && err.message);
             return FETCH_FAILED;
         });
+        benchmarkInflight[trackId] = pending;
+        pending.then(function () {
+            delete benchmarkInflight[trackId];
+        });
+        return pending;
     }
 
     function tierForTime(finishSeconds, at) {
@@ -62152,7 +62286,39 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
     }
 
-    function fetchPlacement(trackId) {
+    function placementFound(trackId, position, total, frames) {
+        if (!Number.isSafeInteger(position) || position < 1 || !total || total < 1) return null;
+        // The weekly bingo's leaderboard squares (mod/nsws_bingo.js).
+        window.dispatchEvent(new CustomEvent("nsws-placement", { detail: { trackId: trackId, position: position, total: total } }));
+        return { position: position, total: total, frames: frames };
+    }
+
+    function fetchPlacement(trackId, since, waitMs) {
+        return boardRead(trackId, since, waitMs).then(function (read) {
+            if (!read) return fetchPlacementDirect(trackId);
+            return read.then(function (board) {
+                var entry = board && board.userEntry;
+                return entry ? placementFound(trackId, entry.position, board.total, entry.time ? entry.time.numberOfFrames : null) : null;
+            }, function () {
+                return fetchPlacementDirect(trackId);
+            });
+        });
+    }
+
+    // After a PB: the upload's reply already has the new position, so only the total is asked for.
+    function pbPlacement(trackId, upload) {
+        return Promise.resolve(upload).then(function (result) {
+            var position = result && result.newPosition;
+            if (!Number.isSafeInteger(position) || position < 1) return null;
+            return fetchLeaderboardTotal(trackId).then(function (total) {
+                return placementFound(trackId, position, total == null ? null : Math.max(total, position), null);
+            });
+        }).catch(function () {
+            return null;
+        });
+    }
+
+    function fetchPlacementDirect(trackId) {
         return getUserTokenHash().then(function (tokenHash) {
             if (!tokenHash) return null;
             var entryUrl = ENTRY_URL + "&trackId=" + encodeURIComponent(trackId) + "&userTokenHash=" + encodeURIComponent(tokenHash) + window.__nswsTrackQuery(trackId);
@@ -62169,14 +62335,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     return r.json();
                 }).then(function (lbData) {
                     var total = lbData && typeof lbData.total === "number" ? lbData.total : null;
-                    if (!total || total < 1) return null;
-                    // The weekly bingo's leaderboard squares (mod/nsws_bingo.js).
-                    window.dispatchEvent(new CustomEvent("nsws-placement", { detail: { trackId: trackId, position: entryData.position, total: total } }));
-                    return {
-                        position: entryData.position,
-                        total: total,
-                        frames: typeof entryData.frames === "number" ? entryData.frames : null
-                    };
+                    return placementFound(trackId, entryData.position, total, typeof entryData.frames === "number" ? entryData.frames : null);
                 });
             });
         }).catch(function () {
@@ -62429,7 +62588,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
     }
 
     function refreshMedalRecord(trackId, pbSeconds) {
-        return fetchPlacement(trackId).then(function (placement) {
+        // The track screen reads its board half a second after it opens.
+        return fetchPlacement(trackId, Date.now(), 1500).then(function (placement) {
             return determineTierAsync(trackId, pbSeconds).then(function (result) {
                 var tier = result.tier;
                 lastDebugInfo[trackId] = {
@@ -62515,57 +62675,54 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         });
     };
 
-    function fetchSettledPlacement(trackId) {
-        return fetchPlacement(trackId).then(function (first) {
-            return new Promise(function (resolve) {
-                setTimeout(function () {
-                    fetchPlacement(trackId).then(function (second) {
-                        resolve(second || first);
-                    }).catch(function () {
-                        resolve(first);
-                    });
-                }, PLACEMENT_SETTLE_DELAY_MS);
-            });
-        });
-    }
+    // Set by the game's finish callback when a run is saved as a PB and uploaded.
+    var pendingPb = null;
+    window.addEventListener("nsws-new-pb", function (e) {
+        var d = e.detail || {};
+        delete boardReads[d.track];
+        pendingPb = { track: d.track, seconds: d.seconds, upload: d.upload, at: Date.now() };
+    });
 
     function handleFinish(trackId, finishSeconds) {
-        if (!enabled || !hasMedals(trackId)) return;
+        // A replay reaching the finish in the Watch view earns nothing.
+        if (!enabled || !hasMedals(trackId) || window.__nswsWatching?.()) return;
+        // Only a PB can earn a better medal or a world record, so other finishes ask the server nothing.
+        var pb = pendingPb;
+        if (!pb || pb.track !== trackId || Math.abs(pb.seconds - finishSeconds) > 0.0005 || Date.now() - pb.at > 10000) return;
+        pendingPb = null;
         var finishRunId = runId;
-        setTimeout(function () {
-            Promise.all([fetchSettledPlacement(trackId), determineTierAsync(trackId, finishSeconds)]).then(function (results) {
-                var placement = results[0];
-                var tier = results[1].tier;
-                var at = results[1].at;
-                if (tier) {
-                    var store = loadStore();
-                    var prev = store[trackId];
-                    var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
-                    // Only a better tier is a new medal. A faster PB in the same tier keeps the
-                    // game's normal PB banner.
-                    if (isNewBest) {
-                        var percentile = placement ? placement.position / placement.total : null;
-                        store[trackId] = {
-                            tier: tier.id,
-                            percentile: percentile,
-                            rank: placement ? placement.position : null,
-                            total: placement ? placement.total : null,
-                            time: finishSeconds,
-                            at: at,
-                            ts: Date.now()
-                        };
-                        saveStore(store);
-                        // The fetches can settle after the player has left, restarted or respawned.
-                        if (trackId !== currentTrackId || runId !== finishRunId) return;
-                        announceMedal(tier, placement, finishSeconds, isNewBest, at);
-                        return;
-                    }
+        Promise.all([pbPlacement(trackId, pb.upload), determineTierAsync(trackId, finishSeconds)]).then(function (results) {
+            var placement = results[0];
+            var tier = results[1].tier;
+            var at = results[1].at;
+            if (tier) {
+                var store = loadStore();
+                var prev = store[trackId];
+                var isNewBest = !prev || TIER_RANK[tier.id] > TIER_RANK[prev.tier];
+                // Only a better tier is a new medal. A faster PB in the same tier keeps the
+                // game's normal PB banner.
+                if (isNewBest) {
+                    var percentile = placement ? placement.position / placement.total : null;
+                    store[trackId] = {
+                        tier: tier.id,
+                        percentile: percentile,
+                        rank: placement ? placement.position : null,
+                        total: placement ? placement.total : null,
+                        time: finishSeconds,
+                        at: at,
+                        ts: Date.now()
+                    };
+                    saveStore(store);
+                    // The fetches can settle after the player has left, restarted or respawned.
+                    if (trackId !== currentTrackId || runId !== finishRunId) return;
+                    announceMedal(tier, placement, finishSeconds, isNewBest, at);
+                    return;
                 }
-                // No new medal: the game's PB banner stays, but may still be a world record.
-                if (trackId !== currentTrackId || runId !== finishRunId) return;
-                maybeAnnounceWorldRecord(trackId, placement);
-            });
-        }, SUBMIT_DELAY_MS);
+            }
+            // No new medal: the game's PB banner stays, but may still be a world record.
+            if (trackId !== currentTrackId || runId !== finishRunId) return;
+            maybeAnnounceWorldRecord(trackId, placement);
+        });
     }
 
     var currentTrackId = null;

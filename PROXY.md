@@ -658,6 +658,16 @@ then stops calling DOs for 10 minutes at a time (`doLimited()`), and what still 
   `pv` keys so the page leaves its announcement alone, and the page keeps that beat's counts for
   the next one.
 
+On a normal day leaderboards read the same snapshot first. A board whose runs the anti-cheat had
+all seen when the snapshot was saved (id up to the board's newest, or in its valid list) is
+filtered from it, with no Durable Object call. Only a board with a newer run asks
+`AntiCheat.classify`. The snapshot also holds each synced track's week and, every 15 minutes, the
+WR holders from `Accounts.wrKeys()`. Names go to `Accounts.observeNames` only for runs newer than
+the snapshot, and `noteWrs` is skipped when the snapshot already has that holder. So a fresh Worker
+instance no longer spends up to 4 DO calls on its first view of each board. A verdict that changes
+later (a legacy run found invalid, an owner approval) reaches boards within about 10 minutes
+(the 5-minute cron plus each instance's 5-minute copy).
+
 The page side is `mod/nsws_offline.js`. `__nswsBusy` remembers `until` and tells the player once;
 any normal reply (a beat, a chat connect, a queued upload) clears it early. A PB whose upload got a
 busy, 5xx or no reply goes in a queue (`_nswsUploadQueue`) and is sent through the game's own

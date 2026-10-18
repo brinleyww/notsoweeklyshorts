@@ -19343,7 +19343,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (!Number.isFinite(preset)) preset = PRESET.OFF;
       }
-      if (this.cinematic) preset = cinematicPreset(preset);
+      if (this.cinematic && !window.__nswsUltraBlocked?.()) preset = cinematicPreset(preset);
       if (typeof window !== "undefined" && window.__polyfxInGarage) preset = PRESET.OFF;
       if (renderer && renderer.domElement && !renderer.domElement.isConnected) preset = PRESET.OFF;
       let cfg = cfgFor(preset);

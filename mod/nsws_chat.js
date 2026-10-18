@@ -49,6 +49,7 @@
     const MAX_TEXT = 200;
     const MAX_ITEMS = 200;
     const KEEPALIVE_MS = 30000;
+    const STABLE_MS = 60000;
     const SLOW_MS = 1000;
     const PING_SOUND_GAP_MS = 4000;
     const WHO_MS = 5000;
@@ -2229,9 +2230,9 @@
         const openTimer = setTimeout(() => {
             if (socket === ws && ws.readyState === WebSocket.CONNECTING) ws.close();
         }, WS_OPEN_TIMEOUT_MS);
+        let upSince = 0;
         ws.addEventListener("open", async () => {
             clearTimeout(openTimer);
-            retryDelay = 2000;
             setStatus("");
             const hello = { t: "hello", v: visitorId(), nick: readNickname() };
             const key = await ownerKey();
@@ -2252,6 +2253,7 @@
             onServer(data);
             if (data?.t === "init") {
                 ready = true;
+                upSince = Date.now();
                 wsFails = 0;
                 storageSet(TRANSPORT_KEY, "");
             }
@@ -2262,7 +2264,9 @@
             socket = null;
             clearInterval(keepAliveTimer);
             // A socket that worked and then dropped just reconnects; one that never got going
-            // counts towards falling back to HTTPS.
+            // counts towards falling back to HTTPS. The backoff only starts over after a socket
+            // that stayed up, so one the server keeps closing can't reconnect every 2 s.
+            if (ready && Date.now() - upSince >= STABLE_MS) retryDelay = 2000;
             if (ready) retry();
             else wsFailed();
         });

@@ -234,6 +234,13 @@ export class Accounts extends DurableObject {
         return { nickname: censor(nickname || "Unknown"), wrs: this.wrCount(userId), since: this.king.since };
     }
 
+    // "userId|frames" of every WR holder, for the leaderboards' snapshot (see AntiCheat.saveSnapshot).
+    wrKeys() {
+        const keys = {};
+        for (const [track, w] of this.wrTable()) keys[track] = w.user_id + "|" + w.frames;
+        return keys;
+    }
+
     // entries: [{ track, week, userId, nickname, frames }], userId null for a board with nobody on it.
     // The Worker only sends tracks the anti-cheat knows, with their real week. Returns chat retags.
     noteWrs(entries) {

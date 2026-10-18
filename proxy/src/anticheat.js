@@ -194,10 +194,20 @@ export class AntiCheat extends DurableObject {
         return blocked;
     }
 
-    // What the Worker falls back on while Durable Objects are refused, saved to KV when it has
-    // changed: per board, the newest run seen, the runs to hide, the lobby holds, and valid runs
-    // newer than the newest seen. Called by the Worker's cron.
-    async saveSnapshot() {
+    // Saved to KV when it has changed: per board, the newest run seen, the runs to hide, the lobby holds,
+    // and valid runs newer than the newest seen; each track's week; and the WR holders Accounts knows
+    // (wrs, passed in by the Worker's cron). Leaderboards read it first, and fall back on it while
+    // Durable Objects are refused.
+    async saveSnapshot(wrs) {
+        this.wrsText ??= (await this.ctx.storage.get("snapshotWrs")) ?? "{}";
+        if (wrs && typeof wrs === "object") {
+            const text = JSON.stringify(wrs);
+            if (text !== this.wrsText) {
+                this.wrsText = text;
+                this.snapshotDirty = true;
+                await this.ctx.storage.put("snapshotWrs", text);
+            }
+        }
         if (!this.env.FALLBACK || !this.snapshotDirty) return { saved: false };
         this.snapshotDirty = false;
         try {
@@ -212,10 +222,12 @@ export class AntiCheat extends DurableObject {
             for (const r of this.sql.exec("SELECT track, user_id, frames, upload_id FROM lobby_runs WHERE state IN ('review', 'hidden')")) {
                 slot(r.track).holds.push(...this.holdKeys(r));
             }
-            const body = JSON.stringify(tracks);
+            const weeks = Object.fromEntries((await this.trackWeeks()).map(([id, week]) => [id, week]));
+            const wrsSaved = JSON.parse(this.wrsText);
+            const body = JSON.stringify({ tracks, weeks, wrs: wrsSaved });
             const hash = hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)));
             if (hash === await this.ctx.storage.get("snapshotHash")) return { saved: false };
-            await this.env.FALLBACK.put(SNAPSHOT_KEY, JSON.stringify({ at: Date.now(), tracks }));
+            await this.env.FALLBACK.put(SNAPSHOT_KEY, JSON.stringify({ at: Date.now(), tracks, weeks, wrs: wrsSaved }));
             await this.ctx.storage.put("snapshotHash", hash);
             return { saved: true, bytes: body.length };
         } catch (err) {

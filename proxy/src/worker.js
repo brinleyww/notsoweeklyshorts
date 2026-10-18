@@ -527,7 +527,7 @@ const seenNames = new Set();
 
 function observeNames(env, ctx, entries) {
     const stub = accounts(env);
-    if (!stub || doLimited()) return;
+    if (!stub || doLimited() || !entries.length) return;
     const fresh = [];
     for (const e of entries) {
         if (!HEX64.test(e?.userId ?? "") || typeof e.nickname !== "string") continue;
@@ -548,6 +548,8 @@ const verdicts = new Map();
 let trackWeeks = null;
 
 async function knownWeek(env, trackId) {
+    const saved = (await verdictSnapshot(env))?.weeks?.[trackId];
+    if (Number.isSafeInteger(saved)) return saved;
     const stale = !trackWeeks || Date.now() - trackWeeks.at > TRACK_WEEKS_TTL_MS;
     const missing = trackWeeks && !trackWeeks.map.has(trackId) && Date.now() - trackWeeks.at > TRACK_WEEKS_RETRY_MS;
     if (stale || missing) {
@@ -569,6 +571,10 @@ function noteWr(env, ctx, track, entry) {
     if (wrSeen.get(track.trackId) === key) return;
     wrSeen.set(track.trackId, key);
     if (wrSeen.size > WR_SEEN_MAX) wrSeen.delete(wrSeen.keys().next().value);
+    // Accounts already had this holder when the snapshot was saved.
+    const snap = snapshot?.data;
+    if (snap?.wrs && snap.weeks?.[track.trackId] === track.week
+        && (snap.wrs[track.trackId] ?? "") === (holder ? holder.userId + "|" + holder.frames : "")) return;
     ctx.waitUntil((async () => {
         if (await knownWeek(env, track.trackId) !== track.week) return;
         const { retags } = await stub.noteWrs([{
@@ -617,6 +623,30 @@ async function fallbackBlocked(env, cfg, track, view) {
     return blocked;
 }
 
+// The anti-cheat's verdicts as of the last snapshot, when it had already seen every run on this board.
+// A newer run, or a board it hasn't saved, needs the anti-cheat itself (null).
+async function snapshotBlocked(env, cfg, track, view) {
+    const saved = (await verdictSnapshot(env))?.tracks?.[track.trackId];
+    if (!saved) return null;
+    const owners = new Set(cfg.ownerUserIds);
+    const hidden = new Set(saved.blocked);
+    const holds = new Set(saved.holds);
+    const ok = new Set(saved.ok);
+    const blocked = new Set();
+    for (const e of view.entries) {
+        if (!Number.isSafeInteger(e.id) || e.id <= 0 || owners.has(e.userId)) continue;
+        if (e.id > saved.top && !ok.has(e.id)) return null;
+        if (hidden.has(e.id) || holds.has(e.userId + "|" + e.frames) || holds.has("#" + e.id)) blocked.add(e.id);
+    }
+    return blocked;
+}
+
+// Runs on the board the snapshot hasn't seen; everything when there is no snapshot of it.
+async function unseenRuns(env, track, entries) {
+    const saved = (await verdictSnapshot(env))?.tracks?.[track.trackId];
+    return saved ? entries.filter((e) => !(e.id <= saved.top)) : entries;
+}
+
 async function blockedRuns(env, cfg, track, view) {
     const anti = antiCheat(env);
     if (!anti || track.week == null) return null;
@@ -624,6 +654,8 @@ async function blockedRuns(env, cfg, track, view) {
     const known = hit && view.entries.every((e) => hit.known.has(e.id));
     if (known && (Date.now() - hit.at < ANTICHEAT_TTL_MS || doLimited())) return hit.blocked;
     if (doLimited()) return fallbackBlocked(env, cfg, track, view);
+    const saved = await snapshotBlocked(env, cfg, track, view);
+    if (saved) return saved;
     const entries = view.entries.map((e) => ({ id: e.id, userId: e.userId, frames: e.frames, nickname: e.nickname }));
     const blocked = new Set(await anti.classify(track.trackId, track.week, entries, cfg.ownerUserIds));
     verdicts.delete(track.trackId);
@@ -642,7 +674,7 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     const owner = cfg.owner || await isOwner(params.get("userToken"), cfg);
 
     const view = await loadView(cfg, request, track, read);
-    if (track.week != null) observeNames(env, ctx, view.entries);
+    if (track.week != null) observeNames(env, ctx, await unseenRuns(env, track, view.entries));
     // If the anti-cheat is unreachable the board still loads, filtered by its last verdicts.
     cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
         noteDoError(err);
@@ -1471,6 +1503,10 @@ export default {
     async scheduled(event, env, ctx) {
         const anti = antiCheat(env);
         if (!anti || !env.FALLBACK) return;
-        ctx.waitUntil(anti.saveSnapshot().catch((err) => console.error("anti-cheat snapshot failed:", err && err.message)));
+        ctx.waitUntil((async () => {
+            const stub = new Date(event.scheduledTime).getUTCMinutes() % 15 < 5 ? accounts(env) : null;
+            const wrs = stub ? await stub.wrKeys().catch(() => null) : null;
+            await anti.saveSnapshot(wrs);
+        })().catch((err) => console.error("anti-cheat snapshot failed:", err && err.message)));
     },
 };
