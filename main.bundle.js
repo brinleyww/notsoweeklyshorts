@@ -6290,7 +6290,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , t = this.getTrackViewDistance()
                   , limited = Number.isFinite(t) && null == o;
                 let a = i.get(this, T, "f").fog;
-                if (!e && !limited) {
+                // Fog off means no fog at all: a limited draw distance then hides far parts without fading them.
+                if (!e) {
                     null != a && (i.get(this, T, "f").fog = null);
                     return
                 }
@@ -6305,9 +6306,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     a.near = a.far * Math.min(Math.max(num(W.A.FogStart, 0), 0), .95),
                     a.fade = 1 - Math.min(Math.max(num(W.A.FogStrength, 1), 0), 1);
                 } else
-                    e ? (a.near = Number.isFinite(t) ? .5 * t : 0, a.far = Number.isFinite(t) ? t : b.maxViewDistance, a.fade = 0) : (a.near = 0, a.far = 1, a.fade = 1);
-                // A shortened draw distance always ends in fog (fogCullNear/Far in fog_fragment), so far parts fade out instead of popping.
-                a.skyBand = e && null == o && a.far < b.maxViewDistance ? Math.min(Math.max(60 / a.far, .02), .7) : 0,
+                    a.near = Number.isFinite(t) ? .5 * t : 0, a.far = Number.isFinite(t) ? t : b.maxViewDistance, a.fade = 0;
+                // With fog on, a shortened draw distance ends in fog (fogCullNear/Far in fog_fragment), so far parts fade out instead of popping.
+                a.skyBand = null == o && a.far < b.maxViewDistance ? Math.min(Math.max(60 / a.far, .02), .7) : 0,
                 a.cullNear = limited ? .5 * t : 0,
                 a.cullFar = limited ? t : 0,
                 a.color.setHex(FOG_COLORS[color] ?? FOG_COLORS.sky),
@@ -31847,7 +31848,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }),
                 t
             }
-            // Hides split meshes whose bounds lie wholly beyond the draw distance (they are fully fogged there).
+            // Hides split meshes whose bounds lie wholly beyond the draw distance (fully fogged there when fog is on).
             function cullTrackByDistance(e, t, n) {
                 if (!e.warm) {
                     e.warm = !0;
