@@ -362,7 +362,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     const STEP = 10;
     const DT = STEP / 1000;
     const RIDE = new Set(["chase", "orbit", "heli", "side", "front", "pack", "dchase", "dfpv", "dside", "dtop", "dorbit"]);
-    const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack"];
+    const TYPES = ["chase", "orbit", "tele", "curb", "heli", "side", "front", "pack", "dtop"];
     // Drone only mode flies these instead: high chase, FPV, tracking beside, straight down, orbit.
     const DRONE_TYPES = ["dchase", "dfpv", "dside", "dtop", "dorbit"];
     const VARIANTS = { chase: 2, orbit: 1, tele: 2, curb: 1, heli: 1, side: 2, front: 1, pack: 1, dchase: 1, dfpv: 1, dside: 2, dtop: 1, dorbit: 1 };
@@ -1234,8 +1234,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
         }
 
-        // Share of the shot spent looking steeply down (over ~60 degrees) at a car that is on flat
-        // ground: a map view of the car, dull to watch. On a wall that is square on to the car.
+        // Share of the shot spent looking steeply down at a car on flat ground: a map view of the
+        // car, dull to watch. Over ~60 degrees counts, but through a turn or a drift it takes over
+        // ~76 (a turn seen from above is worth watching), and on a wall it is square on to the car.
         steepShare(shot) {
             const span = (isFinite(shot.t1) ? shot.t1 : shot.t0 + 3) - shot.t0;
             const dir = this.sd ??= new this.c.T.Vector3();
@@ -1247,7 +1248,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 dir.subVectors(view.look, view.pos);
                 const l = dir.length();
                 n++;
-                if (l > 1e-3 && dir.y / l < -0.86 && this.path.carUp(t, this.w[2]).y > 0.6) steep++;
+                const i = Math.round(t / DT);
+                const turning = Math.abs(this.path.yawRaw(i)) > 0.5 || this.path.slip(i) > 0.2;
+                if (l > 1e-3 && dir.y / l < (turning ? -0.97 : -0.86) && this.path.carUp(t, this.w[2]).y > 0.6) steep++;
             }
             return steep / n;
         }
@@ -3411,11 +3414,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 break;
             case "dtop": {
                 // High up, behind the car and out towards the outside of the turn, looking down at
-                // about 55 degrees (never straight down at the ground). On a wall ride it swings
-                // round to face the wall square on instead.
+                // about 50 degrees, tipping to about 65 through the turn itself (never straight down
+                // at the ground). On a wall ride it swings round to face the wall square on instead.
                 const lift = shot.up * (1 + 0.1 * Math.sin(Math.PI * k));
+                const turn = clamp((Math.abs(path.yawRate(t)) - 0.3) / 0.6, 0, 1);
                 const inside = clamp(path.pos(t + 0.5, e[3]).sub(P).dot(right) / 3, -1, 1);
-                const D = e[4].copy(up).multiplyScalar(lift).addScaledVector(Hs, -0.7 * lift).addScaledVector(right, -inside * 0.35 * lift);
+                const D = e[4].copy(up).multiplyScalar(lift).addScaledVector(Hs, -(0.7 - 0.38 * turn) * lift).addScaledVector(right, -inside * (0.35 - 0.15 * turn) * lift);
                 const a = path.smooth(t, 2, 1, path.acc);
                 const U = e[3].set(a[0], a[1], a[2]);
                 if (U.lengthSq() > 1e-6) {
@@ -3424,7 +3428,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     if (wall > 0) D.lerp(U.multiplyScalar(0.9 * lift).addScaledVector(Hs, -0.4 * lift), wall);
                 }
                 pos.copy(P).add(D);
-                look.copy(P).addScaledVector(Hs, 4.5);
+                look.copy(P).addScaledVector(Hs, 4.5 - 2.5 * turn);
                 out.fov = 55;
                 out.lens = 0.2;
                 break;
