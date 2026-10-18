@@ -75,6 +75,8 @@ body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-export .button { align-self: center; padding: 8px 30px; font-size: 20px; }
 .nsws-loading { position: fixed; left: 50%; top: 50%; z-index: 20; width: 44px; height: 44px; margin: -28px 0 0 -28px; border: 6px solid rgba(255, 255, 255, 0.25); border-top-color: #fff; border-radius: 50%; opacity: 0; pointer-events: none; transition: opacity 0.2s; animation: nsws-spin 0.9s linear infinite; }
 .nsws-loading.shown { opacity: 1; }
+.nsws-loading-text { position: fixed; left: 50%; top: 50%; z-index: 20; margin-top: 34px; transform: translateX(-50%); color: #fff; font-size: 16px; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6); white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+.nsws-loading-text.shown { opacity: 1; }
 @keyframes nsws-spin { to { transform: rotate(360deg); } }
 body.nsws-recording .time-bar-ui, body.nsws-recording .preview-toolbar-ui, body.nsws-recording #_nsws-cps { opacity: 0 !important; pointer-events: none !important; }
 body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-on .checkpoint-ui { display: none !important; }
@@ -407,6 +409,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.n = 0;
             this.p = [];
             this.u = [];
+            this.us = [];
             this.nose = [];
             this.spd = [];
             this.air = [];
@@ -434,10 +437,48 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.nose.push(2 * (qw * qy + qx * qz), 1 - 2 * (qx * qx + qy * qy));
                 this.spd.push(Math.abs(s.speedKmh ?? 0));
                 this.air.push(Array.isArray(s.wheelContact) && s.wheelContact.every((w) => null == w) ? 1 : 0);
+                this.steadyUp(this.n);
                 if (null == this.finish && null != s.finishFrames) this.finish = s.finishFrames / 1000;
                 this.n++;
             }
             this.analyze();
+        }
+
+        // The car's up as the cameras use it: it may turn only so fast, slowly while the car tumbles
+        // through the air (the camera stays level instead of spinning with it), quickly on the road
+        // (a loop still turns the camera all the way round), easing back up to that over a
+        // second after a landing so catching up isn't a spin of its own.
+        steadyUp(i) {
+            const u = this.u, us = this.us;
+            this.ground = this.air[i] || i === 0 ? 0 : (this.ground ?? 0) + DT;
+            const bx = u[3 * i], by = u[3 * i + 1], bz = u[3 * i + 2];
+            if (i === 0) {
+                us.push(bx, by, bz);
+                return;
+            }
+            const ax = us[3 * i - 3], ay = us[3 * i - 2], az = us[3 * i - 1];
+            const dot = clamp(ax * bx + ay * by + az * bz, -1, 1);
+            const ang = Math.acos(dot), max = (2.5 + 11.5 * clamp(this.ground / 1, 0, 1)) * DT;
+            if (ang <= max) {
+                us.push(bx, by, bz);
+                return;
+            }
+            // Turn from a towards b by max, about their common axis (any axis when opposite).
+            let cx = bx - ax * dot, cy = by - ay * dot, cz = bz - az * dot;
+            let cl = Math.hypot(cx, cy, cz);
+            if (cl < 1e-6) {
+                cx = -az;
+                cy = 0;
+                cz = ax;
+                cl = Math.hypot(cx, cz) || 1;
+                if (cl < 1e-6) {
+                    cx = 1;
+                    cl = 1;
+                }
+            }
+            const c = Math.cos(max), sn = Math.sin(max) / cl;
+            const x = ax * c + cx * sn, y = ay * c + cy * sn, z = az * c + cz * sn, l = Math.hypot(x, y, z) || 1;
+            us.push(x / l, y / l, z / l);
         }
 
         get end() {
@@ -455,7 +496,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const a = Math.max(0, i - 6), b = Math.min(this.n - 1, i + 6), p = this.p;
             let x = p[3 * b] - p[3 * a], z = p[3 * b + 2] - p[3 * a + 2];
             let l = Math.hypot(x, z);
-            if (l < 0.2) {
+            const prev = Math.min(i, this.tan.length >> 1) - 1;
+            if (l < 0.2 && prev >= 0) {
+                // Barely moving: keep the way it last went rather than turn with the nose (a car
+                // spinning on the spot would spin the camera round with it).
+                x = this.tan[2 * prev];
+                z = this.tan[2 * prev + 1];
+                l = 1;
+            } else if (l < 0.2) {
                 x = this.nose[2 * i];
                 z = this.nose[2 * i + 1];
                 l = Math.hypot(x, z);
@@ -509,9 +557,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 out[1] = 0;
                 out[2] = this.tz;
             } else if (kind === 1) {
-                out[0] = this.u[3 * i];
-                out[1] = this.u[3 * i + 1];
-                out[2] = this.u[3 * i + 2];
+                out[0] = this.us[3 * i];
+                out[1] = this.us[3 * i + 1];
+                out[2] = this.us[3 * i + 2];
             } else {
                 out[0] = this.spd[i];
                 out[1] = out[2] = 0;
@@ -1870,6 +1918,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             window.addEventListener("keydown", this.onRecKey, true);
 
             this.spinner = el("div", "nsws-loading", document.body);
+            this.spinnerText = el("div", "nsws-loading-text", document.body);
 
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
@@ -1946,6 +1995,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.notice?.remove();
             window.__nswsVideoAudio?.stopPreview();
             this.spinner.remove();
+            this.spinnerText.remove();
             this.layer?.remove();
             this.layer = null;
             this.button.remove();
@@ -3587,9 +3637,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.collectMeshes(runs, performance.now() / 1000);
             for (const r of runs) this.pathOf(r).sync();
             const planner = this.plannerFor(runs, focus);
-            planner.step(planner.plannedTo < t + 2 ? 12 : 4);
-            this.holding = !this.exporting && !planner.done && planner.plannedTo < t + 0.3;
-            this.showWaiting(stalled || this.holding);
+            const ready = this.exporting ? 1 : this.preload(planner, runs);
+            planner.step(ready < 1 ? 25 : planner.plannedTo < t + 2 ? 12 : 4);
+            this.holding = !this.exporting && (ready < 1 || !planner.done && planner.plannedTo < t + 0.3);
+            this.showWaiting(stalled || this.holding, ready < 1 ? ready : null);
             const i = planner.shotAt(t);
             const shot = this.shot = i >= 0 ? planner.shots[i] : HOLD;
             const view = this.viewOf(shot, t, P, planner.path, this.viewA, this.viewB, true);
@@ -3628,9 +3679,32 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return this.exporting ? this.expT : performance.now() / 1000;
         }
 
-        // Shows the spinner while playback waits, for the replays to load that far or for the
-        // director to plan the moment shown (playback holds for that, see `holding`).
-        showWaiting(waiting) {
+        // Before the cinematic plays, every watched replay is loaded to the end and the whole edit
+        // is planned, so nothing is left to work out while it plays. 0..1, 1 once ready; anything
+        // that makes no progress for 4 s is given up on and the cinematic plays with what it has.
+        preload(planner, runs) {
+            if (planner.preloaded) return 1;
+            const now = performance.now();
+            const need = Math.round((this.o.totalTime?.() ?? 0) * 1000) - 1;
+            const loaded = Math.min(...runs.map((r) => r.replay.getLastFrame().numberOfFrames));
+            const pr = planner.pre ??= { loaded: -1, planned: -1, since: now };
+            if (loaded !== pr.loaded || planner.plannedTo !== pr.planned) {
+                pr.loaded = loaded;
+                pr.planned = planner.plannedTo;
+                pr.since = now;
+            }
+            if (loaded >= need && planner.done || now - pr.since > 4000) {
+                planner.preloaded = true;
+                return 1;
+            }
+            const end = (planner.path.finish ?? planner.total) + 4;
+            return clamp(0.5 * clamp(loaded / Math.max(1, need), 0, 1) + 0.5 * clamp(planner.plannedTo / end, 0, 1), 0, 0.99);
+        }
+
+        // Shows the spinner while playback waits: for every replay to load and the edit to be
+        // planned (with how far along that is), or for a replay to load as far as it is being
+        // played (playback holds for those, see `holding`).
+        showWaiting(waiting, progress = null) {
             const now = performance.now();
             if (!waiting) this.waitSince = null;
             else this.waitSince ??= now;
@@ -3638,6 +3712,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (show !== this.spinnerShown) {
                 this.spinnerShown = show;
                 this.spinner.classList.toggle("shown", show);
+            }
+            const text = show && null != progress ? "Loading " + Math.floor(progress * 100) + "%" : "";
+            if (text !== this.spinnerLabel) {
+                this.spinnerLabel = text;
+                if (text) this.spinnerText.textContent = text;
+                this.spinnerText.classList.toggle("shown", !!text);
             }
         }
 
