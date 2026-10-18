@@ -454,16 +454,35 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   say what a cup is doing and whether a newcomer can still race.
 - **Dropped connections:** each mux socket carries a random token. When one closes with anything but
   1000/1005 (a page closing on purpose), its links are parked for 20 s instead of going down: the
-  other ends are not told, and frames for the parked end wait in memory (up to 1 MB). The page
-  reconnects with the same token and `resume=1`, gets `{t: "resumed", ok: true}` and the waiting
-  frames, and every link carries on. An unknown or expired token gets `ok: false` and the page tears
-  its links down as before. The parking timer keeps the room awake, so nothing is stored.
-- **Reclaiming the code:** the organizer's `createInvite` carries a random `reclaim` secret. If its
-  matchmaking socket drops (not a deliberate close) while the room still has mux sockets, the room
-  writes `{key, until, cup}` to its storage (the only thing it ever stores, deleted on reclaim), hides
-  the row from the list but keeps the code reserved, and for 60 s accepts `/cup/host?reclaim=CODE`
-  whose `createInvite` has the same secret: same code, same name, pool and status. The page retries
-  every 1.5 s for that minute (`Fn.prototype.requestInvite` in `main.bundle.js`).
+  other ends are not told, and frames for the parked end are dropped. The page reconnects with the
+  same token and `resume=1&relink=1` and gets `{t: "resumed", ok: true, relink: true}`. It then
+  sends one `{t: "rejoin", pairs: [{pair, side, recv}]}` listing every connection it still has, with
+  `recv`, the number of records it got from the other end (pairs it doesn't list go down). Each listed
+  pair starts over on a new link: the other end gets `{t: "relink", pair}` and answers with its own
+  `open` and `recv`, and both get `{t: "up", pair, link, recv}` carrying the other end's count. Each
+  page then resends what it sent past that count from its log (`transport.js` keeps the last 1 MB
+  per connection), so nothing is lost or doubled, whichever side lost frames. An expired token, or a
+  page without `relink=1` (from before re-linking), gets `ok: false` and tears its links down.
+- **Deploys:** a Worker deploy restarts every room and drops every socket at once, with no close
+  events. A room that comes back knows no tokens, so it accepts any token it never expired, and the
+  pages re-link both ends of each pair themselves (`rejoin` from each side, `up` once both are back).
+  Link numbers start from the clock in seconds, so a restarted room never reuses one a page still
+  holds. Pages keep reconnecting for 60 s. While the organizer's page is cut off (and for 10 s after),
+  it doesn't end a round, and a finish that was held up is judged from when the outage began
+  (`window.__nswsMuxOutage`, `host.ts #outageFrom`). Tested with `wrangler dev` killed and restarted
+  mid-round (`cup-test-tools/cdp/sc_proxyrestart.mjs`): the organizer had its code back about 6 s
+  after the kill, and a finish lost in flight was resent and counted.
+- **Reclaiming the code:** the organizer's `createInvite` carries a random `reclaim` secret. The room
+  stores `{key, code, until, cup}` as soon as the cup opens (the only thing it ever stores), with
+  `until: null` while the organizer is connected, so the record is there when a restart drops the
+  socket without a close event. If the matchmaking socket drops (not a deliberate close), `until` is
+  set 60 s ahead. A room alarm every 10 minutes notices an organizer that is gone without a close
+  (after a restart) and starts the same 60 s. Meanwhile the row is hidden from the list but the code
+  stays reserved, and `/cup/host?reclaim=CODE` whose `createInvite` has the same secret gets the same
+  code, name, pool and status back. When the time is up the alarm deletes the record and frees the
+  code; a deliberate close deletes it at once. The page retries every 1.5 s for a minute
+  (`Fn.prototype.requestInvite` in `main.bundle.js`), and the organizer sends its status again on
+  the new socket (`host.ts #reportStatus`).
 - **No official cups** (removed after v9.36): Cup Champion (`cupchamp`) is an ordinary owner grant on
   Race Control -> Tags. The `cup` column on `announcements` and the old `cup_results` table are unused.
 - **Set before the room opens** (the host's `createInvite` carries them as `nsws`): the cup's name,
@@ -482,7 +501,7 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   relays data channels: each page's mux socket carries frames of records
   `[u32 link][u16 channel][u8 kind][u32 length][bytes]`, and the room forwards each record to the
   other end of its link (one frame per destination). It never reads the game data and stores nothing
-  but the short-lived reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
+  but the reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
   are kept from the earlier lobbies, so no migration was needed).
 - **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
   it sends into one frame: every 200 ms while its car is moving (the organizer: while anyone's is) and

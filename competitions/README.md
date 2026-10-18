@@ -17,7 +17,10 @@ the same session with the cars reset for another round on the same track). The p
 Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 
 - `transport.js` fakes RTCPeerConnection / RTCDataChannel over one WebSocket per page, batching
-  everything into binary frames. Every cup socket (matchmaking, relay, cup chat) is opened with
+  everything into binary frames. Each connection counts the records it got and keeps the last 1 MB
+  it sent, so after a dropped socket or a proxy deploy both ends re-link and resend whatever the
+  other end missed (PROXY.md, "Dropped connections" and "Deploys"). The game never sees the gap, so
+  a racer keeps their place, and the organizer takes its code back. Every cup socket (matchmaking, relay, cup chat) is opened with
   `window.__nswsSocket` (`mod/nsws_socket.js`), which falls back to HTTPS on networks that block
   WebSockets (PROXY.md, "HTTPS fallback for sockets").
 - `net.ts` adds the cup's own data channel (id 40, JSON) on each player connection.

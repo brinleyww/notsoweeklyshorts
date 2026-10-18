@@ -1,7 +1,8 @@
 // Sharing. A new personal best gets a Share button on its banner: it turns the PB screen (the 3D view
 // plus the banner, without the HUD) into an image to copy or save. The week card is a line of medal
 // emojis and the week's bingo card for the current week, with the player's referral link. On a week that is still live, every
-// time in the image reads SECRET, like the leaderboard. Sharing counts for the weekly bingo.
+// time in the image reads SECRET, like the leaderboard, except the green improvement on the player's own
+// previous PB. Sharing counts for the weekly bingo.
 (function () {
     const TIME = /[+\-−]?\d+(?::\d{1,2})*[.,]\d+s?/g;
     const MIN_WIDTH = 1280;
@@ -201,6 +202,8 @@
     // clipped only where the page clips (overflow hidden, e.g. a long track name).
     function drawElement(ctx, node, k, secret, alpha, clip = null) {
         if (node.classList.contains("nsws-share-row")) return;
+        // The improvement on the old PB; the other .difference block (with a .title) compares to an opponent.
+        if (node.classList.contains("difference") && !node.querySelector(".title")) secret = false;
         const cs = getComputedStyle(node);
         if (cs.display === "none" || cs.visibility === "hidden") return;
         const opacity = alpha * parseFloat(cs.opacity || "1");
@@ -330,7 +333,7 @@
         const frame = el("div", "shot");
         frame.appendChild(el("div", "wait", "Taking the picture…"));
         body.appendChild(frame);
-        const note = el("p", "note", secret ? weekName(week) + " is still live, so your times show as SECRET." : "");
+        const note = el("p", "note", secret ? weekName(week) + " is still live, so your time shows as SECRET. Your improvement still shows." : "");
         const row = el("div", "row");
         body.append(row, note);
         view = { overlay, note, url: null, blob: null };

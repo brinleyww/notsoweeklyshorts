@@ -13,6 +13,7 @@ const SESSION_RETRY_MS = 8_000;
 const CHECK_WAIT_MS = 10_000;
 const BROADCAST_MS = 150;
 const STATUS_MS = 2_000;
+const OUTAGE_GRACE_MS = 10_000;
 const RECENT_TRACKS = 8;
 
 export interface PoolTrack extends TrackRef {
@@ -60,6 +61,7 @@ export class Organizer {
   #best = new Map<string, number>();
   #statusKey = '';
   #statusAt = 0;
+  #statusInvite: unknown = null;
   #pool: PoolTrack[] = [];
   #wr = new Map<string, number | null>();
   #runHashes = new Map<string, Set<number>>();
@@ -241,7 +243,7 @@ export class Organizer {
     const s = this.state,
       r = s.round;
     if (!r || m.n !== r.n || m.t !== r.try) return;
-    const result = E.recordFinish(s, u, m.f, now);
+    const result = E.recordFinish(s, u, m.f, now, Math.min(now, this.#outageFrom(now) ?? now));
     if (!result) return;
     const p = player(s, u)!;
     if (result === 'slower') return this.touch();
@@ -531,7 +533,7 @@ export class Organizer {
         }
         break;
       case 'racing':
-        if (E.roundOver(s, now)) {
+        if (E.roundOver(s, now) && this.#outageFrom(now) == null) {
           if (this.#pendingChecks()) {
             E.setPhase(s, 'checking', now, now + CHECK_WAIT_MS);
             this.touch(true);
@@ -665,6 +667,14 @@ export class Organizer {
     this.#go(now);
   }
 
+  // While this page is cut off from the proxy (a Worker deploy restarts every room), and for a
+  // while after, racers' finishes are still coming: the round doesn't end, and a late finish is
+  // judged from when the outage began.
+  #outageFrom(now: number) {
+    const o = site.__nswsMuxOutage;
+    return o && (!o.until || now - o.until < OUTAGE_GRACE_MS) ? o.from : null;
+  }
+
   #reportStatus(now: number) {
     const s = this.state;
     if (now - this.#statusAt < STATUS_MS) return;
@@ -677,9 +687,12 @@ export class Organizer {
       format: s.format.slice(0, 24),
     };
     const key = JSON.stringify(status);
-    if (key === this.#statusKey) return;
+    // A reclaimed code is a new matchmaking socket, which starts with no status.
+    const invite = this.app.connection?.getInvite?.() ?? null;
+    if (key === this.#statusKey && invite === this.#statusInvite) return;
     this.#statusKey = key;
     this.#statusAt = now;
+    this.#statusInvite = invite;
     this.app.connection?.reportCupStatus?.(status);
   }
 

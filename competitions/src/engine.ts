@@ -94,13 +94,14 @@ export function scheduleStart(s: CupState, now: number, limitMs: number | null) 
   setPhase(s, 'countdown', now, r.startAt);
 }
 
-export function recordFinish(s: CupState, u: number, frames: number, now: number) {
+// `sentBy` is the latest the finish can have been sent: `now`, or when a proxy outage that held it began.
+export function recordFinish(s: CupState, u: number, frames: number, now: number, sentBy = now) {
   const r = s.round;
   if (!r || s.phase !== 'racing' || r.startAt == null || !r.racers.includes(u) || r.dnf.includes(u)) return false;
   if (!Number.isSafeInteger(frames) || frames <= 0) return false;
   const ta = s.rules.style === 'timeattack';
   if (!ta && u in r.runs) return false;
-  if (!ta && frames < now - r.startAt - FINISH_SLACK_MS) return false;
+  if (!ta && frames < sentBy - r.startAt - FINISH_SLACK_MS) return false;
   if (frames > now - r.startAt + FINISH_SLACK_MS) return false;
   const prev = r.runs[u];
   if (ta && prev && prev.f <= frames && prev.chk !== 2) {

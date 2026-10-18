@@ -9,6 +9,12 @@
 // the cup sets window.__nswsMuxPace, and window.__nswsMuxFlush() sends at once (a click, a finish).
 // On a network that blocks WebSockets the socket is mod/nsws_socket.js's HTTPS fallback; while that
 // sends one POST per batch, it sets window.__nswsMuxMinPace so batches go out a little less often.
+//
+// Records can be lost when a socket drops, and a proxy deploy drops every socket at once. So each
+// connection counts the records it got and keeps the last LOG_BYTES it sent. A page back on a new
+// socket re-links its pairs (`rejoin`), the proxy gives each end the other's count with the new
+// link (`up`), and each end resends from there. A restarted proxy knows nothing, so both ends
+// re-link from their own pages.
 
 const FLUSH_MS = 200;
 const pace = () => Math.max(FLUSH_MS, Number(window.__nswsMuxMinPace) || 0, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
@@ -16,10 +22,14 @@ const pace = () => Math.max(FLUSH_MS, Number(window.__nswsMuxMinPace) || 0, Math
 const FLUSH_BYTES = 256 * 1024;
 const MAX_EARLY = 64;
 const IDLE_CLOSE_MS = 5000;
-// A dropped socket reconnects and resumes its links for this long (the proxy keeps them parked);
-// what is queued meanwhile is sent on resume, up to MAX_RESUME_BYTES.
-const RESUME_MS = 20000;
+// A dropped socket keeps reconnecting for this long; what is queued meanwhile is sent on resume,
+// up to MAX_RESUME_BYTES. The proxy parks a live room's links for 20 s; a restarted proxy has
+// none, so the page keeps trying for as long as an organizer can reclaim its code.
+const RESUME_MS = 60000;
 const MAX_RESUME_BYTES = 4 * 1024 * 1024;
+const LOG_BYTES = 1024 * 1024;
+// A connection still waiting for its other end this long after re-linking is gone.
+const RELINK_MS = 30000;
 const PAIR_SDP = /^nsws:([A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16})$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -66,7 +76,7 @@ class Mux {
     }
 
     connect(resume) {
-        const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1" : ""));
+        const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1&relink=1" : ""));
         this.ws = ws;
         ws.binaryType = "arraybuffer";
         ws.addEventListener("open", () => {
@@ -81,10 +91,12 @@ class Mux {
     }
 
     // A socket that closes while links are in use reconnects and resumes them.
+    // window.__nswsMuxOutage tells the organizer (host.ts) when this page was cut off from the proxy.
     dropped() {
         if (this.dead) return;
         if (this.idle || !this.pcs.size) return this.closed();
         const now = Date.now();
+        if (!this.resumeUntil) window.__nswsMuxOutage = { from: now, until: 0 };
         this.resumeUntil ||= now + RESUME_MS;
         if (now >= this.resumeUntil || this.bytes > MAX_RESUME_BYTES) return this.closed();
         const wait = Math.min(3000, 400 * 2 ** this.retries++);
@@ -93,12 +105,58 @@ class Mux {
         }, wait);
     }
 
-    resumed(ok) {
-        if (!ok) return this.closed();
+    resumed(m) {
+        if (m.ok !== true) return this.closed();
+        if (window.__nswsMuxOutage?.until === 0) window.__nswsMuxOutage.until = Date.now();
         this.resumeUntil = 0;
         this.retries = 0;
-        for (const c of this.controls.splice(0)) this.ws.send(c);
+        if (m.relink) {
+            // The rejoin covers every open and close queued meanwhile.
+            this.controls.length = 0;
+            const pairs = [];
+            for (const pc of this.pcs.values()) {
+                this.unlink(pc);
+                pairs.push({ pair: pc.pair, side: pc.side, recv: pc._recv });
+            }
+            this.ws.send(JSON.stringify({ t: "rejoin", pairs }));
+            this.awaitRelink();
+        } else {
+            for (const c of this.controls.splice(0)) this.ws.send(c);
+        }
         if (this.queue.length) this.flush();
+    }
+
+    // Until its new link is up, what a connection sends waits in the queue.
+    unlink(pc) {
+        if (pc.link) this.links.delete(pc.link);
+        pc.link = 0;
+    }
+
+    awaitRelink() {
+        clearTimeout(this.relinkTimer);
+        this.relinkTimer = setTimeout(() => {
+            for (const pc of [...this.pcs.values()]) if (!pc.link && pc._linked) pc._down();
+        }, RELINK_MS);
+    }
+
+    // The other end got `recv` records; everything after that goes again, in order.
+    relinked(pc, link, recv) {
+        pc.link = link;
+        const from = Number.isSafeInteger(recv) ? recv - pc._logStart : -1;
+        if (from < 0 || recv > pc._sent) {
+            this.links.delete(link);
+            return pc._down();
+        }
+        this.queue = this.queue.filter((r) => r.pc !== pc);
+        for (let i = from; i < pc._log.length; i++) this.queue.push(pc._log[i]);
+        this.bytes = this.queue.reduce((n, r) => n + 11 + r.bytes.length, 0);
+        if (this.queue.length) this.flush();
+    }
+
+    forget(pc) {
+        if (!this.queue.some((r) => r.pc === pc)) return;
+        this.queue = this.queue.filter((r) => r.pc !== pc);
+        this.bytes = this.queue.reduce((n, r) => n + 11 + r.bytes.length, 0);
     }
 
     control(data) {
@@ -116,7 +174,8 @@ class Mux {
     unregister(pc) {
         if (this.pcs.get(pc.pair) !== pc) return;
         this.pcs.delete(pc.pair);
-        if (pc.link) this.links.delete(pc.link);
+        this.unlink(pc);
+        this.forget(pc);
         this.control({ t: "close", pair: pc.pair });
         if (!this.pcs.size) {
             this.closeTimer = setTimeout(() => {
@@ -128,10 +187,20 @@ class Mux {
         }
     }
 
-    enqueue(link, channel, kind, bytes) {
+    enqueue(pc, channel, kind, bytes) {
         if (!this.queue.length) this.queuedAt = performance.now();
-        this.queue.push({ link, channel, kind, bytes });
+        const record = { pc, channel, kind, bytes };
+        this.queue.push(record);
         this.bytes += bytes.length + 11;
+        pc._log.push(record);
+        pc._sent++;
+        pc._logBytes += bytes.length;
+        if (pc._logBytes > LOG_BYTES) {
+            let n = 0;
+            while (n < pc._log.length - 1 && pc._logBytes > LOG_BYTES * 0.75) pc._logBytes -= pc._log[n++].bytes.length;
+            pc._log.splice(0, n);
+            pc._logStart += n;
+        }
         if (this.bytes >= FLUSH_BYTES) this.flush();
         else if (!this.timer) this.timer = setTimeout(() => this.flush(), pace());
     }
@@ -140,19 +209,28 @@ class Mux {
         clearTimeout(this.timer);
         this.timer = 0;
         if (!this.queue.length || this.ws.readyState !== WebSocket.OPEN) return;
-        const frame = new Uint8Array(this.bytes);
+        const ready = [], waiting = [];
+        let size = 0;
+        for (const r of this.queue) {
+            if (r.pc.link) {
+                ready.push(r);
+                size += 11 + r.bytes.length;
+            } else waiting.push(r);
+        }
+        if (!ready.length) return;
+        const frame = new Uint8Array(size);
         const view = new DataView(frame.buffer);
         let at = 0;
-        for (const r of this.queue) {
-            view.setUint32(at, r.link, true);
+        for (const r of ready) {
+            view.setUint32(at, r.pc.link, true);
             view.setUint16(at + 4, r.channel, true);
             frame[at + 6] = r.kind;
             view.setUint32(at + 7, r.bytes.length, true);
             frame.set(r.bytes, at + 11);
             at += 11 + r.bytes.length;
         }
-        this.queue.length = 0;
-        this.bytes = 0;
+        this.queue = waiting;
+        this.bytes -= size;
         try {
             this.ws.send(frame);
         } catch {}
@@ -166,14 +244,20 @@ class Mux {
             } catch {
                 return;
             }
-            if (m?.t === "resumed") return this.resumed(m.ok === true);
+            if (m?.t === "resumed") return this.resumed(m);
             const pc = this.pcs.get(m?.pair);
             if (!pc) return;
             if (m.t === "up") {
-                this.links.set(m.link, pc);
-                pc._up(m.link);
-            } else if (m.t === "down") {
                 if (pc.link) this.links.delete(pc.link);
+                this.links.set(m.link, pc);
+                if (pc._linked) this.relinked(pc, m.link, m.recv);
+                else pc._up(m.link);
+            } else if (m.t === "relink") {
+                this.unlink(pc);
+                this.control({ t: "open", pair: pc.pair, side: pc.side, recv: pc._recv });
+                this.awaitRelink();
+            } else if (m.t === "down") {
+                this.unlink(pc);
                 pc._down();
             }
             return;
@@ -188,7 +272,11 @@ class Mux {
             const length = view.getUint32(at + 7, true);
             const end = at + 11 + length;
             if (end > frame.length) break;
-            this.links.get(link)?._deliver(channel, kind, frame.subarray(at + 11, end));
+            const pc = this.links.get(link);
+            if (pc) {
+                pc._recv++;
+                pc._deliver(channel, kind, frame.subarray(at + 11, end));
+            }
             at = end;
         }
     }
@@ -196,7 +284,9 @@ class Mux {
     closed() {
         if (this.dead) return;
         this.dead = true;
+        if (window.__nswsMuxOutage?.until === 0) window.__nswsMuxOutage.until = Date.now();
         clearTimeout(this.timer);
+        clearTimeout(this.relinkTimer);
         if (muxes.get(this.code) === this) muxes.delete(this.code);
         for (const pc of [...this.pcs.values()]) pc._down();
         this.pcs.clear();
@@ -266,7 +356,7 @@ export class NswsDataChannel extends EventTarget {
         } else {
             throw new TypeError("Unsupported data channel payload");
         }
-        this._pc._mux.enqueue(this._pc.link, this.id, kind, bytes);
+        this._pc._mux.enqueue(this._pc, this.id, kind, bytes);
     }
 
     close() {
@@ -311,6 +401,12 @@ export class NswsPeerConnection extends EventTarget {
         this._early = new Map();
         this._closed = false;
         this._nextChannel = 2;
+        this._linked = false;
+        this._recv = 0;
+        this._sent = 0;
+        this._log = [];
+        this._logStart = 0;
+        this._logBytes = 0;
     }
 
     createDataChannel(label, options = {}) {
@@ -394,12 +490,14 @@ export class NswsPeerConnection extends EventTarget {
     _up(link) {
         if (this._closed) return;
         this.link = link;
+        this._linked = true;
         this._state("connected");
         for (const channel of this._channels.values()) channel._open();
     }
 
     _down() {
         if (this._closed) return;
+        this._mux?.forget(this);
         this.link = 0;
         this._state("failed");
         for (const channel of this._channels.values()) channel._close();

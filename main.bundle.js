@@ -2099,8 +2099,14 @@ window.__nswsAutoGhostNote = function(trackId) {
         _receiveClipLink(id);
         return true;
     };
+    // Text boxes inside shadow roots (the cup chat) show up in document.activeElement as their host.
+    function deepActiveElement() {
+        var el = document.activeElement;
+        while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
+        return el;
+    }
     window.addEventListener("keydown", function(e) {
-        var focused = document.activeElement;
+        var focused = deepActiveElement();
         if (e.repeat || window.__nswsKeyBindCapturing || !keyBindingMatches(e, getGhostsKeyBind())) return;
         // In a cup, the cup's own ghost toggle (which knows who is racing) takes the key.
         if (window.__nswsCupApp?.inCup()) return;
@@ -2109,7 +2115,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         showClipSavedNotification(ghostsHidden ? "Ghosts hidden" : "Ghosts shown");
     });
     window.addEventListener("keydown", function(e) {
-        var focused = document.activeElement;
+        var focused = deepActiveElement();
         if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)) return;
         if (window.__nswsKeyBindCapturing) return;
         if (e.code === "Escape" && watchingClip) {

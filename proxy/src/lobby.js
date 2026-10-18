@@ -6,7 +6,9 @@
 //
 // Cost on the free plan: incoming WebSocket messages bill 20 to a request, so each page bundles
 // everything it sends into at most one binary frame per flush (about 5 a second while racing).
-// Nothing here touches storage: a room only lives as long as its sockets.
+// A deploy restarts every room and drops every socket at once. The only thing stored is the
+// organizer's reclaim record, so the organizer can take the code back; the pages then re-link
+// their pairs and resend what the other end never got (transport.js keeps what it sent).
 
 import { DurableObject } from "cloudflare:workers";
 import { moderate } from "./chatfilter.js";
@@ -65,12 +67,14 @@ function text(ws, data) {
 }
 
 // A mux socket that drops keeps its links parked this long, so the page can reconnect and resume
-// them; frames for it wait in memory (up to MAX_PARKED_BYTES).
+// them. Frames for a parked end are dropped: the sender resends them once the link is back.
 const RESUME_MS = 20_000;
-const MAX_PARKED_BYTES = 1024 * 1024;
 const TOKEN = /^[0-9a-f]{24}$/;
 // An organizer whose matchmaking socket drops can take the same code back for this long.
 const RECLAIM_MS = 60_000;
+// While the organizer is connected its reclaim record has no end, because a restart never says
+// that the socket went. This alarm notices a missing organizer and starts the RECLAIM_MS clock.
+const RECLAIM_CHECK_MS = 10 * 60_000;
 const STATUS_MIN_MS = 2_000;
 
 // What an organizer's page reports about its cup (competitions/src/host.ts #reportStatus).
@@ -93,11 +97,12 @@ export class LobbyRoom extends DurableObject {
         // link number -> [host mux socket, client mux socket]; rebuilt from attachments after a wake.
         // A parked end is { parked: token } until its page resumes.
         this.links = null;
-        this.nextLink = 1;
+        // From the clock, so a restarted room never hands out a link number a page still holds.
+        this.nextLink = (Date.now() / 1000) >>> 0;
         this.rate = new Map();
         this.listedAt = 0;
         this.parked = new Map();
-        this.reclaim = null;
+        this.expired = new Set();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -127,10 +132,26 @@ export class LobbyRoom extends DurableObject {
         if (role === "host" && reclaiming && !(await this.reclaimRecord())) return refuse("ExpiredInvite");
         this.ctx.acceptWebSocket(server);
         if (role === "mux" && params.get("resume") === "1") {
-            const parked = token ? this.parked.get(token) : null;
-            server.serializeAttachment({ role, code, pairs: parked ? parked.pairs : {}, token });
-            if (parked) this.unpark(token, server, parked);
-            else text(server, { t: "resumed", ok: false });
+            // A page that can't re-link (from before relinking) tears its links down as before.
+            // An unknown token that never expired here is a page coming back after a restart.
+            let parked = token ? this.parked.get(token) : null;
+            const ok = params.get("relink") === "1" && !!token && !this.expired.has(token);
+            // The page's old socket can still look open here; its pairs move to the new one.
+            for (const old of token ? this.sockets("mux") : []) {
+                const oa = old.deserializeAttachment();
+                if (oa.token !== token) continue;
+                if (ok && !parked) parked = { pairs: oa.pairs, timer: 0 };
+                else for (const id of Object.keys(oa.pairs || {})) this.dropPair(old, oa, id);
+                oa.pairs = {};
+                old.serializeAttachment(oa);
+                try {
+                    old.close(4002, "Replaced");
+                } catch {}
+            }
+            server.serializeAttachment({ role, code, pairs: ok && parked ? parked.pairs : {}, token });
+            if (ok && parked) this.unpark(token, server, parked);
+            else if (parked) this.expire(token);
+            text(server, { t: "resumed", ok, relink: ok });
         } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming });
         return new Response(null, { status: 101, webSocket: pair[0] });
     }
@@ -179,7 +200,6 @@ export class LobbyRoom extends DurableObject {
                     return;
                 }
                 Object.assign(a, saved.cup);
-                await this.clearReclaim();
             } else {
                 a.nick = moderate(m.nickname, MAX_NICK) || "Host";
                 a.public = o.public === true;
@@ -191,6 +211,7 @@ export class LobbyRoom extends DurableObject {
             a.invited = true;
             a.reclaimKey = key;
             ws.serializeAttachment(a);
+            if (key) await this.saveReclaim(a, null);
             text(ws, { type: "createInvite", inviteCode: a.code, key: randomHex(16), timeoutMilliseconds: null, censoredNickname: a.nick });
             this.listing(true);
             return;
@@ -220,35 +241,50 @@ export class LobbyRoom extends DurableObject {
     }
 
     // ---- Reclaiming a code after the organizer's matchmaking socket dropped. ----
+    // The record is written when the room opens, so it is already there when a restart drops
+    // every socket without a close event. `until` is null while the organizer is connected.
 
     async reclaimRecord() {
-        const saved = this.reclaim ?? (await this.ctx.storage.get("reclaim")) ?? null;
-        return saved && saved.until > Date.now() ? saved : null;
+        const saved = (await this.ctx.storage.get("reclaim")) ?? null;
+        return saved && (saved.until === null || saved.until > Date.now()) ? saved : null;
+    }
+
+    async saveReclaim(a, until) {
+        const cup = { nick: a.nick, public: a.public, max: a.max, name: a.name, pool: a.pool, chatKey: a.chatKey, status: a.status ?? null };
+        await this.ctx.storage.put("reclaim", { key: a.reclaimKey, code: a.code, until, cup });
+        await this.ctx.storage.setAlarm(until ?? Date.now() + RECLAIM_CHECK_MS);
     }
 
     async clearReclaim() {
-        this.reclaim = null;
-        clearTimeout(this.reclaimTimer);
         await this.ctx.storage.delete("reclaim");
+        await this.ctx.storage.deleteAlarm();
     }
 
     async hostGone(a, dropped) {
-        const live = this.sockets("mux").length > 0;
-        if (dropped && a.reclaimKey && live) {
-            const cup = { nick: a.nick, public: a.public, max: a.max, name: a.name, pool: a.pool, chatKey: a.chatKey, status: a.status };
-            this.reclaim = { key: a.reclaimKey, until: Date.now() + RECLAIM_MS, cup };
-            await this.ctx.storage.put("reclaim", this.reclaim);
+        if (dropped && a.reclaimKey) {
+            await this.saveReclaim(a, Date.now() + RECLAIM_MS);
             // Hidden from the list but still reserved, so nobody else can get the code meanwhile.
             this.directory?.update(a.code, { name: a.name, host: a.nick, players: 1, max: a.max, public: false }).catch(() => {});
-            clearTimeout(this.reclaimTimer);
-            this.reclaimTimer = setTimeout(() => {
-                if (this.host()) return;
-                this.directory?.remove(a.code).catch(() => {});
-                void this.clearReclaim();
-            }, RECLAIM_MS);
             return;
         }
+        await this.clearReclaim();
         this.directory?.remove(a.code).catch(() => {});
+    }
+
+    async alarm() {
+        const saved = await this.ctx.storage.get("reclaim");
+        if (!saved) return;
+        if (this.host()) return void (await this.ctx.storage.setAlarm(Date.now() + RECLAIM_CHECK_MS));
+        if (saved.until === null) {
+            saved.until = Date.now() + RECLAIM_MS;
+            await this.ctx.storage.put("reclaim", saved);
+            await this.ctx.storage.setAlarm(saved.until);
+            this.directory?.update(saved.code, { name: saved.cup.name, host: saved.cup.nick, players: 1, max: saved.cup.max, public: false }).catch(() => {});
+            return;
+        }
+        if (saved.until > Date.now()) return void (await this.ctx.storage.setAlarm(saved.until));
+        await this.clearReclaim();
+        this.directory?.remove(saved.code).catch(() => {});
     }
 
     joinMessage(ws, a, m) {
@@ -301,29 +337,57 @@ export class LobbyRoom extends DurableObject {
     }
 
     muxControl(ws, a, m) {
+        if (m.t === "rejoin") {
+            // A page back on a new socket lists the pairs it still has; the rest are gone.
+            const listed = new Set();
+            for (const e of Array.isArray(m.pairs) ? m.pairs.slice(0, MAX_PAIRS_PER_SOCKET) : []) {
+                if (e && typeof e === "object" && this.openPair(ws, a, e)) listed.add(e.pair);
+            }
+            for (const id of Object.keys(a.pairs)) if (!listed.has(id)) this.dropPair(ws, a, id);
+            return;
+        }
         const id = String(m.pair ?? "");
         if (!PAIR_ID.test(id) || id.slice(0, 5) !== a.code) return;
-        if (m.t === "open") {
-            if (a.pairs[id] || Object.keys(a.pairs).length >= MAX_PAIRS_PER_SOCKET) return;
-            const side = m.side === "host" ? "host" : "client";
-            a.pairs[id] = { side, link: 0 };
-            ws.serializeAttachment(a);
-            const other = this.sockets("mux").find((o) => o !== ws && o.deserializeAttachment().pairs?.[id]?.side === (side === "host" ? "client" : "host"));
-            if (!other) return;
-            if (!this.links) this.rebuildLinks();
-            const link = this.nextLink++;
-            a.pairs[id].link = link;
-            ws.serializeAttachment(a);
-            const oa = other.deserializeAttachment();
-            oa.pairs[id].link = link;
+        if (m.t === "open") this.openPair(ws, a, m);
+        else if (m.t === "close") this.dropPair(ws, a, id);
+    }
+
+    // `recv` is how many records the page got from the other end, so a link that starts over can
+    // be told where to resend from. A link starts over whenever one end comes back on a new socket.
+    openPair(ws, a, m) {
+        const id = String(m.pair ?? "");
+        if (!PAIR_ID.test(id) || id.slice(0, 5) !== a.code) return false;
+        const own = a.pairs[id];
+        if (!own && Object.keys(a.pairs).length >= MAX_PAIRS_PER_SOCKET) return false;
+        if (!this.links) this.rebuildLinks();
+        if (own?.link) this.links.delete(own.link);
+        const side = m.side === "host" ? "host" : "client";
+        const recv = Number.isSafeInteger(m.recv) && m.recv >= 0 ? m.recv : null;
+        a.pairs[id] = { side, link: 0, recv };
+        ws.serializeAttachment(a);
+        const other = this.sockets("mux").find((o) => o !== ws && o.deserializeAttachment().pairs?.[id]?.side === (side === "host" ? "client" : "host"));
+        if (!other) return true;
+        const oa = other.deserializeAttachment();
+        const theirs = oa.pairs[id];
+        if (theirs.link) {
+            // The other end is still on the old link: it answers with its own count.
+            this.links.delete(theirs.link);
+            theirs.link = 0;
+            theirs.recv = null;
             other.serializeAttachment(oa);
-            this.links.set(link, side === "host" ? [ws, other] : [other, ws]);
-            text(ws, { t: "up", pair: id, link });
-            text(other, { t: "up", pair: id, link });
-            this.listing(false);
-        } else if (m.t === "close") {
-            this.dropPair(ws, a, id);
+            text(other, { t: "relink", pair: id });
+            return true;
         }
+        const link = this.nextLink++;
+        a.pairs[id].link = link;
+        ws.serializeAttachment(a);
+        theirs.link = link;
+        other.serializeAttachment(oa);
+        this.links.set(link, side === "host" ? [ws, other] : [other, ws]);
+        text(ws, { t: "up", pair: id, link, recv: theirs.recv });
+        text(other, { t: "up", pair: id, link, recv });
+        this.listing(false);
+        return true;
     }
 
     dropPair(ws, a, id) {
@@ -359,7 +423,7 @@ export class LobbyRoom extends DurableObject {
             entry[p.side === "host" ? 0 : 1] = { parked: a.token };
             this.links.set(p.link, entry);
         }
-        const parked = { pairs: a.pairs, frames: [], bytes: 0, timer: 0 };
+        const parked = { pairs: a.pairs, timer: 0 };
         parked.timer = setTimeout(() => this.expire(a.token), RESUME_MS);
         this.parked.set(a.token, parked);
     }
@@ -374,13 +438,6 @@ export class LobbyRoom extends DurableObject {
             entry[p.side === "host" ? 0 : 1] = ws;
             this.links.set(p.link, entry);
         }
-        text(ws, { t: "resumed", ok: true });
-        for (const frame of parked.frames) {
-            try {
-                ws.send(frame);
-            } catch {}
-        }
-        this.listing(false);
     }
 
     expire(token) {
@@ -388,6 +445,8 @@ export class LobbyRoom extends DurableObject {
         if (!parked) return;
         clearTimeout(parked.timer);
         this.parked.delete(token);
+        if (this.expired.size > 500) this.expired.clear();
+        this.expired.add(token);
         for (const [id, p] of Object.entries(parked.pairs)) {
             this.downPair(id, null);
             if (this.links && p.link) this.links.delete(p.link);
@@ -434,14 +493,7 @@ export class LobbyRoom extends DurableObject {
                     o += p.length;
                 }
             }
-            if (typeof to === "string") {
-                const parked = this.parked.get(to);
-                if (!parked) continue;
-                parked.frames.push(frame.slice());
-                parked.bytes += frame.length;
-                if (parked.bytes > MAX_PARKED_BYTES) this.expire(to);
-                continue;
-            }
+            if (typeof to === "string") continue;
             try {
                 to.send(frame);
             } catch {}

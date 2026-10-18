@@ -34,7 +34,9 @@
   }
 
   function isTypingTarget() {
-    const el = document.activeElement;
+    // A text box inside a shadow root (the cup chat) shows up here as its host element.
+    let el = document.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
     return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
   }
 

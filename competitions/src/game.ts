@@ -174,6 +174,7 @@ export const site = window as unknown as {
   __nswsTicker?: { every(ms: number, fn: () => void): void };
   __nswsMuxPace?: number;
   __nswsMuxFlush?: () => void;
+  __nswsMuxOutage?: { from: number; until: number };
   __nswsCupJoinCode?: string;
   __nswsCupHostOptions?: unknown;
   __nswsCupPool?: { shorts: boolean; weeks?: number[]; main: string[]; community: string[] };
