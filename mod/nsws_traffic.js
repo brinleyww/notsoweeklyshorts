@@ -113,6 +113,19 @@
         tracks = {};
         lastBeat = performance.now();
         promised = body.nx;
+        // Counts the server didn't store go out again with the next beat, unless the page is going away.
+        const keep = () => {
+            if (end) return;
+            runtime += sent.runtime;
+            focus += sent.focus;
+            driving += sent.driving;
+            seenAnn = seenAnn || sent.seenAnn;
+            for (const [k, v] of Object.entries(sent.events)) events[k] = (events[k] || 0) + v;
+            for (const [k, v] of Object.entries(sent.tracks)) {
+                const t = tracks[k] || (tracks[k] = [0, 0, 0]);
+                for (let i = 0; i < 3; i++) t[i] += v[i];
+            }
+        };
         fetch(API + "nsws/beat", {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
@@ -124,6 +137,13 @@
             if (body.nick) sentNick = body.nick;
             if (response.status === 200) {
                 response.json().then((data) => {
+                    if (data?.busy) {
+                        keep();
+                        if (sentNick === body.nick) sentNick = null;
+                        window.__nswsBusy?.fromData(data);
+                    } else if (Number.isSafeInteger(data?.online)) {
+                        window.__nswsBusy?.clear();
+                    }
                     if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
                     if (data?.pv) window.__nswsAnnounce?.pollUpdate?.(data.pv);
                     if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_GAP_S);
@@ -132,19 +152,7 @@
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
                 }, () => {});
             }
-        }).catch(() => {
-            // Try again with the next beat, unless the page is going away.
-            if (end) return;
-            runtime += sent.runtime;
-            focus += sent.focus;
-            driving += sent.driving;
-            seenAnn = seenAnn || sent.seenAnn;
-            for (const [k, v] of Object.entries(sent.events)) events[k] = (events[k] || 0) + v;
-            for (const [k, v] of Object.entries(sent.tracks)) {
-                const t = tracks[k] || (tracks[k] = [0, 0, 0]);
-                for (let i = 0; i < 3; i++) t[i] += v[i];
-            }
-        });
+        }).catch(keep);
     }
 
     function tick() {

@@ -22,6 +22,11 @@
     const HIDDEN_DROP_MS = 60000;
     const MAX_POLL_GAP_MS = 10000;
     const MAX_BUSY_MS = 15 * 60000;
+    // The last messages, shown while the chat can't connect (mod/nsws_offline.js has the busy state).
+    const LOG_KEY = "_nswsChatLog";
+    const LOG_KEEP = 40;
+    const LOG_MAX_AGE_MS = 24 * 3600000;
+    const BUSY_CHECK_MS = 10 * 60000;
     const SEND_ABORT_MS = 15000;
     const EMOJI_URL = "mod/nsws_emoji.json";
     // Uploaded images, served by the Worker after its model has checked them (proxy/src/chatmedia.js).
@@ -414,6 +419,7 @@
     let keepAliveTimer = null;
     let retryTimer = null;
     let retryDelay = 2000;
+    let logTimer = null;
     let me = null;
     let items = [];
     let unread = 0;
@@ -1238,6 +1244,10 @@
         }
         if (res.status === 413) throw new Error("That file is too big (6 MB at most).");
         const data = await res.json().catch(() => null);
+        if (data?.error === "busy") {
+            window.__nswsBusy?.fromData(data);
+            throw new Error("Images are paused until " + (window.__nswsBusy?.label() ?? "later") + ".");
+        }
         if (data?.error) throw new Error(data.error);
         if (!res.ok || !data?.file) throw new Error("Couldn't upload that. Try again.");
         return data.file;
@@ -2064,9 +2074,46 @@
         if (data.t === "msg") window.dispatchEvent(new CustomEvent("nsws-activity", { detail: { kind: "chat" } }));
     }
 
+    function saveLog() {
+        clearTimeout(logTimer);
+        logTimer = setTimeout(() => {
+            if (!me) return;
+            const messages = items.filter((item) => item.kind === "msg").slice(-LOG_KEEP).map((item) => item.m);
+            storageSet(LOG_KEY, JSON.stringify({ at: Date.now(), messages }));
+        }, 2000);
+    }
+
+    function showSavedLog() {
+        if (items.some((item) => item.kind === "msg")) return;
+        let saved = null;
+        try {
+            saved = JSON.parse(storageGet(LOG_KEY));
+        } catch {}
+        if (!Array.isArray(saved?.messages) || !saved.messages.length || !(Date.now() - saved.at < LOG_MAX_AGE_MS)) return;
+        const when = new Date(saved.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        items = saved.messages.map((m) => ({ kind: "msg", m }));
+        items.push({ kind: "sys", text: "Saved messages, up to " + when + "." });
+        renderLog();
+        scrollToEnd(true);
+    }
+
+    // The server is over its free daily limit: wait for the reset instead of retrying every few seconds,
+    // and look again every 10 minutes in case it comes back sooner.
+    function pauseForBusy() {
+        clearTimeout(retryTimer);
+        if (!root) return;
+        const busy = window.__nswsBusy;
+        setStatus("Chat is paused until " + (busy?.label() ?? "later") + ". The server hit its free daily limit.");
+        showSavedLog();
+        const left = (busy?.until() || 0) - Date.now();
+        retryTimer = setTimeout(() => connect(true), Math.max(30000, Math.min(left, BUSY_CHECK_MS)));
+    }
+
     function onServer(data) {
         if (!data || typeof data !== "object") return;
+        saveLog();
         if (data.t === "init") {
+            window.__nswsBusy?.clear();
             me = data.you;
             items = data.messages.map((m) => ({ kind: "msg", m }));
             oldestId = data.messages[0]?.id ?? null;
@@ -2159,9 +2206,10 @@
         waitTimer = setInterval(tick, 250);
     }
 
-    async function connect() {
+    async function connect(force) {
         clearTimeout(retryTimer);
         if (!root || socket || http) return;
+        if (force !== true && window.__nswsBusy?.active()) return pauseForBusy();
         // This network blocked WebSockets recently: go straight to HTTPS, and check quietly
         // whether sockets work again so the next visit can use them.
         if (httpRecently()) {
@@ -2237,6 +2285,7 @@
     function retry() {
         if (!root) return;
         setStatus("Chat is offline. Reconnecting...");
+        showSavedLog();
         retryTimer = setTimeout(connect, retryDelay);
         retryDelay = Math.min(retryDelay * 2, 30000);
     }
@@ -2291,7 +2340,7 @@
             });
             if (!res.ok) {
                 const data = await res.json().catch(() => null);
-                throw { status: res.status, retry: Number(data?.retry) || 0 };
+                throw { status: res.status, retry: Number(data?.retry) || 0, until: Number(data?.until) || 0, busy: data?.error === "busy" };
             }
             return await res.json();
         } finally {
@@ -2323,8 +2372,16 @@
                 if (data.gap > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(data.gap, MAX_POLL_GAP_MS)));
             } catch (err) {
                 if (http !== session) return;
+                if (err?.busy) {
+                    window.__nswsBusy?.note(err.until, err.retry);
+                    http = null;
+                    wsFails = 0;
+                    for (const c of session.controllers) c.abort();
+                    return pauseForBusy();
+                }
                 session.offline = true;
                 setStatus("Chat is offline. Reconnecting...");
+                showSavedLog();
                 const wait = err?.retry > 0 ? Math.min(err.retry * 1000, MAX_BUSY_MS) : delay;
                 await new Promise((resolve) => setTimeout(resolve, wait));
                 delay = Math.min(delay * 2, 30000);
@@ -2337,11 +2394,12 @@
         try {
             const reply = await httpPost(session, "send", { msg: data }, SEND_ABORT_MS);
             if (http === session) for (const r of reply.replies || []) onServer(r);
-        } catch {
+        } catch (err) {
             if (http !== session || data.t !== "msg") return;
             if (input && !input.value) input.value = data.text;
             if (data.media?.f && !attachment && lastAttachment) setAttachment(lastAttachment);
-            addSystem("Couldn't send that. Try again.");
+            if (err?.busy) window.__nswsBusy?.note(err.until, err.retry);
+            addSystem(err?.busy ? "Couldn't send that: chat is paused until " + (window.__nswsBusy?.label() ?? "later") + "." : "Couldn't send that. Try again.");
         }
     }
 
@@ -2797,6 +2855,10 @@
     }
 
     window.addEventListener("nsws-players-online", updateOnline);
+    // The limit lifted (another request got a normal reply): stop waiting for the estimated reset.
+    window.addEventListener("nsws-busy", (e) => {
+        if (!e.detail?.until && root && !socket && !http && !dropped) connect();
+    });
 
     // A tab in the background for a minute lets go of the chat and joins again when it is shown,
     // unless a cup is reading the chat through it.

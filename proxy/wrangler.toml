@@ -47,6 +47,15 @@ OWNER_KEY_HASHES = ["965911be14a967812d548ebc4dd604e6d1a16601ffa26dc995532628fd0
 # only the owner's key can create runs under it.
 OWNER_USER_IDS = ["ab5cf70f37b29f3c54305072e863ef1dd9d78abe490f850afe9050535d7d47a8"]
 
+# The anti-cheat's verdicts, saved for when the free plan's daily Durable Object limits are hit
+# (AntiCheat.saveSnapshot). The cron saves them; leaderboards read them only while DOs are refused.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[kv_namespaces]]
+binding = "FALLBACK"
+id = "6fdacdc0c73640a49251ad4362d4e58a"
+
 # init.bin (the game's physics meshes for the anti-cheat) is imported as an ArrayBuffer.
 [[rules]]
 type = "Data"

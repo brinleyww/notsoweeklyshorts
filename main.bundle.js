@@ -56196,8 +56196,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         try {
                             const [results, selfEntry] = await Promise.all([
                                 Promise.all(LB_TRACKS.map(t =>
-                                    fetch(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false" + window.__nswsTrackQuery(t.id))
-                                        .then(r => r.json())
+                                    stFetchBoard(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false" + window.__nswsTrackQuery(t.id))
                                 )),
                                 LB_TRACKS.length > 0
                                     ? fetch(window.__nswsApiBase + "v6/leaderboardUserEntry?version=0.6.2&trackId=" + LB_TRACKS[0].id + "&userTokenHash=" + (window.__nswsUserToken || "") + "&onlyVerified=false" + window.__nswsTrackQuery(LB_TRACKS[0].id))
@@ -56241,6 +56240,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 listWrap.innerHTML = '<div style="color:rgba(255,120,120,0.7);font-size:18px;padding:20px 8px;">Failed to load standings.</div>';
                             }
                         }
+                    }
+                    // Saved with nicknames only: standings need nothing else, and full 500-run boards are large.
+                    function stFetchBoard(url) {
+                        if (!window.__nswsBoardCache) return fetch(url).then(r => {
+                            if (!r.ok) throw new Error("HTTP " + r.status);
+                            return r.json();
+                        });
+                        return window.__nswsBoardCache.fetchJson(url, data => ({
+                            entries: (Array.isArray(data) ? data : data.entries || []).map(e => ({ nickname: e.nickname || e.name || "" }))
+                        }));
                     }
                     window.__nswsStandingsLoad = stLoad;
                     if (stRefreshInterval == null) {
@@ -57177,7 +57186,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Bh, e, "f"),
                 C.set(this, Gh, t, "f"),
                 C.set(this, Fh, n, "f"),
-                C.set(this, Oh, i, "f")
+                C.set(this, Oh, i, "f"),
+                window.__nswsRecords = this
             }
             addRecordChangedCallback(e) {
                 C.get(this, Vh, "f").push(e)
@@ -57191,7 +57201,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (null == a)
                     return null;
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
-                const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((e => (console.warn(e),
+                const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
+                __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t),
                 null)));
                 for (const e of C.get(this, Vh, "f"))
                     e();
@@ -59646,10 +59657,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     i.timeout = C.get(this, wu, "f"),
                     i.overrideMimeType("text/plain"),
                     i.onreadystatechange = () => {
-                        if (i.readyState == XMLHttpRequest.DONE)
-                            if (200 == i.status)
+                        if (i.readyState == XMLHttpRequest.DONE) {
+                            const __nswsRead = __nswsText => {
                                 try {
-                                    const r = JSON.parse(i.responseText);
+                                    const r = JSON.parse(__nswsText);
                                     if (null == r || "object" != typeof r)
                                         return void n(new Error("JSON is not an object"));
                                     if (!("total"in r) || "number" != typeof r.total)
@@ -59748,8 +59759,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 } catch (e) {
                                     n(new Error("Unknown error: " + String(e)))
                                 }
-                            else
-                                n(new Error("Failed to connect to server"))
+                            };
+                            200 == i.status ? (window.__nswsBoardCache?.put(a, i.responseText),
+                            __nswsRead(i.responseText)) : Promise.resolve(window.__nswsBoardCache?.fallback(a, i)).then((__nswsText => null != __nswsText ? __nswsRead(__nswsText) : n(new Error("Failed to connect to server"))))
+                        }
                     }
                     ,
                     i.open("GET", a, !0),
@@ -59952,7 +59965,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                         window.__nswsRunRejected?.(),
                                         c(new Error("Run failed the anti-cheat check"));
                                     else
-                                        c(new Error("Failed to connect to server"))
+                                        window.__nswsBusy?.fromXhr(u),
+                                        c(Object.assign(new Error("Failed to connect to server"), {
+                                            nswsRetry: 0 == u.status || 429 == u.status || u.status >= 500
+                                        }))
                             }
                             ,
                             u.open("POST", o, !0),

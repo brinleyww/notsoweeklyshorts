@@ -18,6 +18,7 @@
     const RESET_CONFIRM_MS = 6000;
     const MEDAL_RETRY_MS = 15000;
     const RESEND_MS = 10 * 60000;
+    const MARK_RETRY_MS = 60000;
     const MEDAL_RANK = { bronze: 1, silver: 2, gold: 3, author: 4 };
     const ENV_COLORS = { Winter: "#bed8f7", Desert: "#ede2af" };
 
@@ -382,7 +383,7 @@
         const card = week != null && cardFor(week);
         const tags = window.__nswsTags;
         const token = tags?.profileToken?.();
-        if (!card || !state?.bingo || !token || marking || !canMark(week)) return;
+        if (!card || !state?.bingo || !token || marking || !canMark(week) || window.__nswsBusy?.active()) return;
         const p = progress(week, card.round);
         const marks = marksOf(week);
         const fresh = card.squares.map((sq, i) => (!(marks & (1 << i)) && isDone(sq, card, p) ? i : -1)).filter((i) => i >= 0);
@@ -394,6 +395,8 @@
         try {
             const { status, data } = await tags.api("bingo/mark", { userToken: token, week, round: card.round, squares: fresh });
             if (status === 200) tags.apply(data);
+            // Not stored: try again in a minute rather than after RESEND_MS.
+            else lastMark.at = Date.now() - RESEND_MS + MARK_RETRY_MS;
         } catch {} finally {
             marking = false;
         }

@@ -639,6 +639,44 @@ username isn't allowed"), upload nicknames are censored before they reach Kodub,
 the leaderboard routes hand out is censored on the way out. Bans and name matching still use the
 raw name.
 
+## Bad days (free-plan limits)
+
+On the free plan the Durable Objects have daily limits (100,000 requests, 5M rows read, 100,000
+rows written). Once one runs out, every DO call fails until about 00:15 UTC. Each Worker instance
+then stops calling DOs for 10 minutes at a time (`doLimited()`), and what still works is:
+
+- **Leaderboards** load, filtered by the anti-cheat's last verdicts. Every 5 minutes a cron asks
+  `AntiCheat.saveSnapshot()` to save them to Workers KV (binding `FALLBACK`, only when they
+  changed). Per board, the snapshot holds the newest run id seen, the runs to hide, the lobby holds,
+  and the valid runs newer than that id. While limited, a board uses this instance's own verdicts
+  first, then the snapshot. A run newer than both stays hidden until the anti-cheat is back,
+  because no upload reaches Kodub through the proxy while it is limited. A board neither has seen
+  counts as all legacy, as it would on its first anti-cheat visit.
+- **Everything else** that needs a DO answers `503 {error:"busy", retry:600, until}`, where
+  `until` is the expected lift (00:15 UTC). This covers uploads to NSWS boards, chat, chat images,
+  accounts, poll votes and cups. A beat answers `200 {busy:true, nv, until}`, with no `ann` or
+  `pv` keys so the page leaves its announcement alone, and the page keeps that beat's counts for
+  the next one.
+
+The page side is `mod/nsws_offline.js`. `__nswsBusy` remembers `until` and tells the player once;
+any normal reply (a beat, a chat connect, a queued upload) clears it early. A PB whose upload got a
+busy, 5xx or no reply goes in a queue (`_nswsUploadQueue`) and is sent through the game's own
+`syncRecord` once the server is back. While busy, one queued upload is still tried every 10
+minutes. Lobby runs are never queued.
+
+The chat shows its last 40 messages (`_nswsChatLog`) and "paused until …", and looks again every 10
+minutes. A busy poll ends the HTTPS session, so the page goes back to WebSockets afterwards
+instead of long-polling for 12 hours.
+
+If the Worker itself is out of requests, nothing answers at all. Every board the game loaded is
+kept in Cache Storage (`nsws-boards`, the newest 60) and shown with a "saved copy" note;
+standings keep nicknames only. Tags and the bingo card show the last account state
+(`_nswsAccountState`, up to 7 days).
+
+Testing: copy `proxy/` next to the repo (not under %TEMP%), add a route that sets `doLimitedUntil`,
+and run `wrangler dev --test-scheduled` (`/__scheduled` runs the cron). `bad-day-test/` next to the
+repo has the scripts.
+
 ## Privacy note
 
 Leaderboard reads for Not So Weekly Shorts tracks, submissions and profile

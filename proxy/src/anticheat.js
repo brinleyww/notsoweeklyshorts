@@ -13,6 +13,15 @@ import { Simulator, readInit } from "./sim/run-check.js";
 const CHECK_BATCH = 8;
 const RETRY_MS = 60_000;
 const LOG_LIMIT = 60;
+// The Workers KV key (binding FALLBACK) for the verdicts the Worker uses while Cloudflare refuses
+// Durable Object calls. Valid runs newer than this are listed by id, so a run the proxy passed
+// shortly before the limit still shows.
+export const SNAPSHOT_KEY = "anticheat-verdicts";
+const SNAPSHOT_OK_WINDOW_MS = 2 * 86_400_000;
+
+function hex(buffer) {
+    return Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export class RunChecker extends DurableObject {
     async check(track, recording, frames) {
@@ -28,6 +37,7 @@ export class AntiCheat extends DurableObject {
         // track id -> { cutoff, runs: Map(id -> { state, source }), passes: Map("user|frames" -> state) }
         this.boards = new Map();
         this.payloads = new Map();
+        this.snapshotDirty = true;
         ctx.blockConcurrencyWhile(async () => this.migrate());
     }
 
@@ -62,6 +72,13 @@ export class AntiCheat extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS lobby_runs_track ON lobby_runs(track)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS runs_state_at ON runs(state, at)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS rejects_last ON rejects(last)");
+        // top: the newest run id seen on the board. A run above it was never checked.
+        try {
+            this.sql.exec("ALTER TABLE boards ADD COLUMN top INTEGER");
+            this.sql.exec("UPDATE boards SET top = (SELECT MAX(id) FROM runs WHERE runs.track = boards.track)");
+        } catch {
+            /* already added */
+        }
         this.migrateTallies();
     }
 
@@ -102,14 +119,14 @@ export class AntiCheat extends DurableObject {
     board(track, week, entries) {
         let board = this.boards.get(track);
         if (board) return board;
-        let row = this.sql.exec("SELECT cutoff FROM boards WHERE track = ?", track).toArray()[0];
+        let row = this.sql.exec("SELECT cutoff, top FROM boards WHERE track = ?", track).toArray()[0];
         if (!row) {
             // Everything on the board the first time it is seen here counts as legacy.
             const cutoff = entries.reduce((max, e) => (Number.isSafeInteger(e.id) && e.id > max ? e.id : max), 0);
             this.sql.exec("INSERT OR IGNORE INTO boards (track, week, cutoff, seen) VALUES (?, ?, ?, ?)", track, week, cutoff, Date.now());
-            row = this.sql.exec("SELECT cutoff FROM boards WHERE track = ?", track).one();
+            row = this.sql.exec("SELECT cutoff, top FROM boards WHERE track = ?", track).one();
         }
-        board = { cutoff: row.cutoff, runs: new Map(), passes: new Map(), holds: new Set() };
+        board = { cutoff: row.cutoff, top: Math.max(row.cutoff, row.top ?? 0), runs: new Map(), passes: new Map(), holds: new Set() };
         for (const r of this.sql.exec("SELECT id, state, source FROM runs WHERE track = ?", track)) {
             board.runs.set(r.id, { state: r.state, source: r.source });
         }
@@ -131,6 +148,7 @@ export class AntiCheat extends DurableObject {
                 nickname = excluded.nickname, frames = excluded.frames, state = excluded.state, source = excluded.source,
                 reason = excluded.reason, at = excluded.at`,
             entry.id, track, week, entry.userId ?? null, entry.nickname ?? null, entry.frames, state, source, reason ?? null, Date.now());
+        this.snapshotDirty = true;
         const run = { state, source };
         this.boards.get(track)?.runs.set(entry.id, run);
         return run;
@@ -166,8 +184,44 @@ export class AntiCheat extends DurableObject {
             const held = board.holds.has(e.userId + "|" + e.frames) || board.holds.has("#" + e.id);
             if (held || run.state === "invalid" || (run.state === "pending" && run.source !== "legacy")) blocked.push(e.id);
         }
+        const top = entries.reduce((max, e) => (Number.isSafeInteger(e.id) && e.id > max ? e.id : max), board.top);
+        if (top > board.top) {
+            board.top = top;
+            this.sql.exec("UPDATE boards SET top = ? WHERE track = ?", top, track);
+            this.snapshotDirty = true;
+        }
         if (queued) await this.kick();
         return blocked;
+    }
+
+    // What the Worker falls back on while Durable Objects are refused, saved to KV when it has
+    // changed: per board, the newest run seen, the runs to hide, the lobby holds, and valid runs
+    // newer than the newest seen. Called by the Worker's cron.
+    async saveSnapshot() {
+        if (!this.env.FALLBACK || !this.snapshotDirty) return { saved: false };
+        this.snapshotDirty = false;
+        try {
+            const tracks = {};
+            const slot = (t) => (tracks[t] ??= { top: 0, blocked: [], holds: [], ok: [] });
+            for (const r of this.sql.exec("SELECT track, MAX(cutoff, COALESCE(top, 0)) AS top FROM boards")) slot(r.track).top = r.top;
+            for (const r of this.sql.exec(`SELECT id, track FROM runs WHERE state = 'invalid'
+                UNION ALL SELECT id, track FROM runs WHERE state = 'pending' AND source != 'legacy'`)) slot(r.track).blocked.push(r.id);
+            for (const r of this.sql.exec("SELECT id, track FROM runs WHERE state = 'valid' AND at > ?", Date.now() - SNAPSHOT_OK_WINDOW_MS)) {
+                if (r.id > slot(r.track).top) slot(r.track).ok.push(r.id);
+            }
+            for (const r of this.sql.exec("SELECT track, user_id, frames, upload_id FROM lobby_runs WHERE state IN ('review', 'hidden')")) {
+                slot(r.track).holds.push(...this.holdKeys(r));
+            }
+            const body = JSON.stringify(tracks);
+            const hash = hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body)));
+            if (hash === await this.ctx.storage.get("snapshotHash")) return { saved: false };
+            await this.env.FALLBACK.put(SNAPSHOT_KEY, JSON.stringify({ at: Date.now(), tracks }));
+            await this.ctx.storage.put("snapshotHash", hash);
+            return { saved: true, bytes: body.length };
+        } catch (err) {
+            this.snapshotDirty = true;
+            throw err;
+        }
     }
 
     payload(track) {
@@ -235,6 +289,7 @@ export class AntiCheat extends DurableObject {
     }
 
     finish(item, result) {
+        this.snapshotDirty = true;
         const state = result.valid ? "valid" : "invalid";
         if (item.run_id != null) {
             this.sql.exec("UPDATE runs SET state = ?, reason = ?, at = ? WHERE id = ?", state, result.reason ?? null, Date.now(), item.run_id);
@@ -308,6 +363,7 @@ export class AntiCheat extends DurableObject {
         const id = this.sql.exec(`INSERT INTO lobby_runs (upload_id, track, week, user_id, nickname, frames, lobby, car_style, recording, at)
             VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
             r.track, r.week, r.userId, r.nickname, r.frames, r.lobby, r.carStyle, r.recording, Date.now()).one().id;
+        this.snapshotDirty = true;
         this.boards.get(r.track)?.holds.add(r.userId + "|" + r.frames);
         return id;
     }
@@ -317,6 +373,7 @@ export class AntiCheat extends DurableObject {
         const row = this.sql.exec("SELECT track FROM lobby_runs WHERE id = ?", id).toArray()[0];
         if (!row) return;
         this.sql.exec("UPDATE lobby_runs SET upload_id = ? WHERE id = ?", uploadId, id);
+        this.snapshotDirty = true;
         this.boards.get(row.track)?.holds.add("#" + uploadId);
     }
 
@@ -325,11 +382,13 @@ export class AntiCheat extends DurableObject {
         const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
         if (!row) return;
         this.sql.exec("DELETE FROM lobby_runs WHERE id = ?", id);
+        this.snapshotDirty = true;
         const holds = this.boards.get(row.track)?.holds;
         if (holds) for (const key of this.holdKeys(row)) holds.delete(key);
     }
 
     unhold(row) {
+        this.snapshotDirty = true;
         const holds = this.boards.get(row.track)?.holds;
         if (holds) for (const key of this.holdKeys(row)) holds.delete(key);
     }
@@ -344,6 +403,7 @@ export class AntiCheat extends DurableObject {
         const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
         if (!row || (verdict !== "verified" && verdict !== "hidden")) return { ok: false };
         this.sql.exec("UPDATE lobby_runs SET state = ?, recording = NULL, at = ? WHERE id = ?", verdict, Date.now(), id);
+        this.snapshotDirty = true;
         if (verdict === "verified") this.unhold(row);
         if (verdict === "hidden") {
             if (row.upload_id != null) {
@@ -371,6 +431,7 @@ export class AntiCheat extends DurableObject {
         const row = this.sql.exec("SELECT track FROM runs WHERE id = ?", id).toArray()[0];
         if (!row) return { ok: false };
         this.sql.exec("UPDATE runs SET state = 'valid', source = 'approved', reason = NULL, at = ? WHERE id = ?", Date.now(), id);
+        this.snapshotDirty = true;
         this.sql.exec("DELETE FROM queue WHERE run_id = ?", id);
         for (const held of this.sql.exec("SELECT * FROM lobby_runs WHERE upload_id = ?", id).toArray()) this.unhold(held);
         this.sql.exec("UPDATE lobby_runs SET state = 'verified', recording = NULL WHERE upload_id = ?", id);

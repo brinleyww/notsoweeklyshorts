@@ -7,6 +7,8 @@
     const PENDING_KEY = "_nswsRefPending";
     // Per account (keyed by its referral code): earned tags and confirmed referrals already announced.
     const SEEN_KEY = "_nswsTagsSeen:";
+    const STATE_KEY = "_nswsAccountState";
+    const STATE_MAX_AGE_MS = 7 * 86400000;
     const TOKEN = /^[0-9a-f]{64}$/;
     const CODE = /^[A-HJ-NP-Z2-9]{8}$/;
     const TOAST_MS = 7000;
@@ -269,6 +271,7 @@
         try {
             data = await response.json();
         } catch {}
+        if (response.status === 503) window.__nswsBusy?.fromData(data);
         return { status: response.status, data };
     }
 
@@ -326,12 +329,12 @@
         return hours < 10 ? (Math.floor(hours * 10) / 10).toFixed(1) : String(Math.floor(hours));
     }
 
-    function setState(next) {
+    function setState(next, saved) {
         if (!next || typeof next !== "object" || !Array.isArray(next.owned)) return;
         state = next;
         renderGarage();
         renderRef();
-        announce(next);
+        if (!saved) announce(next);
         window.dispatchEvent(new CustomEvent("nsws-account", { detail: next }));
     }
 
@@ -391,6 +394,14 @@
         }
     }
 
+    function savedState(token) {
+        try {
+            const saved = JSON.parse(storageGet(STATE_KEY));
+            if (saved?.who === token.slice(0, 12) && Date.now() - saved.at < STATE_MAX_AGE_MS) return saved.data;
+        } catch {}
+        return null;
+    }
+
     // Also links this browser's chat to the profile, so the chat can show its tag.
     function loadState() {
         const token = profileToken();
@@ -398,8 +409,16 @@
         if (loading?.token === token) return loading.promise;
         const promise = api("refer/me", { userToken: token, v: visitorId() }).then(({ status, data }) => {
             if (loading?.promise === promise) loading = null;
-            if (status !== 200) throw Object.assign(new Error("refer/me " + status), { status });
-            if (profileToken() === token) setState(data);
+            if (status !== 200) {
+                const saved = savedState(token);
+                if (!saved) throw Object.assign(new Error("refer/me " + status), { status });
+                if (profileToken() === token) setState(saved, true);
+                return saved;
+            }
+            if (profileToken() === token) {
+                setState(data);
+                storageSet(STATE_KEY, JSON.stringify({ who: token.slice(0, 12), at: Date.now(), data }));
+            }
             return data;
         });
         loading = { token, promise };

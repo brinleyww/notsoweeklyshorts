@@ -2,7 +2,7 @@
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
 import { TrafficStats, readBeat, readAnnouncement, readVote, describeClient } from "./traffic.js";
-import { AntiCheat, RunChecker } from "./anticheat.js";
+import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
@@ -55,6 +55,10 @@ const TRACK_WEEKS_TTL_MS = 10 * 60_000;
 // making them for a while and tells pages to come back later, instead of every page retrying.
 const DO_LIMIT_PAUSE_MS = 10 * 60_000;
 const DO_LIMIT_RETRY_S = 600;
+// Cloudflare resets those limits at 00:00 UTC but lifted the block about 14 minutes later.
+const DO_LIMIT_LIFT_MS = 15 * 60_000;
+// How long an instance reuses the anti-cheat snapshot it read from KV (see AntiCheat.saveSnapshot).
+const SNAPSHOT_TTL_MS = 5 * 60_000;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -130,6 +134,8 @@ function readConfig(env) {
         ownerUserIds: [...hashSet(env.OWNER_USER_IDS)],
         // Ids of runs the anti-cheat hides on this request's board; set per request.
         blocked: null,
+        // blocked came from fallbackBlocked, not a fresh anti-cheat answer.
+        blockedFallback: false,
         // The request carries the owner's key in nswsOwner; set per request.
         owner: false,
     };
@@ -491,8 +497,15 @@ function noteDoError(err) {
     if (/free tier|exceeded allowed/i.test(err?.message ?? "")) doLimitedUntil = Date.now() + DO_LIMIT_PAUSE_MS;
 }
 
+// When the daily limits are expected to lift, for pages to tell players.
+function limitLiftsAt() {
+    const now = new Date();
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) + DO_LIMIT_LIFT_MS;
+    return now.getTime() < today ? today : today + 86_400_000;
+}
+
 function busy(origin) {
-    return json({ error: "busy", retry: DO_LIMIT_RETRY_S }, origin, 503);
+    return json({ error: "busy", retry: DO_LIMIT_RETRY_S, until: limitLiftsAt() }, origin, 503);
 }
 
 function antiCheat(env) {
@@ -569,11 +582,48 @@ function noteWr(env, ctx, track, entry) {
     }));
 }
 
+let snapshot = null;
+
+async function verdictSnapshot(env) {
+    if (!env.FALLBACK) return null;
+    if (!snapshot || Date.now() - snapshot.at > SNAPSHOT_TTL_MS) {
+        snapshot = { at: Date.now(), data: null };
+        snapshot.data = await env.FALLBACK.get(SNAPSHOT_KEY, "json").catch((err) => {
+            console.error("anti-cheat snapshot unavailable:", err && err.message);
+            return null;
+        });
+    }
+    return snapshot.data;
+}
+
+// While the anti-cheat can't be reached: this instance's last verdicts, then the snapshot in KV.
+// A run newer than both was never checked, so it stays hidden until the anti-cheat is back.
+// A board neither has seen counts as all legacy, as it would on its first anti-cheat visit.
+async function fallbackBlocked(env, cfg, track, view) {
+    const saved = (await verdictSnapshot(env))?.tracks?.[track.trackId];
+    const hit = verdicts.get(track.trackId);
+    if (!saved && !hit) return null;
+    const owners = new Set(cfg.ownerUserIds);
+    const blocked = new Set([...(hit?.blocked ?? []), ...(saved?.blocked ?? [])]);
+    const holds = new Set(saved?.holds ?? []);
+    const ok = new Set(saved?.ok ?? []);
+    const top = saved?.top ?? 0;
+    for (const e of view.entries) {
+        if (!Number.isSafeInteger(e.id) || e.id <= 0 || owners.has(e.userId) || hit?.known.has(e.id)) continue;
+        if (holds.has(e.userId + "|" + e.frames) || holds.has("#" + e.id)) blocked.add(e.id);
+        else if (e.id > top && !ok.has(e.id)) blocked.add(e.id);
+    }
+    cfg.blockedFallback = true;
+    return blocked;
+}
+
 async function blockedRuns(env, cfg, track, view) {
     const anti = antiCheat(env);
-    if (!anti || track.week == null || doLimited()) return null;
+    if (!anti || track.week == null) return null;
     const hit = verdicts.get(track.trackId);
-    if (hit && Date.now() - hit.at < ANTICHEAT_TTL_MS && view.entries.every((e) => hit.known.has(e.id))) return hit.blocked;
+    const known = hit && view.entries.every((e) => hit.known.has(e.id));
+    if (known && (Date.now() - hit.at < ANTICHEAT_TTL_MS || doLimited())) return hit.blocked;
+    if (doLimited()) return fallbackBlocked(env, cfg, track, view);
     const entries = view.entries.map((e) => ({ id: e.id, userId: e.userId, frames: e.frames, nickname: e.nickname }));
     const blocked = new Set(await anti.classify(track.trackId, track.week, entries, cfg.ownerUserIds));
     verdicts.delete(track.trackId);
@@ -593,14 +643,14 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
 
     const view = await loadView(cfg, request, track, read);
     if (track.week != null) observeNames(env, ctx, view.entries);
-    // If the anti-cheat is unreachable the board still loads, unfiltered, rather than failing.
+    // If the anti-cheat is unreachable the board still loads, filtered by its last verdicts.
     cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
         noteDoError(err);
         console.error("anti-cheat unavailable:", err && err.message);
-        return null;
+        return fallbackBlocked(env, cfg, track, view);
     });
     const ranked = view.entries.filter((e) => !isBanned(e, cfg));
-    if (skip === 0 && cfg.blocked && read.version === DEFAULT_VERSION && read.onlyVerified === "false") noteWr(env, ctx, track, ranked[0]);
+    if (skip === 0 && cfg.blocked && !cfg.blockedFallback && read.version === DEFAULT_VERSION && read.onlyVerified === "false") noteWr(env, ctx, track, ranked[0]);
     let page = ranked.slice(skip, skip + amount);
     if (!view.complete && !track.hiddenId && page.length < amount) {
         const rawSkip = Math.max(skip, ranked.length) + (view.entries.length - ranked.length);
@@ -855,11 +905,12 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
     const nickname = form.get("nickname");
     if (nickname != null && findSlurs(nickname).length) return json({ nicknameBlocked: true }, origin, 422);
     const stub = accounts(env);
-    if (stub && HEX64.test(token) && nickname != null) {
+    if (stub && HEX64.test(token) && nickname != null && !doLimited()) {
         let taken = false;
         try {
             taken = !(await stub.claimName(await sha256Hex(token), nickname)).available;
         } catch (err) {
+            noteDoError(err);
             console.error("accounts unavailable:", err && err.message);
         }
         if (taken) {
@@ -1008,12 +1059,15 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
                 console.error("traffic beat failed:", err && err.message);
             }
         }
-        const nv = reply?.nv ?? (doLimited() ? DO_LIMIT_RETRY_S : null);
-        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null, pv: reply?.pv ?? null, nv }, origin);
+        if (reply) return json({ online: reply.online ?? null, ann: reply.ann ?? null, pv: reply.pv ?? null, nv: reply.nv ?? null }, origin);
+        // Nothing was stored, so the page keeps this beat's counts for the next one, and leaves any
+        // announcement or poll it is showing alone.
+        return json(doLimited() ? { busy: true, nv: DO_LIMIT_RETRY_S, until: limitLiftsAt() } : { busy: true, nv: null }, origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "poll") {
         const vote = readVote(text);
         if (!vote) return plain(400, "Bad request", origin);
+        if (doLimited()) return busy(origin);
         const result = await stub.vote(vote.visitor, vote.id, vote.choice, request.headers.get("CF-Connecting-IP"));
         if (result.error) return json(result, origin, result.error === "busy" ? 429 : 409);
         return json(result, origin);
@@ -1151,7 +1205,13 @@ async function handleChat(request, url, env, fromSite, origin) {
     const file = /^\/nsws\/chat\/file\/([0-9a-f]{32})$/.exec(url.pathname);
     if (file && request.method === "GET") {
         if (!env.CHAT) return new Response("Not found", { status: 404 });
-        return env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/file/" + file[1]));
+        if (doLimited()) return new Response("Busy", { status: 503, headers: { "Cache-Control": "no-store" } });
+        try {
+            return await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/file/" + file[1]));
+        } catch (err) {
+            noteDoError(err);
+            return new Response("Busy", { status: 503, headers: { "Cache-Control": "no-store" } });
+        }
     }
     if (!fromSite) return forbidden();
     if (url.pathname === TRAFFIC_PREFIX + "chat/upload") {
@@ -1161,10 +1221,18 @@ async function handleChat(request, url, env, fromSite, origin) {
         if (Number(request.headers.get("Content-Length")) > MAX_CHAT_UPLOAD) return plain(413, "Too large", origin);
         const body = await request.arrayBuffer();
         if (body.byteLength > MAX_CHAT_UPLOAD) return plain(413, "Too large", origin);
+        if (doLimited()) return busy(origin);
         const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
-        const reply = await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/upload", {
-            method: "POST", headers: { "X-Chat-Ip": ip }, body,
-        }));
+        let reply;
+        try {
+            reply = await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/upload", {
+                method: "POST", headers: { "X-Chat-Ip": ip }, body,
+            }));
+        } catch (err) {
+            noteDoError(err);
+            console.error("chat upload error:", err && err.message);
+            return doLimited() ? busy(origin) : plain(500, "Upload failed", origin);
+        }
         return new Response(reply.body, {
             status: reply.status,
             headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(origin) },
@@ -1221,6 +1289,10 @@ function socketRefusal(error) {
 // (the relayed data channels). Only the site can use them.
 async function handleCup(request, url, env, fromSite, origin, cfg) {
     if (!fromSite) return forbidden();
+    if (doLimited() && request.method !== "OPTIONS") {
+        const upgrade = (request.headers.get("Upgrade") || "").toLowerCase() === "websocket";
+        return upgrade ? socketRefusal("ServerUnavailable") : busy(origin);
+    }
     if (url.pathname === TRAFFIC_PREFIX + "cup/list") {
         if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
         if (!env.LOBBY_DIR) return plain(503, "Competitions are off", origin);
@@ -1254,6 +1326,7 @@ async function handleSockets(request, url, env, fromSite, origin) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
     if (!env.BRIDGE) return plain(503, "Sockets over HTTPS are off", origin);
+    if (doLimited()) return url.pathname.endsWith("/open") ? json({ refused: "ServerUnavailable" }, origin) : busy(origin);
     const sid = url.searchParams.get("sid") || "";
     const cup = String(url.searchParams.get("b") || "").toUpperCase();
     if (!SOCK_SID.test(sid)) return plain(400, "Bad request", origin);
@@ -1317,8 +1390,9 @@ export default {
                 try {
                     return await handleSockets(request, url, env, fromSite, requestOrigin);
                 } catch (err) {
+                    noteDoError(err);
                     console.error("sock error:", err && err.message);
-                    return plain(500, "Sockets failed", requestOrigin);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Sockets failed", requestOrigin);
                 }
             }
             if (url.pathname.startsWith(TRAFFIC_PREFIX + "cup/")) {
@@ -1327,7 +1401,7 @@ export default {
                 } catch (err) {
                     noteDoError(err);
                     console.error("cup error:", err && err.message);
-                    return plain(500, "Competitions failed", requestOrigin);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Competitions failed", requestOrigin);
                 }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags|bingo)\//.test(url.pathname)) {
@@ -1337,7 +1411,7 @@ export default {
                 } catch (err) {
                     noteDoError(err);
                     console.error("accounts error:", err && err.message);
-                    return plain(500, "Accounts failed", requestOrigin);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Accounts failed", requestOrigin);
                 }
             }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
@@ -1351,7 +1425,7 @@ export default {
             } catch (err) {
                 noteDoError(err);
                 console.error("traffic error:", err && err.message);
-                return plain(500, "Traffic stats failed", origin);
+                return doLimited() ? busy(origin) : plain(500, "Traffic stats failed", origin);
             }
         }
 
@@ -1390,5 +1464,13 @@ export default {
         }
 
         return passThrough(request, url, cfg, origin, ctx);
+    },
+
+    // Every few minutes (wrangler.toml): the anti-cheat saves its verdicts to KV if they changed,
+    // for leaderboards to keep their filter while Durable Objects are refused.
+    async scheduled(event, env, ctx) {
+        const anti = antiCheat(env);
+        if (!anti || !env.FALLBACK) return;
+        ctx.waitUntil(anti.saveSnapshot().catch((err) => console.error("anti-cheat snapshot failed:", err && err.message)));
     },
 };

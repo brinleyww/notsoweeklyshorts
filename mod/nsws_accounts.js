@@ -26,7 +26,10 @@
         } catch {
             throw Object.assign(new Error("Clip server unreachable"), { status: 0 });
         }
-        if (!response.ok) throw Object.assign(new Error("Clip server answered " + response.status), { status: response.status });
+        if (!response.ok) {
+            await window.__nswsBusy?.fromResponse(response);
+            throw Object.assign(new Error("Clip server answered " + response.status), { status: response.status });
+        }
         return response.json();
     }
 
