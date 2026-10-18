@@ -3,7 +3,7 @@
 // token; the token itself is never stored.
 
 import { DurableObject } from "cloudflare:workers";
-import { findSlurs } from "./chatfilter.js";
+import { censor, findSlurs } from "./chatfilter.js";
 
 const MAX_NICK = 100;
 const MAX_CLIP_NAME = 100;
@@ -62,8 +62,10 @@ const TOP_TTL_MS = 60_000;
 // Keep in step with TAGS in mod/nsws_tags.js, which draws them. "referred" belongs to anyone
 // who redeemed a code, "milestone" to anyone with that many confirmed referrals, "hours" to anyone
 // who has played that long, "bingo" to anyone with that many bingos in all, "blackout" to anyone who
-// marked a whole card, "shop" is bought with referral points, and "grant" only the owner hands out.
+// marked a whole card, "king" to the one player holding the most WRs, "shop" is bought with referral
+// points, and "grant" only the owner hands out.
 export const TAGS = {
+    king: { kind: "king" },
     bingo: { kind: "bingo", bingos: 1 },
     dauber: { kind: "bingo", bingos: 5 },
     fullhouse: { kind: "bingo", bingos: 15 },
@@ -191,7 +193,127 @@ export class Accounts extends DurableObject {
                     bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, row.user_id, row.week);
             }
         }
+        // First place on each NSWS board, as the Worker last served it (noteWrs).
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS wrs (
+            track TEXT PRIMARY KEY, week INTEGER NOT NULL, user_id TEXT NOT NULL, nickname TEXT NOT NULL,
+            frames INTEGER NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID`);
+        // The one NSWS King; before is the tag they wore when crowned, put back when they lose it.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS wr_king (
+            id INTEGER PRIMARY KEY CHECK (id = 0), user_id TEXT NOT NULL, since INTEGER NOT NULL, before TEXT)`);
         this.top = null;
+        this.wrs = null;
+        this.king = null;
+    }
+
+    // Every WR row, kept in memory: boards are read all the time and almost never change their leader.
+    wrTable() {
+        if (!this.wrs) {
+            this.wrs = new Map();
+            for (const r of this.sql.exec("SELECT track, week, user_id, nickname, frames, at FROM wrs")) this.wrs.set(r.track, r);
+            this.king = this.sql.exec("SELECT user_id, since, before FROM wr_king WHERE id = 0").toArray()[0] ?? null;
+        }
+        return this.wrs;
+    }
+
+    wrCount(userId) {
+        let n = 0;
+        for (const w of this.wrTable().values()) if (w.user_id === userId) n++;
+        return n;
+    }
+
+    kingId() {
+        this.wrTable();
+        return this.king?.user_id ?? null;
+    }
+
+    kingInfo() {
+        const userId = this.kingId();
+        if (!userId) return null;
+        let nickname = this.nicknameOf(userId);
+        if (!nickname) for (const w of this.wrs.values()) if (w.user_id === userId) nickname = w.nickname;
+        return { nickname: censor(nickname || "Unknown"), wrs: this.wrCount(userId), since: this.king.since };
+    }
+
+    // entries: [{ track, week, userId, nickname, frames }], userId null for a board with nobody on it.
+    // The Worker only sends tracks the anti-cheat knows, with their real week. Returns chat retags.
+    noteWrs(entries) {
+        if (!Array.isArray(entries)) return { error: "bad" };
+        const table = this.wrTable();
+        const touched = new Set();
+        const now = Date.now();
+        this.ctx.storage.transactionSync(() => {
+            for (const e of entries) {
+                if (!HEX64.test(e?.track ?? "") || !Number.isSafeInteger(e.week)) continue;
+                const old = table.get(e.track);
+                if (!HEX64.test(e.userId ?? "")) {
+                    if (!old) continue;
+                    this.sql.exec("DELETE FROM wrs WHERE track = ?", e.track);
+                    table.delete(e.track);
+                    touched.add(old.user_id);
+                    continue;
+                }
+                const nickname = text(e.nickname, MAX_NICK);
+                const frames = Number.isSafeInteger(e.frames) ? e.frames : 0;
+                if (old && old.user_id === e.userId && old.frames === frames && old.nickname === nickname && old.week === e.week) continue;
+                // at is when this player took the record, so a faster run of their own keeps it.
+                const row = { track: e.track, week: e.week, user_id: e.userId, nickname, frames, at: old?.user_id === e.userId ? old.at : now };
+                this.sql.exec(`INSERT INTO wrs (track, week, user_id, nickname, frames, at) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(track) DO UPDATE SET week = excluded.week, user_id = excluded.user_id, nickname = excluded.nickname,
+                        frames = excluded.frames, at = excluded.at`,
+                    row.track, row.week, row.user_id, row.nickname, row.frames, row.at);
+                table.set(e.track, row);
+                if (old?.user_id !== e.userId) {
+                    touched.add(e.userId);
+                    if (old) touched.add(old.user_id);
+                }
+            }
+        });
+        return { retags: touched.size ? this.crown(touched) : [] };
+    }
+
+    // Most WRs wins. A tie keeps the current King; with no King among the tied, whoever got there first.
+    crown(touched) {
+        const counts = new Map();
+        const reached = new Map();
+        for (const w of this.wrTable().values()) {
+            counts.set(w.user_id, (counts.get(w.user_id) ?? 0) + 1);
+            reached.set(w.user_id, Math.max(reached.get(w.user_id) ?? 0, w.at));
+        }
+        const current = this.king?.user_id ?? null;
+        let best = current && counts.has(current) ? current : null;
+        for (const [id, n] of counts) {
+            const top = best ? counts.get(best) : 0;
+            if (n > top || (n === top && best !== current && reached.get(id) < reached.get(best))) best = id;
+        }
+        const retags = new Set(best && touched.has(best) ? [best] : []);
+        if (best !== current) {
+            this.ctx.storage.transactionSync(() => {
+                if (current) {
+                    const before = this.king.before;
+                    if (this.tagProfile(current).equipped === "king") this.setEquipped(current, isTag(before) ? before : null);
+                    retags.add(current);
+                }
+                if (best) {
+                    const before = this.tagProfile(best).equipped;
+                    this.setEquipped(best, "king");
+                    this.king = { user_id: best, since: Date.now(), before: before === "king" ? null : before };
+                    this.sql.exec("INSERT OR REPLACE INTO wr_king (id, user_id, since, before) VALUES (0, ?, ?, ?)",
+                        best, this.king.since, this.king.before);
+                    retags.add(best);
+                } else {
+                    this.king = null;
+                    this.sql.exec("DELETE FROM wr_king WHERE id = 0");
+                }
+            });
+        }
+        return [...retags].map((userId) => ({ uids: this.chatUids(userId), tag: this.chatTagOf(userId) })).filter((r) => r.uids.length);
+    }
+
+    // The tag as the chat stores it; the King's carries their WR count ("king:7").
+    chatTagOf(userId) {
+        const equipped = this.tagProfile(userId).equipped;
+        if (!equipped || !this.ownedTags(userId).has(equipped)) return null;
+        return equipped === "king" ? "king:" + this.wrCount(userId) : equipped;
     }
 
     hoursOf(userId) {
@@ -319,6 +441,7 @@ export class Accounts extends DurableObject {
             if (tag.kind === "bingo" && bingo.total >= tag.bingos) owned.add(id);
             if (tag.kind === "blackout" && bingo.blackouts > 0) owned.add(id);
         }
+        if (this.kingId() === userId) owned.add("king");
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         return owned;
@@ -347,6 +470,8 @@ export class Accounts extends DurableObject {
             now: Date.now(),
             hours,
             bingo,
+            wrs: this.wrCount(userId),
+            king: this.kingInfo(),
             recent: this.recentReferrals(userId),
             referrals: counts.confirmed,
             pending: counts.pending,
@@ -375,7 +500,7 @@ export class Accounts extends DurableObject {
             }
         }
         const state = this.tagState(userId);
-        return { state, linked: linked ? { uids: [uid], tag: state.equipped } : null };
+        return { state, linked: linked ? { uids: [uid], tag: this.chatTagOf(userId) } : null };
     }
 
     redeem(userId, code, ipHash) {
@@ -409,7 +534,7 @@ export class Accounts extends DurableObject {
 
     changed(userId) {
         const state = this.tagState(userId);
-        return { state, retag: { uids: this.chatUids(userId), tag: state.equipped } };
+        return { state, retag: { uids: this.chatUids(userId), tag: this.chatTagOf(userId) } };
     }
 
     // Bought tags are kept for good and put on straight away.
@@ -435,9 +560,7 @@ export class Accounts extends DurableObject {
     chatTag(uid) {
         if (!CHAT_UID.test(uid ?? "")) return null;
         const userId = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id;
-        if (!userId) return null;
-        const equipped = this.tagProfile(userId).equipped;
-        return equipped && this.ownedTags(userId).has(equipped) ? equipped : null;
+        return userId ? this.chatTagOf(userId) : null;
     }
 
     // Owner tools, found by account or by exact nickname (names are unique to one account).

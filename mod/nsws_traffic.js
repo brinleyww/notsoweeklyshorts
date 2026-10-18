@@ -237,13 +237,33 @@
         return syncing;
     }
 
+    // The Worker notes each NSWS board's first place when it serves the board (for the NSWS King tag),
+    // so boards nobody opens would never count; the owner's page opens every one now and then.
+    const WR_SWEEP_KEY = "_nswsWrSweep";
+    const WR_SWEEP_MS = 12 * 3600_000;
+    async function sweepWrs() {
+        let last = 0;
+        try {
+            last = Number(localStorage.getItem(WR_SWEEP_KEY)) || 0;
+        } catch {}
+        if (Date.now() - last < WR_SWEEP_MS || !window.__nswsTracksForWeek || !window.__nswsTrackQuery) return;
+        try {
+            localStorage.setItem(WR_SWEEP_KEY, String(Date.now()));
+        } catch {}
+        const ids = [...new Set((window.__nswsWeeks || []).flatMap((w) => window.__nswsTracksForWeek(w.week).map((t) => t.id)))];
+        for (const id of ids) {
+            await fetch(API + "v6/leaderboard?version=0.6.2&trackId=" + id + "&skip=0&amount=1&onlyVerified=false" + window.__nswsTrackQuery(id),
+                { credentials: "omit", cache: "no-store" }).catch(() => {});
+        }
+    }
+
     let autoSynced = false;
     let panelScript = null;
     window.__nswsOwner = {
         check: () => ownerToken().then((token) => {
             if (token && !autoSynced) {
                 autoSynced = true;
-                setTimeout(() => syncTracks(false).catch(() => {}), 4000);
+                setTimeout(() => syncTracks(false).catch(() => {}).then(sweepWrs), 4000);
             }
             return !!token;
         }, () => false),

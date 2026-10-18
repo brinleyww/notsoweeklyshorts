@@ -48,6 +48,10 @@ const MAX_ACCOUNT_BODY = 400_000;
 // How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
 // seen yet is always classified at once.
 const ANTICHEAT_TTL_MS = 15_000;
+const TRACK_WEEKS_TTL_MS = 10 * 60_000;
+// A track the list doesn't have yet (a new week) is looked up again after this long.
+const TRACK_WEEKS_RETRY_MS = 60_000;
+const WR_SEEN_MAX = 2000;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -505,6 +509,45 @@ function observeNames(env, ctx, entries) {
 // track id -> { at, known: Set of classified ids, blocked: Set }
 const verdicts = new Map();
 
+// track id -> week, from the anti-cheat's synced tracks, so a made-up nswsWeek on some other
+// board can't count towards the NSWS King.
+let trackWeeks = null;
+
+async function knownWeek(env, trackId) {
+    const stale = !trackWeeks || Date.now() - trackWeeks.at > TRACK_WEEKS_TTL_MS;
+    const missing = trackWeeks && !trackWeeks.map.has(trackId) && Date.now() - trackWeeks.at > TRACK_WEEKS_RETRY_MS;
+    if (stale || missing) {
+        const anti = antiCheat(env);
+        if (!anti) return null;
+        trackWeeks = { at: Date.now(), map: new Map(await anti.trackWeeks()) };
+    }
+    return trackWeeks.map.get(trackId) ?? null;
+}
+
+// track id -> the first place this instance last passed to Accounts.
+const wrSeen = new Map();
+
+function noteWr(env, ctx, track, entry) {
+    const stub = accounts(env);
+    if (!stub) return;
+    const holder = HEX64.test(entry?.userId ?? "") ? entry : null;
+    const key = holder ? holder.userId + "|" + holder.frames + "|" + holder.nickname : "";
+    if (wrSeen.get(track.trackId) === key) return;
+    wrSeen.set(track.trackId, key);
+    if (wrSeen.size > WR_SEEN_MAX) wrSeen.delete(wrSeen.keys().next().value);
+    ctx.waitUntil((async () => {
+        if (await knownWeek(env, track.trackId) !== track.week) return;
+        const { retags } = await stub.noteWrs([{
+            track: track.trackId, week: track.week,
+            userId: holder?.userId ?? null, nickname: holder?.nickname ?? "", frames: holder?.frames ?? 0,
+        }]);
+        for (const retag of retags ?? []) await chatRetag(env, retag);
+    })().catch((err) => {
+        wrSeen.delete(track.trackId);
+        console.error("WR note failed:", err && err.message);
+    }));
+}
+
 async function blockedRuns(env, cfg, track, view) {
     const anti = antiCheat(env);
     if (!anti || track.week == null) return null;
@@ -535,6 +578,7 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
         return null;
     });
     const ranked = view.entries.filter((e) => !isBanned(e, cfg));
+    if (skip === 0 && cfg.blocked && read.version === DEFAULT_VERSION && read.onlyVerified === "false") noteWr(env, ctx, track, ranked[0]);
     let page = ranked.slice(skip, skip + amount);
     if (!view.complete && !track.hiddenId && page.length < amount) {
         const rawSkip = Math.max(skip, ranked.length) + (view.entries.length - ranked.length);

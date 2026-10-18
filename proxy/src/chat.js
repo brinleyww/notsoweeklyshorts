@@ -32,7 +32,8 @@ const REPEAT_MS = 20_000;
 const MUTE_MINUTES = [10, 60, 1440];
 // How long the room trusts its copy of a player's tag; equipping a new one updates it at once.
 const TAG_CACHE_MS = 10 * 60_000;
-const TAG_ID = /^[a-z]{1,24}$/;
+// A tag id, with a count for the NSWS King ("king:7").
+const TAG_ID = /^[a-z]{1,24}(:[0-9]{1,5})?$/;
 // Pings: at most MAX_PINGS people per message and PING_BUDGET per PING_WINDOW_MS, and the same
 // person no more than once per PING_SAME_MS. Extra @names still show, they just don't notify.
 const MAX_PINGS = 3;

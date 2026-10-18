@@ -277,8 +277,15 @@ export class AntiCheat extends DurableObject {
         await this.ctx.storage.setAlarm(Date.now() + 50);
     }
 
+    // [track id, week] for every synced NSWS track.
+    async trackWeeks() {
+        this.weeks ??= this.sql.exec("SELECT id, week FROM tracks").toArray().map((r) => [r.id, r.week]);
+        return this.weeks;
+    }
+
     async putTracks(tracks) {
         const now = Date.now();
+        this.weeks = null;
         for (const t of tracks) {
             this.sql.exec(`INSERT INTO tracks (id, week, payload, updated) VALUES (?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET week = excluded.week, payload = excluded.payload, updated = excluded.updated`,

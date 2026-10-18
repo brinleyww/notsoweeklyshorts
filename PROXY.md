@@ -411,6 +411,22 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   `BLACKOUT` with one whole card. Squares are the player's own word, like the
   hours: the tags are for fun, not for the boards. (An earlier weekly streak left
   an unused `played_weeks` table and `meta` key `weeks_backfill`.)
+- **NSWS King.** One player at a time wears `NSWS KING`: whoever holds the most
+  WRs (first place on a board) over every NSWS week, live week included. When the
+  Worker serves the first page of an NSWS board (version 0.6.2, all runs, with the
+  anti-cheat reachable), it passes the board's first place, after bans and hidden
+  runs, to `Accounts.noteWrs`. Only tracks the anti-cheat has synced count, and
+  only under their real week (`AntiCheat.trackWeeks`), so a made-up `nswsWeek`
+  on another board counts for nothing. Each Worker instance remembers what it last
+  sent per track, and `Accounts` keeps the `wrs` table in memory, so an
+  unchanged board costs no rows. A tie keeps the current King; with no King among
+  the tied, whoever got there first. The new King has the tag put on by the
+  server (the tag they wore is kept in `wr_king.before`), and the old one gets
+  that tag back if they were still wearing the crown. The chat stores the King's
+  tag with the count (`king:7`), and `refer/me` returns `wrs` (the player's
+  own count) and `king` (`{nickname, wrs, since}`). Boards nobody opens would
+  never be noted, so the owner's page opens every NSWS board once every 12 hours
+  (`sweepWrs` in `mod/nsws_traffic.js`, after the track sync).
 - **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
   tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,

@@ -16,6 +16,7 @@
 
     // Keep in step with TAGS in proxy/src/accounts.js (ids, costs, referral counts, hours and bingos).
     const TAGS = [
+        { id: "king", label: "NSWS KING", group: "king" },
         { id: "bingo", label: "BINGO", group: "bingo", bingos: 1 },
         { id: "dauber", label: "DAUBER", group: "bingo", bingos: 5 },
         { id: "fullhouse", label: "FULL HOUSE", group: "bingo", bingos: 15 },
@@ -53,6 +54,7 @@
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
+        ["king", "NSWS King", "Only one player wears it: whoever holds the most WRs over every NSWS week. It moves to whoever takes the lead (a tie keeps the current King) and goes on by itself when you get it."],
         ["bingo", "Bingo", "Earned with bingos on the weekly bingo card (a full row, column or diagonal). BLACKOUT needs every square of one card."],
         ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
@@ -84,6 +86,9 @@
 .nsws-tag.t-youtuber::before{content:"";flex-shrink:0;border-style:solid;border-width:.32em 0 .32em .52em;border-color:transparent transparent transparent #fff;}
 .nsws-tag.t-author{background:#103d3b;color:#5ff2d6;}
 .nsws-tag.t-og{background:#111;color:#ffcc66;}
+.nsws-tag.t-king{background:linear-gradient(180deg,#6a1fb0,#330a5e);color:#ffd76a;box-shadow:inset 0 -2px #ffd76a;}
+.nsws-tag.t-king::before{content:"";flex-shrink:0;width:.95em;height:.68em;background:currentColor;clip-path:polygon(0 100%,0 18%,26% 58%,50% 0,74% 58%,100% 18%,100% 100%);}
+.nsws-tag>.wr{margin-left:.05em;padding-left:.4em;border-left:1px solid currentColor;font-variant-numeric:tabular-nums;}
 .nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
 .nsws-tag>.ball{display:inline-flex;align-items:center;justify-content:center;min-width:1.3em;height:1.3em;margin:-.1em .05em -.1em -.25em;padding:0 .2em;box-sizing:border-box;border-radius:.65em;background:#fff;color:#14141e;font-size:.72em;font-style:normal;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 .14em rgba(0,0,0,.18);}
 .nsws-tag.t-bingo{background:#d23a4c;}
@@ -267,10 +272,23 @@
         return { status: response.status, data };
     }
 
+    // The chat sends the King's tag with its WR count ("king:7").
     function chip(id) {
-        const tag = BY_ID.get(id);
+        const [base, count] = String(id ?? "").split(":");
+        const tag = BY_ID.get(base);
         if (!tag) return null;
-        const span = el("span", "nsws-tag t-" + id);
+        const span = el("span", "nsws-tag t-" + base);
+        if (tag.group === "king") {
+            const wrs = count != null ? Number(count) : owns(base) ? state.wrs : state?.king?.wrs;
+            span.appendChild(document.createTextNode(tag.label));
+            if (Number.isSafeInteger(wrs)) {
+                span.appendChild(el("span", "wr", wrsText(wrs)));
+                span.title = tag.label + " · holds " + wrsText(wrs) + ", the most on NSWS";
+            } else {
+                span.title = tag.label;
+            }
+            return span;
+        }
         if (tag.hours) {
             span.appendChild(el("span", "h", tag.hours + "H"));
             span.title = tag.label + " · " + tag.hours + (tag.hours === 1 ? " hour" : " hours") + " played";
@@ -286,6 +304,10 @@
 
     function bingosText(n) {
         return n + (n === 1 ? " bingo" : " bingos");
+    }
+
+    function wrsText(n) {
+        return n + (n === 1 ? " WR" : " WRs");
     }
 
     // Tags that come by themselves. A new one is put on when the player wears no tag or a smaller one
@@ -335,6 +357,13 @@
             if (fresh.length === 1) lines.push(fresh[0].nickname + " finished their first run, so your referral counts! +1 point.");
             else if (fresh.length > 1) lines.push(fresh.length + " friends you referred finished their first run! +" + fresh.length + " points.");
         }
+        const king = next.owned.includes("king");
+        if (king && !seen?.king) {
+            lines.push("You hold the most WRs on NSWS (" + wrsText(next.wrs ?? 0) + "): you're the NSWS KING"
+                + (next.equipped === "king" ? " and you're wearing the tag now." : ". Wear the tag from Garage → Tags."));
+        } else if (!king && seen?.king) {
+            lines.push((next.king ? next.king.nickname + " holds more WRs now" : "You no longer hold the most WRs") + ", so the NSWS KING tag has moved on.");
+        }
         const worn = BY_ID.get(next.equipped);
         let wear = null;
         for (const kind of EARNED) {
@@ -348,7 +377,7 @@
                 : "You marked a whole bingo card: the BLACKOUT tag is yours";
             lines.push(what + (wear === top.id ? " and you're wearing it now." : ". Wear it from Garage → Tags."));
         }
-        storageSet(SEEN_KEY + next.code, JSON.stringify({ earned: earned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0) }));
+        storageSet(SEEN_KEY + next.code, JSON.stringify({ earned: earned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0), king }));
         if (lines.length) toast(lines.join(" "));
         const token = profileToken();
         if (wear && token) {
@@ -484,6 +513,7 @@
 
     function requirement(tag) {
         if (tag.group === "shop") return tag.cost === 1 ? "1 point" : tag.cost + " points";
+        if (tag.group === "king") return (state?.wrs ?? 0) + " / " + wrsText((state?.king?.wrs ?? 0) + 1);
         if (tag.referrals) return Math.min(state?.referrals ?? 0, tag.referrals) + " / " + tag.referrals + " referrals";
         if (tag.hours) return hoursText(Math.min(state?.hours ?? 0, tag.hours)) + " / " + tag.hours + " h";
         if (tag.blackout) return "Whole card";
@@ -501,6 +531,13 @@
     function needText(tag) {
         if (tag.group === "shop") return "Costs " + requirement(tag) + " from the referral shop. You get a point for every friend you refer.";
         if (tag.group === "discord") return tag.need + " Only the owner can give this one out.";
+        if (tag.group === "king") {
+            if (owns(tag.id)) return "You hold the most WRs on NSWS (" + wrsText(state.wrs) + "), so you're the King. If someone takes the lead, the tag moves to them.";
+            const king = state?.king;
+            return "Hold more WRs (first place on a board) than anyone else, counting every NSWS week. Only one player wears it, and a tie keeps the current King. "
+                + (king ? "The King is " + king.nickname + " with " + wrsText(king.wrs) + "." : "Nobody holds it yet.")
+                + " You hold " + wrsText(state?.wrs ?? 0) + ".";
+        }
         if (tag.hours) {
             const played = "You've played " + hoursText(state?.hours ?? 0) + " hours";
             return "Play NSWS for " + tag.hours + (tag.hours === 1 ? " hour. " : " hours. ")
