@@ -206,7 +206,9 @@
     }
 
     setInterval(tryShow, 1000);
-    setInterval(check, POLL_MS);
+    setInterval(() => {
+        if (document.visibilityState === "visible") check();
+    }, POLL_MS);
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") check();
     });

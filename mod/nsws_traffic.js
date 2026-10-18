@@ -9,12 +9,10 @@
     const OWNER_HASH = "965911be14a967812d548ebc4dd604e6d1a16601ffa26dc995532628fd0b6a6a";
     const VISITOR_KEY = "nsws_visitor";
     const BEAT_VISIBLE_S = 60;
-    const BEAT_HIDDEN_S = 240;
-    const MAX_HIDDEN_S = 1800;
+    const MAX_GAP_S = 1800;
     const MIN_GAP_MS = 15000;
     // A longer gap between samples means the tab was frozen or the machine slept.
-    const MAX_SAMPLE_VISIBLE_S = 5;
-    const MAX_SAMPLE_HIDDEN_S = 75;
+    const MAX_SAMPLE_S = 5;
     const TRACK_ID = /^[0-9a-f]{64}$/;
     const TRACK_EVENTS = { attempts: 0, finishes: 1, uploads: 2 };
 
@@ -51,11 +49,12 @@
     let seenAnn = null;
     let lastSample = performance.now();
     let lastBeat = -Infinity;
-    // The beat reply stretches the gap when the site is busy (nv). The next beat always comes
-    // before the gap the last one promised, so going hidden needs no extra beat.
+    // Only a tab that is shown beats. A hidden one sends nothing and drops off the online count once
+    // the gap its last beat promised runs out; it beats again as soon as it is shown. The beat reply
+    // stretches the gap when the site is busy (nv).
     let visibleGap = BEAT_VISIBLE_S;
     let promised = BEAT_VISIBLE_S;
-    const gapFor = (hidden) => (hidden ? Math.min(MAX_HIDDEN_S, visibleGap * BEAT_HIDDEN_S / BEAT_VISIBLE_S) : visibleGap);
+    let hiddenAt = document.visibilityState === "hidden" ? performance.now() : 0;
 
     function currentState() {
         if (document.querySelector(".editor-ui")) return "editor";
@@ -67,12 +66,11 @@
 
     function sample() {
         const now = performance.now();
-        const hidden = document.visibilityState === "hidden";
-        const seconds = Math.min((now - lastSample) / 1000, hidden ? MAX_SAMPLE_HIDDEN_S : MAX_SAMPLE_VISIBLE_S);
+        const seconds = Math.min((now - lastSample) / 1000, MAX_SAMPLE_S);
         lastSample = now;
-        if (!(seconds > 0)) return;
+        if (!(seconds > 0) || document.visibilityState === "hidden") return;
         runtime += seconds;
-        if (!hidden && document.hasFocus()) {
+        if (document.hasFocus()) {
             focus += seconds;
             if (currentState() === "race") driving += seconds;
         }
@@ -81,7 +79,6 @@
     function beat(end) {
         sample();
         const state = currentState();
-        const hidden = document.visibilityState === "hidden";
         const body = {
             s: sessionId,
             v: visitorId,
@@ -89,7 +86,7 @@
             rt: Math.round(runtime * 10) / 10,
             ft: Math.round(focus * 10) / 10,
             dt: Math.round(driving * 10) / 10,
-            nx: gapFor(hidden),
+            nx: visibleGap,
             st: state,
             tk: state === "race" ? currentTrack : null,
             ev: events,
@@ -129,7 +126,7 @@
                 response.json().then((data) => {
                     if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
                     if (data?.pv) window.__nswsAnnounce?.pollUpdate?.(data.pv);
-                    if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_HIDDEN_S);
+                    if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_GAP_S);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
@@ -150,13 +147,22 @@
         });
     }
 
-    setInterval(() => {
+    function tick() {
         sample();
-        const hidden = document.visibilityState === "hidden";
-        if (performance.now() - lastBeat >= Math.min(promised, gapFor(hidden)) * 1000) beat(false);
-    }, 1000);
+        if (document.visibilityState === "hidden") return;
+        if (performance.now() - lastBeat >= Math.min(promised, visibleGap) * 1000) beat(false);
+    }
 
-    window.addEventListener("pagehide", () => beat(true));
+    setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") hiddenAt = performance.now();
+        else tick();
+    });
+    // Closing a shown tab hides it a moment before pagehide, so only a tab hidden for a while skips the goodbye.
+    window.addEventListener("pagehide", () => {
+        if (document.visibilityState === "hidden" && performance.now() - hiddenAt > 5000) return;
+        beat(true);
+    });
     window.addEventListener("pageshow", (e) => {
         if (e.persisted) {
             lastSample = performance.now();

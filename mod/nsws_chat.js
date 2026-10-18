@@ -19,7 +19,7 @@
     const WS_FAILS_BEFORE_HTTP = 2;
     const HTTP_REMEMBER_MS = 12 * 3600000;
     const POLL_ABORT_MS = 35000;
-    const HIDDEN_POLL_MS = 60000;
+    const HIDDEN_DROP_MS = 60000;
     const MAX_POLL_GAP_MS = 10000;
     const MAX_BUSY_MS = 15 * 60000;
     const SEND_ABORT_MS = 15000;
@@ -2300,32 +2300,11 @@
         }
     }
 
-    let hiddenAt = document.visibilityState === "hidden" ? performance.now() : 0;
-    document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden") hiddenAt = performance.now();
-    });
-
-    function untilShown() {
-        return new Promise((resolve) => {
-            const on = () => {
-                if (document.visibilityState === "hidden") return;
-                document.removeEventListener("visibilitychange", on);
-                resolve();
-            };
-            document.addEventListener("visibilitychange", on);
-        });
-    }
-
     // Each poll waits on the server until something happens (or about 25 s pass). The server answers
-    // a stale or missing position with a full reload, so a tab hidden for a while simply stops polling
-    // until it is shown again.
+    // a stale or missing position with a full reload.
     async function pollLoop(session) {
         let delay = 2000;
         while (http === session) {
-            if (document.visibilityState === "hidden" && performance.now() - hiddenAt >= HIDDEN_POLL_MS) {
-                await untilShown();
-                if (http !== session) return;
-            }
             try {
                 const data = await httpPost(session, "poll", { epoch: session.epoch, after: session.seq }, POLL_ABORT_MS);
                 if (http !== session) return;
@@ -2787,7 +2766,8 @@
         window.addEventListener("keydown", quickKey, true);
         window.addEventListener("resize", applyLayout);
         root.classList.toggle("tucked", tucked);
-        connect();
+        if (document.visibilityState === "hidden") dropped = true;
+        else connect();
         setTimeout(loadEmoji, 2000);
     }
 
@@ -2817,6 +2797,27 @@
     }
 
     window.addEventListener("nsws-players-online", updateOnline);
+
+    // A tab in the background for a minute lets go of the chat and joins again when it is shown,
+    // unless a cup is reading the chat through it.
+    let dropTimer = null;
+    let dropped = false;
+
+    function dropIfHidden() {
+        if (!root || feedListeners.size || document.visibilityState !== "hidden") return;
+        dropped = true;
+        disconnect();
+    }
+
+    document.addEventListener("visibilitychange", () => {
+        clearTimeout(dropTimer);
+        if (document.visibilityState === "hidden") {
+            dropTimer = setTimeout(dropIfHidden, HIDDEN_DROP_MS);
+        } else if (dropped) {
+            dropped = false;
+            if (root) connect();
+        }
+    });
 
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState !== "visible" || titleBefore == null) return;
@@ -2870,6 +2871,10 @@
             subscribe(fn) {
                 const listener = (m) => fn(m.media ? { ...m, text: lineText(m) } : m);
                 feedListeners.add(listener);
+                if (dropped && root) {
+                    dropped = false;
+                    connect();
+                }
                 return () => feedListeners.delete(listener);
             },
             post: postText,
