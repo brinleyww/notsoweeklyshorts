@@ -31660,21 +31660,24 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.dispose()
             }
             // Plain Blocks are drawn as merged faces instead of instances: a face against another Block is dropped and
-            // coplanar faces of one colour become rectangles (no longer than `grid` tiles). The exact same surface is
-            // drawn, with about a third of the triangles on big deco tracks. Blocks whose box is off the tile grid
-            // stay instanced. `blocks` holds [part, resolved colour] pairs.
-            function mergeBlockFaces(blocks, type, grid) {
-                const quads = []
-                  , rest = []
-                  , src = [...type.colors.values()].find(e => null != e)?.geometry
-                  , attrs = null == src ? [] : Object.keys(src.attributes).sort().join();
-                if ("color,normal,position" != attrs)
-                    return { quads, rest: blocks };
+            // coplanar faces of one colour become rectangles. That is the same surface with about half the triangles on
+            // big deco tracks. The merge runs in a worker (~100 ms on a 40k-Block track); until it is back the Blocks
+            // stay instanced. Blocks whose box is off the tile grid always stay instanced (`rest`).
+            function blockMergeInput(blocks, type) {
+                const src = [...type.colors.values()].find(e => null != e)?.geometry;
+                if (null == src || "color,normal,position" != Object.keys(src.attributes).sort().join())
+                    return null;
                 null === src.boundingBox && src.computeBoundingBox();
                 const S = M.partSize
                   , boxes = new Map
-                  , placed = [];
-                let x0 = 1 / 0, y0 = 1 / 0, z0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, z1 = -1 / 0;
+                  , placed = []
+                  , rest = []
+                  , rgb = {};
+                for (const [e,t] of type.colors)
+                    if (null != t) {
+                        const n = t.geometry.attributes.color;
+                        rgb[e] = [n.getX(0), n.getY(0), n.getZ(0)]
+                    }
                 for (const b of blocks) {
                     const e = b[0]
                       , k = 8 * e.rotation + e.rotationAxis;
@@ -31686,35 +31689,38 @@ window.__nswsAutoGhostNote = function(trackId) {
                         o.every(e => Math.abs(e - Math.round(e)) < 1e-3) ? o = o.map(Math.round) : o = null,
                         boxes.set(k, o)
                     }
-                    if (null == o) {
-                        rest.push(b);
-                        continue
-                    }
-                    const p = [e.x + o[0], e.y + o[1], e.z + o[2], e.x + o[3], e.y + o[4], e.z + o[5], b[1]];
-                    placed.push(p),
-                    x0 = Math.min(x0, p[0]), y0 = Math.min(y0, p[1]), z0 = Math.min(z0, p[2]),
-                    x1 = Math.max(x1, p[3]), y1 = Math.max(y1, p[4]), z1 = Math.max(z1, p[5])
+                    null == o || null == rgb[b[1]] ? rest.push(b) : placed.push(e.x + o[0], e.y + o[1], e.z + o[2], e.x + o[3], e.y + o[4], e.z + o[5], b[1])
                 }
-                if (0 == placed.length)
-                    return { quads, rest };
+                return {
+                    placed: Int32Array.from(placed),
+                    rest,
+                    rgb
+                }
+            }
+            // Runs in the worker: Block boxes (min xyz, max xyz, colour; in tiles) to rectangles no longer than `grid` tiles.
+            function mergeBlockCells(placed, grid) {
+                const quads = []
+                  , n = placed.length / 7;
+                if (0 == n)
+                    return quads;
+                let x0 = 1 / 0, y0 = 1 / 0, z0 = 1 / 0, x1 = -1 / 0, y1 = -1 / 0, z1 = -1 / 0;
+                for (let i = 0; i < placed.length; i += 7)
+                    x0 = Math.min(x0, placed[i]), y0 = Math.min(y0, placed[i + 1]), z0 = Math.min(z0, placed[i + 2]),
+                    x1 = Math.max(x1, placed[i + 3]), y1 = Math.max(y1, placed[i + 4]), z1 = Math.max(z1, placed[i + 5]);
                 const NX = x1 - x0
                   , NZ = z1 - z0
                   , layers = new Array(y1 - y0)
                   , colors = [0]
-                  , at = (x, y, z) => {
-                    if (x < x0 || y < y0 || z < z0 || x >= x1 || y >= y1 || z >= z1)
-                        return 0;
-                    const L = layers[y - y0];
-                    return void 0 === L ? 0 : L[(x - x0) * NZ + z - z0]
-                };
-                for (const p of placed) {
-                    let c = colors.indexOf(p[6]);
-                    c < 0 && (c = colors.push(p[6]) - 1),
-                    p[6] = c;
-                    for (let y = p[1]; y < p[4]; y++) {
+                  , index = new Uint8Array(n);
+                for (let b = 0; b < n; b++) {
+                    const p = 7 * b;
+                    let c = colors.indexOf(placed[p + 6]);
+                    c < 0 && (c = colors.push(placed[p + 6]) - 1),
+                    index[b] = c;
+                    for (let y = placed[p + 1]; y < placed[p + 4]; y++) {
                         const L = layers[y - y0] ?? (layers[y - y0] = new Uint8Array(NX * NZ));
-                        for (let x = p[0]; x < p[3]; x++)
-                            L.fill(c, (x - x0) * NZ + p[2] - z0, (x - x0) * NZ + p[5] - z0)
+                        for (let x = placed[p]; x < placed[p + 3]; x++)
+                            L.fill(c, (x - x0) * NZ + placed[p + 2] - z0, (x - x0) * NZ + placed[p + 5] - z0)
                     }
                 }
                 // Exposed cell faces grouped by axis, side, plane, colour and greedy-grid square; cells are packed square-local.
@@ -31731,8 +31737,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     last.sorted && c.length > 0 && e < c[c.length - 1] && (last.sorted = !1),
                     c.push(e)
                 };
-                for (const p of placed) {
-                    const col = p[6];
+                for (let b = 0; b < n; b++) {
+                    const p = placed.subarray(7 * b, 7 * b + 6)
+                      , col = index[b];
                     for (let d = -1; d <= 1; d += 2) {
                         const plane = d > 0 ? p[3] : p[0]
                           , x = d > 0 ? plane - 1 : plane
@@ -31802,43 +31809,100 @@ window.__nswsAutoGhostNote = function(trackId) {
                         for (let e = lo; e <= hi; e++)
                             bitmap[e] && take(s, e)
                 }
-                return { quads, rest }
+                return quads
             }
-            // One geometry for merged Block quads of one colour, with the same attributes as the Block's own geometry.
-            function blockQuadGeometry(quads, colorGeometry) {
-                const S = M.partSize
-                  , n = quads.length
-                  , pos = new Float32Array(12 * n)
-                  , nor = new Float32Array(12 * n)
-                  , col = new Float32Array(12 * n)
-                  , index = 4 * n > 65535 ? new Uint32Array(6 * n) : new Uint16Array(6 * n)
-                  , ca = colorGeometry.attributes.color
-                  , r = ca.getX(0), g = ca.getY(0), b = ca.getZ(0)
+            // Runs in the worker: vertex arrays per colour, split into meshes of about 8k triangles so culling and the
+            // cinematic camera's rays still work per area. Attributes match the Block's own geometry.
+            function blockChunkArrays(quads, rgb, span, S) {
+                const byColor = new Map
+                  , out = []
                   , p = [0, 0, 0];
-                for (let i = 0; i < n; i++) {
-                    const q = quads[i]
-                      , ua = (q.a + 1) % 3
-                      , va = (q.a + 2) % 3
-                      , corners = q.d > 0 ? [[q.u0, q.v0], [q.u1, q.v0], [q.u1, q.v1], [q.u0, q.v1]] : [[q.u0, q.v0], [q.u0, q.v1], [q.u1, q.v1], [q.u1, q.v0]];
-                    for (let k = 0; k < 4; k++) {
-                        const o = 12 * i + 3 * k;
-                        p[q.a] = q.plane * S, p[ua] = corners[k][0] * S, p[va] = corners[k][1] * S,
-                        pos[o] = p[0], pos[o + 1] = p[1], pos[o + 2] = p[2],
-                        nor[o + q.a] = q.d,
-                        col[o] = r, col[o + 1] = g, col[o + 2] = b
-                    }
-                    const o = 6 * i, v = 4 * i;
-                    index[o] = v, index[o + 1] = v + 1, index[o + 2] = v + 2,
-                    index[o + 3] = v, index[o + 4] = v + 2, index[o + 5] = v + 3
+                for (const e of quads) {
+                    const t = byColor.get(e.color);
+                    null == t ? byColor.set(e.color, [e]) : t.push(e)
                 }
-                const t = new THREE.BufferGeometry;
-                return t.setAttribute("position", new THREE.BufferAttribute(pos,3)),
-                t.setAttribute("normal", new THREE.BufferAttribute(nor,3)),
-                t.setAttribute("color", new THREE.BufferAttribute(col,3)),
-                t.setIndex(new THREE.BufferAttribute(index,1)),
-                t.computeBoundingBox(),
-                t.computeBoundingSphere(),
-                t
+                for (const [color,list] of byColor)
+                    for (const e of splitTrackParts(list, 4e3, span)) {
+                        const n = e.length
+                          , pos = new Float32Array(12 * n)
+                          , nor = new Float32Array(12 * n)
+                          , col = new Float32Array(12 * n)
+                          , index = 4 * n > 65535 ? new Uint32Array(6 * n) : new Uint16Array(6 * n)
+                          , [r,g,b] = rgb[color];
+                        for (let i = 0; i < n; i++) {
+                            const q = e[i]
+                              , ua = (q.a + 1) % 3
+                              , va = (q.a + 2) % 3
+                              , corners = q.d > 0 ? [q.u0, q.v0, q.u1, q.v0, q.u1, q.v1, q.u0, q.v1] : [q.u0, q.v0, q.u0, q.v1, q.u1, q.v1, q.u1, q.v0];
+                            for (let k = 0; k < 4; k++) {
+                                const o = 12 * i + 3 * k;
+                                p[q.a] = q.plane * S, p[ua] = corners[2 * k] * S, p[va] = corners[2 * k + 1] * S,
+                                pos[o] = p[0], pos[o + 1] = p[1], pos[o + 2] = p[2],
+                                nor[o + q.a] = q.d,
+                                col[o] = r, col[o + 1] = g, col[o + 2] = b
+                            }
+                            const o = 6 * i
+                              , v = 4 * i;
+                            index[o] = v, index[o + 1] = v + 1, index[o + 2] = v + 2,
+                            index[o + 3] = v, index[o + 4] = v + 2, index[o + 5] = v + 3
+                        }
+                        out.push({color, pos, nor, col, index})
+                    }
+                return out
+            }
+            function blockMergeNow(e) {
+                try {
+                    return blockChunkArrays(mergeBlockCells(e.placed, e.grid), e.rgb, e.span, e.size)
+                } catch (t) {
+                    return console.error(t), null
+                }
+            }
+            let blockWorker, blockJobId = 0;
+            const blockJobs = new Map;
+            // Calls done(chunks) later and returns undefined, or returns the result at once (null if it failed) when no worker runs.
+            function runBlockMerge(data, done) {
+                if (void 0 === blockWorker)
+                    try {
+                        const e = [selectTrackPart, splitTrackParts, mergeBlockCells, blockChunkArrays, blockMergeNow].join("\n") + "\nonmessage = e => { const r = blockMergeNow(e.data); postMessage({ id: e.data.id, chunks: r }, null == r ? [] : r.flatMap(e => [e.pos.buffer, e.nor.buffer, e.col.buffer, e.index.buffer])) }";
+                        blockWorker = new Worker(URL.createObjectURL(new Blob([e],{
+                            type: "text/javascript"
+                        }))),
+                        blockWorker.onmessage = e => {
+                            const t = blockJobs.get(e.data.id);
+                            blockJobs.delete(e.data.id),
+                            t?.done(e.data.chunks)
+                        },
+                        blockWorker.onerror = () => {
+                            blockWorker = null;
+                            const e = [...blockJobs.values()];
+                            blockJobs.clear();
+                            for (const t of e)
+                                t.done(blockMergeNow(t.data))
+                        }
+                    } catch {
+                        blockWorker = null
+                    }
+                if (null == blockWorker)
+                    return blockMergeNow(data);
+                const id = ++blockJobId;
+                blockJobs.set(id, {data, done}),
+                blockWorker.postMessage({...data, id})
+            }
+            // The merge for a track's current Blocks, cached until a part changes. While it is pending `chunks` is null.
+            function blockMerge(track, blocks, type, grid, span, color) {
+                const key = grid + "|" + span + "|" + color;
+                let c = blockMerges.get(track);
+                if (null != c && c.key == key)
+                    return c;
+                const input = blockMergeInput(blocks, type);
+                if (null == input)
+                    return blockMerges.set(track, c = {key, rest: blocks, chunks: []}), c;
+                const failed = () => (c.rest = blocks, c.chunks = []);
+                blockMerges.set(track, c = {key, rest: input.rest, chunks: null});
+                const now = runBlockMerge({placed: input.placed, grid, span, rgb: input.rgb, size: M.partSize}, e => {
+                    blockMerges.get(track) === c && (null == e ? failed() : (c.chunks = e, trackRenderStates.get(track)?.blockSwap?.(e)))
+                });
+                return void 0 !== now && (null == now ? failed() : c.chunks = now), c
             }
             // Chunk width in 5 m tiles (5/3 of the cull distance), so far chunks drop out instead of staying drawn for one close part.
             function trackChunkSpan(e) {
@@ -31853,6 +31917,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     meshes: [],
                     geometries: [],
                     ownGeometries: [],
+                    blockMeshes: [],
+                    blockSwap: null,
                     flatMaterial: null,
                     cull: null,
                     distanceCulled: !1,
@@ -32139,42 +32205,94 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , y = new Map;
                     v.split = A,
                     v.span = span;
-                    const blocks = [];
-                    for (const e of m.get(this, l, "f")) {
-                        let t = e.color;
-                        t == TrackPartColorId.Default && (t = n);
-                        if (e.type.configuration.id == Part.Block) {
-                            blocks.push([e, t]);
-                            continue
-                        }
+                    const blocks = []
+                      , group = (e, t) => {
                         let i = y.get(e.type);
                         null == i && y.set(e.type, i = new Map);
                         const r = i.get(t);
                         null == r ? i.set(t, [e]) : r.push(e)
                     }
+                    ;
+                    for (const e of m.get(this, l, "f")) {
+                        let t = e.color;
+                        t == TrackPartColorId.Default && (t = n),
+                        e.type.configuration.id == Part.Block ? blocks.push([e, t]) : group(e, t)
+                    }
                     const blockType = blocks.length > 0 ? m.get(this, s, "f").getPart(Part.Block) : null
-                      , blockGrid = Math.max(16, Math.floor(Math.min(64, span)));
-                    let merged = null;
-                    null != blockType && (merged = blockMerges.get(this),
-                    (null == merged || merged.grid != blockGrid || merged.color != n) && blockMerges.set(this, merged = {
-                        grid: blockGrid,
-                        color: n,
-                        ...mergeBlockFaces(blocks, blockType, blockGrid)
-                    }));
+                      , merged = null == blockType ? null : blockMerge(this, blocks, blockType, Math.max(16, Math.floor(Math.min(64, span))), A ? span : 1 / 0, n);
                     if (null != merged)
-                        for (const [e,t] of merged.rest) {
-                            let i = y.get(e.type);
-                            null == i && y.set(e.type, i = new Map);
-                            const r = i.get(t);
-                            null == r ? i.set(t, [e]) : r.push(e)
-                        }
+                        for (const [e,t] of null == merged.chunks ? blocks : merged.rest)
+                            group(e, t);
                     let w = null;
                     null != c && (v.flatMaterial = new THREE.MeshBasicMaterial({
                         color: c,
                         depthWrite: !1
                     }),
                     w = flatShadowMatrix(new THREE.Plane(new THREE.Vector3(0,1,0),0), t));
-                    const x = new THREE.Matrix4;
+                    const x = new THREE.Matrix4
+                      , scene = m.get(this, r, "f").scene
+                      , list = m.get(this, u, "f")
+                      , addMesh = (e, t, n, out) => {
+                        t.matrixAutoUpdate = !1,
+                        t.matrixWorldAutoUpdate = !1,
+                        t.frustumCulled = A,
+                        t.castShadow = h,
+                        t.receiveShadow = !0,
+                        A && (t.computeBoundingSphere(),
+                        t.computeBoundingBox()),
+                        scene.add(t),
+                        list.push(t);
+                        let i = null;
+                        if (null != w) {
+                            i = new THREE.InstancedMesh(e,v.flatMaterial,n.length);
+                            for (let e = 0; e < n.length; ++e)
+                                i.setMatrixAt(e, x.multiplyMatrices(w, n[e]));
+                            i.matrixAutoUpdate = !1,
+                            i.matrixWorldAutoUpdate = !1,
+                            i.renderOrder = -1,
+                            i.frustumCulled = A && setFlatShadowBounds(t, w, i),
+                            scene.add(i),
+                            list.push(i)
+                        }
+                        A && v.meshes.push({
+                            mesh: t,
+                            shadow: i,
+                            shadowCulled: null != i && i.frustumCulled
+                        }),
+                        out?.push({
+                            mesh: t,
+                            shadow: i,
+                            geometry: e
+                        })
+                    }
+                      , addInstanced = (n, e, out) => {
+                        for (const i of A ? splitTrackParts(e, maxPartsPerMesh(n.geometry), span) : [e]) {
+                            const a = A ? shareGeometry(n.geometry) : n.geometry
+                              , t = new THREE.InstancedMesh(a,n.material,i.length);
+                            A && v.geometries.push(a);
+                            for (let e = 0; e < i.length; ++e)
+                                t.setMatrixAt(e, i[e].matrix);
+                            addMesh(a, t, i.map(e => e.matrix), out)
+                        }
+                    }
+                      , identity = [new THREE.Matrix4]
+                      , addMerged = (chunks, out) => {
+                        for (const e of chunks) {
+                            const n = blockType.colors.get(e.color)
+                              , a = new THREE.BufferGeometry;
+                            a.setAttribute("position", new THREE.BufferAttribute(e.pos,3)),
+                            a.setAttribute("normal", new THREE.BufferAttribute(e.nor,3)),
+                            a.setAttribute("color", new THREE.BufferAttribute(e.col,3)),
+                            a.setIndex(new THREE.BufferAttribute(e.index,1)),
+                            a.computeBoundingBox(),
+                            a.computeBoundingSphere(),
+                            v.ownGeometries.push(a);
+                            const t = new THREE.InstancedMesh(a,n.material,1);
+                            t.setMatrixAt(0, identity[0]),
+                            addMesh(a, t, identity, out)
+                        }
+                    }
+                    ;
                     for (const e of m.get(this, s, "f").getAllParts())
                         for (const [t,n] of e.colors) {
                             const i = y.get(e)?.get(t);
@@ -32182,82 +32300,34 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 continue;
                             if (null == n)
                                 throw new Error("Mesh is not loaded");
-                            for (const e of A ? splitTrackParts(i, maxPartsPerMesh(n.geometry), span) : [i]) {
-                                const a = A ? shareGeometry(n.geometry) : n.geometry
-                                  , t = new THREE.InstancedMesh(a,n.material,e.length);
-                                A && v.geometries.push(a);
-                                t.matrixAutoUpdate = !1,
-                                t.matrixWorldAutoUpdate = !1,
-                                t.frustumCulled = A,
-                                t.castShadow = h,
-                                t.receiveShadow = !0;
-                                for (let n = 0; n < e.length; ++n)
-                                    t.setMatrixAt(n, e[n].matrix);
-                                A && (t.computeBoundingSphere(),
-                                t.computeBoundingBox()),
-                                m.get(this, r, "f").scene.add(t),
-                                m.get(this, u, "f").push(t);
-                                let i = null;
-                                if (null != w) {
-                                    i = new THREE.InstancedMesh(a,v.flatMaterial,e.length);
-                                    for (let t = 0; t < e.length; ++t)
-                                        i.setMatrixAt(t, x.multiplyMatrices(w, e[t].matrix));
-                                    i.matrixAutoUpdate = !1,
-                                    i.matrixWorldAutoUpdate = !1,
-                                    i.renderOrder = -1,
-                                    i.frustumCulled = A && setFlatShadowBounds(t, w, i),
-                                    m.get(this, r, "f").scene.add(i),
-                                    m.get(this, u, "f").push(i)
-                                }
-                                A && v.meshes.push({
-                                    mesh: t,
-                                    shadow: i,
-                                    shadowCulled: null != i && i.frustumCulled
-                                })
-                            }
+                            addInstanced(n, i, e == blockType ? v.blockMeshes : null)
                         }
-                    if (null != merged && merged.quads.length > 0) {
+                    null != merged?.chunks ? addMerged(merged.chunks, v.blockMeshes) : null != merged && (v.blockSwap = chunks => {
+                        v.blockSwap = null;
+                        const old = new Set;
+                        for (const e of v.blockMeshes)
+                            old.add(e.mesh),
+                            null != e.shadow && old.add(e.shadow),
+                            A && (releaseSharedGeometry(e.geometry),
+                            v.geometries.splice(v.geometries.indexOf(e.geometry), 1)),
+                            scene.remove(e.mesh),
+                            null != e.shadow && scene.remove(e.shadow);
+                        for (let e = list.length; e-- > 0; )
+                            old.has(list[e]) && list.splice(e, 1);
+                        v.meshes = v.meshes.filter(e => !old.has(e.mesh)),
+                        v.blockMeshes = [];
                         const byColor = new Map;
-                        for (const e of merged.quads) {
-                            const t = byColor.get(e.color);
-                            null == t ? byColor.set(e.color, [e]) : t.push(e)
+                        for (const [e,t] of merged.rest) {
+                            const n = byColor.get(t);
+                            null == n ? byColor.set(t, [e]) : n.push(e)
                         }
-                        for (const [e,c] of byColor) {
-                            const n = blockType.colors.get(e);
-                            if (null == n)
-                                throw new Error("Mesh is not loaded");
-                            // About 8k triangles per mesh, so culling and the cinematic camera's rays still work per area.
-                            for (const e of splitTrackParts(c, 4e3, A ? span : 1 / 0)) {
-                                const a = blockQuadGeometry(e, n.geometry)
-                                  , t = new THREE.InstancedMesh(a,n.material,1);
-                                v.ownGeometries.push(a),
-                                t.matrixAutoUpdate = !1,
-                                t.matrixWorldAutoUpdate = !1,
-                                t.frustumCulled = A,
-                                t.castShadow = h,
-                                t.receiveShadow = !0,
-                                t.setMatrixAt(0, x.identity()),
-                                t.computeBoundingSphere(),
-                                t.computeBoundingBox(),
-                                m.get(this, r, "f").scene.add(t),
-                                m.get(this, u, "f").push(t);
-                                let i = null;
-                                null != w && (i = new THREE.InstancedMesh(a,v.flatMaterial,1),
-                                i.setMatrixAt(0, w),
-                                i.matrixAutoUpdate = !1,
-                                i.matrixWorldAutoUpdate = !1,
-                                i.renderOrder = -1,
-                                i.frustumCulled = A && setFlatShadowBounds(t, w, i),
-                                m.get(this, r, "f").scene.add(i),
-                                m.get(this, u, "f").push(i)),
-                                A && v.meshes.push({
-                                    mesh: t,
-                                    shadow: i,
-                                    shadowCulled: null != i && i.frustumCulled
-                                })
-                            }
-                        }
+                        for (const [e,t] of byColor)
+                            addInstanced(blockType.colors.get(e), t, v.blockMeshes);
+                        addMerged(chunks, v.blockMeshes),
+                        A && (v.warm = !1,
+                        v.culledAfterWarmUp = !0)
                     }
+                    );
                     A && null != d.trackCullers && (v.cull ?? (v.cull = e => cullTrackByDistance(v, d, e)),
                     v.warm = !1,
                     v.culledAfterWarmUp = A,
@@ -32405,6 +32475,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.geometries = [],
                 e.ownGeometries.forEach(e => e.dispose()),
                 e.ownGeometries = [],
+                e.blockMeshes = [],
+                e.blockSwap = null,
                 e.meshes = [],
                 e.distanceCulled = !1,
                 m.get(this, r, "f").trackCullers?.delete(e.cull))
