@@ -7,6 +7,8 @@ import { btn, click, h, icon, fill, range } from './dom.ts';
 
 export interface MapPool {
   shorts: boolean;
+  // Weeks of the shorts in the pool; empty means every week.
+  weeks?: number[];
   main: string[];
   community: string[];
 }
@@ -83,7 +85,10 @@ export function cupCode(text: string) {
 
 export function poolLabel(pool: MapPool) {
   const parts: string[] = [];
-  if (pool.shorts) parts.push('Not So Weekly Shorts');
+  if (pool.shorts) {
+    const weeks = [...(pool.weeks ?? [])].sort((a, b) => a - b);
+    parts.push(weeks.length ? `Not So Weekly Shorts week${weeks.length > 1 ? 's' : ''} ${weeks.join(', ')}` : 'Not So Weekly Shorts');
+  }
   if (pool.main.length) parts.push(pool.main.join(', ') + ' main tracks');
   if (pool.community.length) parts.push('Community ' + pool.community.join(', '));
   return parts.join(' + ') || 'No maps';
@@ -102,7 +107,7 @@ function loadSettings(): Settings {
     public: saved.public !== false,
     max: Number.isInteger(saved.max) ? Math.min(MAX_RACERS, Math.max(2, saved.max as number)) : 10,
     name: typeof saved.name === 'string' ? saved.name : '',
-    pool: { shorts: pool.shorts !== false, main: strings(pool.main).filter((e) => MAIN.includes(e)), community: strings(pool.community) },
+    pool: { shorts: pool.shorts !== false, weeks: Array.isArray(pool.weeks) ? pool.weeks.filter((w) => Number.isInteger(w)) : [], main: strings(pool.main).filter((e) => MAIN.includes(e)), community: strings(pool.community) },
     format: typeof saved.format === 'string' && formatById(saved.format) ? saved.format : 'quickplay',
     role: saved.role === 'spectator' ? 'spectator' : 'racer',
   };
@@ -268,13 +273,19 @@ export class Hub {
   #maps(pool: MapPool) {
     const wrap = h('div', { class: 'maps' });
     const counts = new Map<string, number>(),
-      mainCounts = new Map<string, number>();
+      mainCounts = new Map<string, number>(),
+      weekCounts = new Map<number, number>();
     try {
       const tracks = site.__nswsCup?.services().tracks as {
+        forEachCommunityTrack(cb: (id: string, group: string, meta: unknown) => void): void;
         forEachKodubCommunityTrack(cb: (id: string, group: string) => void): void;
         forEachOfficialTrack(cb: (id: string, meta: { name: string }) => void): void;
       };
       tracks?.forEachKodubCommunityTrack((_id, group) => counts.set(group, (counts.get(group) ?? 0) + 1));
+      tracks?.forEachCommunityTrack((id, _group, meta) => {
+        const week = site.__nswsTrackWeekMap?.[id];
+        if (meta && week != null) weekCounts.set(week, (weekCounts.get(week) ?? 0) + 1);
+      });
       tracks?.forEachOfficialTrack((_id, meta) => {
         const env = /^(Summer|Winter|Desert)\b/.exec(meta?.name ?? '')?.[1];
         if (env) mainCounts.set(env, (mainCounts.get(env) ?? 0) + 1);
@@ -283,6 +294,18 @@ export class Hub {
     const versions = [...counts.keys()].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     pool.community = pool.community.filter((v) => counts.has(v));
     let showVersions = pool.community.length > 0;
+    const weeks = [...weekCounts.keys()].sort((a, b) => b - a);
+    pool.weeks ??= [];
+    if (weeks.length) pool.weeks = pool.weeks.filter((w) => weekCounts.has(w));
+    if (pool.weeks.length === weeks.length) pool.weeks = [];
+    let showWeeks = pool.shorts && pool.weeks.length > 0;
+    const weekOn = (w: number) => pool.shorts && (!pool.weeks!.length || pool.weeks!.includes(w));
+    // An empty list means every week, so new weeks join a saved pool by themselves.
+    const setWeeks = (list: number[]) => {
+      pool.shorts = list.length > 0;
+      pool.weeks = list.length === weeks.length ? [] : list;
+    };
+    const flipWeek = (w: number) => setWeeks(weeks.filter((x) => (x === w ? !weekOn(x) : weekOn(x))));
     const flip = (list: string[], v: string) => {
       const i = list.indexOf(v);
       if (i >= 0) list.splice(i, 1);
@@ -292,12 +315,22 @@ export class Hub {
       h('button', { class: 'mapchip' + (on ? ' on' : '') + extra, onclick: click(() => (fn(), paint())) }, on ? icon('check') : null, label);
     const paint = (): void => {
       const chips: HTMLElement[] = [
-        chip('Not So Weekly Shorts', pool.shorts, () => (pool.shorts = !pool.shorts)),
+        weeks.length > 1
+          ? chip(`Not So Weekly Shorts${pool.shorts && pool.weeks!.length ? ` (${pool.weeks!.length})` : ''} ${showWeeks ? '▾' : '▸'}`, pool.shorts, () => (showWeeks = !showWeeks), ' more')
+          : chip('Not So Weekly Shorts', pool.shorts, () => setWeeks(pool.shorts ? [] : weeks)),
         ...MAIN.map((env) => chip(`${env}${mainCounts.get(env) ? ` · ${mainCounts.get(env)}` : ''}`, pool.main.includes(env), () => flip(pool.main, env))),
       ];
       if (versions.length) chips.push(chip(`Community${pool.community.length ? ` (${pool.community.length})` : ''} ${showVersions ? '▾' : '▸'}`, pool.community.length > 0, () => (showVersions = !showVersions), ' more'));
       fill(wrap, 
         ...chips,
+        showWeeks && weeks.length > 1
+          ? h(
+              'div',
+              { class: 'versions' },
+              weeks.map((w) => chip(`Week ${w} · ${weekCounts.get(w)}`, weekOn(w), () => flipWeek(w))),
+              h('button', { class: 'mapchip ghost', onclick: click(() => (setWeeks(pool.shorts && !pool.weeks!.length ? [] : weeks), paint())) }, pool.shorts && !pool.weeks!.length ? 'None' : 'All'),
+            )
+          : null,
         showVersions && versions.length
           ? h(
               'div',

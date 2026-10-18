@@ -51,6 +51,8 @@ function cleanPool(value) {
     const list = (v, ok) => [...new Set(Array.isArray(v) ? v : [])].filter(ok).slice(0, 20);
     return {
         shorts: o.shorts !== false,
+        // Empty means every week.
+        weeks: [...new Set(Array.isArray(o.weeks) ? o.weeks : [])].filter((w) => Number.isInteger(w) && w > 0 && w < 1000).slice(0, 100),
         main: list(o.main, (e) => ["Summer", "Winter", "Desert"].includes(e)),
         community: list(o.community, (v) => typeof v === "string" && /^\d{1,2}\.\d{1,2}\.\d{1,2}$/.test(v)),
     };

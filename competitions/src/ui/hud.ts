@@ -252,8 +252,16 @@ export class Hud {
     // As many rows as fit: on a phone the touch buttons leave less room.
     const full = Math.max(3, Math.min(BOARD_FULL, Math.floor((this.boardRoom - 52 - (this.#watchers.hidden ? 0 : 40)) / 32)));
     if (order.length > full) {
-      shown = order.slice(0, full - 2);
-      if (app.me != null && order.includes(app.me) && !shown.includes(app.me)) shown.push(app.me);
+      // The last line is the "+N more" note. Below the rows shown: the top, then whoever is ahead, you, and whoever is behind.
+      const n = full - 1,
+        i = app.me != null ? order.indexOf(app.me) : -1;
+      if (i < n) shown = order.slice(0, n);
+      else {
+        let near = order.slice(i - 1, i + 2);
+        if (n - near.length < 1) near = near.length === 3 ? near.slice(0, 2) : [app.me!];
+        if (n - near.length < 1) near = [app.me!];
+        shown = [...order.slice(0, n - near.length), ...near];
+      }
       more = order.length - shown.length;
     }
     const watched = app.watch.active ? app.watch.target : null;

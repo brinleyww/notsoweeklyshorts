@@ -176,7 +176,8 @@ export const site = window as unknown as {
   __nswsMuxFlush?: () => void;
   __nswsCupJoinCode?: string;
   __nswsCupHostOptions?: unknown;
-  __nswsCupPool?: { shorts: boolean; main: string[]; community: string[] };
+  __nswsCupPool?: { shorts: boolean; weeks?: number[]; main: string[]; community: string[] };
+  __nswsTrackWeekMap?: Record<string, number>;
   __nswsMessageBox?: { show(text: string, button: string, callback: null): void };
   __nswsOwner?: { check(): Promise<boolean>; token(): Promise<string | null> };
   __nswsUIClick?: () => void;

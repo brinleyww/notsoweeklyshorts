@@ -237,7 +237,8 @@ export class Driver {
       if (e.repeat) return;
       if (Date.now() - this.#retireArmed > RETIRE_CONFIRM_MS) {
         this.#retireArmed = Date.now();
-        app.notify('Press restart again to retire from this round', 'bad');
+        this.#restartRun(g, r.startAt);
+        app.notify('Run restarted. Press restart again to retire', 'bad');
         return;
       }
       this.#retireArmed = 0;
@@ -249,15 +250,21 @@ export class Driver {
       e.preventDefault();
       e.stopImmediatePropagation();
       if (e.repeat) return;
-      const elapsed = Math.floor(app.now() - r.startAt);
-      app.native.reset(g);
-      app.refreshInfo();
-      app.live.clearLocal();
-      this.offset = elapsed;
-      this.#goCar = app.info!.car;
-      app.native.applyDrivingInput(g, this.held.controls());
-      app.info!.car.start();
+      this.#restartRun(g, r.startAt);
     }
+  }
+
+  // Back to the start line with the race clock still running.
+  #restartRun(g: Game, startAt: number) {
+    const app = this.app;
+    const elapsed = Math.floor(app.now() - startAt);
+    app.native.reset(g);
+    app.refreshInfo();
+    app.live.clearLocal();
+    this.offset = elapsed;
+    this.#goCar = app.info!.car;
+    app.native.applyDrivingInput(g, this.held.controls());
+    app.info!.car.start();
   }
 
   // The camera the racer drives with, carried into the next round.

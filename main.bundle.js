@@ -9781,12 +9781,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t.setDrawRange(0, 0),
                     this.__used = 0,
                     this.__suppressed = !1,
+                    this.__hidden = !1,
                     l.get(this, M, "f").scene.add(l.get(this, _, "f"))
                 }
                 // Not So Weekly Shorts: with many ghosts only some of them leave marks.
                 set suppressed(e) {
                     this.__suppressed = !!e,
-                    l.get(this, _, "f").visible = this.__used > 0 && !this.__suppressed
+                    l.get(this, _, "f").visible = this.__used > 0 && !this.__suppressed && !this.__hidden
+                }
+                // Cups hiding the other cars: marks are kept, only not drawn.
+                set hidden(e) {
+                    !!e !== this.__hidden && (this.__hidden = !!e,
+                    l.get(this, _, "f").visible = this.__used > 0 && !this.__suppressed && !this.__hidden)
                 }
                 dispose() {
                     l.get(this, _, "f").geometry.dispose(),
@@ -9847,7 +9853,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         l.get(this, R, "f").needsUpdate = !0,
                         6 * (e + 1) > this.__used && (this.__used = 6 * (e + 1),
                         l.get(this, _, "f").geometry.setDrawRange(0, this.__used),
-                        l.get(this, _, "f").visible = !this.__suppressed),
+                        l.get(this, _, "f").visible = !this.__suppressed && !this.__hidden),
                         l.get(this, I, "f") >= l.get(this, P, "f") - 1 && l.set(this, I, 0, "f")
                     }
                     l.set(this, L, u, "f"),
@@ -10222,7 +10228,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     ))
                 }
                 setVisible(e) {
-                    l.get(this, ve, "f").visible = e
+                    // The nametag is a separate scene object; update() only picks this up on the next frame.
+                    l.get(this, ve, "f").visible = e,
+                    e || null == l.get(this, be, "f") || (l.get(this, be, "f").visible = !1)
                 }
                 get object3D() {
                     return l.get(this, ve, "f")
@@ -10230,6 +10238,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                 set skidmarksSuppressed(e) {
                     for (const t of l.get(this, Le, "f"))
                         t.suppressed = e
+                }
+                set skidmarksHidden(e) {
+                    for (const t of l.get(this, Le, "f"))
+                        t.hidden = e
                 }
                 // Not So Weekly Shorts: cup collisions, through this car's own simulation.
                 setCollisionCars(e) {
@@ -44757,6 +44769,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             const thumbnail = t => t instanceof HTMLCanvasElement ? t.toDataURL() : t;
             const cupPool = () => window.__nswsCupPool ?? { shorts: !0, main: [], community: [] };
             const mainEnv = meta => /^(Summer|Winter|Desert)\b/.exec(meta?.name ?? "")?.[1];
+            // No weeks listed means every week.
+            const shortInPool = (pool, id) => pool.shorts && (!pool.weeks?.length || pool.weeks.includes(window.__nswsTrackWeekMap?.[id]));
             return {
                 Host: Fn,
                 Client: Dl,
@@ -44767,7 +44781,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         const pool = cupPool();
                         y.forEachOfficialTrack((id, meta, data, thumb) => pool.main.includes(mainEnv(meta)) && cb(id, meta, "official", data?.environment, async () => ({ trackData: data, trackMetadata: meta }), thumbnail(thumb)));
                         const listed = category => (id, group, meta, env, load, thumb) => cb(id, meta, category, env, async () => ({ trackData: await load(), trackMetadata: meta }), thumbnail(thumb));
-                        pool.shorts && y.forEachCommunityTrack(listed("official"));
+                        const short = listed("official");
+                        y.forEachCommunityTrack((id, group, meta, ...rest) => null != meta && shortInPool(pool, id) && short(id, group, meta, ...rest));
                         const community = listed("community");
                         y.forEachKodubCommunityTrack((id, group, ...rest) => pool.community.includes(group) && community(id, group, ...rest));
                         y.forEachCustomTrack((id, meta, data, thumb) => cb(id, meta, "custom", data?.environment, async () => ({ trackData: data, trackMetadata: meta }), thumbnail(thumb)));
@@ -44776,7 +44791,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         const pool = cupPool();
                         let found = !1;
                         y.forEachOfficialTrack((t, meta) => t === id && pool.main.includes(mainEnv(meta)) && (found = !0));
-                        pool.shorts && y.forEachCommunityTrack(t => t === id && (found = !0));
+                        shortInPool(pool, id) && y.forEachCommunityTrack(t => t === id && (found = !0));
                         return found;
                     },
                     isCommunityTrack(id) {
@@ -44896,7 +44911,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                 },
                 visibility: (g, ids, self) => {
                     C.get(g, wa, "f").setVisible(null === ids || ids.includes(self));
-                    for (const [id, r] of C.get(g, Ra, "f")) r.car.setVisible(null === ids || ids.includes(id));
+                    for (const [id, r] of C.get(g, Ra, "f")) {
+                        const show = null === ids || ids.includes(id);
+                        r.car.setVisible(show);
+                        r.car.skidmarksHidden = !show;
+                    }
                 },
                 drivingView: g => !C.get(g, Ba, "f").isEnabled && C.get(g, zr, "f").camera === C.get(g, wa, "f").cameraCockpit ? 1 : 0,
                 release: (g, view) => {

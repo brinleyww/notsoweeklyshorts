@@ -29,8 +29,8 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   random identity key kept per cup code (so a player who reloads gets their place and points back),
   syncs its clock with the organizer, and drives:
   - `driver.ts`: the local car. Controls are held until GO, the car starts on GO, finishes go to the
-    organizer with their replay. Single-run rounds: restart pressed twice retires, respawning with no
-    checkpoint restarts the car with the clock still running. Time attack: restarts are free.
+    organizer with their replay. Single-run rounds: restart (and respawning with no checkpoint) puts the car
+    back at the start with the clock still running; restart pressed twice within 2 s retires. Time attack: restarts are free.
   - `spectate.ts`: watching. The camera rides another racer's car using that car's own chase or
     cockpit camera, so nothing is streamed. Director (auto), Follow (◀ ▶) or Free camera.
   - `live.ts`: live timing from the car states the game already sends: checkpoints, running order,
