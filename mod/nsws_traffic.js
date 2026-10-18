@@ -10,6 +10,7 @@
     const VISITOR_KEY = "nsws_visitor";
     const BEAT_VISIBLE_S = 60;
     const BEAT_HIDDEN_S = 240;
+    const MAX_HIDDEN_S = 1800;
     const MIN_GAP_MS = 15000;
     // A longer gap between samples means the tab was frozen or the machine slept.
     const MAX_SAMPLE_VISIBLE_S = 5;
@@ -50,6 +51,11 @@
     let seenAnn = null;
     let lastSample = performance.now();
     let lastBeat = -Infinity;
+    // The beat reply stretches the gap when the site is busy (nv). The next beat always comes
+    // before the gap the last one promised, so going hidden needs no extra beat.
+    let visibleGap = BEAT_VISIBLE_S;
+    let promised = BEAT_VISIBLE_S;
+    const gapFor = (hidden) => (hidden ? Math.min(MAX_HIDDEN_S, visibleGap * BEAT_HIDDEN_S / BEAT_VISIBLE_S) : visibleGap);
 
     function currentState() {
         if (document.querySelector(".editor-ui")) return "editor";
@@ -83,7 +89,7 @@
             rt: Math.round(runtime * 10) / 10,
             ft: Math.round(focus * 10) / 10,
             dt: Math.round(driving * 10) / 10,
-            nx: hidden ? BEAT_HIDDEN_S : BEAT_VISIBLE_S,
+            nx: gapFor(hidden),
             st: state,
             tk: state === "race" ? currentTrack : null,
             ev: events,
@@ -109,6 +115,7 @@
         events = {};
         tracks = {};
         lastBeat = performance.now();
+        promised = body.nx;
         fetch(API + "nsws/beat", {
             method: "POST",
             headers: { "Content-Type": "text/plain" },
@@ -122,6 +129,7 @@
                 response.json().then((data) => {
                     if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
                     if (data?.pv) window.__nswsAnnounce?.pollUpdate?.(data.pv);
+                    if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_HIDDEN_S);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
@@ -145,12 +153,9 @@
     setInterval(() => {
         sample();
         const hidden = document.visibilityState === "hidden";
-        if (performance.now() - lastBeat >= (hidden ? BEAT_HIDDEN_S : BEAT_VISIBLE_S) * 1000) beat(false);
+        if (performance.now() - lastBeat >= Math.min(promised, gapFor(hidden)) * 1000) beat(false);
     }, 1000);
 
-    document.addEventListener("visibilitychange", () => {
-        if (performance.now() - lastBeat >= MIN_GAP_MS) beat(false);
-    });
     window.addEventListener("pagehide", () => beat(true));
     window.addEventListener("pageshow", (e) => {
         if (e.persisted) {
@@ -187,7 +192,7 @@
         },
         // The beat reply carries the same online count Race Control shows.
         refreshOnline() {
-            if (performance.now() - lastBeat >= MIN_GAP_MS) beat(false);
+            if (performance.now() - lastBeat >= MIN_GAP_MS * visibleGap / BEAT_VISIBLE_S) beat(false);
         },
     };
 

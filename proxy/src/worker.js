@@ -49,8 +49,12 @@ const MAX_TRACK_SYNC_BODY = 1_500_000;
 const MAX_ACCOUNT_BODY = 400_000;
 // How long a Worker instance reuses a board's anti-cheat verdicts. Any entry it hasn't
 // seen yet is always classified at once.
-const ANTICHEAT_TTL_MS = 15_000;
+const ANTICHEAT_TTL_MS = 120_000;
 const TRACK_WEEKS_TTL_MS = 10 * 60_000;
+// Once Cloudflare refuses Durable Object calls (the free plan's daily limits), this instance stops
+// making them for a while and tells pages to come back later, instead of every page retrying.
+const DO_LIMIT_PAUSE_MS = 10 * 60_000;
+const DO_LIMIT_RETRY_S = 600;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -207,6 +211,7 @@ function errorResponse(err, origin) {
             ? plain(err.status, "Upstream refused the request", origin)
             : plain(502, "Upstream unreachable", origin);
     }
+    noteDoError(err);
     console.error("leaderboard proxy error:", err && err.message);
     return plain(502, "Upstream unreachable", origin);
 }
@@ -476,6 +481,20 @@ function censorNames(value) {
     return out;
 }
 
+let doLimitedUntil = 0;
+
+function doLimited() {
+    return Date.now() < doLimitedUntil;
+}
+
+function noteDoError(err) {
+    if (/free tier|exceeded allowed/i.test(err?.message ?? "")) doLimitedUntil = Date.now() + DO_LIMIT_PAUSE_MS;
+}
+
+function busy(origin) {
+    return json({ error: "busy", retry: DO_LIMIT_RETRY_S }, origin, 503);
+}
+
 function antiCheat(env) {
     return env.ANTICHEAT ? env.ANTICHEAT.get(env.ANTICHEAT.idFromName("global")) : null;
 }
@@ -495,7 +514,7 @@ const seenNames = new Set();
 
 function observeNames(env, ctx, entries) {
     const stub = accounts(env);
-    if (!stub) return;
+    if (!stub || doLimited()) return;
     const fresh = [];
     for (const e of entries) {
         if (!HEX64.test(e?.userId ?? "") || typeof e.nickname !== "string") continue;
@@ -531,7 +550,7 @@ const wrSeen = new Map();
 
 function noteWr(env, ctx, track, entry) {
     const stub = accounts(env);
-    if (!stub) return;
+    if (!stub || doLimited()) return;
     const holder = HEX64.test(entry?.userId ?? "") ? entry : null;
     const key = holder ? holder.userId + "|" + holder.frames + "|" + holder.nickname : "";
     if (wrSeen.get(track.trackId) === key) return;
@@ -552,7 +571,7 @@ function noteWr(env, ctx, track, entry) {
 
 async function blockedRuns(env, cfg, track, view) {
     const anti = antiCheat(env);
-    if (!anti || track.week == null) return null;
+    if (!anti || track.week == null || doLimited()) return null;
     const hit = verdicts.get(track.trackId);
     if (hit && Date.now() - hit.at < ANTICHEAT_TTL_MS && view.entries.every((e) => hit.known.has(e.id))) return hit.blocked;
     const entries = view.entries.map((e) => ({ id: e.id, userId: e.userId, frames: e.frames, nickname: e.nickname }));
@@ -576,6 +595,7 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     if (track.week != null) observeNames(env, ctx, view.entries);
     // If the anti-cheat is unreachable the board still loads, unfiltered, rather than failing.
     cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
+        noteDoError(err);
         console.error("anti-cheat unavailable:", err && err.message);
         return null;
     });
@@ -677,6 +697,7 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     // time it claims never reaches Kodub.
     const anti = track.week != null && !ownerUpload ? antiCheat(env) : null;
     let check = null;
+    if (anti && doLimited()) return busy(origin);
     if (anti) {
         const recording = form.get("recording") ?? "";
         const nickname = (form.get("nickname") ?? "").slice(0, 64);
@@ -979,12 +1000,16 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         // The reply carries how many people are on the site, which the chat shows, and the
         // owner's live announcement.
         let reply = null;
-        try {
-            reply = await stub.beat(beat, meta);
-        } catch (err) {
-            console.error("traffic beat failed:", err && err.message);
+        if (!doLimited()) {
+            try {
+                reply = await stub.beat(beat, meta);
+            } catch (err) {
+                noteDoError(err);
+                console.error("traffic beat failed:", err && err.message);
+            }
         }
-        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null, pv: reply?.pv ?? null }, origin);
+        const nv = reply?.nv ?? (doLimited() ? DO_LIMIT_RETRY_S : null);
+        return json({ online: reply?.online ?? null, ann: reply?.ann ?? null, pv: reply?.pv ?? null, nv }, origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "poll") {
         const vote = readVote(text);
@@ -1152,17 +1177,30 @@ async function handleChat(request, url, env, fromSite, origin) {
     }
     if (!isSocket && request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (!env.CHAT) return plain(503, "Chat is off", origin);
+    if (doLimited()) return isSocket ? plain(503, "Chat is busy", origin) : busy(origin);
     if (isSocket) {
         const target = await chatTarget(url, request.headers.get("CF-Connecting-IP"));
         if (target.refused) return plain(404, "Not found", origin);
-        return connectSocket(env, request, target);
+        try {
+            return await connectSocket(env, request, target);
+        } catch (err) {
+            noteDoError(err);
+            return plain(503, "Chat is busy", origin);
+        }
     }
     const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
     const room = env.CHAT.get(env.CHAT.idFromName("global"));
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
     const text = await readSmallBody(request, MAX_CHAT_BODY);
     if (text == null) return plain(413, "Too large", origin);
-    const reply = await room.fetch(new Request(url.toString(), { method: "POST", headers: { "X-Chat-Ip": ip }, body: text }));
+    let reply;
+    try {
+        reply = await room.fetch(new Request(url.toString(), { method: "POST", headers: { "X-Chat-Ip": ip }, body: text }));
+    } catch (err) {
+        noteDoError(err);
+        console.error("chat error:", err && err.message);
+        return doLimited() ? busy(origin) : plain(500, "Chat failed", origin);
+    }
     return new Response(reply.body, {
         status: reply.status,
         headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(origin) },
@@ -1287,14 +1325,17 @@ export default {
                 try {
                     return await handleCup(request, url, env, fromSite, requestOrigin, cfg);
                 } catch (err) {
+                    noteDoError(err);
                     console.error("cup error:", err && err.message);
                     return plain(500, "Competitions failed", requestOrigin);
                 }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags|bingo)\//.test(url.pathname)) {
+                if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin);
                 } catch (err) {
+                    noteDoError(err);
                     console.error("accounts error:", err && err.message);
                     return plain(500, "Accounts failed", requestOrigin);
                 }
@@ -1308,6 +1349,7 @@ export default {
             try {
                 return await handleTraffic(request, url, env, cfg, origin, ctx);
             } catch (err) {
+                noteDoError(err);
                 console.error("traffic error:", err && err.message);
                 return plain(500, "Traffic stats failed", origin);
             }

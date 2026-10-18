@@ -53,7 +53,12 @@ const MAX_REACTION_KINDS = 20;
 // for something to happen; a polling player counts as online until POLL_GONE_MS after their last
 // request. The room keeps the last EVENTS_KEPT events for pollers to catch up on, and a player
 // can have at most POLLS_PER_UID polls waiting (one per tab), the same caps as for sockets.
-const POLL_WAIT_MS = 20_000;
+const POLL_WAIT_MS = 25_000;
+// Each event brings every waiting poller straight back. Past POLL_CROWD of them, replies ask the
+// page to wait a little (POLL_GAP_STEP_MS per extra poller) before polling again.
+const POLL_CROWD = 5;
+const POLL_GAP_STEP_MS = 500;
+const POLL_GAP_MAX_MS = 10_000;
 const POLL_GONE_MS = 45_000;
 const EVENTS_KEPT = 200;
 const POLLS_PER_UID = SOCKETS_PER_UID;
@@ -316,9 +321,9 @@ export class ChatRoom extends DurableObject {
         this.touch(me);
         const ready = this.eventsAfter(body.epoch, body.after);
         if (ready === null) {
-            return jsonReply({ epoch: this.epoch, seq: this.seq, init: { you: { uid: me.uid, owner: me.owner }, messages: this.history() } });
+            return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), init: { you: { uid: me.uid, owner: me.owner }, messages: this.history() } });
         }
-        if (ready.length) return jsonReply({ epoch: this.epoch, seq: this.seq, events: ready });
+        if (ready.length) return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: ready });
         const after = body.after;
         return new Promise((resolve) => {
             const waiter = {
@@ -327,12 +332,17 @@ export class ChatRoom extends DurableObject {
                 wake: () => {
                     clearTimeout(waiter.timer);
                     this.waiters.delete(waiter);
-                    resolve(jsonReply({ epoch: this.epoch, seq: this.seq, events: this.eventsAfter(this.epoch, after) ?? [] }));
+                    resolve(jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: this.eventsAfter(this.epoch, after) ?? [] }));
                 },
             };
             waiter.timer = setTimeout(waiter.wake, POLL_WAIT_MS);
             this.waiters.add(waiter);
         });
+    }
+
+    pollGap() {
+        const extra = this.livePollers().length - POLL_CROWD;
+        return extra > 0 ? Math.min(POLL_GAP_MAX_MS, extra * POLL_GAP_STEP_MS) : 0;
     }
 
     async sendHttp(me, body) {

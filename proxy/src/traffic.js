@@ -6,8 +6,16 @@ import { DurableObject } from "cloudflare:workers";
 // Everything is summed into 10-minute buckets: `t` is epoch seconds / BUCKET_S.
 const BUCKET_S = 600;
 const DAY_MS = 86_400_000;
+// The free plan allows 100k Durable Object requests and 100k rows written a day, and every open
+// tab beats. Past BEAT_BUDGET_PER_MIN sessions online, the beat reply stretches every tab's gap so
+// the whole site stays near that many beats a minute.
+const BEAT_BUDGET_PER_MIN = 20;
+const MAX_VISIBLE_GAP_S = 900;
+const MAX_NEXT_S = 1800;
 // No beat may claim more time than this, however long it has been since the last one.
-const MAX_BEAT_S = 400;
+const MAX_BEAT_S = MAX_NEXT_S + 60;
+// After a restart, sessions seen this recently count as online until their next beat says otherwise.
+const RESTORE_LIVE_S = 400;
 // A session counts as online until its promised next beat is this late.
 const LIVE_GRACE_MS = 45_000;
 const MINUTE_RING = 180;
@@ -34,8 +42,8 @@ const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
 // Focused time goes to Accounts (hours played) in one batch per this long, not one call per beat.
 const PLAY_FLUSH_MS = 5 * 60_000;
-// Most one visitor can be credited per batch; a late alarm still fits.
-const PLAY_CAP_S = 2 * PLAY_FLUSH_MS / 1000;
+// Most one visitor can be credited per batch; a late alarm, or one stretched beat, still fits.
+const PLAY_CAP_S = Math.max(2 * PLAY_FLUSH_MS / 1000, MAX_VISIBLE_GAP_S + 60);
 
 // Announcements: one is live at a time, and a newer one replaces it. Players get it with their
 // next beat, so even "online now" has to stay up a few minutes for everyone's beat to come in.
@@ -202,11 +210,11 @@ export class TrafficStats extends DurableObject {
             Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
         const rows = this.sql.exec(
             "SELECT * FROM sessions WHERE start > ? AND last > ? AND ended = 0",
-            now - RESTORE_MS, now - MAX_BEAT_S * 1000).toArray();
+            now - RESTORE_MS, now - RESTORE_LIVE_S * 1000).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, start: row.start, last: row.last,
-                expires: row.last + MAX_BEAT_S * 1000, runtime: row.runtime, ended: false,
+                expires: row.last + RESTORE_LIVE_S * 1000, runtime: row.runtime, ended: false,
                 nickname: row.nickname, country: row.country, device: row.device, os: row.os,
                 browser: row.browser, site: row.site, state: "menu", track: null,
             });
@@ -266,7 +274,13 @@ export class TrafficStats extends DurableObject {
 
     async beat(b, meta) {
         const online = this.record(b, meta) ?? null;
-        return { online, ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null };
+        return { online, ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap() };
+    }
+
+    // Seconds between a visible tab's beats (hidden tabs wait four times as long).
+    visibleGap() {
+        const online = this.onlineCount(Date.now());
+        return Math.min(MAX_VISIBLE_GAP_S, Math.max(60, Math.ceil(online * 60 / BEAT_BUDGET_PER_MIN)));
     }
 
     record(b, meta) {
@@ -680,7 +694,7 @@ export function readBeat(text) {
         rt: clampNumber(raw.rt, MAX_BEAT_S),
         ft: clampNumber(raw.ft, MAX_BEAT_S),
         dt: clampNumber(raw.dt, MAX_BEAT_S),
-        nx: Math.max(20, Math.min(360, clampNumber(raw.nx, 360) || 60)),
+        nx: Math.max(20, Math.min(MAX_NEXT_S, clampNumber(raw.nx, MAX_NEXT_S) || 60)),
         end: raw.end === 1 || raw.end === true,
         nick: text64(raw.nick, 40),
         ref: ref && /^[a-z0-9.-]+$/i.test(ref) ? ref.toLowerCase() : null,

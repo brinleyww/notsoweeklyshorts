@@ -19,6 +19,9 @@
     const WS_FAILS_BEFORE_HTTP = 2;
     const HTTP_REMEMBER_MS = 12 * 3600000;
     const POLL_ABORT_MS = 35000;
+    const HIDDEN_POLL_MS = 60000;
+    const MAX_POLL_GAP_MS = 10000;
+    const MAX_BUSY_MS = 15 * 60000;
     const SEND_ABORT_MS = 15000;
     const EMOJI_URL = "mod/nsws_emoji.json";
     // Uploaded images, served by the Worker after its model has checked them (proxy/src/chatmedia.js).
@@ -2286,7 +2289,10 @@
                 cache: "no-store",
                 signal: controller.signal,
             });
-            if (!res.ok) throw new Error("HTTP " + res.status);
+            if (!res.ok) {
+                const data = await res.json().catch(() => null);
+                throw { status: res.status, retry: Number(data?.retry) || 0 };
+            }
             return await res.json();
         } finally {
             clearTimeout(timer);
@@ -2294,11 +2300,32 @@
         }
     }
 
-    // Each poll waits on the server until something happens (or about 20 s pass), then the next
-    // one goes out at once. The server answers a stale or missing position with a full reload.
+    let hiddenAt = document.visibilityState === "hidden" ? performance.now() : 0;
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") hiddenAt = performance.now();
+    });
+
+    function untilShown() {
+        return new Promise((resolve) => {
+            const on = () => {
+                if (document.visibilityState === "hidden") return;
+                document.removeEventListener("visibilitychange", on);
+                resolve();
+            };
+            document.addEventListener("visibilitychange", on);
+        });
+    }
+
+    // Each poll waits on the server until something happens (or about 25 s pass). The server answers
+    // a stale or missing position with a full reload, so a tab hidden for a while simply stops polling
+    // until it is shown again.
     async function pollLoop(session) {
         let delay = 2000;
         while (http === session) {
+            if (document.visibilityState === "hidden" && performance.now() - hiddenAt >= HIDDEN_POLL_MS) {
+                await untilShown();
+                if (http !== session) return;
+            }
             try {
                 const data = await httpPost(session, "poll", { epoch: session.epoch, after: session.seq }, POLL_ABORT_MS);
                 if (http !== session) return;
@@ -2314,11 +2341,13 @@
                     setStatus("");
                 }
                 for (const event of data.events || []) onServer(event);
-            } catch {
+                if (data.gap > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(data.gap, MAX_POLL_GAP_MS)));
+            } catch (err) {
                 if (http !== session) return;
                 session.offline = true;
                 setStatus("Chat is offline. Reconnecting...");
-                await new Promise((resolve) => setTimeout(resolve, delay));
+                const wait = err?.retry > 0 ? Math.min(err.retry * 1000, MAX_BUSY_MS) : delay;
+                await new Promise((resolve) => setTimeout(resolve, wait));
                 delay = Math.min(delay * 2, 30000);
             }
         }

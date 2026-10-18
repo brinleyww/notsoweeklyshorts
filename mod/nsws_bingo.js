@@ -17,6 +17,7 @@
     const POPUP_MS = 3400;
     const RESET_CONFIRM_MS = 6000;
     const MEDAL_RETRY_MS = 15000;
+    const RESEND_MS = 10 * 60000;
     const MEDAL_RANK = { bronze: 1, silver: 2, gold: 3, author: 4 };
     const ENV_COLORS = { Winter: "#bed8f7", Desert: "#ede2af" };
 
@@ -363,6 +364,9 @@
     }
 
     // Squares done on this device that the Worker hasn't marked yet go out in one request.
+    // The same squares aren't sent again for a while if the Worker didn't take them.
+    let lastMark = { key: "", at: 0 };
+
     function scheduleMark() {
         clearTimeout(markTimer);
         markTimer = setTimeout(sendMarks, MARK_DELAY_MS);
@@ -383,6 +387,9 @@
         const marks = marksOf(week);
         const fresh = card.squares.map((sq, i) => (!(marks & (1 << i)) && isDone(sq, card, p) ? i : -1)).filter((i) => i >= 0);
         if (!fresh.length) return;
+        const key = week + "|" + card.round + "|" + fresh.join(",");
+        if (key === lastMark.key && Date.now() - lastMark.at < RESEND_MS) return;
+        lastMark = { key, at: Date.now() };
         marking = true;
         try {
             const { status, data } = await tags.api("bingo/mark", { userToken: token, week, round: card.round, squares: fresh });
