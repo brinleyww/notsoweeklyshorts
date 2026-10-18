@@ -170,7 +170,8 @@
         { id: "preset:slide", name: "Slide Through The Turn", by: "The Big GPT", file: "slide-through-the-turn.mp3", duration: 61.5 },
         { id: "preset:drift-brutal", name: "Drift Brutal", by: "The Big GPT", file: "drift-brutal.mp3", duration: 150 },
         { id: "preset:final-drop", name: "Final Drop", by: "The Big GPT", file: "final-drop.mp3", duration: 174.8 },
-        { id: "preset:triumph", name: "Triumph in Motion", by: "The Big GPT", file: "triumph-in-motion.mp3", duration: 186.4 }
+        { id: "preset:triumph", name: "Triumph in Motion", by: "The Big GPT", file: "triumph-in-motion.mp3", duration: 186.4 },
+        { id: "preset:soaring", name: "Soaring", by: "@vanyayuyay_11133", file: "soaring.mp3", duration: 78.5 }
     ];
     const presetStarts = () => {
         try {
