@@ -42009,6 +42009,166 @@ window.__nswsAutoGhostNote = function(trackId) {
         _moveBackward = new WeakMap,
         _moveLeft = new WeakMap,
         _speedModifier = new WeakMap;
+        // The game's touch steering marks touch mode on touchstart and drops it on keydown; this follows the same rule.
+        const spectatorTouchMode = (() => {
+            const listeners = new Set();
+            let on = matchMedia("(pointer: coarse)").matches;
+            const set = v => {
+                if (v === on) return;
+                on = v;
+                document.body?.classList.toggle("nsws-touch", on);
+                for (const f of listeners) f();
+            };
+            document.body ? document.body.classList.toggle("nsws-touch", on) : addEventListener("DOMContentLoaded", () => document.body.classList.toggle("nsws-touch", on));
+            addEventListener("touchstart", () => set(!0), { capture: !0, passive: !0 });
+            addEventListener("keydown", () => set(!1), !0);
+            return { get on() { return on }, listen: f => listeners.add(f), unlisten: f => listeners.delete(f) };
+        })();
+        const spectatorTouchCss = `
+.nsws-freecam-touch { position: absolute; inset: 0; pointer-events: none; }
+.nsws-freecam-touch:not(.show) { display: none; }
+.nsws-freecam-touch > * { position: absolute; margin: 10px; padding: 0; border: none; background-color: var(--button-color); opacity: 0.6; pointer-events: auto; touch-action: none; box-sizing: border-box; }
+.nsws-freecam-touch > button > img { margin: 0; padding: 30px; vertical-align: top; width: 100%; height: 100%; box-sizing: border-box; pointer-events: none; transition: transform 0.25s ease-out; }
+.nsws-freecam-touch > button.active > img { transform: scale(0.9); }
+.nsws-freecam-touch > .exit { top: calc(1.5cm + 50px); left: calc(1.5cm + var(--safe-area-horizontal) + 180px); width: 160px; height: 160px; background-color: var(--button-active-color); }
+.nsws-freecam-touch:not(.exitable) > .exit { display: none; }
+.nsws-freecam-touch > .pad { left: calc(1.5cm + var(--safe-area-horizontal)); bottom: calc(1.5cm + 20px); width: 280px; height: 280px; opacity: 0.5; }
+.nsws-freecam-touch > .pad > div { position: absolute; left: 90px; top: 90px; width: 100px; height: 100px; background-color: #fff; opacity: 0.35; pointer-events: none; }
+.nsws-freecam-touch > .pad.active > div { opacity: 0.6; }
+.nsws-freecam-touch > .fast { right: calc(1.5cm + var(--safe-area-horizontal)); bottom: calc(1.5cm + 20px); width: 160px; height: 160px; }
+.nsws-freecam-touch > .fast.active { background-color: var(--button-active-color); }
+.nsws-freecam-touch.watch > .pad, .nsws-freecam-touch.watch > .fast { bottom: calc(1.5cm + 90px); }
+.touch-controls-ui > .freecam { left: calc(1.5cm + var(--safe-area-horizontal) + 180px); }
+.time-bar-ui > .button.nsws-freecam-button { display: none; }
+body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
+.time-bar-ui > .button.nsws-freecam-button.on { background-color: var(--button-hover-color); }
+.time-bar-ui > .button.nsws-freecam-button.on::after { width: 100%; }
+`;
+        const attachSpectatorTouch = (spectator, canvas) => {
+            if (!document.getElementById("nsws-freecam-css")) {
+                const style = document.createElement("style");
+                style.id = "nsws-freecam-css";
+                style.textContent = spectatorTouchCss;
+                document.head.appendChild(style);
+            }
+            const state = { x: 0, y: 0, fast: !1 };
+            const root = document.createElement("div");
+            root.className = "nsws-freecam-touch";
+            const exit = document.createElement("button");
+            exit.className = "exit";
+            exit.innerHTML = '<img src="images/freecam.svg">';
+            exit.addEventListener("click", () => {
+                spectator.isEnabled = !1
+            });
+            const pad = document.createElement("div");
+            pad.className = "pad";
+            const knob = document.createElement("div");
+            pad.appendChild(knob);
+            const fast = document.createElement("button");
+            fast.className = "fast";
+            fast.innerHTML = '<img src="images/fast.svg">';
+            root.append(exit, pad, fast);
+            (document.getElementById("ui") ?? document.body).appendChild(root);
+            let padId = null
+              , lookId = null
+              , look = null;
+            const find = (list, id) => {
+                for (const t of list)
+                    if (t.identifier === id)
+                        return t;
+                return null
+            };
+            const movePad = t => {
+                const r = pad.getBoundingClientRect()
+                  , half = r.width / 2;
+                let x = (t.clientX - r.left - half) / (.75 * half)
+                  , y = (t.clientY - r.top - half) / (.75 * half);
+                const m = Math.hypot(x, y);
+                m > 1 && (x /= m, y /= m);
+                state.x = x;
+                state.y = y;
+                knob.style.transform = `translate(${90 * x}px, ${90 * y}px)`
+            };
+            const releasePad = () => {
+                padId = null;
+                state.x = state.y = 0;
+                knob.style.transform = "";
+                pad.classList.remove("active")
+            };
+            pad.addEventListener("touchstart", e => {
+                e.preventDefault();
+                if (null != padId)
+                    return;
+                const t = e.changedTouches[0];
+                padId = t.identifier;
+                pad.classList.add("active");
+                movePad(t)
+            }, { passive: !1 });
+            fast.addEventListener("touchstart", e => {
+                e.preventDefault();
+                state.fast = !0;
+                fast.classList.add("active")
+            }, { passive: !1 });
+            const fastUp = () => {
+                state.fast = !1;
+                fast.classList.remove("active")
+            };
+            fast.addEventListener("touchend", fastUp);
+            fast.addEventListener("touchcancel", fastUp);
+            const onStart = e => {
+                if (!spectator.isEnabled || null != lookId || e.target !== canvas)
+                    return;
+                const t = e.changedTouches[0]
+                  , a = (new THREE.Euler).setFromQuaternion(spectator.camera.quaternion, "YXZ");
+                lookId = t.identifier;
+                look = { x: t.clientX, y: t.clientY, yaw: a.y, pitch: a.x }
+            };
+            const onMove = e => {
+                const p = null != padId ? find(e.changedTouches, padId) : null;
+                p && movePad(p);
+                const t = null != lookId ? find(e.changedTouches, lookId) : null;
+                if (!t || !spectator.isEnabled)
+                    return;
+                e.cancelable && e.preventDefault();
+                const s = 4.5 / Math.max(innerWidth, innerHeight);
+                look.yaw = (look.yaw - (t.clientX - look.x) * s) % (2 * Math.PI);
+                look.pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, look.pitch - (t.clientY - look.y) * s));
+                look.x = t.clientX;
+                look.y = t.clientY;
+                const pitch = (new THREE.Quaternion).setFromAxisAngle(new THREE.Vector3(1,0,0), look.pitch);
+                spectator.camera.quaternion.setFromAxisAngle(new THREE.Vector3(0,1,0), look.yaw).multiply(pitch)
+            };
+            const onEnd = e => {
+                null != padId && find(e.changedTouches, padId) && releasePad();
+                null != lookId && find(e.changedTouches, lookId) && (lookId = null)
+            };
+            addEventListener("touchstart", onStart, { passive: !0 });
+            addEventListener("touchmove", onMove, { passive: !1 });
+            addEventListener("touchend", onEnd);
+            addEventListener("touchcancel", onEnd);
+            const sync = () => {
+                const show = spectator.isEnabled && spectatorTouchMode.on;
+                root.classList.contains("show") !== show && root.classList.toggle("show", show);
+                show || (releasePad(), fastUp(), lookId = null);
+                const exitable = show && !!spectator.touchExit?.();
+                root.classList.contains("exitable") !== exitable && root.classList.toggle("exitable", exitable)
+            };
+            spectatorTouchMode.listen(sync);
+            sync();
+            return {
+                state,
+                sync,
+                root,
+                dispose: () => {
+                    spectatorTouchMode.unlisten(sync);
+                    removeEventListener("touchstart", onStart);
+                    removeEventListener("touchmove", onMove);
+                    removeEventListener("touchend", onEnd);
+                    removeEventListener("touchcancel", onEnd);
+                    root.remove()
+                }
+            }
+        };
         const SpectatorCamera = class {
             constructor(renderer, inputManager) {
                 _renderer.set(this, void 0),
@@ -42089,9 +42249,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                 window.addEventListener("contextmenu", C.set(this, _onContextMenu, (e => {
                     C.get(this, _isEnabled, "f") && e.preventDefault()
                 }
-                ), "f"))
+                ), "f")),
+                this.nswsTouch = attachSpectatorTouch(this, renderer.canvas)
             }
             dispose() {
+                this.nswsTouch.dispose(),
                 window.removeEventListener("keydown", C.get(this, _onKeyDown, "f")),
                 window.removeEventListener("keyup", C.get(this, _onKeyUp, "f")),
                 C.get(this, _renderer, "f").canvas.removeEventListener("mousedown", C.get(this, _onMouseDown, "f")),
@@ -42107,7 +42269,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             }
             set isEnabled(e) {
                 if (C.get(this, _isEnabled, "f") != e) {
-                    C.set(this, _isEnabled, e, "f");
+                    C.set(this, _isEnabled, e, "f"),
+                    this.nswsTouch.sync();
                     for (const e of C.get(this, _toggleListeners, "f"))
                         e(C.get(this, _isEnabled, "f"))
                 }
@@ -42118,7 +42281,10 @@ window.__nswsAutoGhostNote = function(trackId) {
             update(e) {
                 if (C.get(this, _isEnabled, "f")) {
                     let t;
-                    if (t = C.get(this, _speedModifier, "f") ? 400 * e : 50 * e,
+                    const pad = this.nswsTouch.state;
+                    if (this.nswsTouch.sync(),
+                    t = C.get(this, _speedModifier, "f") || pad.fast ? 400 * e : 50 * e,
+                    (pad.x || pad.y) && C.get(this, _camera, "f").position.add(new THREE.Vector3(pad.x,0,pad.y).applyQuaternion(C.get(this, _camera, "f").quaternion).multiplyScalar(t)),
                     C.get(this, _moveForward, "f")) {
                         const e = new THREE.Vector3(0,0,-1).applyQuaternion(C.get(this, _camera, "f").quaternion);
                         C.get(this, _camera, "f").position.add(e.multiplyScalar(t))
@@ -42173,7 +42339,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         ;
         const Ct = class {
-            constructor(e, t, n, i, r, a) {
+            constructor(e, t, n, i, r, a, freecam) {
                 xt.add(this),
                 St.set(this, void 0),
                 kt.set(this, void 0),
@@ -42217,6 +42383,23 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 )),
                 C.get(this, kt, "f").appendChild(C.get(this, Et, "f"));
+                if (freecam) {
+                    const f = this.nswsFreecam = document.createElement("button");
+                    f.className = "freecam",
+                    f.innerHTML = '<img src="images/freecam.svg">',
+                    f.addEventListener("touchstart", ( () => {
+                        t.playUIClick(),
+                        C.get(this, xt, "m", _t).call(this),
+                        f.classList.add("active"),
+                        freecam()
+                    }
+                    )),
+                    f.addEventListener("touchend", ( () => {
+                        f.classList.remove("active")
+                    }
+                    )),
+                    C.get(this, kt, "f").appendChild(f)
+                }
                 const l = document.createElement("div");
                 l.className = "left-container",
                 C.get(this, kt, "f").appendChild(l);
@@ -42291,6 +42474,9 @@ window.__nswsAutoGhostNote = function(trackId) {
             set isEnabled(e) {
                 e != C.get(this, Mt, "f") && (C.get(this, kt, "f").className = e ? "touch-controls-ui" : "hidden",
                 C.set(this, Mt, e, "f"))
+            }
+            setFreecamAvailable(e) {
+                this.nswsFreecam && this.nswsFreecam.hidden !== !e && (this.nswsFreecam.hidden = !e)
             }
             setResetCheckpointAvailable(e) {
                 e ? C.get(this, Et, "f").classList.add("checkpoint-available") : C.get(this, Et, "f").classList.remove("checkpoint-available")
@@ -45214,7 +45400,19 @@ window.__nswsAutoGhostNote = function(trackId) {
                     !P.ip() && C.get(this, wa, "f").hasStarted() && (C.get(this, _r, "m", ja).call(this) ? C.get(this, ya, "f").reset = !0 : (C.get(this, _r, "m", Qa).call(this),
                     C.get(this, ya, "f").reset = !1))
                 }
+                ),( () => {
+                    if (C.get(this, _r, "m", Ha).call(this) || window.__nswsFreecamBlocked?.(C.get(this, Yr, "f").getId()) || null != C.get(this, ca, "f") || C.get(this, Pa, "f"))
+                        return;
+                    const spectator = C.get(this, Ba, "f")
+                      , camera = C.get(this, zr, "f").camera;
+                    spectator.camera.position.copy(camera.position);
+                    const e = new THREE.Euler(0,0,0,"YXZ").setFromQuaternion(camera.quaternion);
+                    e.z = 0,
+                    spectator.camera.quaternion.setFromEuler(e),
+                    spectator.toggle()
+                }
                 )), "f"),
+                C.get(this, Ba, "f").touchExit = () => !C.get(this, _r, "m", Ha).call(this),
                 C.get(this, ma, "f").isEnabled = C.get(this, Wr, "f").touchEnabled,
                 C.set(this, ea, new br, "f"),
                 C.set(this, ta, new ResetHintUI(C.get(this, ea, "f").element,C.get(this, Ur, "f"),C.get(this, Wr, "f"),C.get(this, Gr, "f")), "f"),
@@ -45842,7 +46040,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , r = C.get(this, xa, "f").reduce(( (e, t) => e + t.maxFrames), 0);
                 let a;
                 a = r > 0 ? i / r : 1,
-                C.get(this, ma, "f").isEnabled = C.get(this, Wr, "f").touchEnabled && !C.get(this, _r, "m", Ha).call(this),
+                C.get(this, ma, "f").isEnabled = C.get(this, Wr, "f").touchEnabled && !C.get(this, _r, "m", Ha).call(this) && !C.get(this, Ba, "f").isEnabled,
+                this.nswsFreecamBlocked ??= !!window.__nswsFreecamBlocked?.(C.get(this, Yr, "f").getId(), !0),
+                C.get(this, ma, "f").setFreecamAvailable(!this.nswsFreecamBlocked && (null == C.get(this, Sa, "f") || !C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").hasFinished())),
                 C.get(this, ta, "f").update(C.get(this, wa, "f"), e, t && null == C.get(this, ha, "f") && null == C.get(this, da, "f")),
                 C.get(this, na, "f")?.update(a),
                 C.get(this, aa, "f").update(C.get(this, wa, "f")),
@@ -57314,9 +57514,9 @@ window.__nswsAutoGhostNote = function(trackId) {
             const wk = window.__nswsTrackWeekMap[trackId];
             return wk === window.__nswsCurrentWeek;
         };
-        window.__nswsFreecamBlocked = function(trackId) {
+        window.__nswsFreecamBlocked = function(trackId, quiet) {
             const blocked = __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noFreecam)));
-            if (blocked && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
+            if (blocked && !quiet && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
                 window.__nswsMessageBox.show("Freecam is disabled on this map.", "Ok", null);
             return blocked;
         };
@@ -61073,6 +61273,29 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                 }
                 ), "f"));
+                const freecamBar = C.get(this, Af, "f").element.querySelector(".time-bar-ui");
+                if (freecamBar && !window.__nswsFreecamBlocked(C.get(this, tf, "f").getId(), !0)) {
+                    const button = document.createElement("button");
+                    button.className = "button nsws-freecam-button",
+                    button.title = "Free camera",
+                    button.innerHTML = '<img src="images/freecam.svg">',
+                    button.addEventListener("click", ( () => {
+                        l.playUIClick();
+                        const spectator = C.get(this, mf, "f")
+                          , camera = C.get(this, sf, "f").camera;
+                        spectator.isEnabled || spectator.camera.position.copy(camera.position);
+                        const t = new THREE.Euler(0,0,0,"YXZ").setFromQuaternion(camera.quaternion);
+                        t.z = 0,
+                        spectator.isEnabled || spectator.camera.quaternion.setFromEuler(t),
+                        spectator.toggle(),
+                        button.blur()
+                    }
+                    )),
+                    C.get(this, mf, "f").addToggleListener((e => button.classList.toggle("on", e))),
+                    C.get(this, mf, "f").nswsTouch.root.classList.add("watch");
+                    const seek = freecamBar.querySelector(":scope > .bar");
+                    seek ? freecamBar.insertBefore(button, seek) : freecamBar.appendChild(button)
+                }
                 watchSession = this;
                 window.__nswsTraffic?.event("replays");
             }

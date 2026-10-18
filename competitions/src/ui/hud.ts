@@ -663,7 +663,7 @@ export class Hud {
           { class: 'main' },
           h('div', { class: 'label' }, w.mode === 'director' ? 'Director cam' : w.mode === 'free' ? 'Spectating' : 'Watching'),
           name,
-          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), h('div', { class: 'keys4' }, keys)),
+          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, document.body.classList.contains('nsws-touch') ? 'Drag to look, use the pad to fly' : 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), h('div', { class: 'keys4' }, keys)),
         ),
         w.mode === 'free' ? null : h('button', { class: 'arrow', title: `Next racer (${kb.next})`, onclick: () => w.cycle(1) }, icon('right')),
       ),
