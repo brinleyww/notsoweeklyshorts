@@ -86,7 +86,7 @@
 .nsws-tag.t-youtuber::before{content:"";flex-shrink:0;border-style:solid;border-width:.32em 0 .32em .52em;border-color:transparent transparent transparent #fff;}
 .nsws-tag.t-author{background:#103d3b;color:#5ff2d6;}
 .nsws-tag.t-og{background:#111;color:#ffcc66;}
-.nsws-tag.t-king{background:linear-gradient(180deg,#6a1fb0,#330a5e);color:#ffd76a;box-shadow:inset 0 -2px #ffd76a;}
+.nsws-tag.t-king{background:linear-gradient(90deg,#662edb,#0202b8,#662edb);background-size:200% 100%;color:#ffd76a;box-shadow:inset 0 -2px #ffd76a;animation:nsws-tag-slide 3s linear infinite;}
 .nsws-tag.t-king::before{content:"";flex-shrink:0;width:.95em;height:.68em;background:currentColor;clip-path:polygon(0 100%,0 18%,26% 58%,50% 0,74% 58%,100% 18%,100% 100%);}
 .nsws-tag>.wr{margin-left:.05em;padding-left:.4em;border-left:1px solid currentColor;font-variant-numeric:tabular-nums;}
 .nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
