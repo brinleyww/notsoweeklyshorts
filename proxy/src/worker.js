@@ -893,7 +893,6 @@ async function handleAccounts(request, url, env, fromSite, origin) {
         || result.error === "points" || result.error === "locked" || result.error === "closed") {
         return json({ error: result.error }, origin, 409);
     }
-    if (result.error === "busy" && path === "refer/redeem") return json({ error: "busy" }, origin, 429);
     if (result.error === "bad") return plain(400, "Bad request", origin);
     if (result.error === "full") return plain(507, "Too many clips", origin);
     if (result.error === "busy") return plain(429, "Too many links", origin);

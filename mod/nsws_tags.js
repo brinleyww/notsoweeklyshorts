@@ -416,7 +416,6 @@
         self: "That's your own code. Send it to a friend instead!",
         already: "This profile has already used a referral code.",
         mutual: "That player joined with your code, so you can't use theirs.",
-        busy: "Too many referral codes from this network today. Try again tomorrow.",
     };
 
     // Resolves to { ok, text, keep }; keep means it's worth trying again later.

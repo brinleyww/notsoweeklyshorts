@@ -53,9 +53,6 @@ const BINGO_LINES = (() => {
     return lines;
 })();
 const BINGO_HISTORY = 12;
-// A whole school shares one address, so these only stop one person farming referrals.
-const REDEEMS_PER_IP_DAY = 10;
-const REDEEMS_PER_IP_REFERRER_DAY = 3;
 const MAX_BONUS = 10_000;
 const TOP_RECRUITERS = 5;
 const SEARCH_RESULTS = 12;
@@ -394,11 +391,6 @@ export class Accounts extends DurableObject {
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ? AND referrer = ?", referrer, userId).toArray().length) {
             return { error: "mutual" };
         }
-        const dayAgo = Date.now() - 86_400_000;
-        const fromIp = this.sql.exec("SELECT COUNT(*) AS n FROM referrals WHERE ip = ? AND at > ?", ipHash, dayAgo).one().n;
-        const fromIpToReferrer = this.sql.exec("SELECT COUNT(*) AS n FROM referrals WHERE ip = ? AND at > ? AND referrer = ?",
-            ipHash, dayAgo, referrer).one().n;
-        if (fromIp >= REDEEMS_PER_IP_DAY || fromIpToReferrer >= REDEEMS_PER_IP_REFERRER_DAY) return { error: "busy" };
         this.sql.exec("INSERT INTO referrals (referred, referrer, at, ip, confirmed) VALUES (?, ?, ?, ?, NULL)",
             userId, referrer, Date.now(), ipHash);
         return { ok: true, referrer: this.nicknameOf(referrer) || "a player", state: this.tagState(userId) };
