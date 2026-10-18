@@ -54,7 +54,8 @@
         { id: "pastsilver", text: "Silver time on an older week's track", hint: "Older weeks are further down the Play menu." },
         { id: "kodub3", text: "Finish 3 Official & Community tracks", hint: "Play menu, top right: Official & Community." },
         { id: "cup", text: "Finish a race in a cup", hint: "Competitions on the main menu." },
-        { id: "days3", text: "Finish a run on 3 different days", hint: "Any track counts. Come back tomorrow!" },
+        // Retired, but kept in the shuffle so cards already in play keep their squares where the marks are.
+        { id: "days3", retired: true },
         { id: "share", text: "Share a PB image", hint: "Press Share PB on the banner after a new personal best." },
     ];
 
@@ -217,7 +218,8 @@
                 cells.push({ kind: "track", task: task.id, track: { id: track.id, name: trackName(track) }, text: task.text(trackName(track)) });
             }
             while (cells.length < (c === 2 ? SIZE - 1 : SIZE)) {
-                const act = activities.shift();
+                let act = activities.shift();
+                if (act.retired) act = activities.pop();
                 cells.push({ kind: "act", act: act.id, text: act.text, hint: act.hint });
             }
             const rows = shuffle([0, 1, 2, 3, 4].filter((r) => !(c === 2 && r === 2)), rnd);
@@ -267,10 +269,10 @@
     }
 
     // Counters for this device, one set per card (week and round): finishes, medal-time runs and the
-    // best medal time per track, the best leaderboard place seen, finished seconds, days, older and
-    // Kodub tracks finished, the longest run of finishes without a restart, and one-off activities.
+    // best medal time per track, the best leaderboard place seen, finished seconds, older and Kodub
+    // tracks finished, the longest run of finishes without a restart, and one-off activities.
     function blank() {
-        return { finishes: {}, runs: {}, best: {}, ranks: {}, acts: {}, driven: 0, days: [], past: {}, pastBest: 0, kodub: {}, clean: 0 };
+        return { finishes: {}, runs: {}, best: {}, ranks: {}, acts: {}, driven: 0, past: {}, pastBest: 0, kodub: {}, clean: 0 };
     }
 
     function progress(week, round = roundOf(week)) {
@@ -336,7 +338,6 @@
                 case "past3": return { have: Object.keys(p.past).length, need: 3, count: true };
                 case "pastsilver": return { have: p.pastBest >= 2 ? 1 : 0, need: 1 };
                 case "kodub3": return { have: Object.keys(p.kodub).length, need: 3, count: true };
-                case "days3": return { have: p.days.length, need: 3, count: true };
                 default: return { have: p.acts[square.act] ? 1 : 0, need: 1 };
             }
         }
@@ -412,11 +413,6 @@
         }
     }
 
-    function today() {
-        const d = new Date();
-        return d.getFullYear() + "-" + (d.getMonth() + 1) + "-" + d.getDate();
-    }
-
     // Finishes in a row on one track: a new run after a finish keeps the count, a new run before the
     // finish (a restart) or another track starts it again.
     let run = { track: null, finished: false, streak: 0 };
@@ -446,8 +442,6 @@
         bump((p) => {
             if (own) p.finishes[track] = (p.finishes[track] ?? 0) + 1;
             p.driven += seconds;
-            const day = today();
-            if (!p.days.includes(day)) p.days.push(day);
             p.clean = Math.max(p.clean, streak);
             if (trackWeek != null && trackWeek < week) p.past[track] = 1;
             if (trackWeek == null && isKodubTrack(track)) p.kodub[track] = 1;
