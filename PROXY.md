@@ -379,7 +379,10 @@ never stored.
 - **Clip links.** `/nsws/clips/share` stores a copy of a clip under a 10-character
   id (30 new links per account per hour); `?clip=<id>` on the site adds it to
   the visitor's clips and starts playing it. A link keeps working after its clip
-  is renamed or deleted.
+  is renamed or deleted. Clips selected together (same track only) share as
+  `?clip=<id>,<id>,...` (up to 20), one id per clip; the visitor gets them all and
+  watches them as one replay. The same clip always gets the same id back, so
+  sharing it again costs nothing against the hourly limit.
 - **Views.** `/nsws/clips/view` counts a watch against the run itself (the clip's
   key), so every copy of a shared clip adds to one count; a repeat within 30 s
   from the same account doesn't count. The clip list reports views and distinct

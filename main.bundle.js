@@ -1373,50 +1373,53 @@ window.__nswsAutoGhostNote = function(trackId) {
             setTimeout(() => el.remove(), 300);
         }, 1800);
     }
-    function _playClipNow(clip) {
+    function _clipFailed(message) {
+        alert(message);
+        hideClipSkyOverlay();
+        openClipsMenu();
+    }
+    // Clips played together must be on the same track: the Watch view drives one track.
+    function _playClipsNow(clips) {
         const RecordingClass = window.__clipRecordingClass;
         const TimeClass = window.__clipTimeClass;
         if (!RecordingClass || !TimeClass) {
-            alert("Engine not ready.");
-            hideClipSkyOverlay();
-            openClipsMenu();
+            _clipFailed("Engine not ready.");
             return;
         }
         const pako = window.__clipPako?.Ay ?? window.__clipPako;
-        const recBytes = _clipRecordingBytes(clip);
-        const d = new pako.Deflate({
-            level: 9
-        });
-        d.push(recBytes, true);
-        const b64 = _bytesToBase64(d.result).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-        const recording = RecordingClass.deserialize(b64);
-        if (!recording) {
-            alert("Failed to deserialize clip recording.");
-            hideClipSkyOverlay();
-            openClipsMenu();
-            return;
-        }
-        let carStyle;
-        try {
-            carStyle = window.__clipCarStyleClass ? window.__clipCarStyleClass.deserializeSafe(clip.carStyle) : null;
-        } catch (e) {
-            carStyle = null;
-        }
-        const loaded = replayLoaderClass?.loadClip(recording, clip.frames);
-        if (!loaded) {
-            alert("Failed to load clip.");
-            hideClipSkyOverlay();
-            openClipsMenu();
-            return;
+        const runs = [];
+        for (const clip of clips) {
+            const d = new pako.Deflate({
+                level: 9
+            });
+            d.push(_clipRecordingBytes(clip), true);
+            const b64 = _bytesToBase64(d.result).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+            const recording = RecordingClass.deserialize(b64);
+            if (!recording) {
+                _clipFailed("Failed to deserialize clip recording.");
+                return;
+            }
+            let carStyle;
+            try {
+                carStyle = window.__clipCarStyleClass ? window.__clipCarStyleClass.deserializeSafe(clip.carStyle) : null;
+            } catch (e) {
+                carStyle = null;
+            }
+            const loaded = replayLoaderClass?.loadClip(recording, clip.frames);
+            if (!loaded) {
+                _clipFailed("Failed to load clip.");
+                return;
+            }
+            runs.push({
+                recording: loaded.recording,
+                carStyle: carStyle,
+                nickname: clip.playerName || clip.name,
+                time: loaded.time,
+                isSelf: false
+            });
         }
         watchingClip = true;
-        watchClipFunction([ {
-            recording: loaded.recording,
-            carStyle: carStyle,
-            nickname: clip.playerName || clip.name,
-            time: loaded.time,
-            isSelf: false
-        } ]);
+        watchClipFunction(runs);
         requestAnimationFrame(function() {
             requestAnimationFrame(hideClipSkyOverlay);
         });
@@ -1447,30 +1450,24 @@ window.__nswsAutoGhostNote = function(trackId) {
             })();
         });
     }
-    async function watchClip(clip) {
-        const currentTrackId = _currentTrackId();
-        if (!clip.trackId || currentTrackId === clip.trackId) {
-            _playClipNow(clip);
+    async function watchClips(clips) {
+        const trackId = clips[0].trackId;
+        if (!trackId || _currentTrackId() === trackId) {
+            _playClipsNow(clips);
             return;
         }
         const previousWatchFn = watchClipFunction;
-        const opened = window.__bw_selectTrackById?.(clip.trackId);
-        if (!opened) {
-            const trackLabel = getTrackNameById(clip.trackId) || clip.trackId;
-            alert("This clip is for a different track (" + trackLabel + ") that isn't in your track list right now. Open that track yourself, then try watching the clip again.");
-            hideClipSkyOverlay();
-            openClipsMenu();
+        if (!window.__bw_selectTrackById?.(trackId)) {
+            const trackLabel = getTrackNameById(trackId) || trackId;
+            _clipFailed((clips.length > 1 ? "These clips are" : "This clip is") + " for a different track (" + trackLabel + ") that isn't in your track list right now. Open that track yourself, then try watching again.");
             return;
         }
         // Usually rebound in the same tick; the wait covers the track list refreshing first.
-        const rebound = await _waitForWatchFunctionRebind(previousWatchFn, 5000);
-        if (!rebound) {
-            alert("The track for this clip took too long to load. Please try watching the clip again.");
-            hideClipSkyOverlay();
-            openClipsMenu();
+        if (!await _waitForWatchFunctionRebind(previousWatchFn, 5000)) {
+            _clipFailed("The track took too long to load. Please try watching again.");
             return;
         }
-        _playClipNow(clip);
+        _playClipsNow(clips);
     }
     // Plays an uploaded run (Race Control's lobby PB review), then calls `done`.
     window.__nswsWatchRun = async function(run, done) {
@@ -1525,7 +1522,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         if (document.getElementById("_bw-clip-css")) return;
         var style = document.createElement("style");
         style.id = "_bw-clip-css";
-        style.textContent = [ ".clip-menu-bg{display:flex;flex-direction:column;position:absolute;left:calc(50% - 750px / 2);top:150px;z-index:2;margin:0;padding:0;width:750px;height:calc(100% - 150px * 2);box-sizing:border-box;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-bg>h2{margin:0;padding:10px 20px;font-weight:normal;font-size:38px;text-align:center;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-status{margin:0;padding:0 20px 10px 20px;text-align:center;font-size:18px;opacity:0.75;}", ".clip-menu-status:empty{display:none;}", ".clip-menu-container{margin:0;padding:10px;flex-grow:1;min-height:0;box-sizing:border-box;background-color:var(--surface-secondary-color);overflow-x:hidden;overflow-y:scroll;pointer-events:auto;}", "button.clip-menu-entry{position:relative;margin:0 0 10px 0;padding:10px 20px;display:block;width:100%;box-sizing:border-box;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);text-align:left;white-space:nowrap;}", "button.clip-menu-entry:last-of-type{margin-bottom:0;}", "button.clip-menu-entry.selected{background-color:var(--button-hover-color);}", "button.clip-menu-entry>h2{margin:0;padding:0 0 6px 0;font-weight:normal;font-size:24px;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>p{margin:0;font-size:18px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry.has-stats{padding-right:160px;}", ".clip-menu-stats{position:absolute;right:38px;top:50%;transform:translateY(-50%);text-align:right;white-space:nowrap;pointer-events:none;}", ".clip-menu-stats>div:first-child{font-size:22px;}", ".clip-menu-stats>div:last-child{margin-top:4px;font-size:16px;opacity:0.7;}", ".clip-menu-stats.fade-in{animation:clip-menu-stats-in 0.6s ease-out both;}", "@keyframes clip-menu-stats-in{0%{opacity:0;transform:translate(10px,-50%);}100%{opacity:1;transform:translate(0,-50%);}}", "button.clip-menu-entry>.checkmark{display:none;position:absolute;right:0;top:0;margin:6px;width:14px;}", "button.clip-menu-entry.selected>.checkmark{display:block;animation:clip-menu-checkmark-spawn 0.15s ease-out;}", "@keyframes clip-menu-checkmark-spawn{0%{transform:scale(0);}90%{transform:scale(1.2);}100%{transform:scale(1);}}", ".clip-menu-wrapper{display:flex;align-items:flex-start;flex-wrap:nowrap;padding:10px;}", ".clip-menu-wrapper>.button.back{margin:0;flex-shrink:0;}", ".clip-menu-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:10px;margin-left:auto;}", ".clip-menu-actions>.button{margin:0;}", ".clip-box-bg{position:fixed;inset:0;background-color:rgba(20,20,30,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;}", ".clip-box{background-color:var(--surface-color);color:var(--text-color);width:500px;max-width:90vw;box-sizing:border-box;display:flex;flex-direction:column;}", ".clip-box>textarea{margin:10px;box-sizing:border-box;width:calc(100% - 20px);height:120px;background-color:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-family:inherit;font-size:16px;padding:10px;resize:none;}", ".clip-box>.clip-box-buttons{display:flex;justify-content:space-between;padding:0 10px 10px 10px;}", ".clip-confirm-message{margin:10px;padding:10px;font-size:18px;line-height:1.4;}", ".clip-saved-notification{position:fixed;left:50%;bottom:150px;margin:0;padding:0;text-align:center;font-size:32px;color:#fff;text-shadow:2px 2px 0 #112052,0 0 2px #000;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px);transition:opacity 0.25s ease-in-out, transform 0.25s ease-in-out;z-index:9999;}", ".clip-saved-notification.show{opacity:1;transform:translateX(-50%) translateY(0);}", ".clips-menu-open .clip-saved-notification{bottom:auto;top:70px;}" ].join("");
+        style.textContent = [ ".clip-menu-bg{display:flex;flex-direction:column;position:absolute;left:calc(50% - 750px / 2);top:150px;z-index:2;margin:0;padding:0;width:750px;height:calc(100% - 150px * 2);box-sizing:border-box;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-bg>h2{margin:0;padding:10px 20px;font-weight:normal;font-size:38px;text-align:center;background-color:var(--surface-color);color:var(--text-color);}", ".clip-menu-status{margin:0;padding:0 20px 10px 20px;text-align:center;font-size:18px;opacity:0.75;}", ".clip-menu-status:empty{display:none;}", ".clip-menu-container{margin:0;padding:10px;flex-grow:1;min-height:0;box-sizing:border-box;background-color:var(--surface-secondary-color);overflow-x:hidden;overflow-y:scroll;pointer-events:auto;}", "button.clip-menu-entry{position:relative;margin:0 0 10px 0;padding:10px 20px;display:block;width:100%;box-sizing:border-box;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);text-align:left;white-space:nowrap;}", "button.clip-menu-entry:last-of-type{margin-bottom:0;}", "button.clip-menu-entry.selected{background-color:var(--button-hover-color);}", "button.clip-menu-entry.other-track{opacity:0.5;}", "button.clip-menu-entry>h2{margin:0;padding:0 0 6px 0;font-weight:normal;font-size:24px;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry>p{margin:0;font-size:18px;opacity:0.7;overflow:hidden;text-overflow:ellipsis;}", "button.clip-menu-entry.has-stats{padding-right:160px;}", ".clip-menu-stats{position:absolute;right:38px;top:50%;transform:translateY(-50%);text-align:right;white-space:nowrap;pointer-events:none;}", ".clip-menu-stats>div:first-child{font-size:22px;}", ".clip-menu-stats>div:last-child{margin-top:4px;font-size:16px;opacity:0.7;}", ".clip-menu-stats.fade-in{animation:clip-menu-stats-in 0.6s ease-out both;}", "@keyframes clip-menu-stats-in{0%{opacity:0;transform:translate(10px,-50%);}100%{opacity:1;transform:translate(0,-50%);}}", "button.clip-menu-entry>.checkmark{display:none;position:absolute;right:0;top:0;margin:6px;width:14px;}", "button.clip-menu-entry.selected>.checkmark{display:block;animation:clip-menu-checkmark-spawn 0.15s ease-out;}", "@keyframes clip-menu-checkmark-spawn{0%{transform:scale(0);}90%{transform:scale(1.2);}100%{transform:scale(1);}}", ".clip-menu-wrapper{display:flex;align-items:flex-start;flex-wrap:nowrap;padding:10px;}", ".clip-menu-wrapper>.button.back{margin:0;flex-shrink:0;}", ".clip-menu-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:10px;margin-left:auto;}", ".clip-menu-actions>.button{margin:0;}", ".clip-box-bg{position:fixed;inset:0;background-color:rgba(20,20,30,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;}", ".clip-box{background-color:var(--surface-color);color:var(--text-color);width:500px;max-width:90vw;box-sizing:border-box;display:flex;flex-direction:column;}", ".clip-box>textarea{margin:10px;box-sizing:border-box;width:calc(100% - 20px);height:120px;background-color:var(--surface-secondary-color);color:var(--text-color);border:none;outline:none;font-family:inherit;font-size:16px;padding:10px;resize:none;}", ".clip-box>.clip-box-buttons{display:flex;justify-content:space-between;padding:0 10px 10px 10px;}", ".clip-confirm-message{margin:10px;padding:10px;font-size:18px;line-height:1.4;}", ".clip-saved-notification{position:fixed;left:50%;bottom:150px;margin:0;padding:0;text-align:center;font-size:32px;color:#fff;text-shadow:2px 2px 0 #112052,0 0 2px #000;pointer-events:none;opacity:0;transform:translateX(-50%) translateY(10px);transition:opacity 0.25s ease-in-out, transform 0.25s ease-in-out;z-index:9999;}", ".clip-saved-notification.show{opacity:1;transform:translateX(-50%) translateY(0);}", ".clips-menu-open .clip-saved-notification{bottom:auto;top:70px;}" ].join("");
         document.head.appendChild(style);
     }
     function ensureClipSkyOverlay() {
@@ -1693,10 +1690,11 @@ window.__nswsAutoGhostNote = function(trackId) {
         boxBg.appendChild(box);
         document.body.appendChild(boxBg);
     }
-    // The clip to select when the menu next opens: { id, key }.
+    // The clips to select when the menu next opens: [{ id, key }].
     let clipMenuSelect = null;
-    // Set with clipMenuSelect to start watching that clip as soon as the menu opens.
+    // Set with clipMenuSelect to start watching those clips as soon as the menu opens.
     let clipMenuAutoWatch = false;
+    const CLIP_LINK_MAX = 20;
     // Clips whose view counts have already faded in this visit, so a refresh doesn't replay it.
     const clipStatsShown = new Set();
     function _recordClipView(key, clip) {
@@ -1707,8 +1705,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             key: k
         })).catch(() => {});
     }
-    function _clipLink(shareId) {
-        return (window.__nswsShareBase || location.origin + location.pathname) + "?clip=" + shareId;
+    function _clipLink(shareIds) {
+        return (window.__nswsShareBase || location.origin + location.pathname) + "?clip=" + shareIds.join(",");
     }
     function createClipsMenu(onClose) {
         openClipsMenu = () => createClipsMenu(onClose);
@@ -1723,7 +1721,8 @@ window.__nswsAutoGhostNote = function(trackId) {
         var container = document.createElement("div");
         container.className = "clip-menu-container";
         var clipData = [];
-        var selection = clipMenuSelect;
+        // Every selected clip is on one track, so they can always be watched together.
+        var selection = clipMenuSelect || [];
         var autoWatch = clipMenuAutoWatch;
         clipMenuSelect = null;
         clipMenuAutoWatch = false;
@@ -1734,12 +1733,53 @@ window.__nswsAutoGhostNote = function(trackId) {
             if (onClose) onClose();
         }
         pushClipEscape(closeClipsMenu);
-        function selectedClip() {
-            var selected = container.querySelector(".clip-menu-entry.selected");
-            if (!selected) return null;
-            return clipData.find(function(c) {
-                return c.id === selected.dataset.clipId;
-            }) || null;
+        // A clip moved from this device to the account gets a new id, but keeps its key.
+        function matches(s, clip) {
+            return s.id === clip.id || !!s.key && s.key === clip.key;
+        }
+        function isSelected(clip) {
+            return selection.some(function(s) {
+                return matches(s, clip);
+            });
+        }
+        function selectedClips() {
+            return clipData.filter(isSelected);
+        }
+        function showSelection() {
+            var chosen = selectedClips();
+            var trackId = chosen.length ? chosen[0].trackId || "" : null;
+            Array.from(container.children).forEach(function(entry) {
+                var clip = clipData.find(function(c) {
+                    return c.id === entry.dataset.clipId;
+                });
+                if (!clip) return;
+                entry.classList.toggle("selected", isSelected(clip));
+                entry.classList.toggle("other-track", trackId !== null && (clip.trackId || "") !== trackId);
+            });
+            headText.textContent = chosen.length > 1 ? "Your Clips: " + chosen.length + " selected" : "Your Clips:";
+        }
+        function toggleSelected(clip) {
+            if (isSelected(clip)) {
+                selection = selection.filter(function(s) {
+                    return !matches(s, clip);
+                });
+            } else {
+                var chosen = selectedClips();
+                if (chosen.length && (chosen[0].trackId || "") !== (clip.trackId || "")) {
+                    if (chosen.length > 1) showClipSavedNotification("Only clips on the same track can be selected together");
+                    selection = [];
+                }
+                selection.push({ id: clip.id, key: clip.key });
+            }
+            showSelection();
+        }
+        function oneSelected(action) {
+            var chosen = selectedClips();
+            if (chosen.length > 1) {
+                showClipAlert("Select just one clip to " + action + ".");
+                return null;
+            }
+            return chosen[0] || null;
         }
         function showStatus() {
             var listed = cloudClips.loaded && cloudClips.token === _clipToken();
@@ -1751,7 +1791,12 @@ window.__nswsAutoGhostNote = function(trackId) {
             clipData = _menuClips();
             container.textContent = "";
             clipData.forEach(createEntry);
+            showSelection();
             showStatus();
+            var first = container.querySelector(".clip-menu-entry.selected");
+            if (first) requestAnimationFrame(function() {
+                first.scrollIntoView({ block: "nearest" });
+            });
         }
         function refresh() {
             syncFailed = false;
@@ -1779,12 +1824,14 @@ window.__nswsAutoGhostNote = function(trackId) {
         exportButton.innerHTML = '<img class="button-icon" src="images/export.svg"> ';
         exportButton.append("Export");
         exportButton.addEventListener("click", function() {
-            closeLegacyPanel();
-            var clip = selectedClip();
-            if (!clip) {
+            if (!selectedClips().length) {
+                closeLegacyPanel();
                 alert("Please select a clip first!");
                 return;
             }
+            var clip = oneSelected("export as a code");
+            if (!clip) return;
+            closeLegacyPanel();
             _fullClip(clip).then(function(full) {
                 createBoxDisplay(toClipExport(full));
             }, showLoadFailed);
@@ -1795,22 +1842,31 @@ window.__nswsAutoGhostNote = function(trackId) {
         linkButton.append("Export as Link");
         var linkBusy = false;
         linkButton.addEventListener("click", function() {
-            var clip = selectedClip();
-            if (!clip) {
+            var clips = selectedClips();
+            if (!clips.length) {
                 alert("Please select a clip first!");
+                return;
+            }
+            if (clips.length > CLIP_LINK_MAX) {
+                showClipAlert("A link can hold up to " + CLIP_LINK_MAX + " clips. Deselect some, then try again.");
                 return;
             }
             if (linkBusy) return;
             linkBusy = true;
-            _fullClip(clip).then(function(full) {
-                return window.__nswsAccounts.call("clips/share", {
-                    userToken: _clipToken(),
-                    code: toClipExport(full)
+            // One link id per clip; the proxy hands back the same id for a clip it already has.
+            Promise.all(clips.map(function(clip) {
+                return _fullClip(clip).then(function(full) {
+                    return window.__nswsAccounts.call("clips/share", {
+                        userToken: _clipToken(),
+                        code: toClipExport(full)
+                    });
                 });
-            }).then(function(result) {
-                createBoxDisplay(_clipLink(result.id));
+            })).then(function(results) {
+                createBoxDisplay(_clipLink(results.map(function(r) {
+                    return r.id;
+                })));
             }, function(e) {
-                showClipAlert(e && e.status === 429 ? "You've made a lot of clip links recently. Please try again later." : "Couldn't make a link for this clip. Check your connection and try again.");
+                showClipAlert(e && e.status === 429 ? "You've made a lot of clip links recently. Please try again later." : "Couldn't make a link for " + (clips.length > 1 ? "these clips" : "this clip") + ". Check your connection and try again.");
             }).then(function() {
                 linkBusy = false;
             });
@@ -1887,17 +1943,21 @@ window.__nswsAutoGhostNote = function(trackId) {
         watchButton.append("Watch");
         var watchBusy = false;
         watchButton.addEventListener("click", function() {
-            var clip = selectedClip();
-            if (!clip || watchBusy) return;
+            var clips = selectedClips();
+            if (!clips.length || watchBusy) return;
             watchBusy = true;
-            _fullClip(clip).then(function(full) {
+            Promise.all(clips.map(_fullClip)).then(function(fulls) {
                 watchBusy = false;
                 if (!background.isConnected) return;
                 popClipEscape(closeClipsMenu);
                 background.remove();
+                // Back from watching, the same clips are still selected.
+                clipMenuSelect = selection.slice();
                 showClipSkyOverlay();
-                watchClip(full);
-                _recordClipView(clip.key, full);
+                watchClips(fulls);
+                fulls.forEach(function(full, i) {
+                    _recordClipView(clips[i].key, full);
+                });
             }, function() {
                 watchBusy = false;
                 showLoadFailed();
@@ -1907,19 +1967,10 @@ window.__nswsAutoGhostNote = function(trackId) {
         deleteButton.className = "button";
         deleteButton.innerHTML = '<img class="button-icon" src="images/cancel.svg"> ';
         deleteButton.append("Delete");
-        deleteButton.addEventListener("click", function() {
-            var clip = selectedClip();
-            if (!clip) return;
-            if (clip.local) {
-                if (!localDeleteClip(clip.id)) {
-                    alert("Failed to delete clip.");
-                    return;
-                }
-                render();
-                return;
-            }
+        function deleteClip(clip) {
+            if (clip.local) return localDeleteClip(clip.id) ? Promise.resolve() : Promise.reject(new Error("Storage"));
             var token = cloudClips.token;
-            window.__nswsAccounts.call("clips/delete", {
+            return window.__nswsAccounts.call("clips/delete", {
                 userToken: token,
                 id: clip.id
             }).then(function() {
@@ -1927,17 +1978,28 @@ window.__nswsAutoGhostNote = function(trackId) {
                     return c.id !== clip.id;
                 });
                 cloudClips.codes.delete(clip.id);
-                if (background.isConnected) render();
-            }, function() {
-                showClipAlert("Couldn't delete this clip. Check your connection and try again.");
             });
+        }
+        deleteButton.addEventListener("click", function() {
+            var clips = selectedClips();
+            if (!clips.length) return;
+            function deleteAll() {
+                Promise.allSettled(clips.map(deleteClip)).then(function(results) {
+                    if (background.isConnected) render();
+                    if (results.some(function(r) {
+                        return r.status === "rejected";
+                    })) showClipAlert(clips.length > 1 ? "Couldn't delete some of these clips. Check your connection and try again." : "Couldn't delete this clip. Check your connection and try again.");
+                });
+            }
+            if (clips.length > 1) showClipConfirm("Delete these " + clips.length + " clips?", "Delete", deleteAll);
+            else deleteAll();
         });
         var renameButton = document.createElement("button");
         renameButton.className = "button";
         renameButton.innerHTML = '<img class="button-icon" src="images/reset.svg"> ';
         renameButton.append("Rename");
         renameButton.addEventListener("click", function() {
-            var clip = selectedClip();
+            var clip = oneSelected("rename");
             if (!clip) return;
             createBoxDisplay("", function(newName) {
                 if (!newName) return;
@@ -1946,7 +2008,6 @@ window.__nswsAutoGhostNote = function(trackId) {
                         alert("Failed to rename clip.");
                         return;
                     }
-                    selection = { id: clip.id };
                     render();
                     return;
                 }
@@ -1960,10 +2021,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         return c.id === clip.id;
                     });
                     if (listed) listed.name = newName.slice(0, 100);
-                    if (background.isConnected) {
-                        selection = { id: clip.id, key: clip.key };
-                        render();
-                    }
+                    if (background.isConnected) render();
                 }, function() {
                     showClipAlert("Couldn't rename this clip. Check your connection and try again.");
                 });
@@ -1982,19 +2040,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             checkmark.className = "checkmark";
             checkmark.src = "images/checkmark.svg";
             btn.addEventListener("click", function() {
-                var wasSelected = btn.classList.contains("selected");
-                Array.from(container.children).forEach(function(c) {
-                    c.classList.remove("selected");
-                });
-                if (!wasSelected) btn.classList.add("selected");
-                selection = wasSelected ? null : { id: clip.id, key: clip.key };
+                toggleSelected(clip);
             });
-            if (selection && (selection.id === clip.id || selection.key && selection.key === clip.key)) {
-                btn.classList.add("selected");
-                requestAnimationFrame(function() {
-                    btn.scrollIntoView({ block: "nearest" });
-                });
-            }
             btn.appendChild(h2);
             btn.appendChild(p);
             btn.appendChild(checkmark);
@@ -2033,37 +2080,46 @@ window.__nswsAutoGhostNote = function(trackId) {
         background.appendChild(wrapper);
         ui.appendChild(background);
         refresh();
-        if (autoWatch && selectedClip()) watchButton.click();
+        if (autoWatch && selectedClips().length) watchButton.click();
     }
-    // A clip link is ?clip=<id>. Opening one adds that clip to the visitor's clips and shows it.
-    let clipLinkId = null;
+    // A clip link is ?clip=<id>[,<id>...]. Opening one adds those clips to the visitor's clips and plays them together.
+    let clipLinkIds = null;
     try {
-        const id = new URLSearchParams(location.search).get("clip");
-        if (/^[A-Za-z0-9]{10}$/.test(id || "")) clipLinkId = id;
+        const ids = (new URLSearchParams(location.search).get("clip") || "").split(",");
+        if (ids.length <= CLIP_LINK_MAX && ids.every(id => /^[A-Za-z0-9]{10}$/.test(id))) clipLinkIds = Array.from(new Set(ids));
     } catch (e) {}
     function _showClipMessage(text) {
         const box = window.__nswsMessageBox;
         if (box && !box.isOpen) box.show(text, "Ok", null);
         else alert(text);
     }
-    async function _receiveClipLink(id) {
-        let clip = null;
-        let missing = false;
-        try {
-            const share = await window.__nswsAccounts.call("share/get", { id: id });
-            clip = fromClipExport(share?.code ?? "");
-        } catch (e) {
-            missing = e.status === 404;
-        }
-        if (!clip) {
-            _showClipMessage(missing ? "This clip link doesn't exist. Please check that it was copied fully." : "Couldn't load the clip from this link. Check your connection and open the link again.");
+    async function _receiveClipLink(ids) {
+        let missing = 0;
+        const shared = await Promise.all(ids.map(async id => {
+            try {
+                const share = await window.__nswsAccounts.call("share/get", { id: id });
+                return fromClipExport(share?.code ?? "");
+            } catch (e) {
+                if (e.status === 404) missing++;
+                return null;
+            }
+        }));
+        let clips = shared.filter(Boolean);
+        // Links only ever hold clips from one track; drop any others so the rest can still play together.
+        if (clips.length) clips = clips.filter(c => (c.trackId || "") === (clips[0].trackId || ""));
+        if (!clips.length) {
+            _showClipMessage(missing === ids.length ? "This clip link doesn't exist. Please check that it was copied fully." : "Couldn't load the clip from this link. Check your connection and open the link again.");
             return;
         }
         await syncClips().catch(() => {});
-        const duplicate = await _findDuplicateClip(clip);
-        if (duplicate) {
-            clipMenuSelect = { id: duplicate.id, key: duplicate.key };
-        } else {
+        const select = [];
+        let added = 0;
+        for (const clip of clips) {
+            const duplicate = await _findDuplicateClip(clip);
+            if (duplicate) {
+                select.push({ id: duplicate.id, key: duplicate.key });
+                continue;
+            }
             const now = Date.now();
             clip.id = "clip_" + now;
             clip.createdAt = now;
@@ -2072,8 +2128,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                 alert("Failed to save the clip: storage is full. Try deleting some old clips, then open the link again.");
                 return;
             }
-            clipMenuSelect = { id: clip.id, key: await _clipKey(clip) };
+            added++;
+            select.push({ id: clip.id, key: await _clipKey(clip) });
         }
+        clipMenuSelect = select;
         const menuButtons = document.querySelector(".menu-ui > .main-buttons-container");
         if (menuButtons && !menuButtons.classList.contains("hidden") && !document.querySelector(".clip-menu-bg")) {
             clipMenuAutoWatch = true;
@@ -2081,23 +2139,25 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         clipMenuSelect = null;
         clipMenuAutoWatch = false;
-        showClipSavedNotification(duplicate ? "📹 You already have this clip" : "📹 Clip added to your clips!");
+        const many = clips.length > 1;
+        showClipSavedNotification(added === 0 ? (many ? "📹 You already have these clips" : "📹 You already have this clip") : many ? "📹 " + added + (added === 1 ? " clip" : " clips") + " added to your clips!" : "📹 Clip added to your clips!");
+        if (clips.length < ids.length) _showClipMessage("Only " + clips.length + " of the " + ids.length + " clips in this link could be loaded.");
     }
     // Called once the main menu first appears. True when it opened a clip link, so the
     // first-visit auto-start is skipped.
     window.__nswsClipsOnLoad = function() {
-        if (!clipLinkId) {
+        if (!clipLinkIds) {
             syncClips().catch(() => {});
             return false;
         }
-        const id = clipLinkId;
-        clipLinkId = null;
+        const ids = clipLinkIds;
+        clipLinkIds = null;
         try {
             const url = new URL(location.href);
             url.searchParams.delete("clip");
             history.replaceState(history.state, "", url.pathname + url.search + url.hash);
         } catch (e) {}
-        _receiveClipLink(id);
+        _receiveClipLink(ids);
         return true;
     };
     // Text boxes inside shadow roots (the cup chat) show up in document.activeElement as their host.

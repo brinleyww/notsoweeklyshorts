@@ -622,9 +622,9 @@
 
     function updateOnline() {
         if (!onlineLabel) return;
+        // Away players (hidden tabs) are already in the count.
         const n = window.__nswsPlayersOnline;
-        const away = window.__nswsPlayersAway;
-        onlineLabel.textContent = Number.isSafeInteger(n) ? n + " online" + (away > 0 ? " (" + away + " away)" : "") : "";
+        onlineLabel.textContent = Number.isSafeInteger(n) ? n + " online" : "";
     }
 
     function pingSoundOn() {
