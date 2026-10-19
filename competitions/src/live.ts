@@ -1,6 +1,7 @@
 // Live timing from the car states the game already sends for every racer: checkpoint splits,
 // running order and gaps, with no messages of its own.
 import type { CarState, Connection, CarUpdate } from './game.ts';
+import { rawCarUpdates } from './smooth.ts';
 
 export interface Progress {
   cp: number;
@@ -17,7 +18,7 @@ export class LiveTiming {
   #session: number | null = null;
   #cars = new Map<number, Progress & { resets: number }>();
   #connection: Connection | null = null;
-  #listener: CarUpdate = (session, id, resets, state) => this.#update(session, id, resets, state);
+  #listener: CarUpdate = rawCarUpdates((session, id, resets, state) => this.#update(session, id, resets, state));
 
   attach(connection: Connection | null) {
     if (connection === this.#connection) return;

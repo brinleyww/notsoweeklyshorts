@@ -1,7 +1,7 @@
 // The Competitions screen behind the main menu button: open cups, joining by code or link, and
 // hosting. Hosting picks the name, format and maps before the room opens.
 import type { App } from '../app.ts';
-import { site, type Connection, type TrackData, type TrackMeta } from '../game.ts';
+import { background, site, type Connection, type TrackData, type TrackMeta } from '../game.ts';
 import { cleanRules, FORMATS, formatById, MAX_RACERS, PRODUCT } from '../rules.ts';
 import { btn, click, h, icon, fill, range } from './dom.ts';
 
@@ -35,7 +35,7 @@ interface ListedCup {
   max: number;
   status?: CupStatus | null;
 }
-interface CupInfo {
+export interface CupInfo {
   name: string;
   host: string;
   pool: MapPool;
@@ -164,7 +164,7 @@ export class Hub {
     this.#build();
     void this.#refresh(true);
     clearInterval(this.#listTimer);
-    this.#listTimer = window.setInterval(() => document.visibilityState === 'visible' && !this.el.hidden && void this.#refresh(false), LIST_REFRESH_MS);
+    this.#listTimer = window.setInterval(() => !background() && !this.el.hidden && void this.#refresh(false), LIST_REFRESH_MS);
     setTimeout(() => this.#code.focus(), 50);
   }
 
@@ -455,6 +455,14 @@ export class Hub {
       ),
     );
     this.#card.hidden = false;
+  }
+
+  // Back into a cup this page was in before the tab closed (mod/nsws_cup_rejoin.js already looked it up).
+  rejoin(code: string, info: CupInfo, role: 'racer' | 'spectator') {
+    if (this.#busy) return;
+    if (this.el.hidden) this.open();
+    this.#card.hidden = false;
+    void this.#connect(code, info, role);
   }
 
   async #info(code: string) {

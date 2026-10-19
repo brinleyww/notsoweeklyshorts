@@ -4,6 +4,7 @@ import { App } from './app.ts';
 import { site } from './game.ts';
 import { installTransport } from './transport.js';
 import { Layer } from './ui/layer.ts';
+import type { CupInfo } from './ui/hub.ts';
 import { FORMATS, importOldPresets } from './rules.ts';
 
 installTransport();
@@ -40,7 +41,13 @@ site.__nswsLobbyTag = () => {
 
 site.__nswsCupApp = {
   open: () => (app.connection && app.game ? layer.panel.setOpen(true) : layer.hub.open()),
-  join: (code: string) => layer.hub.join(code),
+  join: (code: string) => {
+    // Set by mod/nsws_cup_rejoin.js when the player chose to rejoin the cup they were in.
+    const rejoin = site.__nswsCupRejoin;
+    site.__nswsCupRejoin = undefined;
+    if (rejoin?.code === code && rejoin.info) return layer.hub.rejoin(code, rejoin.info as CupInfo, rejoin.role);
+    return layer.hub.join(code);
+  },
   inCup: () => !!app.state,
   debug: () => ({
     host: app.isHost,

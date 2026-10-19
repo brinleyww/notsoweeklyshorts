@@ -36,6 +36,25 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
     back at the start with the clock still running; restart pressed twice within 2 s retires. Time attack: restarts are free.
   - `spectate.ts`: watching. The camera rides another racer's car using that car's own chase or
     cockpit camera, so nothing is streamed. Director (auto), Follow (◀ ▶) or Free camera.
+  - `smooth.ts`: draws every other car where it is now. Each page stamps its car's states with when
+    that car started on the cup clock (`transport.js`), so a state's age is known; the car is drawn at
+    (cup time now - its start), between real states or carried on from the newest along its path (up to
+    1.2 s), and a correction after a brake, crash or landing fades out over ~0.1 s. The game's own remote
+    playback (a buffer drawn 0.6 s behind, which skipped 50 ms a frame whenever a 200 ms bunch over- or
+    under-filled it) gets no states. The organizer's own car goes out in its batches, so its start is in
+    the cup state (`clk`). Measured with three pages at over 100 km/h: 33-58 m behind before, 0.3-1.2 m
+    off (p95 0.8-2.4 m) now. Other cars are hidden while results, votes or loading cover the race.
+    Live timing still reads states as they arrive. Bumper cars don't guess (a guessed car would be one
+    you crash into): their pages send every 100 ms while driving and the game's own playback draws
+    other cars 0.25 s behind its newest state (about 0.3-0.37 s behind the real car, was 0.5-0.57 s),
+    which costs about twice the messages while racing, in bumper cups only.
+  - Car states go straight between pages: the room passes a racer's stamped states (`kind 2` records)
+    to every other page as well as the organizer (PROXY.md, "Competitions"), so they skip the organizer's
+    page and its batching. The room stamps each copy with the link it came in on, and pages trust only
+    the organizer's list of whose link is whose (`lk` in the cup state). The organizer's game then leaves them out of its batches to pages that get
+    them this way (`window.__nswsCupDirect`, set in `app.ts` from `transport.js`), so each state is
+    decoded once; with an older page or Worker on either end it relays them as before, and `smooth.ts`
+    drops any copy it already has.
   - `live.ts`: live timing from the car states the game already sends: checkpoints, running order,
     gaps and splits, at no network cost.
 - `ui/`: everything is in one shadow root over the game, scaled by the game's `--ui-scale-factor`.
@@ -124,4 +143,23 @@ car is moving (racers from the countdown on; the organizer while anyone's car mo
 runs), and every 1 s otherwise; the transport re-checks the pace every 100 ms, so a batch queued at
 the slow pace never holds up a car that just started. Clicks,
 finishes and phase changes flush at once. Live timing and spectating need no messages of their
-own. Measured with two pages: about 3.5 frames a second per driving page, about 1 a second idle.
+own. On the game's unreliable channel the transport also drops what carries nothing: the empty car
+batch the organizer's game sends everyone every 100 ms, repeated car states, pings beyond one per
+10 s at the slow pace, and (while results, votes or loading cover the race) all but the newest car
+state. Pages also stay quiet in the background (hidden, or another window focused): no pongs, clock
+syncs, watch reports, cup chat keepalives or list refreshes, unless the player races in a round or
+organizes. Clock syncs are every 30 s, and pings or watch changes reach the others with the next real
+state change (at most 10 s later between rounds).
+
+Measured with two pages (frames a second, before -> after): driving 4.0 -> 3.9 (unchanged by design),
+the organizer in a countdown 3.6 -> 1.4, results 1.3-1.5 -> 0.3-0.4, votes and lobby 0.9-1.05 ->
+0.1-0.27, a hidden page between rounds ~1 -> 0, a player who left 0. A 16-racer cup works out at
+about 135 requests a minute before and 114 after while racing; driving is the floor at this pace.
+With prediction (`smooth.ts`) the pace no longer shows as lag, only as guessing error: three weaving
+racers at 110-156 km/h were drawn a median 1.1-1.9 m off (p95 2-6 m) at a 400 ms pace, against
+0.3-1.2 m (p95 0.8-2.4 m) at 200 ms, for about half the driving frames.
+
+A player who closes the tab by accident is offered the cup again from the menu
+(`mod/nsws_cup_rejoin.js`, the game's own confirm box): while they are in a cup (not organizing it),
+`app.ts` keeps `nsws-sc-rejoin` in localStorage, which leaving on purpose clears; Rejoin connects with
+the same identity key, so the organizer gives back the same player, points and results.

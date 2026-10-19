@@ -12,6 +12,10 @@ const LOAD_WAIT_MS = 15_000;
 const SESSION_RETRY_MS = 8_000;
 const CHECK_WAIT_MS = 10_000;
 const BROADCAST_MS = 150;
+// Pings and who watches whom go out with the next real change, or after this long between rounds.
+const SOFT_MS = 10_000;
+// How long after a page is sent a racer's link before the game stops relaying that racer to it.
+const LINK_SETTLE_MS = 1_000;
 const STATUS_MS = 2_000;
 const OUTAGE_GRACE_MS = 10_000;
 const RECENT_TRACKS = 8;
@@ -25,6 +29,8 @@ interface Peer {
   key: string | null;
   hist: number;
   greeted: boolean;
+  // Each player's link as last sent to this page, and when it was first sent.
+  links?: Map<number, { link: number; at: number }>;
 }
 
 const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -44,6 +50,7 @@ export class Organizer {
   #peers = new Map<number, Peer>();
   #nextU = 1;
   #dirty = true;
+  #soft = false;
   #urgent = false;
   #sentAt = 0;
   #ready = new Map<number, number>();
@@ -103,6 +110,40 @@ export class Organizer {
   touch(urgent = false) {
     this.#dirty = true;
     if (urgent) this.#urgent = true;
+    this.app.changed();
+  }
+
+  links(ids: Map<number, number>) {
+    for (const p of this.state.players) {
+      if (p.u === this.me) continue;
+      let link: number | undefined;
+      for (const [l, pid] of ids) if (pid === p.pid) link = l;
+      if (p.lk === link) continue;
+      if (link == null) delete p.lk;
+      else p.lk = link;
+      this.#softTouch();
+    }
+  }
+
+  // Page `to` has known `from`'s current link long enough to draw the copies the room passes it (app.ts).
+  knowsLink(to: number, from: number, link: number, now: number) {
+    const known = this.#peers.get(to)?.links?.get(from);
+    return known?.link === link && now - known.at >= LINK_SETTLE_MS;
+  }
+
+  carClock(start: number | null) {
+    const me = player(this.state, this.me);
+    if (!me) return;
+    if (start == null) {
+      if (me.clk == null) return;
+      delete me.clk;
+    } else if (me.clk != null && Math.abs(me.clk - start) <= 30) return;
+    else me.clk = Math.round(start);
+    this.#softTouch();
+  }
+
+  #softTouch() {
+    this.#soft = true;
     this.app.changed();
   }
 
@@ -197,7 +238,7 @@ export class Organizer {
         // Small wobbles aren't worth a broadcast.
         if (p.ping == null || Math.abs(p.ping - ping) >= 15) {
           p.ping = ping;
-          this.touch();
+          this.#softTouch();
         }
       }
       return;
@@ -328,7 +369,7 @@ export class Organizer {
     this.#watchAt.set(u, now);
     if (to == null) delete p.watch;
     else p.watch = to;
-    this.touch();
+    this.#softTouch();
   }
 
   #ballot(u: number, v: number) {
@@ -349,12 +390,22 @@ export class Organizer {
     if (peer.hist < this.history.length) {
       if (this.app.net.send(pid, { k: 'hist', from: peer.hist, rows: this.history.slice(peer.hist) })) peer.hist = this.history.length;
     }
-    this.app.net.send(pid, { k: 'st', s: this.state });
+    if (!this.app.net.send(pid, { k: 'st', s: this.state })) return;
+    const links = (peer.links ??= new Map());
+    const now = Date.now();
+    for (const p of this.state.players) {
+      if (p.pid == null || p.lk == null) continue;
+      if (links.get(p.pid)?.link !== p.lk) links.set(p.pid, { link: p.lk, at: now });
+    }
+    for (const pid of links.keys()) if (!this.state.players.some((p) => p.pid === pid && p.lk != null)) links.delete(pid);
   }
 
   #broadcast(now: number) {
-    if (!this.#dirty || now - this.#sentAt < BROADCAST_MS) return;
+    // While cars race the organizer sends every 200 ms anyway, so a soft change costs nothing extra.
+    const soft = this.#soft && ((site.__nswsMuxPace ?? 1000) <= 200 || now - this.#sentAt >= SOFT_MS);
+    if ((!this.#dirty && !soft) || now - this.#sentAt < BROADCAST_MS) return;
     this.#dirty = false;
+    this.#soft = false;
     this.#sentAt = now;
     this.state.seq++;
     for (const pid of this.#peers.keys()) this.#sendTo(pid);

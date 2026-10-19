@@ -40,6 +40,10 @@ export interface Player {
   away?: 1;
   ready?: 1;
   best?: number;
+  // When the organizer's own car started, on the cup clock: other pages draw it where it is now.
+  clk?: number;
+  // The player's link to the organizer in the relay, so pages know whose car a direct copy is.
+  lk?: number;
 }
 
 export interface Run {

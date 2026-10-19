@@ -39492,7 +39492,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 throw De(t) ? new Error("Error creating WebGL context with your selected attributes.") : new Error("Error creating WebGL context.")
                         }
                     } catch (e) {
-                        throw e("WebGLRenderer: " + e.message),
+                        throw console.error("THREE.WebGLRenderer: " + e.message),
                         e
                     }
                     function Be() {
@@ -43043,7 +43043,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             carState: e
                         });
                 for (const n of C.get(this, mn, "f"))
-                    if (n != e && n.unsentCarStates.length > 0)
+                    if (n != e && n.unsentCarStates.length > 0 && !window.__nswsCupDirect?.(n.id, e.id))
                         for (const e of n.unsentCarStates)
                             t.push({
                                 id: n.id,

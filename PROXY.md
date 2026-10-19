@@ -547,15 +547,28 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   `declineJoin`, `iceCandidate`, `joinDisconnect`), censoring nicknames and cup names. It then
   relays data channels: each page's mux socket carries frames of records
   `[u32 link][u16 channel][u8 kind][u32 length][bytes]`, and the room forwards each record to the
-  other end of its link (one frame per destination). It never reads the game data and stores nothing
+  other end of its link (one frame per destination). A page that opens its mux socket with `fan=1`
+  sends its own car states as kind 2, `[u32 0][f64 car start on the cup clock][game bytes]`;
+  the room writes the link the record came in on over the first four bytes, passes it to the organizer
+  (kind 1 without the 12-byte prefix if the organizer's page didn't ask for `fan=1`) and also straight
+  to every other `fan=1` page, on that page's link, so other cars skip the organizer's page. Pages learn
+  whose link is whose only from the organizer (`lk` on each player in the cup state) and drop a copy
+  from a link it hasn't named, so a page can't pass its car off as someone else's. Only outgoing messages multiply, which aren't billed. `up` says
+  `fan: true` to a page whose socket asked for it and `peerFan: true` when the other end's did; older
+  pages never see kind 2. The organizer's game leaves a racer's states out of its batches to a
+  `peerFan` page once that racer's states arrive as kind 2. Pages don't count
+  these copies among their link's records (`transport.js`). It never reads the game data and stores nothing
   but the reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
   are kept from the earlier lobbies, so no migration was needed).
 - **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
   it sends into one frame: every 200 ms while its car is moving (the organizer: while anyone's is) and
-  every second otherwise; clicks, finishes and phase changes go at once. Measured: about 3.5 frames a
-  second per driving page and about 1 a second idle. An 8-player cup is about 1.5 requests a second
-  while everyone races and well under 1 between rounds. Spectating and live timing send nothing of
-  their own. The room rejects more than 60 frames a second from one socket.
+  every second otherwise; clicks, finishes and phase changes go at once. Pages drop what carries
+  nothing (the organizer's empty car batches, repeated car states, most pings between rounds) and
+  send nothing from a background tab unless racing or organizing (`competitions/README.md`, "Cost on
+  Cloudflare"). Measured: about 3.9 frames a second per driving page and 0.1-0.3 between rounds. An
+  8-player cup is about 1.5 requests a second while everyone races and about 0.1 between rounds.
+  Spectating and live timing send nothing of their own. The room rejects more than 60 frames a second
+  from one socket.
 - **Cup PBs go to the owner:** with "Upload leaderboard times" on in a cup's rules, a personal best set
   in a cup is uploaded with `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal
   replay check and is put on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to

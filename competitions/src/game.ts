@@ -21,6 +21,7 @@ export interface Car {
   getSpeedKmh(): number;
   getRecording(): { serialize(): string } | null;
   getCarState(): CarState;
+  setCarState(state: CarState, reset: boolean): void;
   hasStarted(): boolean;
   hasFinished(): boolean;
   addCheckpointCallback(cb: (index: number) => void): void;
@@ -164,6 +165,9 @@ export interface SiteKeys {
   record(cb: (code: string | null) => void): void;
 }
 
+// Hidden, or another window has the focus.
+export const background = () => document.hidden || !document.hasFocus();
+
 export const site = window as unknown as {
   __nswsCup?: Bridge;
   __nswsApiBase?: string;
@@ -173,6 +177,13 @@ export const site = window as unknown as {
   __nswsKeyBindCapturing?: boolean;
   __nswsTicker?: { every(ms: number, fn: () => void): void };
   __nswsMuxPace?: number;
+  __nswsMuxQuiet?: boolean;
+  __nswsMuxCarsUnseen?: boolean;
+  __nswsMuxCar?: { start: number };
+  __nswsFanIds?: Map<number, number>;
+  __nswsCarClocks?: Map<number, number>;
+  __nswsCupDirect?: (from: number, to: number) => boolean;
+  __nswsCupRejoin?: { code: string; role: 'racer' | 'spectator'; info: unknown };
   __nswsMuxFlush?: () => void;
   __nswsMuxOutage?: { from: number; until: number };
   __nswsCupJoinCode?: string;

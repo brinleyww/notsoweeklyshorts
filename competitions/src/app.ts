@@ -4,10 +4,11 @@
 import { CupChat } from './chat.ts';
 import { Driver } from './driver.ts';
 import type { Bridge, Connection, Game, GameInfo, LobbyPlayer, Native } from './game.ts';
-import { site } from './game.ts';
+import { background, site } from './game.ts';
 import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
+import { installSmoothing, predictCars } from './smooth.ts';
 import { VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
@@ -28,9 +29,14 @@ export interface Note {
 }
 
 const HELLO_MS = 2000;
-const CLOCK_MS = 10_000;
+const CLOCK_MS = 30_000;
 const PACE_DRIVING = 200;
+// Bumper cars draw other cars with the game's own playback, not guessed ahead (smooth.ts), so they go twice as often.
+const PACE_BUMPER = 100;
 const PACE_IDLE = 1000;
+const REJOIN_KEY = 'nsws-sc-rejoin';
+const COVERED = ['loading', 'checking', 'results', 'vote', 'podium'];
+const REJOIN_SAVE_MS = 20_000;
 
 function identityKey(code: string) {
   const name = 'nsws-sc-key:' + code;
@@ -94,12 +100,15 @@ export class App {
   #lobbyAt = 0;
   #changeQueued = false;
   #lastSeq = -1;
+  #savedAt = 0;
+  #pageHiding = false;
 
   constructor() {
     const bridge = site.__nswsCup;
     if (!bridge) throw new Error('The game is still loading.');
     this.bridge = bridge;
     this.native = bridge.native();
+    installSmoothing(this.native);
     this.net = new Net(
       (from, m) => this.#receive(from, m),
       () => this.changed(),
@@ -136,6 +145,8 @@ export class App {
     };
     if (site.__nswsTicker) site.__nswsTicker.every(100, tick);
     else setInterval(tick, 100);
+    window.addEventListener('pagehide', () => (this.#pageHiding = true));
+    window.addEventListener('pageshow', () => (this.#pageHiding = false));
   }
 
   // ---- Lifecycle ----
@@ -207,11 +218,24 @@ export class App {
     this.#helloAt = 0;
     this.#readySent = null;
     this.#lastSeq = -1;
+    this.#savedAt = 0;
     this.driver.runs = [];
     site.__nswsMuxPace = undefined;
+    site.__nswsMuxQuiet = false;
+    site.__nswsMuxCarsUnseen = false;
+    site.__nswsMuxCar = undefined;
+    site.__nswsCarClocks?.clear();
+    site.__nswsFanIds?.clear();
+    site.__nswsCupDirect = undefined;
+    this.#carStart = null;
   }
 
   #closed() {
+    // Leaving on purpose; a closing tab keeps the record so the menu can offer to rejoin.
+    if (!this.#pageHiding)
+      try {
+        localStorage.removeItem(REJOIN_KEY);
+      } catch {}
     this.#reset();
     this.connection = null;
     this.game = null;
@@ -259,7 +283,15 @@ export class App {
     if (this.selfPid != null) {
       const own = info.car.getCarState();
       this.live.local(this.selfPid, own && this.driver.offset ? { ...own, frames: own.frames + this.driver.offset } : own);
+      this.#noteCarClock(own);
     }
+    predictCars(
+      info.connection,
+      (id) => this.native.remoteCar(g, id),
+      this.now(),
+      (id) => site.__nswsCarClocks?.get(id) ?? this.playerByPid(id)?.clk,
+      s.rules.collisions,
+    );
     if (s.id !== this.#cupId) {
       this.#cupId = s.id;
       this.driver.runs = [];
@@ -270,14 +302,16 @@ export class App {
     const r = s.round;
     const live = !!r && LIVE_PHASES.includes(s.phase) || s.phase === 'checking';
     const onRound = live && r!.session === info.sessionId;
-    if (onRound) {
+    // Between rounds the cup draws its own cards, so the game's finish banner and hints stay hidden
+    // too, and so do other cars: their states only go out now and then meanwhile (transport.js).
+    const covered = COVERED.includes(s.phase);
+    if (covered) this.native.visibility(g, this.selfPid == null ? [] : [this.selfPid], this.selfPid);
+    else if (onRound) {
       const pids = r!.racers.map((u) => player(s, u)?.pid).filter((id): id is number => id != null);
       let shown = pids;
       if (this.watch.ghostsHidden && !s.rules.collisions) shown = pids.filter((id) => id === this.selfPid || (this.watch.active && id === this.watch.target));
       this.native.visibility(g, shown, this.selfPid);
     } else this.native.visibility(g, null, this.selfPid);
-    // Between rounds the cup draws its own cards, so the game's finish banner and hints stay hidden too.
-    const covered = ['loading', 'checking', 'results', 'vote', 'podium'].includes(s.phase);
     this.native.presentation(g, true, this.watch.active || covered);
     const crashing = s.rules.collisions && s.phase === 'racing' && this.driver.racing && !this.driver.done;
     this.native.collisions(
@@ -307,12 +341,69 @@ export class App {
     // A player whose connection died for good leaves the game's list (and the cup) at once.
     if (this.isHost) this.native.pruneClosedPeers(c);
     this.net.sync(this.native, c);
+    this.#fanIds(c);
+    if (this.isHost) this.#relayDirect(c);
     this.chat.tick();
     if (this.org) this.org.tick(Date.now());
     else this.#clientTick();
     this.#watchSync();
     this.#bumps();
     this.#pace();
+    this.#remember();
+  }
+
+  // The game's relay (main.bundle.js) skips a racer's states for a page the room already passes them
+  // to straight (transport.js) and that can tell whose they are (Organizer.knowsLink).
+  #relayDirect(c: Connection) {
+    const pcs = new Map<number, { link?: number; _carDirect?: boolean; _peerFan?: boolean }>();
+    for (const { id, pc } of this.native.peers(c)) pcs.set(id, pc as never);
+    const org = this.org;
+    site.__nswsCupDirect = (from, to) => {
+      const sender = pcs.get(from);
+      return !!sender?._carDirect && !!sender.link && !!pcs.get(to)?._peerFan && !!org?.knowsLink(to, from, sender.link, Date.now());
+    };
+  }
+
+  // Whose relay link is whose, for car states that come straight from other racers (transport.js):
+  // the organizer's page knows its own links, everyone else takes them from the organizer.
+  #fanIds(c: Connection) {
+    const ids = (site.__nswsFanIds ??= new Map());
+    ids.clear();
+    if (this.isHost) {
+      for (const { id, pc } of this.native.peers(c)) {
+        const link = (pc as unknown as { link?: number }).link;
+        if (link) ids.set(link, id);
+      }
+      this.org?.links(ids);
+    } else for (const p of this.state?.players ?? []) if (p.lk && p.pid != null) ids.set(p.lk, p.pid);
+  }
+
+  // When this page's car started on the cup clock: stamped on its states (transport.js), and in the
+  // cup state for the organizer's own car, so other pages can draw it where it is now (smooth.ts).
+  #carStart: number | null = null;
+  #noteCarClock(own: { hasStarted: boolean; frames: number } | null) {
+    if (!own?.hasStarted) this.#carStart = null;
+    else {
+      const start = this.now() - own.frames;
+      if (this.#carStart == null || Math.abs(start - this.#carStart) > 50) this.#carStart = start;
+      else this.#carStart += (start - this.#carStart) * 0.05;
+    }
+    site.__nswsMuxCar = { start: this.#carStart ?? NaN };
+    this.org?.carClock(this.#carStart);
+  }
+
+  // For mod/nsws_cup_rejoin.js, which offers the cup again if the tab closes by accident.
+  #remember() {
+    const s = this.state,
+      me = this.self;
+    if (this.isHost || !s || !me || !this.code) return;
+    const now = Date.now();
+    if (now - this.#savedAt < REJOIN_SAVE_MS) return;
+    this.#savedAt = now;
+    try {
+      if (s.phase === 'podium') localStorage.removeItem(REJOIN_KEY);
+      else localStorage.setItem(REJOIN_KEY, JSON.stringify({ code: this.code, role: me.role, name: s.name, at: now }));
+    } catch {}
   }
 
   #clientTick() {
@@ -322,7 +413,7 @@ export class App {
       this.#helloAt = now;
       this.net.send(0, { k: 'hi', v: VERSION, key: identityKey(this.code), role: this.#intent }, true);
     }
-    if (this.me != null && (this.#clockBurst < 4 || now - this.#clockAt > CLOCK_MS) && now - this.#clockAt > 400) {
+    if (this.me != null && (this.#clockBurst < 4 || (now - this.#clockAt > CLOCK_MS && !site.__nswsMuxQuiet)) && now - this.#clockAt > 400) {
       this.#clockAt = now;
       this.#clockBurst++;
       this.net.send(0, this.#lastPing == null ? { k: 't0', a: now } : { k: 't0', a: now, rtt: this.#lastPing }, true);
@@ -338,7 +429,7 @@ export class App {
   // Sent once the choice has held for a moment, so the director's cuts don't each cost a message.
   #watchSync() {
     const me = this.self;
-    if (!me) return;
+    if (!me || site.__nswsMuxQuiet) return;
     const w = this.watch;
     const pid = w.active && w.mode !== 'free' ? w.target : null;
     const want = pid == null ? null : (this.playerByPid(pid)?.u ?? null);
@@ -376,7 +467,10 @@ export class App {
     const racing = this.driver.racing && !this.driver.done && (s?.phase === 'countdown' || s?.phase === 'racing');
     // The organizer relays everyone else's car, so it keeps the fast pace while any car moves or a round runs.
     const hostLive = this.isHost && !!s && (performance.now() - this.live.movedAt < 1500 || s.phase === 'countdown' || s.phase === 'racing');
-    site.__nswsMuxPace = moving || racing || hostLive ? PACE_DRIVING : PACE_IDLE;
+    site.__nswsMuxPace = moving || racing || hostLive ? (s?.rules.collisions ? PACE_BUMPER : PACE_DRIVING) : PACE_IDLE;
+    // The organizer keeps everyone's cup running, and a racer in a round keeps racing.
+    site.__nswsMuxQuiet = !this.isHost && !moving && !racing && background();
+    site.__nswsMuxCarsUnseen = !!s && COVERED.includes(s.phase);
   }
 
   // To the organizer (or straight into the Organizer on its own page).

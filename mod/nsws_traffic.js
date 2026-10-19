@@ -49,12 +49,11 @@
     let seenAnn = null;
     let lastSample = performance.now();
     let lastBeat = -Infinity;
-    // Only a tab that is shown beats. A hidden one sends nothing and drops off the online count once
-    // the gap its last beat promised runs out; it beats again as soon as it is shown. The beat reply
-    // stretches the gap when the site is busy (nv).
+    // Only a tab that is shown beats. A hidden one sends nothing: once the gap its last beat promised
+    // runs out the server counts it as away (still online) until it says goodbye on close, or for two
+    // hours. It beats again as soon as it is shown. The beat reply stretches the gap when the site is busy (nv).
     let visibleGap = BEAT_VISIBLE_S;
     let promised = BEAT_VISIBLE_S;
-    let hiddenAt = document.visibilityState === "hidden" ? performance.now() : 0;
 
     function currentState() {
         if (document.querySelector(".editor-ui")) return "editor";
@@ -149,6 +148,7 @@
                     if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_GAP_S);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;
+                    window.__nswsPlayersAway = Number.isSafeInteger(data.away) ? data.away : 0;
                     window.dispatchEvent(new CustomEvent("nsws-players-online", { detail: data.online }));
                 }, () => {});
             }
@@ -163,14 +163,9 @@
 
     setInterval(tick, 1000);
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden") hiddenAt = performance.now();
-        else tick();
+        if (document.visibilityState !== "hidden") tick();
     });
-    // Closing a shown tab hides it a moment before pagehide, so only a tab hidden for a while skips the goodbye.
-    window.addEventListener("pagehide", () => {
-        if (document.visibilityState === "hidden" && performance.now() - hiddenAt > 5000) return;
-        beat(true);
-    });
+    window.addEventListener("pagehide", () => beat(true));
     window.addEventListener("pageshow", (e) => {
         if (e.persisted) {
             lastSample = performance.now();

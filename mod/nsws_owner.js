@@ -6,8 +6,8 @@
     const ACCENT = "#b3c1ff";
     const GOOD = "#3ddc84";
     const GOLD = "#ffc94a";
-    const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181" };
-    const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage" };
+    const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
+    const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
     const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"]];
     const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
@@ -708,10 +708,15 @@
     }
 
     // All-time runtime, including what the online players have run since their last beat.
+    // Away tabs are hidden, and a hidden tab adds no runtime.
+    function activeOnline(live) {
+        return Math.max(0, live.online - (live.away || 0));
+    }
+
     function odometerSeconds() {
         const live = ui.live;
         if (!live) return 0;
-        return live.totalRuntime + live.pending + live.online * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
+        return live.totalRuntime + live.pending + activeOnline(live) * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
     }
 
     function odometerText(seconds) {
@@ -754,8 +759,8 @@
         odo.innerHTML = odometerText(odometerSeconds());
         odoCard.appendChild(odo);
         const rate = el("div", "nrc-rate");
-        rate.innerHTML = live.online
-            ? `Climbing <b>+${num(live.online)}s</b> every second right now · ${num(live.totalOpens)} opens all time`
+        rate.innerHTML = activeOnline(live)
+            ? `Climbing <b>+${num(activeOnline(live))}s</b> every second right now · ${num(live.totalOpens)} opens all time`
             : `Nobody online right now · ${num(live.totalOpens)} opens all time`;
         odoCard.appendChild(rate);
         hero.appendChild(odoCard);

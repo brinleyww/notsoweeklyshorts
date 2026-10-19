@@ -39,7 +39,8 @@ class Room {
       this.unread = 0;
       this.#retryAt = 0;
     }
-    if (key && !this.#ws && Date.now() >= this.#retryAt) this.#open(query, secret);
+    // A hidden tab waits to reconnect until it is looked at again.
+    if (key && !this.#ws && Date.now() >= this.#retryAt && !document.hidden) this.#open(query, secret);
   }
 
   #open(query: string, secret: string | null) {
@@ -63,7 +64,7 @@ class Room {
       if (secret) hello.host = secret;
       if (this.#ws !== ws) return;
       ws.send(JSON.stringify(hello));
-      this.#keepAlive = window.setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('ping'), KEEPALIVE_MS);
+      this.#keepAlive = window.setInterval(() => ws.readyState === WebSocket.OPEN && !document.hidden && ws.send('ping'), KEEPALIVE_MS);
     };
     ws.onmessage = (e) => {
       if (this.#ws !== ws || e.data === 'pong') return;

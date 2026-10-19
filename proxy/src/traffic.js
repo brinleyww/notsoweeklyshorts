@@ -18,6 +18,9 @@ const MAX_BEAT_S = MAX_NEXT_S + 60;
 const RESTORE_LIVE_S = 400;
 // A session counts as online until its promised next beat is this late.
 const LIVE_GRACE_MS = 45_000;
+// A hidden tab sends nothing. Once its promised beat is late it counts as away, still online,
+// until it says goodbye (closing the tab) or this long after its last beat.
+const AWAY_MS = 2 * 60 * 60_000;
 const MINUTE_RING = 180;
 // New sessions allowed per IP address per hour. Schools share one address, so it is generous.
 const OPENS_PER_IP_HOUR = 120;
@@ -210,7 +213,7 @@ export class TrafficStats extends DurableObject {
             Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
         const rows = this.sql.exec(
             "SELECT * FROM sessions WHERE start > ? AND last > ? AND ended = 0",
-            now - RESTORE_MS, now - RESTORE_LIVE_S * 1000).toArray();
+            now - RESTORE_MS, now - AWAY_MS).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, start: row.start, last: row.last,
@@ -221,10 +224,21 @@ export class TrafficStats extends DurableObject {
         }
     }
 
+    // Active sessions beat on time; away ones stopped beating but never said goodbye.
+    liveCounts(now) {
+        let active = 0;
+        let away = 0;
+        for (const s of this.online.values()) {
+            if (s.ended) continue;
+            if (s.expires > now) active++;
+            else if (now - s.last < AWAY_MS) away++;
+        }
+        return { active, away };
+    }
+
     onlineCount(now) {
-        let n = 0;
-        for (const s of this.online.values()) if (!s.ended && s.expires > now) n++;
-        return n;
+        const { active, away } = this.liveCounts(now);
+        return active + away;
     }
 
     noteMinute(now, online) {
@@ -273,14 +287,17 @@ export class TrafficStats extends DurableObject {
     }
 
     async beat(b, meta) {
-        const online = this.record(b, meta) ?? null;
-        return { online, ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap() };
+        const counts = this.record(b, meta);
+        return {
+            online: counts ? counts.active + counts.away : null, away: counts?.away ?? null,
+            ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap(),
+        };
     }
 
-    // Seconds between a visible tab's beats (hidden tabs wait four times as long).
+    // Seconds between a shown tab's beats. Away tabs send nothing, so only active ones are budgeted.
     visibleGap() {
-        const online = this.onlineCount(Date.now());
-        return Math.min(MAX_VISIBLE_GAP_S, Math.max(60, Math.ceil(online * 60 / BEAT_BUDGET_PER_MIN)));
+        const { active } = this.liveCounts(Date.now());
+        return Math.min(MAX_VISIBLE_GAP_S, Math.max(60, Math.ceil(active * 60 / BEAT_BUDGET_PER_MIN)));
     }
 
     record(b, meta) {
@@ -327,7 +344,8 @@ export class TrafficStats extends DurableObject {
             attempts = attempts + ?, finishes = finishes + ?, ended = ?, nickname = COALESCE(?, nickname) WHERE id = ?`,
             now, runtime, focus, driving, ev.attempts, ev.finishes, s.ended ? 1 : 0, b.nick, b.s);
 
-        const online = this.onlineCount(now);
+        const counts = this.liveCounts(now);
+        const online = counts.active + counts.away;
         this.noteMinute(now, online);
         const t = Math.floor(now / 1000 / BUCKET_S);
         if (this.totals) {
@@ -364,9 +382,9 @@ export class TrafficStats extends DurableObject {
         }
 
         for (const [id, other] of this.online) {
-            if (other.ended || other.expires < now - 10 * 60_000) this.online.delete(id);
+            if (other.ended || (other.expires < now && now - other.last >= AWAY_MS)) this.online.delete(id);
         }
-        return online;
+        return counts;
     }
 
     liveAnnouncement() {
@@ -486,18 +504,22 @@ export class TrafficStats extends DurableObject {
     liveView(now) {
         const sessions = [];
         let pending = 0;
+        let away = 0;
         for (const s of this.online.values()) {
-            if (s.ended || s.expires <= now) continue;
-            pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
+            if (s.ended) continue;
+            const isAway = s.expires <= now;
+            if (isAway && now - s.last >= AWAY_MS) continue;
+            if (isAway) away++;
+            else pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
             sessions.push({
                 nickname: s.nickname, country: s.country, device: s.device, os: s.os, browser: s.browser,
-                site: s.site, state: s.state, track: s.track, since: s.start,
+                site: s.site, state: isAway ? "away" : s.state, track: isAway ? null : s.track, since: s.start,
             });
         }
         sessions.sort((a, b) => a.since - b.since);
         const minute = Math.floor(now / 60_000);
         const ring = this.ring.filter(([m]) => m > minute - MINUTE_RING);
-        return { online: sessions.length, pending, sessions, ring, now };
+        return { online: sessions.length, away, pending, sessions, ring, now };
     }
 
     loadTotals() {

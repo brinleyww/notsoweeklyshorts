@@ -623,7 +623,8 @@
     function updateOnline() {
         if (!onlineLabel) return;
         const n = window.__nswsPlayersOnline;
-        onlineLabel.textContent = Number.isSafeInteger(n) ? n + " online" : "";
+        const away = window.__nswsPlayersAway;
+        onlineLabel.textContent = Number.isSafeInteger(n) ? n + " online" + (away > 0 ? " (" + away + " away)" : "") : "";
     }
 
     function pingSoundOn() {

@@ -27,6 +27,13 @@ const MAX_PAIRS_PER_SOCKET = 40;
 const PAIR_ID = /^[A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16}$/;
 // A page flushes about 5 times a second; far more than this is a broken or hostile client.
 const FRAMES_PER_SEC = 60;
+// A racer's car state with its car clock in front ([u32 link][f64 start]), from a page that opened
+// its mux socket with fan=1. The room passes it to the organizer and also straight to every other
+// page that asked for them, so other cars arrive without the organizer's page in between. The room
+// writes the link it came in on over the first four bytes, so a page can't pass its states off as
+// another racer's; pages learn whose link is whose from the organizer (transport.js).
+const FAN_KIND = 2;
+const FAN_HEADER = 12;
 // How often a live public room refreshes its row in the directory.
 const LISTING_MS = 60_000;
 
@@ -66,6 +73,33 @@ function text(ws, data) {
     } catch {}
 }
 
+// One relay record for `link`, copied from the record at `at` minus `skip` bytes of its payload,
+// with `from` (the sender's link) over the payload's first four bytes when given.
+function record(link, data, at, skip, kind, from) {
+    const length = (data[at + 7] | data[at + 8] << 8 | data[at + 9] << 16 | data[at + 10] << 24) >>> 0;
+    const size = length - skip;
+    const out = new Uint8Array(11 + size);
+    out[0] = link & 255;
+    out[1] = link >>> 8 & 255;
+    out[2] = link >>> 16 & 255;
+    out[3] = link >>> 24 & 255;
+    out[4] = data[at + 4];
+    out[5] = data[at + 5];
+    out[6] = kind;
+    out[7] = size & 255;
+    out[8] = size >>> 8 & 255;
+    out[9] = size >>> 16 & 255;
+    out[10] = size >>> 24 & 255;
+    out.set(data.subarray(at + 11 + skip, at + 11 + length), 11);
+    if (from !== undefined) {
+        out[11] = from & 255;
+        out[12] = from >>> 8 & 255;
+        out[13] = from >>> 16 & 255;
+        out[14] = from >>> 24 & 255;
+    }
+    return out;
+}
+
 // A mux socket that drops keeps its links parked this long, so the page can reconnect and resume
 // them. Frames for a parked end are dropped: the sender resends them once the link is back.
 const RESUME_MS = 20_000;
@@ -103,6 +137,7 @@ export class LobbyRoom extends DurableObject {
         this.listedAt = 0;
         this.parked = new Map();
         this.expired = new Set();
+        this.fans = new WeakMap();
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -148,11 +183,11 @@ export class LobbyRoom extends DurableObject {
                     old.close(4002, "Replaced");
                 } catch {}
             }
-            server.serializeAttachment({ role, code, pairs: ok && parked ? parked.pairs : {}, token });
+            server.serializeAttachment({ role, code, pairs: ok && parked ? parked.pairs : {}, token, fan: params.get("fan") === "1" });
             if (ok && parked) this.unpark(token, server, parked);
             else if (parked) this.expire(token);
             text(server, { t: "resumed", ok, relink: ok });
-        } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming });
+        } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming, fan: role === "mux" && params.get("fan") === "1" });
         return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -384,8 +419,8 @@ export class LobbyRoom extends DurableObject {
         theirs.link = link;
         other.serializeAttachment(oa);
         this.links.set(link, side === "host" ? [ws, other] : [other, ws]);
-        text(ws, { t: "up", pair: id, link, recv: theirs.recv });
-        text(other, { t: "up", pair: id, link, recv });
+        text(ws, { t: "up", pair: id, link, recv: theirs.recv, fan: a.fan === true, peerFan: oa.fan === true });
+        text(other, { t: "up", pair: id, link, recv, fan: oa.fan === true, peerFan: a.fan === true });
         this.listing(false);
         return true;
     }
@@ -467,6 +502,13 @@ export class LobbyRoom extends DurableObject {
         const data = new Uint8Array(buffer);
         if (!this.links) this.rebuildLinks();
         const out = new Map();
+        const add = (to, part) => {
+            const key = to.parked ?? to;
+            let parts = out.get(key);
+            if (!parts) out.set(key, parts = []);
+            parts.push(part);
+        };
+        let fanTo = null;
         let at = 0;
         while (at + 11 <= data.length) {
             const link = (data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24) >>> 0;
@@ -475,11 +517,12 @@ export class LobbyRoom extends DurableObject {
             if (end > data.length) break;
             const ends = this.links.get(link);
             const to = ends && (ends[0] === ws ? ends[1] : ends[1] === ws ? ends[0] : null);
-            if (to) {
-                const key = to.parked ?? to;
-                let parts = out.get(key);
-                if (!parts) out.set(key, parts = []);
-                parts.push(data.subarray(at, end));
+            if (data[at + 6] !== FAN_KIND) {
+                if (to) add(to, data.subarray(at, end));
+            } else if (ends && ends[1] === ws && length > FAN_HEADER) {
+                if (to) add(to, this.fanned(to) ? record(link, data, at, 0, FAN_KIND, link) : record(link, data, at, FAN_HEADER, 1));
+                fanTo ??= this.fanTargets(ws);
+                for (const [theirs, other] of fanTo) add(other, record(theirs, data, at, 0, FAN_KIND, link));
             }
             at = end;
         }
@@ -499,6 +542,20 @@ export class LobbyRoom extends DurableObject {
             } catch {}
         }
         if (Date.now() - this.listedAt > LISTING_MS) this.listing(true);
+    }
+
+    fanned(ws) {
+        if (typeof ws?.deserializeAttachment !== "function") return false;
+        let on = this.fans.get(ws);
+        if (on === undefined) this.fans.set(ws, on = ws.deserializeAttachment()?.fan === true);
+        return on;
+    }
+
+    // Every other page's link to the organizer, where that page takes car states straight from racers.
+    fanTargets(from) {
+        const list = [];
+        for (const [link, [, client]] of this.links) if (client && client !== from && this.fanned(client)) list.push([link, client]);
+        return list;
     }
 
     // Public rooms show in the Competitions list. Only the host's name, a player count and the cup's

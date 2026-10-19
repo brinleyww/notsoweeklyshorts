@@ -1091,7 +1091,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
                 console.error("traffic beat failed:", err && err.message);
             }
         }
-        if (reply) return json({ online: reply.online ?? null, ann: reply.ann ?? null, pv: reply.pv ?? null, nv: reply.nv ?? null }, origin);
+        if (reply) return json({ online: reply.online ?? null, away: reply.away ?? null, ann: reply.ann ?? null, pv: reply.pv ?? null, nv: reply.nv ?? null }, origin);
         // Nothing was stored, so the page keeps this beat's counts for the next one, and leaves any
         // announcement or poll it is showing alone.
         return json(doLimited() ? { busy: true, nv: DO_LIMIT_RETRY_S, until: limitLiftsAt() } : { busy: true, nv: null }, origin);

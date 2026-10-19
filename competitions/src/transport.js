@@ -17,7 +17,9 @@
 // re-link from their own pages.
 
 const FLUSH_MS = 200;
-const pace = () => Math.max(FLUSH_MS, Number(window.__nswsMuxMinPace) || 0, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
+// Bumper cars send every 100 ms while driving (app.ts).
+const MIN_PACE_MS = 100;
+const pace = () => Math.max(MIN_PACE_MS, Number(window.__nswsMuxMinPace) || 0, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
 // Past this much queued, flush at once (track transfers) instead of waiting for the timer.
 const FLUSH_BYTES = 256 * 1024;
 const MAX_EARLY = 64;
@@ -30,6 +32,99 @@ const MAX_RESUME_BYTES = 4 * 1024 * 1024;
 const LOG_BYTES = 1024 * 1024;
 // A connection still waiting for its other end this long after re-linking is gone.
 const RELINK_MS = 30000;
+// The game's unreliable channel may lose messages, so on it:
+// - an empty car batch (the organizer's game sends everyone one every 100 ms) or a car state the
+//   other end already has never goes;
+// - at the slow pace, pings go once per PING_MS;
+// - while the cup covers the race with its own cards (window.__nswsMuxCarsUnseen: results, votes,
+//   loading), car states wait in a slot of one, the newest, for the next frame or HOLD_MS, and are
+//   dropped once the race shows again (the next round resets the cars, and a late one would undo it);
+// - a page the cup marks quiet (window.__nswsMuxQuiet: in the background, not organizing, its car
+//   not moving) answers no pings and sends its slot only with a frame that goes anyway.
+const UNRELIABLE = 1;
+const PING_MS = 10000;
+const HOLD_MS = 10000;
+const HOST_CARS = 3, HOST_PING = 9, HOST_PING_DATA = 10, CLIENT_CAR = 1, CLIENT_PONG = 3;
+const slow = () => pace() >= 1000;
+// With a room that passes car states straight between pages (proxy/src/lobby.js, FAN_KIND), a
+// racer's own states go out as [u32 0][f64 its car's start on the cup clock][the game's bytes],
+// the start from window.__nswsMuxCar. The room writes the sender's link over the first four
+// bytes; window.__nswsFanIds (app.ts, from the organizer) says whose link it is, and a copy from
+// a link nobody vouched for is dropped. The start tells every page how old a state is (smooth.ts,
+// window.__nswsCarClocks by player id). These copies don't count as the link's records.
+// On the organizer's page, a racer whose latest state came that way (pc._carDirect) isn't relayed
+// again by the game to pages whose sockets take them (pc._peerFan; app.ts, __nswsCupDirect).
+const FAN_KIND = 2;
+const FAN_HEADER = 12;
+
+function stamped(bytes) {
+    const car = window.__nswsMuxCar;
+    if (!car) return null;
+    const out = new Uint8Array(FAN_HEADER + bytes.length);
+    new DataView(out.buffer).setFloat64(4, Number.isFinite(car.start) ? car.start : NaN, true);
+    out.set(bytes, FAN_HEADER);
+    return out;
+}
+
+// The game's client only reads other cars from the organizer's batches ([3][u32 session][zlib of
+// [u32 id][u32 resets][state]...]), so a racer's [1][u32 session][u32 resets][state] is rewrapped
+// as one, in stored (uncompressed) zlib blocks.
+function asHostCars(id, bytes) {
+    const payload = new Uint8Array(bytes.length - 1);
+    new DataView(payload.buffer).setUint32(0, id >>> 0, true);
+    payload.set(bytes.subarray(5), 4);
+    const blocks = Math.max(1, Math.ceil(payload.length / 65535));
+    const out = new Uint8Array(5 + 2 + payload.length + blocks * 5 + 4);
+    out[0] = HOST_CARS;
+    out.set(bytes.subarray(1, 5), 1);
+    out[5] = 0x78;
+    out[6] = 0x01;
+    let at = 7;
+    for (let i = 0; i < blocks; i++) {
+        const part = payload.subarray(i * 65535, (i + 1) * 65535);
+        out[at] = i === blocks - 1 ? 1 : 0;
+        out[at + 1] = part.length & 255;
+        out[at + 2] = part.length >> 8;
+        out[at + 3] = ~part.length & 255;
+        out[at + 4] = (~part.length >> 8) & 255;
+        out.set(part, at + 5);
+        at += 5 + part.length;
+    }
+    let a = 1, b = 0;
+    for (let i = 0; i < payload.length; i++) {
+        a = (a + payload[i]) % 65521;
+        b = (b + a) % 65521;
+    }
+    new DataView(out.buffer).setUint32(at, ((b << 16) | a) >>> 0, false);
+    return out;
+}
+
+function sameBytes(a, b) {
+    if (!a || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+}
+
+// "send", "drop" or "hold".
+function sortRecord(pc, channel, kind, bytes) {
+    if (channel !== UNRELIABLE || kind !== 1 || !bytes.length) return "send";
+    const type = bytes[0];
+    const host = pc.side === "host";
+    if (host ? type === HOST_CARS : type === CLIENT_CAR) {
+        // Deflated nothing: 5 header bytes, then 8 bytes ending in the empty input's Adler-32 (1).
+        if (host && bytes.length === 13 && bytes[9] === 0 && bytes[10] === 0 && bytes[11] === 0 && bytes[12] === 1) return "drop";
+        if (sameBytes(pc._lastCar, bytes)) return "drop";
+        pc._lastCar = bytes;
+        return window.__nswsMuxCarsUnseen ? "hold" : "send";
+    }
+    if (!host && type === CLIENT_PONG) return window.__nswsMuxQuiet ? "drop" : "send";
+    if (host && (type === HOST_PING || type === HOST_PING_DATA)) {
+        const now = performance.now();
+        if (slow() && now - (pc._pingAt[type] ?? -Infinity) < PING_MS) return "drop";
+        pc._pingAt[type] = now;
+    }
+    return "send";
+}
 const PAIR_SDP = /^nsws:([A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16})$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -64,6 +159,7 @@ class Mux {
         this.queue = [];
         this.bytes = 0;
         this.queuedAt = 0;
+        this.heldAt = 0;
         this.timer = 0;
         this.controls = [];
         this.closeTimer = 0;
@@ -76,7 +172,7 @@ class Mux {
     }
 
     connect(resume) {
-        const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + (resume ? "&resume=1&relink=1" : ""));
+        const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + "&fan=1" + (resume ? "&resume=1&relink=1" : ""));
         this.ws = ws;
         ws.binaryType = "arraybuffer";
         ws.addEventListener("open", () => {
@@ -188,7 +284,28 @@ class Mux {
     }
 
     enqueue(pc, channel, kind, bytes) {
+        const sort = sortRecord(pc, channel, kind, bytes);
+        if (sort === "drop") return;
+        if (channel === UNRELIABLE && pc._lastCar === bytes) {
+            pc._held = null;
+            const fan = pc._fan && pc.side === "client" ? stamped(bytes) : null;
+            if (fan) {
+                kind = FAN_KIND;
+                bytes = fan;
+            }
+        }
+        if (sort === "hold") {
+            pc._held = { channel, kind, bytes };
+            this.heldAt ||= performance.now();
+            return;
+        }
         if (!this.queue.length) this.queuedAt = performance.now();
+        this.push(pc, channel, kind, bytes);
+        if (this.bytes >= FLUSH_BYTES) this.flush();
+        else if (!this.timer) this.timer = setTimeout(() => this.flush(), pace());
+    }
+
+    push(pc, channel, kind, bytes) {
         const record = { pc, channel, kind, bytes };
         this.queue.push(record);
         this.bytes += bytes.length + 11;
@@ -201,14 +318,29 @@ class Mux {
             pc._log.splice(0, n);
             pc._logStart += n;
         }
-        if (this.bytes >= FLUSH_BYTES) this.flush();
-        else if (!this.timer) this.timer = setTimeout(() => this.flush(), pace());
     }
 
-    flush() {
+    // Held car states ride along with a frame that goes anyway, or go on their own (force).
+    flush(force = false) {
         clearTimeout(this.timer);
         this.timer = 0;
-        if (!this.queue.length || this.ws.readyState !== WebSocket.OPEN) return;
+        if (this.ws.readyState !== WebSocket.OPEN) return;
+        if (!force && !this.queue.some((r) => r.pc.link)) return;
+        this.heldAt = 0;
+        for (const pc of this.pcs.values()) {
+            const held = pc._held;
+            if (!held) continue;
+            if (!window.__nswsMuxCarsUnseen) {
+                pc._held = null;
+                continue;
+            }
+            if (!pc.link) {
+                this.heldAt ||= performance.now();
+                continue;
+            }
+            pc._held = null;
+            this.push(pc, held.channel, held.kind, held.bytes);
+        }
         const ready = [], waiting = [];
         let size = 0;
         for (const r of this.queue) {
@@ -248,6 +380,9 @@ class Mux {
             const pc = this.pcs.get(m?.pair);
             if (!pc) return;
             if (m.t === "up") {
+                pc._fan = m.fan === true;
+                pc._peerFan = m.peerFan === true;
+                pc._carDirect = false;
                 if (pc.link) this.links.delete(pc.link);
                 this.links.set(m.link, pc);
                 if (pc._linked) this.relinked(pc, m.link, m.recv);
@@ -273,12 +408,28 @@ class Mux {
             const end = at + 11 + length;
             if (end > frame.length) break;
             const pc = this.links.get(link);
-            if (pc) {
+            if (pc && kind === FAN_KIND) this.fanned(pc, channel, frame.subarray(at + 11, end));
+            else if (pc) {
+                if (pc.side === "host" && channel === UNRELIABLE && kind === 1 && frame[at + 11] === CLIENT_CAR) pc._carDirect = false;
                 pc._recv++;
                 pc._deliver(channel, kind, frame.subarray(at + 11, end));
             }
             at = end;
         }
+    }
+
+    fanned(pc, channel, bytes) {
+        if (bytes.length <= FAN_HEADER + 9) return;
+        const view = new DataView(bytes.buffer, bytes.byteOffset, FAN_HEADER);
+        const id = window.__nswsFanIds?.get(view.getUint32(0, true));
+        const start = view.getFloat64(4, true);
+        if (id != null && Number.isFinite(start)) (window.__nswsCarClocks ??= new Map()).set(id, start);
+        const game = bytes.subarray(FAN_HEADER);
+        if (pc.side === "host") {
+            pc._carDirect = true;
+            pc._recv++;
+            pc._deliver(channel, 1, game);
+        } else if (id != null && game[0] === CLIENT_CAR) pc._deliver(channel, 1, asHostCars(id, game));
     }
 
     closed() {
@@ -407,6 +558,12 @@ export class NswsPeerConnection extends EventTarget {
         this._log = [];
         this._logStart = 0;
         this._logBytes = 0;
+        this._held = null;
+        this._lastCar = null;
+        this._pingAt = {};
+        this._fan = false;
+        this._peerFan = false;
+        this._carDirect = false;
     }
 
     createDataChannel(label, options = {}) {
@@ -531,7 +688,10 @@ export function installTransport() {
         // the pace drops (a car starts moving), so a batch queued at the slow pace doesn't hold it up.
         window.__nswsTicker.every(100, () => {
             const now = performance.now();
-            for (const mux of muxes.values()) if (mux.queue.length && now - mux.queuedAt >= pace()) mux.flush();
+            for (const mux of muxes.values()) {
+                if (mux.queue.length && now - mux.queuedAt >= pace()) mux.flush();
+                else if (mux.heldAt && !window.__nswsMuxQuiet && now - mux.heldAt >= HOLD_MS) mux.flush(true);
+            }
         });
     }
 }
