@@ -115,6 +115,7 @@
 .nrc-keys span{display:inline-flex;align-items:center;gap:7px;}
 .nrc-keys i{display:inline-block;width:12px;height:12px;border-radius:2px;}
 .nrc-pill{display:inline-block;font-size:12px;padding:3px 9px;color:#fff;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
+.nrc-alert{background:rgba(217,89,38,.2);border-left:3px solid #d95926;padding:10px 14px;margin-bottom:14px;font-size:15px;color:#fff;}
 .nrc-empty{padding:26px 0;text-align:center;color:rgba(255,255,255,.45);font-size:15px;}
 .nrc-foot{font-size:12px;color:rgba(255,255,255,.4);margin-top:16px;line-height:1.5;}
 .nrc-compose{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;margin-bottom:14px;align-items:start;}
@@ -505,6 +506,7 @@
         loading: 0,
         anti: null,
         antiError: null,
+        liveError: null,
         antiBusy: "",
         ann: null,
         annError: null,
@@ -604,6 +606,7 @@
             const data = await post("stats", { range: ui.range, tz: -new Date().getTimezoneOffset() });
             cachePut(key, data);
             cachePut("live", data.live);
+            ui.liveError = null;
             if (ticket !== ui.loading || !ui.overlay) return;
             ui.stats = data;
             ui.error = null;
@@ -630,10 +633,14 @@
         try {
             const live = await post("live", {});
             cachePut("live", live);
+            ui.liveError = null;
             if (!ui.overlay) return;
             acceptLive(live);
-            if (ui.tab === "live") render();
-        } catch {}
+        } catch (err) {
+            ui.liveError = err;
+            if (!ui.overlay) return;
+        }
+        if (ui.tab === "live") render();
     }
 
     function setAnn(data) {
@@ -948,8 +955,16 @@
 
     function renderLive(body) {
         const live = ui.live;
+        if (ui.liveError) {
+            const err = ui.liveError;
+            const why = err.status === 503 || err.status === 429 ? "the Worker is busy (HTTP " + err.status + ")"
+                : err.status ? "HTTP " + err.status : "couldn't reach the Worker";
+            const age = updatedLabel();
+            body.appendChild(el("div", "nrc-alert", "Refresh failed: " + why + ". This list is still the old one" +
+                (age ? " (" + age.charAt(0).toLowerCase() + age.slice(1) + ")." : ".")));
+        }
         const hero = el("div", "nrc-hero");
-        const now = card("Online now", "multiplayer", "Updates every 10 seconds");
+        const now = card("Online now", "multiplayer", "As of the last refresh");
         now.appendChild(el("div", "nrc-odo", num(live.online)));
         now.appendChild(stateStack(live.sessions));
         hero.appendChild(now);
