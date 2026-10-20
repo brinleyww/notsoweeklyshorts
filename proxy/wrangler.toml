@@ -19,6 +19,10 @@ UPSTREAM_ORIGIN = "https://www.kodub.com"
 # is served from must be here or its leaderboards fail to load.
 ALLOWED_ORIGINS = ["https://brinleyww.github.io", "https://notweeklyshorts.github.io"]
 
+# Where a shared cup link (/c/<code>) sends the player. Keep it in step with
+# `window.__nswsShareBase` in index.html, the copy every shared link opens.
+SHARE_SITE = "https://notweeklyshorts.github.io/"
+
 # Not case-sensitive. Ranks and player counts are recounted without them.
 BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
 

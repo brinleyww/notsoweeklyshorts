@@ -8,6 +8,7 @@ import { Accounts, nameKey } from "./accounts.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
 import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
+import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
 
 export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge };
 
@@ -19,6 +20,16 @@ const DEFAULT_VERSION = "0.6.2";
 // Only these path prefixes are forwarded, so the Worker can't be used as an
 // open relay to arbitrary hosts.
 const ALLOWED_PREFIXES = ["/v6/"];
+
+// A shared cup link: /c/RW7EW, and /c/RW7EW/card.png, the picture under it. Chat apps run no
+// scripts, so the Worker is the only place that can say what a cup link is about; the page itself
+// just sends a player on to the site. SHARE_SITE is the copy of the site they land on.
+const CUP_LINK = /^\/c\/([A-Za-z0-9]{5})(\/card\.png)?$/;
+const DEFAULT_SHARE_SITE = "https://notweeklyshorts.github.io/";
+// Cup pages an address may ask for in a minute. A link is read once or twice when it is posted,
+// so this is only here to stop someone sweeping the codes for open cups.
+const CUP_LINK_LIMIT = 40;
+const CUP_LINK_WINDOW_MS = 60_000;
 
 // Edge cache TTLs (seconds) for passed-through GETs; anything unlisted is never cached.
 // Never add an endpoint whose URL carries a userToken, such as `user`.
@@ -1387,6 +1398,105 @@ async function handleSockets(request, url, env, fromSite, origin) {
     return new Response(res.body, { status: res.status, headers });
 }
 
+// ---- Shared cup links (/c/<code>) ----
+
+const cupLinkHits = new Map();
+
+function cupLinkFlood(ip) {
+    if (!ip) return false;
+    const now = Date.now();
+    if (cupLinkHits.size > 2000) cupLinkHits.clear();
+    const seen = cupLinkHits.get(ip);
+    if (!seen || now - seen.at > CUP_LINK_WINDOW_MS) {
+        cupLinkHits.set(ip, { at: now, count: 1 });
+        return false;
+    }
+    return ++seen.count > CUP_LINK_LIMIT;
+}
+
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+// The page a cup link opens. A player is sent straight on to the site; a chat app stops at the meta
+// tags, which is the whole point of the page. It never says more about a cup than its join card
+// does, and whoever has the link can open that card anyway.
+async function handleCupLink(request, url, env, code, wantsCard) {
+    if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", null);
+    const site = ((typeof env.SHARE_SITE === "string" && env.SHARE_SITE) || DEFAULT_SHARE_SITE).replace(/\/*$/, "/");
+    const open = new URL(site);
+    open.search = "";
+    open.hash = "";
+    open.searchParams.set("cup", code);
+    const here = url.origin + "/c/" + code;
+    const flooded = cupLinkFlood(request.headers.get("CF-Connecting-IP"));
+
+    // A cup that can't be looked up (the daily Durable Object limits, or a swept code) reads as one
+    // that has ended, which is what an old link looks like anyway.
+    let info = null;
+    let drawn = false;
+    if (env.LOBBY && LOBBY_CODE.test(code) && !doLimited() && !flooded) {
+        try {
+            const room = env.LOBBY.get(env.LOBBY.idFromName(code));
+            if (wantsCard) {
+                const png = await room.card(code, site);
+                return new Response(png, {
+                    headers: {
+                        "Content-Type": "image/png",
+                        "Cache-Control": "public, max-age=300",
+                        "Content-Length": String(png.byteLength),
+                    },
+                });
+            }
+            info = await room.info();
+            drawn = true;
+        } catch (err) {
+            noteDoError(err);
+            console.error("cup link error:", err && err.message);
+            if (wantsCard) return plain(503, "No card", null);
+        }
+    } else if (wantsCard) {
+        return plain(503, "No card", null);
+    }
+
+    const cup = describeCup(code, info);
+    const description = cup.lines.filter(Boolean).map(escapeHtml).join("&#10;");
+    const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(cup.title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="description" content="${description}">
+<meta name="theme-color" content="${cup.color}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Cuppa · Not So Weekly Shorts">
+<meta property="og:title" content="${escapeHtml(cup.title)}">
+<meta property="og:description" content="${description}">
+<meta property="og:url" content="${escapeHtml(here)}">
+<meta property="og:image" content="${escapeHtml(drawn ? here + "/card.png" : site + "images/og.png")}">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="${CARD_W}">
+<meta property="og:image:height" content="${CARD_H}">
+<meta property="og:image:alt" content="${escapeHtml(cup.title)} on Not So Weekly Shorts">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="${escapeHtml(open.toString())}">
+<meta http-equiv="refresh" content="0;url=${escapeHtml(open.toString())}">
+<style>html{color-scheme:dark}body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#192042;color:#e6ebff;font:16px/1.5 system-ui,sans-serif;text-align:center}a{color:#ffc94a}</style>
+</head>
+<body>
+<p>Opening <b>${escapeHtml(cup.name)}</b> on Not So Weekly Shorts…<br><a href="${escapeHtml(open.toString())}">Open the cup</a></p>
+<script>location.replace(${JSON.stringify(open.toString())})</script>
+</body>
+</html>`;
+    return new Response(page, {
+        headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": info ? "public, max-age=60" : "public, max-age=30",
+            "Referrer-Policy": "no-referrer",
+        },
+    });
+}
+
 // A socket path the page asks for, checked like the WebSocket routes check theirs. Only the cup
 // sockets and cup chats can be carried (the main chat has its own HTTPS fallback in src/chat.js).
 async function sockTarget(text, env, connectingIp) {
@@ -1411,6 +1521,19 @@ export default {
         const cfg = readConfig(env);
         cfg.owner = await isOwner(url.searchParams.get("nswsOwner"), cfg);
         url.searchParams.delete("nswsOwner");
+
+        // A shared cup link. It is opened from chat apps and address bars, so unlike the API it
+        // takes no Origin and no key.
+        const cupLink = CUP_LINK.exec(url.pathname);
+        if (cupLink) {
+            try {
+                return await handleCupLink(request, url, env, cupLink[1].toUpperCase(), !!cupLink[2]);
+            } catch (err) {
+                noteDoError(err);
+                console.error("cup link error:", err && err.message);
+                return plain(500, "Cup links failed", null);
+            }
+        }
 
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
             const requestOrigin = request.headers.get("Origin");

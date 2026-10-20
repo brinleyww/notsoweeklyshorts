@@ -94,6 +94,7 @@ under the real id, so nothing disappears when you switch it on.
 | `HIDDEN_FROM_WEEK` | First week stored under secret track ids (needs `TRACK_SALT`)  |
 | `OWNER_KEY_HASHES` | The owner, the only one who gets past any restriction (below) |
 | `OWNER_USER_IDS`   | The owner's public userId; their runs always show            |
+| `SHARE_SITE`       | Where a shared cup link sends the player (`/c/<code>`)         |
 
 `PUBLIC_NICKNAMES` has to match `BENCHMARK_NICKNAME` and
 `BENCHMARK_NICKNAME_WEEK_OVERRIDES` in `main.bundle.js`, or current-week medals
@@ -520,6 +521,19 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   in for Kodub's matchmaking server and WebRTC: `/nsws/cup/host` (a new cup code, reserved by
   `LobbyDirectory`, 10 per address per 10 minutes; `?reclaim=CODE` asks for the organizer's own code
   back), `/nsws/cup/join?code=` and `/nsws/cup/mux?code=&token=` (`&resume=1` to resume).
+- **Shared cup links** (2026-10-19): `GET /c/<CODE>`, the link the Competitions panel's **Copy
+  invite link** hands out, and `GET /c/<CODE>/card.png`, the picture under it. A chat app runs no
+  scripts, so a link straight to the site can only ever show the site's own card; this page is
+  built per cup instead, with the cup's name as its title, what it is playing and doing and its
+  map pool as the description, a stripe colour that follows the phase, and a 1200x630 card drawn
+  in `src/cupcard.js`. Whoever clicks it is sent on to `SHARE_SITE` + `?cup=CODE` at once (a meta
+  refresh and `location.replace`), so nothing about joining changes. Unlike the rest of the API
+  these two take no `Origin` and no key - a chat app sends neither - so they are limited to 40
+  page views an address a minute, codes that can't exist never reach a Durable Object, and a cup
+  that can't be looked up (daily limits, an old link) reads as one that has ended. They say no
+  more than `/cup/info` already tells anyone holding the code. The card is drawn inside the cup's
+  `LobbyRoom` (`card()`), because 1200x630 takes more CPU than a Worker request gets on the free
+  plan; the room keeps the last one it drew, and the reply is cacheable for 5 minutes.
 - **Status:** the organizer's page sends `{type: "nswsStatus", status: {phase, round, racers,
   canRace, format}}` on its matchmaking socket when the cup changes (at most every 2 s). The room
   keeps it on the attachment and puts it in the list row and `/info`, so the list and the join card

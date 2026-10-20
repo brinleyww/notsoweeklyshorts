@@ -4,6 +4,12 @@ The main menu's **Competitions** button opens Cuppa, the site's live cup mode. I
 built from `src/` into `mod/competitions.js`, which only loads when someone opens Competitions or
 a `?cup=CODE` link. Edit the source, not the built file.
 
+**Copy invite link** hands out `<proxy>/c/CODE` rather than a link to the site, because only the
+proxy can tell a chat app whose cup it is: it answers with the cup's name, format, phase, racers and
+maps in the meta tags, a card drawn from them, and an instant redirect to `?cup=CODE` on the site
+(PROXY.md, "Shared cup links"). Codes, old `?cup=` links and the new ones all paste into the join
+box (`cupCode` in `src/ui/hub.ts`).
+
 ```sh
 npm i -D esbuild        # or set ESBUILD to an esbuild package folder
 node competitions/build.mjs
@@ -70,7 +76,8 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
     gaps and splits, at no network cost.
 - `ui/`: everything is in one shadow root over the game, scaled by the game's `--ui-scale-factor`.
   `hud.ts` (round bar, countdown, live board, split popup, spectator bar, results, votes, warm-up,
-  chat feed, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules, chat),
+  chat feed, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules, chat;
+  the Tracks tab lists the cup's whole map pool to everyone, and only the organizer gets Play next),
   `hub.ts` (the Competitions screen), `layer.ts` (mounting, keys, the game toolbar buttons, layout),
   `keymenu.ts` (a Keys button joined to the speedometer that lists a racer's keys).
 - Layout (`layer.ts`): four times a second the layer measures what the game draws (timer, speedometer,
@@ -105,7 +112,9 @@ Quickplay, Sprint, Championship, Formula, Pick & Ban, Knockout, Time Attack and 
 starting points: every format is a set of the same rules (`rules.ts`), and the organizer can change
 each one on its own on the cup panel's setup page. Players see the same rules read-only. Mid-cup,
 the safe ones stay editable: break, finish window, late joiners, free camera, next track, ready ends
-warm-up, countdown, choosing time and skip votes.
+warm-up, countdown, choosing time, skip votes and the points cap. The cap never goes to a total a
+racer already has (`pts >= target` takes the cup), so both the box's floor and `Organizer.adjust`
+hold it at `leaderPoints(s) + 1`.
 
 - **Winning:** points (a typed points cap), a fixed number of rounds, or knockout (the slowest K go
   each round; exact ties at the cut stay; racers who leave are out). With points, the **finalist**

@@ -775,9 +775,12 @@ export class Organizer {
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target'>>) {
     const s = this.state;
-    s.rules = cleanRules({ ...s.rules, ...change });
+    const next = { ...change };
+    // The points cap can still move during a cup, but never onto a total someone already has.
+    if (next.target != null && s.phase !== 'lobby') next.target = Math.max(next.target, E.leaderPoints(s) + 1);
+    s.rules = cleanRules({ ...s.rules, ...next });
     this.touch(true);
   }
 

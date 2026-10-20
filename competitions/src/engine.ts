@@ -220,6 +220,12 @@ export function picker(s: CupState, result: RoundResult | undefined, kind: 'winn
   return pick?.[0] ?? null;
 }
 
+// The most points anyone in the cup has. Reaching the cap wins it (`pts >= rules.target`), so a
+// points cap moved mid-cup has to stay above this or the cup would end on the spot.
+export function leaderPoints(s: CupState) {
+  return s.players.reduce((top, p) => Math.max(top, p.pts), 0);
+}
+
 export function resetScores(s: CupState) {
   for (const p of s.players) {
     p.pts = 0;

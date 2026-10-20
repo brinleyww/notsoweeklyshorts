@@ -1,10 +1,11 @@
-// The cup panel (Tab): overview and setup, standings, rounds, players, tracks (organizer) and rules,
+// The cup panel (Tab): overview and setup, standings, rounds, players, tracks and rules,
 // with the cup chat alongside.
 import type { App } from '../app.ts';
-import { canRace, racers } from '../engine.ts';
+import { canRace, leaderPoints, racers } from '../engine.ts';
 import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
-import { player, standings, type CupState, isFinalist } from '../state.ts';
+import { player, standings, type Category, type CupState, type TrackRef, isFinalist } from '../state.ts';
 import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
+import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { site } from '../game.ts';
 
@@ -37,7 +38,7 @@ export class Panel {
   #search = '';
   onKeys: () => void = () => {};
   #shoutInput = (() => {
-    const input = h('input', { class: 'text', placeholder: 'Message everyone…', maxlength: 140, style: 'width:200px;font-size:15px' }) as HTMLInputElement;
+    const input = h('input', { class: 'text', placeholder: 'Announce to everyone…', maxlength: 140, style: 'width:190px;font-size:15px' }) as HTMLInputElement;
     input.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter' && input.value.trim()) {
@@ -73,7 +74,6 @@ export class Panel {
       if (!s) this.el.hidden = true;
       return;
     }
-    if (this.tab === 'tracks' && !app.isHost) this.tab = 'cup';
     // Never rebuild under someone typing (or dragging a slider) in the main column.
     const active = (this.el.getRootNode() as ShadowRoot).activeElement;
     if (!force && active && this.#main.contains(active) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) {
@@ -134,7 +134,7 @@ export class Panel {
       ['rounds', 'Rounds', 'flag', app.history.filter((x) => !x.void).length || null],
       ['players', 'Players', 'users', s.players.filter((p) => !p.away).length],
     ];
-    if (app.isHost) tabs.push(['tracks', 'Tracks', 'search', null]);
+    tabs.push(['tracks', 'Tracks', 'search', null]);
     const tabBar = h(
       'div',
       { class: 'tabs' },
@@ -174,24 +174,7 @@ export class Panel {
     const out: (HTMLElement | null)[] = [];
     const me = app.self;
     if (s.phase === 'lobby') {
-      const count = racers(s).length;
-      out.push(
-        h(
-          'div',
-          { class: 'hero' },
-          h('span', { class: 'big amber' }, icon('flag')),
-          h(
-            'div',
-            { class: 'grow' },
-            h('div', { class: 'big' }, app.isHost ? (count < 2 ? 'Invite some racers' : `${count} racers on the grid`) : 'Waiting for the organizer'),
-            h('p', null, app.isHost ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practice on this track until you start.` : 'Practice on this track while you wait. The cup starts when the organizer is ready.'),
-          ),
-          app.isHost && app.code ? btn([icon('link'), 'Copy invite link'], () => this.#copy(this.#link(), 'Invite link copied'), 'primary') : null,
-          app.isHost && !app.code && app.connection
-            ? h('span', { class: app.native.inviteError(app.connection) ? 'bad' : 'dim' }, app.native.inviteError(app.connection) ?? 'Getting a code…')
-            : null,
-        ),
-      );
+      out.push(this.#inviteHero(s));
       out.push(this.#roleChooser(s));
       out.push(this.#formatSection(s));
       // Every rule of the chosen format can be changed right here, one by one.
@@ -200,7 +183,8 @@ export class Panel {
       out.push(this.#statusHero(s));
       if (me) out.push(this.#roleChooser(s));
       out.push(this.#skipVote(s));
-      out.push(this.#leaders(s));
+      // The invite stays here all cup long; the table is a tab of its own.
+      out.push(this.#inviteHero(s));
       out.push(...this.#rulesTab(s));
     }
     return out;
@@ -219,7 +203,7 @@ export class Panel {
       h('h3', null, 'You'),
       h(
         'div',
-        { class: 'tile', style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap' },
+        { class: 'tile flat', style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap' },
         h('span', { style: 'font-size:20px;flex:1' }, me.out ? `Knocked out in round ${me.out}` : racing ? 'You are on the grid' : 'You are spectating'),
         me.out
           ? null
@@ -325,15 +309,30 @@ export class Panel {
     );
   }
 
-  #leaders(s: CupState) {
+  // The cup's code and invite link. It sits on the Cup tab for the whole cup, not only the lobby:
+  // people are sent a link mid-cup as well, and whether they can still race depends on late joiners.
+  #inviteHero(s: CupState) {
     const app = this.app;
-    const table = standings(s, app.history).slice(0, 5);
+    const lobby = s.phase === 'lobby';
+    const count = racers(s).length;
     const best = app.bestRun();
+    const open = s.rules.lateJoin && s.rules.mode !== 'knockout';
+    const head = lobby && !app.isHost ? 'Waiting for the organizer' : lobby && count >= 2 ? `${count} racers on the grid` : 'Invite some racers';
+    const body = lobby
+      ? app.isHost
+        ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practice on this track until you start.`
+        : 'Practice on this track while you wait. The cup starts when the organizer is ready.'
+      : `Share the code ${app.code ?? '…'} or the invite link. ${open ? 'Newcomers can still take a grid slot.' : 'The grid is closed, so they come in to watch.'}`;
     return h(
       'div',
-      { class: 'sect' },
-      h('h3', null, 'Top of the table', h('span', { class: 'grow' }), best ? btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'small ghost') : null),
-      table.length ? h('div', { class: 'list' }, table.map((p, i) => this.#standRow(s, p.u, i + 1))) : h('div', { class: 'empty' }, 'No results yet.'),
+      { class: 'hero' },
+      h('span', { class: 'big amber' }, icon('flag')),
+      h('div', { class: 'grow' }, h('div', { class: 'big' }, head), h('p', null, body)),
+      best ? btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'small ghost') : null,
+      app.code ? btn([icon('link'), 'Copy invite link'], () => this.#copy(this.#link(), 'Invite link copied')) : null,
+      app.isHost && !app.code && app.connection
+        ? h('span', { class: app.native.inviteError(app.connection) ? 'bad' : 'dim' }, app.native.inviteError(app.connection) ?? 'Getting a code…')
+        : null,
     );
   }
 
@@ -469,9 +468,13 @@ export class Panel {
 
   // ---- Tracks (organizer) ----
 
+  // The cup's maps: the pool picked in the Competitions menu. Every page's track library is already
+  // filtered to that pool (hub.ts sets __nswsCupPool both when hosting and when joining), so a racer
+  // sees the same list as the organizer, who alone gets to play one next.
   #tracksTab(s: CupState) {
-    const org = this.app.org!;
-    const pool = org.pool();
+    const app = this.app;
+    const org = app.org;
+    const pool = org ? org.pool() : cupTracks(app);
     const q = this.#search.trim().toLowerCase();
     const list = pool.filter((t) => !q || t.name.toLowerCase().includes(q) || (t.author ?? '').toLowerCase().includes(q)).slice(0, 120);
     const input = h('input', { class: 'text', placeholder: `Search ${pool.length} tracks…`, value: this.#search, style: 'width:100%' }) as HTMLInputElement;
@@ -484,15 +487,17 @@ export class Panel {
       if (pos != null) again?.setSelectionRange(pos, pos);
     });
     input.addEventListener('keydown', (e) => e.stopPropagation());
-    const voting = s.phase === 'vote' && s.vote?.kind === 'host';
-    const queued = org.queued;
+    const voting = !!org && s.phase === 'vote' && s.vote?.kind === 'host';
+    const queued = org?.queued;
+    const maps = site.__nswsCupPool ? poolLabel(site.__nswsCupPool as MapPool) : '';
     return [
       h(
         'div',
         { class: 'sect' },
-        h('h3', null, voting ? 'Pick the next track' : 'Play a track next'),
-        h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, voting ? 'Choose any track below, or one of the options on screen.' : 'The track you pick replaces the next track change (vote, picks or random).'),
-        queued ? h('div', { class: 'tile', style: 'display:flex;align-items:center;gap:10px;margin-bottom:10px' }, h('span', { class: 'grow' }, 'Up next: ', h('span', { class: 'amber' }, queued.name)), btn('Clear', () => org.queue(null), 'small ghost')) : null,
+        h('h3', null, org ? (voting ? 'Pick the next track' : 'Play a track next') : "The cup's tracks"),
+        h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, org ? (voting ? 'Choose any track below, or one of the options on screen.' : 'The track you pick replaces the next track change (vote, picks or random).') : 'Every track this cup can land on. Votes, picks and random all come out of this list.'),
+        h('div', { class: 'poolline' }, h('span', { class: 'dim' }, 'Maps'), h('span', { class: 'grow' }, maps || 'This cup’s maps'), h('span', { class: 'faint mono' }, `${pool.length} track${pool.length === 1 ? '' : 's'}`)),
+        queued ? h('div', { class: 'tile', style: 'display:flex;align-items:center;gap:10px;margin-bottom:10px' }, h('span', { class: 'grow' }, 'Up next: ', h('span', { class: 'amber' }, queued.name)), btn('Clear', () => org!.queue(null), 'small ghost')) : null,
         input,
       ),
       h(
@@ -503,10 +508,11 @@ export class Panel {
             'div',
             { class: 'prow' },
             h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', t.cat].filter(Boolean).join(' · '))),
-            btn(voting ? 'Pick' : queued?.id === t.id ? 'Queued' : 'Play next', () => org.hostPick({ id: t.id, name: t.name, author: t.author, cat: t.cat }), 'small ' + (voting ? 'primary' : 'ghost')),
+            org ? btn(voting ? 'Pick' : queued?.id === t.id ? 'Queued' : 'Play next', () => org.hostPick({ id: t.id, name: t.name, author: t.author, cat: t.cat }), 'small ' + (voting ? 'primary' : 'ghost')) : null,
           ),
         ),
-        list.length ? null : h('div', { class: 'empty' }, 'No tracks match.'),
+        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : 'The track list is still loading.'),
+        pool.length > list.length ? h('div', { class: 'empty' }, `Showing ${list.length} of ${pool.length}. Search for the rest.`) : null,
       ),
     ];
   }
@@ -523,7 +529,7 @@ export class Panel {
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes'];
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
     const toggle = (field: keyof Rules, label: string, hint: string) => {
@@ -557,7 +563,11 @@ export class Panel {
       });
       input.addEventListener('change', () => {
         const n = Math.round(Number(input.value));
-        if (Number.isFinite(n)) set({ [field]: Math.min(max, Math.max(min, n)) } as Partial<Rules>);
+        if (!Number.isFinite(n)) return;
+        const v = Math.min(max, Math.max(min, n));
+        // Show the clamp straight away: the panel skips its rebuild while this box still has focus.
+        input.value = String(v);
+        set({ [field]: v } as Partial<Rules>);
       });
       return row(label, hint, input);
     };
@@ -571,7 +581,15 @@ export class Panel {
         ['rounds', 'Rounds'],
         ['knockout', 'Knockout'],
       ]),
-      r.mode === 'points' ? number('target', r.finalist ? 'Finalist at' : 'Points to win', 'The points cap', 1, 100000) : null,
+      r.mode === 'points'
+        ? number(
+            'target',
+            r.finalist ? 'Finalist at' : 'Points to win',
+            lobby ? 'The points cap' : `The points cap, which has to stay above the leader's ${leaderPoints(s)}`,
+            lobby ? 1 : leaderPoints(s) + 1,
+            100000,
+          )
+        : null,
       r.mode === 'points' ? toggle('finalist', 'Finalist rule', 'Reaching the cap makes you a finalist; then win a round to take the cup') : null,
       r.mode === 'rounds' ? slider('rounds', 'Rounds', 'Length of the season', 1, 50, 1, (n) => `${n}`) : null,
       r.mode === 'knockout' ? slider('knockout', 'Knocked out', 'Racers out per round', 1, 8, 1, (n) => `${n}`) : null,
@@ -771,7 +789,7 @@ export class Panel {
       }
       items.push(h('span', { style: 'flex:1' }));
       const shout = this.#shoutInput;
-      items.push(shout, btn([icon('megaphone')], () => shout.value.trim() && (org.shout(shout.value), (shout.value = '')), 'small ghost icon', 'Show a message to everyone'));
+      items.push(h('div', { class: 'announce' }, shout, btn([icon('megaphone')], () => shout.value.trim() && (org.shout(shout.value), (shout.value = '')), 'small ghost icon', 'Show it on every screen')));
       if (s.phase !== 'lobby' && s.phase !== 'podium') items.push(confirmBtn('End cup', () => org.endCup(), 'small danger'));
     } else {
       items.push(h('span', { style: 'flex:1' }));
@@ -868,11 +886,16 @@ export class Panel {
     return { box, msgs, input, cupTab, allTab };
   }
 
+  // Through the proxy (worker.js /c/<code>), the only side that can tell a chat app whose cup
+  // this is and what it is doing. Whoever opens it is sent straight on to the site.
   #link() {
+    const code = this.app.code ?? '';
+    const api = site.__nswsApiBase;
+    if (api) return new URL('c/' + encodeURIComponent(code), api).toString();
     const url = new URL(site.__nswsShareBase || location.href);
     url.search = '';
     url.hash = '';
-    url.searchParams.set('cup', this.app.code ?? '');
+    url.searchParams.set('cup', code);
     return url.toString();
   }
 
@@ -882,4 +905,19 @@ export class Panel {
       () => this.app.notify(text, 'info'),
     );
   }
+}
+
+// The cup's tracks read from this page's own library, for pages with no Organizer. The game filters
+// the library by window.__nswsCupPool, which hub.ts sets both when hosting and when joining, so this
+// is the same list the organizer's pool() returns.
+function cupTracks(app: App): TrackRef[] {
+  const custom = (site.__nswsCupPool as { custom?: boolean } | undefined)?.custom === true;
+  const list: TrackRef[] = [];
+  try {
+    app.native.trackLibrary.forEachTrack((id, meta, category) => {
+      if (category === 'custom' && !custom) return;
+      list.push({ id, name: meta?.name ?? 'Track', author: meta?.author, cat: (['official', 'community', 'custom'].includes(category) ? category : 'custom') as Category });
+    });
+  } catch {}
+  return list;
 }

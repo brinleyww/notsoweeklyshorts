@@ -12,6 +12,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { moderate } from "./chatfilter.js";
+import { renderCupCard } from "./cupcard.js";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const CODE_LENGTH = 5;
@@ -205,6 +206,18 @@ export class LobbyRoom extends DurableObject {
         if (!host) return null;
         const a = host.deserializeAttachment();
         return { name: a.name, host: a.nick, pool: a.pool ?? cleanPool(null), status: a.status ?? null };
+    }
+
+    // The picture on this cup's shared link (worker.js /c/<code>/card.png). Drawing it takes more
+    // CPU than a Worker request is allowed on the free plan, which is why it happens in here.
+    async card(code, site) {
+        const info = this.info();
+        const key = code + " " + site + " " + JSON.stringify(info);
+        if (this.cardKey !== key) {
+            this.cardPng = await renderCupCard(code, info, site);
+            this.cardKey = key;
+        }
+        return this.cardPng;
     }
 
     // Called by the cup's chat room (chat.js) to recognise the organizer.

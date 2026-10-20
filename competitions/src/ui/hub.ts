@@ -71,15 +71,19 @@ export function readableError(message: string) {
   return (reason && SERVER_ERRORS[reason]) || SERVER_ERRORS[message] || message;
 }
 
-// A cup code from whatever was typed or pasted: the code in any case, or an invite link.
+// A cup code from whatever was typed or pasted: the code in any case, an invite link (/c/CODE)
+// or a link straight to the site (?cup=CODE).
 export function cupCode(text: string) {
   const raw = text.trim();
   try {
-    const fromLink = new URL(raw).searchParams.get('cup');
-    if (fromLink) return fromLink.trim().toUpperCase();
+    const link = new URL(raw);
+    const fromQuery = link.searchParams.get('cup');
+    if (fromQuery) return fromQuery.trim().toUpperCase();
+    const fromPath = /^\/c\/([a-z0-9]{5})(?:\/|$)/i.exec(link.pathname);
+    if (fromPath) return fromPath[1].toUpperCase();
   } catch {}
-  const match = /[?&]cup=([a-z0-9]{5})/i.exec(raw);
-  if (match) return match[1].toUpperCase();
+  const match = /[?&]cup=([a-z0-9]{5})|\/c\/([a-z0-9]{5})(?:[/?#]|$)/i.exec(raw);
+  if (match) return (match[1] ?? match[2]).toUpperCase();
   return raw.replace(/[^a-z0-9]/gi, '').toUpperCase();
 }
 
@@ -253,7 +257,7 @@ export class Hub {
           st.name = name.value.trim();
           this.#save();
           return this.host();
-        }, 'wide'),
+        }, 'wide primary'),
       ),
     );
     fill(
