@@ -50,8 +50,8 @@
     let lastSample = performance.now();
     let lastBeat = -Infinity;
     // Only a tab that is shown beats. A hidden one sends nothing: once the gap its last beat promised
-    // runs out the server counts it as away (still online) until it says goodbye on close, or for two
-    // hours. It beats again as soon as it is shown. The beat reply stretches the gap when the site is busy (nv).
+    // runs out the server counts it as away (still online) until it says goodbye on close. It beats
+    // again as soon as it is shown. The beat reply stretches the gap when the site is busy (nv).
     let visibleGap = BEAT_VISIBLE_S;
     let promised = BEAT_VISIBLE_S;
 

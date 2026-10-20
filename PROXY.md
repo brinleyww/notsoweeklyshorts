@@ -145,7 +145,10 @@ chat window shows "n online".
   sites counts twice). A visitor with a tab
   whose beats come on time is active. A visitor whose tabs are all hidden past their
   promised beat is away: still online, and counted in `away`, until each tab says
-  goodbye on close or 2 hours after its last beat (`AWAY_MS`). Race Control's
+  goodbye on close, however long it stays hidden. A tab that dies without a goodbye
+  (a phone closing a frozen tab, a crash) stays until `TrafficStats` restarts, and a
+  restart only brings back tabs opened in the last 3 hours (`RESTORE_MS`); older hidden
+  ones come back when they are shown again. Race Control's
   "Online now", the last-3-hours chart, the peaks and an announcement's "online when
   sent" use the same count. Its live list has one row per person (the active tab
   that beat last, "N tabs" when there are several, on the site since the earliest

@@ -18,9 +18,8 @@ const MAX_BEAT_S = MAX_NEXT_S + 60;
 const RESTORE_LIVE_S = 400;
 // A session counts as online until its promised next beat is this late.
 const LIVE_GRACE_MS = 45_000;
-// A hidden tab sends nothing. Once its promised beat is late it counts as away, still online,
-// until it says goodbye (closing the tab) or this long after its last beat.
-const AWAY_MS = 2 * 60 * 60_000;
+// A hidden tab sends nothing. Once its promised beat is late it counts as away, still online, until
+// it says goodbye (closing the tab). One that dies without a goodbye stays until the object restarts.
 const MINUTE_RING = 180;
 // New sessions allowed per IP address per hour. Schools share one address, so it is generous.
 const OPENS_PER_IP_HOUR = 120;
@@ -37,8 +36,8 @@ const RANGES = {
     month: { ms: 30 * DAY_MS, step: 6 * 3600 },
     all: { ms: null, step: 86_400 },
 };
-// Sessions this recent are put back online when the object restarts; older ones that still beat
-// come back with their next beat.
+// Sessions opened this recently are put back online when the object restarts; older ones come back
+// with their next beat, which for a hidden tab is when it is shown again.
 const RESTORE_MS = 3 * 60 * 60_000;
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
@@ -212,8 +211,7 @@ export class TrafficStats extends DurableObject {
         this.ring = this.sql.exec("SELECT m, online FROM minutes WHERE m > ? ORDER BY m",
             Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
         const rows = this.sql.exec(
-            "SELECT * FROM sessions WHERE start > ? AND last > ? AND ended = 0",
-            now - RESTORE_MS, now - AWAY_MS).toArray();
+            "SELECT * FROM sessions WHERE start > ? AND ended = 0", now - RESTORE_MS).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, start: row.start, last: row.last,
@@ -236,7 +234,7 @@ export class TrafficStats extends DurableObject {
             if (s.expires > now) {
                 activeTabs++;
                 people.set(s.visitor, true);
-            } else if (now - s.last < AWAY_MS && !people.has(s.visitor)) {
+            } else if (!people.has(s.visitor)) {
                 people.set(s.visitor, false);
             }
         }
@@ -389,7 +387,7 @@ export class TrafficStats extends DurableObject {
         }
 
         for (const [id, other] of this.online) {
-            if (other.ended || (other.expires < now && now - other.last >= AWAY_MS)) this.online.delete(id);
+            if (other.ended) this.online.delete(id);
         }
         return counts;
     }
@@ -518,7 +516,6 @@ export class TrafficStats extends DurableObject {
         for (const s of this.online.values()) {
             if (s.ended) continue;
             const isAway = s.expires <= now;
-            if (isAway && now - s.last >= AWAY_MS) continue;
             if (!isAway) {
                 activeTabs++;
                 pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
