@@ -128,16 +128,35 @@ Worker, then push the site:
 ## Site traffic (Race Control)
 
 `mod/nsws_traffic.js` runs on every page. It sends a small "beat" to
-`/nsws/beat` when the site opens, every minute while the tab is visible (every
-4 minutes in the background), and when the page closes. A beat carries a random
-session id, a random visitor id kept in `localStorage` (`nsws_visitor`), the
-nickname, what the player is doing, and counts of races, finishes, uploads and
-so on. It never carries the account token. The Worker adds a coarse country,
-device, system and browser, and stores everything in one SQLite Durable Object,
-`TrafficStats` (`proxy/src/traffic.js`). IP addresses are only held in memory to
-cap new sessions at 120 per address per hour; they are never stored. The reply to a
-beat is `{"online": n}`: how many different visitors have the site open, which the
-chat window shows.
+`/nsws/beat` when the site opens, every minute while the tab is shown, and when
+the page closes; a hidden tab sends nothing. A beat carries a random session id
+(one per tab), a random visitor id kept in `localStorage` (`nsws_visitor`, so all
+tabs of one browser on one site share it; each site has its own `localStorage`),
+the nickname, what the player is doing, and counts
+of races, finishes, uploads and so on. It never carries the account token. The
+Worker adds a coarse country, device, system and browser, and stores everything in
+one SQLite Durable Object, `TrafficStats` (`proxy/src/traffic.js`). IP addresses
+are only held in memory to cap new sessions at 120 per address per hour; they are
+never stored. The reply to a beat is `{"online": n, "away": m, "nv": s, ...}`; the
+chat window shows "n online".
+
+- **Online counts browsers, not tabs.** `TrafficStats` groups its live sessions by
+  visitor id, so all tabs of one browser count as one person (one browser on both
+  sites counts twice). A visitor with a tab
+  whose beats come on time is active. A visitor whose tabs are all hidden past their
+  promised beat is away: still online, and counted in `away`, until each tab says
+  goodbye on close or 2 hours after its last beat (`AWAY_MS`). Race Control's
+  "Online now", the last-3-hours chart, the peaks and an announcement's "online when
+  sent" use the same count. Its live list has one row per person (the active tab
+  that beat last, "N tabs" when there are several, on the site since the earliest
+  tab opened); the visitor id never reaches the panel.
+- **Runtime and the beat budget count tabs.** Every shown tab beats and adds its own
+  runtime, so the live reply's `pending` and `activeTabs` are per tab and the
+  all-time odometer climbs by `activeTabs`. Past 20 shown tabs
+  (`BEAT_BUDGET_PER_MIN`), `nv` stretches every tab's gap, to at most 15 minutes
+  (`MAX_VISIBLE_GAP_S`), so the whole site stays near 20 beats a minute.
+- All of this is worked out in memory over the live sessions, with no extra rows
+  read or written.
 
 `/nsws/stats`, `/nsws/live` and `/nsws/anticheat*` answer only the owner: the request
 body must hold the owner key (see "Owner access"). The page checks the same hash

@@ -136,7 +136,7 @@
 .nrc-opts{display:flex;flex-direction:column;gap:6px;}
 .nrc-opts .button{font-size:16px;padding:6px 14px;}
 .nrc-annline .nrc-bars{margin-top:10px;font-style:normal;}
-.nrc-table .poll{margin-left:8px;font-size:12px;color:rgba(255,255,255,.5);}
+.nrc-table .poll,.nrc-table .tabs{margin-left:8px;font-size:12px;color:rgba(255,255,255,.5);}
 .nrc-table tr.pick{cursor:pointer;}
 .nrc-table tr.sel td{background:rgba(179,193,255,.1);}
 .nrc-pollacts{display:flex;gap:8px;flex-wrap:wrap;}
@@ -708,15 +708,16 @@
     }
 
     // All-time runtime, including what the online players have run since their last beat.
-    // Away tabs are hidden, and a hidden tab adds no runtime.
-    function activeOnline(live) {
-        return Math.max(0, live.online - (live.away || 0));
+    // Every shown tab adds runtime and a hidden one adds none, so this counts shown tabs, not people.
+    // An older Worker sends no activeTabs; it counted tabs as people, so online - away was the same.
+    function activeTabs(live) {
+        return live.activeTabs ?? Math.max(0, live.online - (live.away || 0));
     }
 
     function odometerSeconds() {
         const live = ui.live;
         if (!live) return 0;
-        return live.totalRuntime + live.pending + activeOnline(live) * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
+        return live.totalRuntime + live.pending + activeTabs(live) * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
     }
 
     function odometerText(seconds) {
@@ -759,8 +760,8 @@
         odo.innerHTML = odometerText(odometerSeconds());
         odoCard.appendChild(odo);
         const rate = el("div", "nrc-rate");
-        rate.innerHTML = activeOnline(live)
-            ? `Climbing <b>+${num(activeOnline(live))}s</b> every second right now · ${num(live.totalOpens)} opens all time`
+        rate.innerHTML = activeTabs(live)
+            ? `Climbing <b>+${num(activeTabs(live))}s</b> every second right now · ${num(live.totalOpens)} opens all time`
             : `Nobody online right now · ${num(live.totalOpens)} opens all time`;
         odoCard.appendChild(rate);
         hero.appendChild(odoCard);
@@ -988,7 +989,10 @@
                 if (x.state === "race" && x.track) doing.appendChild(document.createTextNode("  " + trackName(x.track)));
                 const since = el("span", null, duration((Date.now() - ui.liveClockOffset - x.since) / 1000));
                 since.dataset.since = String(x.since);
-                return [withFlag(x.country, x.nickname || "Unnamed"), doing, since, x.device + " · " + x.os + " · " + x.browser, x.site || ""];
+                // An older Worker sends one row per tab, without `tabs`.
+                const device = el("span", null, x.device + " · " + x.os + " · " + x.browser);
+                if (x.tabs > 1) device.appendChild(el("span", "tabs", num(x.tabs) + " tabs"));
+                return [withFlag(x.country, x.nickname || "Unnamed"), doing, since, device, x.site || ""];
             });
             list.appendChild(table([["Player", "name"], ["Doing"], ["On site for", "num"], ["Device"], ["Site"]], rows));
         }

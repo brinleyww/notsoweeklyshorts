@@ -224,21 +224,29 @@ export class TrafficStats extends DurableObject {
         }
     }
 
-    // Active sessions beat on time; away ones stopped beating but never said goodbye.
+    // Active sessions beat on time; away ones stopped beating but never said goodbye. People are
+    // counted by visitor id, which all tabs of a browser share: any active tab makes them active, and
+    // `people` includes the away ones. Each shown tab beats, so the beat budget uses `activeTabs`.
     liveCounts(now) {
-        let active = 0;
-        let away = 0;
+        let activeTabs = 0;
+        // visitor -> has an active tab
+        const people = new Map();
         for (const s of this.online.values()) {
             if (s.ended) continue;
-            if (s.expires > now) active++;
-            else if (now - s.last < AWAY_MS) away++;
+            if (s.expires > now) {
+                activeTabs++;
+                people.set(s.visitor, true);
+            } else if (now - s.last < AWAY_MS && !people.has(s.visitor)) {
+                people.set(s.visitor, false);
+            }
         }
-        return { active, away };
+        let away = 0;
+        for (const active of people.values()) if (!active) away++;
+        return { people: people.size, away, activeTabs };
     }
 
     onlineCount(now) {
-        const { active, away } = this.liveCounts(now);
-        return active + away;
+        return this.liveCounts(now).people;
     }
 
     noteMinute(now, online) {
@@ -289,15 +297,14 @@ export class TrafficStats extends DurableObject {
     async beat(b, meta) {
         const counts = this.record(b, meta);
         return {
-            online: counts ? counts.active + counts.away : null, away: counts?.away ?? null,
-            ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap(),
+            online: counts?.people ?? null, away: counts?.away ?? null,
+            ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap(counts),
         };
     }
 
     // Seconds between a shown tab's beats. Away tabs send nothing, so only active ones are budgeted.
-    visibleGap() {
-        const { active } = this.liveCounts(Date.now());
-        return Math.min(MAX_VISIBLE_GAP_S, Math.max(60, Math.ceil(active * 60 / BEAT_BUDGET_PER_MIN)));
+    visibleGap(counts = this.liveCounts(Date.now())) {
+        return Math.min(MAX_VISIBLE_GAP_S, Math.max(60, Math.ceil(counts.activeTabs * 60 / BEAT_BUDGET_PER_MIN)));
     }
 
     record(b, meta) {
@@ -345,7 +352,7 @@ export class TrafficStats extends DurableObject {
             now, runtime, focus, driving, ev.attempts, ev.finishes, s.ended ? 1 : 0, b.nick, b.s);
 
         const counts = this.liveCounts(now);
-        const online = counts.active + counts.away;
+        const online = counts.people;
         this.noteMinute(now, online);
         const t = Math.floor(now / 1000 / BUCKET_S);
         if (this.totals) {
@@ -500,26 +507,47 @@ export class TrafficStats extends DurableObject {
         return { current, list, online: this.onlineCount(now), now };
     }
 
-    // Unflushed seconds of everyone online, so the dashboard's running total is exact.
+    // One row per person (see liveCounts), showing their active tab over an away one, then the one that
+    // beat last. Every active tab adds runtime, so `pending` (unflushed seconds, which keeps the
+    // dashboard's running total exact) and `activeTabs` count tabs.
     liveView(now) {
-        const sessions = [];
+        // visitor -> { s: the tab shown, isAway, tabs, since }
+        const people = new Map();
         let pending = 0;
-        let away = 0;
+        let activeTabs = 0;
         for (const s of this.online.values()) {
             if (s.ended) continue;
             const isAway = s.expires <= now;
             if (isAway && now - s.last >= AWAY_MS) continue;
+            if (!isAway) {
+                activeTabs++;
+                pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
+            }
+            const p = people.get(s.visitor);
+            if (!p) {
+                people.set(s.visitor, { s, isAway, tabs: 1, since: s.start });
+                continue;
+            }
+            p.tabs++;
+            p.since = Math.min(p.since, s.start);
+            if (p.isAway === isAway ? s.last > p.s.last : p.isAway) {
+                p.s = s;
+                p.isAway = isAway;
+            }
+        }
+        const sessions = [];
+        let away = 0;
+        for (const { s, isAway, tabs, since } of people.values()) {
             if (isAway) away++;
-            else pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
             sessions.push({
                 nickname: s.nickname, country: s.country, device: s.device, os: s.os, browser: s.browser,
-                site: s.site, state: isAway ? "away" : s.state, track: isAway ? null : s.track, since: s.start,
+                site: s.site, state: isAway ? "away" : s.state, track: isAway ? null : s.track, since, tabs,
             });
         }
         sessions.sort((a, b) => a.since - b.since);
         const minute = Math.floor(now / 60_000);
         const ring = this.ring.filter(([m]) => m > minute - MINUTE_RING);
-        return { online: sessions.length, away, pending, sessions, ring, now };
+        return { online: sessions.length, away, activeTabs, pending, sessions, ring, now };
     }
 
     loadTotals() {
