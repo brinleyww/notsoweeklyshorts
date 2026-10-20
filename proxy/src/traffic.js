@@ -117,6 +117,10 @@ export class TrafficStats extends DurableObject {
         this.polls = new Map();
         // All-time totals, loaded the first time the dashboard asks and then kept up by record().
         this.totals = null;
+        // The runtime odometer adds a second per person online, away ones too, each second. People only
+        // change when a session opens or ends, so it is credited from the last change on each beat.
+        // `owed` is bucket -> seconds not written yet.
+        this.onlineCredit = { at: Date.now(), people: 0, owed: new Map() };
         // visitor -> focused seconds not yet handed to Accounts. Lost if the object is evicted first.
         this.play = new Map();
         this.playAlarm = false;
@@ -171,6 +175,9 @@ export class TrafficStats extends DurableObject {
             ann INTEGER NOT NULL, voter TEXT NOT NULL, choice INTEGER NOT NULL, at INTEGER NOT NULL,
             PRIMARY KEY (ann, voter)) WITHOUT ROWID`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+        // Person-seconds online for the odometer. Buckets from before it existed stay NULL and count their runtime.
+        if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "online_s"))
+            this.sql.exec("ALTER TABLE buckets ADD COLUMN online_s REAL");
     }
 
     notePlay(visitor, seconds) {
@@ -220,6 +227,20 @@ export class TrafficStats extends DurableObject {
                 browser: row.browser, site: row.site, state: "menu", track: null,
             });
         }
+        this.onlineCredit = { at: now, people: this.liveCounts(now).people, owed: new Map() };
+    }
+
+    creditOnline(now) {
+        const c = this.onlineCredit;
+        if (c.people) {
+            for (let from = c.at; from < now;) {
+                const t = Math.floor(from / 1000 / BUCKET_S);
+                const to = Math.min(now, (t + 1) * BUCKET_S * 1000);
+                c.owed.set(t, (c.owed.get(t) ?? 0) + c.people * (to - from) / 1000);
+                from = to;
+            }
+        }
+        c.at = Math.max(c.at, now);
     }
 
     // Active sessions beat on time; away ones stopped beating but never said goodbye. People are
@@ -307,6 +328,7 @@ export class TrafficStats extends DurableObject {
 
     record(b, meta) {
         const now = Date.now();
+        this.creditOnline(now);
         let s = this.online.get(b.s);
         let opened = false;
         let isNew = false;
@@ -353,16 +375,28 @@ export class TrafficStats extends DurableObject {
         const online = counts.people;
         this.noteMinute(now, online);
         const t = Math.floor(now / 1000 / BUCKET_S);
+        const credit = this.onlineCredit;
+        credit.people = online;
+        const onlineNow = credit.owed.get(t) ?? 0;
+        credit.owed.delete(t);
+        let onlineSeconds = onlineNow;
+        for (const [bt, seconds] of credit.owed) {
+            onlineSeconds += seconds;
+            this.sql.exec(`INSERT INTO buckets (t, online_s) VALUES (?, ?)
+                ON CONFLICT(t) DO UPDATE SET online_s = COALESCE(online_s, runtime) + excluded.online_s`, bt, seconds);
+        }
+        credit.owed.clear();
         if (this.totals) {
-            this.totals.runtime += runtime;
+            this.totals.onlineTime += onlineSeconds;
             if (opened) this.totals.opens++;
             if (isNew) this.totals.visitors++;
             if (!this.totals.peak || online > this.totals.peak.online) this.totals.peak = { online, t };
         }
         this.sql.exec(`INSERT INTO buckets (t, runtime, focus, driving, opens, new_visitors, peak,
-                attempts, finishes, uploads, replays, clips, editor, garage, standings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attempts, finishes, uploads, replays, clips, editor, garage, standings, online_s)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(t) DO UPDATE SET runtime = runtime + excluded.runtime, focus = focus + excluded.focus,
+                online_s = COALESCE(online_s, runtime) + excluded.online_s,
                 driving = driving + excluded.driving, opens = opens + excluded.opens,
                 new_visitors = new_visitors + excluded.new_visitors, peak = MAX(peak, excluded.peak),
                 attempts = attempts + excluded.attempts, finishes = finishes + excluded.finishes,
@@ -370,7 +404,7 @@ export class TrafficStats extends DurableObject {
                 clips = clips + excluded.clips, editor = editor + excluded.editor,
                 garage = garage + excluded.garage, standings = standings + excluded.standings`,
             t, runtime, focus, driving, opened ? 1 : 0, isNew ? 1 : 0, online,
-            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings);
+            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings, onlineNow);
 
         const day = Math.floor(now / DAY_MS);
         for (const [track, [attempts, finishes, uploads]] of b.tr) {
@@ -506,20 +540,16 @@ export class TrafficStats extends DurableObject {
     }
 
     // One row per person (see liveCounts), showing their active tab over an away one, then the one that
-    // beat last. Every active tab adds runtime, so `pending` (unflushed seconds, which keeps the
-    // dashboard's running total exact) and `activeTabs` count tabs.
+    // beat last. `pending` is the odometer's seconds not credited yet, which keeps its running total exact.
     liveView(now) {
         // visitor -> { s: the tab shown, isAway, tabs, since }
         const people = new Map();
-        let pending = 0;
-        let activeTabs = 0;
+        const credit = this.onlineCredit;
+        let pending = credit.people * Math.max(0, now - credit.at) / 1000;
+        for (const seconds of credit.owed.values()) pending += seconds;
         for (const s of this.online.values()) {
             if (s.ended) continue;
             const isAway = s.expires <= now;
-            if (!isAway) {
-                activeTabs++;
-                pending += Math.min((now - s.last) / 1000, MAX_BEAT_S);
-            }
             const p = people.get(s.visitor);
             if (!p) {
                 people.set(s.visitor, { s, isAway, tabs: 1, since: s.start });
@@ -544,16 +574,16 @@ export class TrafficStats extends DurableObject {
         sessions.sort((a, b) => a.since - b.since);
         const minute = Math.floor(now / 60_000);
         const ring = this.ring.filter(([m]) => m > minute - MINUTE_RING);
-        return { online: sessions.length, away, activeTabs, pending, sessions, ring, now };
+        return { online: sessions.length, away, pending, sessions, ring, now };
     }
 
     loadTotals() {
         if (this.totals) return this.totals;
         const sums = this.sql.exec(
-            "SELECT COALESCE(SUM(runtime), 0) AS runtime, COALESCE(SUM(opens), 0) AS opens FROM buckets").one();
+            "SELECT COALESCE(SUM(COALESCE(online_s, runtime)), 0) AS online, COALESCE(SUM(opens), 0) AS opens FROM buckets").one();
         const peak = this.sql.exec("SELECT t, peak FROM buckets ORDER BY peak DESC, t ASC LIMIT 1").toArray()[0];
         this.totals = {
-            runtime: sums.runtime,
+            onlineTime: sums.online,
             opens: sums.opens,
             visitors: this.sql.exec("SELECT COUNT(*) AS n FROM visitors").one().n,
             peak: peak ? { online: peak.peak, t: peak.t } : null,
@@ -564,7 +594,7 @@ export class TrafficStats extends DurableObject {
     async liveStats() {
         const view = this.liveView(Date.now());
         const totals = this.loadTotals();
-        return { ...view, totalRuntime: totals.runtime, totalOpens: totals.opens };
+        return { ...view, totalRuntime: totals.onlineTime, totalOpens: totals.opens };
     }
 
     async stats(rangeKey, tzOffsetMin) {

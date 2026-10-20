@@ -714,17 +714,11 @@
         return points;
     }
 
-    // All-time runtime, including what the online players have run since their last beat.
-    // Every shown tab adds runtime and a hidden one adds none, so this counts shown tabs, not people.
-    // An older Worker sends no activeTabs; it counted tabs as people, so online - away was the same.
-    function activeTabs(live) {
-        return live.activeTabs ?? Math.max(0, live.online - (live.away || 0));
-    }
-
+    // All-time runtime: every person online, away ones too, adds a second each second.
     function odometerSeconds() {
         const live = ui.live;
         if (!live) return 0;
-        return live.totalRuntime + live.pending + activeTabs(live) * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
+        return live.totalRuntime + live.pending + live.online * Math.min((performance.now() - ui.liveAt) / 1000, ODO_GUESS_S);
     }
 
     function odometerText(seconds) {
@@ -761,14 +755,14 @@
         const live = ui.live;
         const hero = el("div", "nrc-hero");
 
-        const odoCard = card("Total runtime · all time", "timer", "Every open copy of the site adds a second each second. 10 players online means +10s every second.");
+        const odoCard = card("Total runtime · all time", "timer", "Every player online, away ones too, adds a second each second. 10 players online means +10s every second.");
         const odo = el("div", "nrc-odo");
         odo.dataset.odo = "1";
         odo.innerHTML = odometerText(odometerSeconds());
         odoCard.appendChild(odo);
         const rate = el("div", "nrc-rate");
-        rate.innerHTML = activeTabs(live)
-            ? `Climbing <b>+${num(activeTabs(live))}s</b> every second right now · ${num(live.totalOpens)} opens all time`
+        rate.innerHTML = live.online
+            ? `Climbing <b>+${num(live.online)}s</b> every second right now · ${num(live.totalOpens)} opens all time`
             : `Nobody online right now · ${num(live.totalOpens)} opens all time`;
         odoCard.appendChild(rate);
         hero.appendChild(odoCard);
