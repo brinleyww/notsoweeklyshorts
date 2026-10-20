@@ -11,6 +11,8 @@
     const FINISHED = "🏁";
     const UNPLAYED = "⬛";
     const SHOW_DELAY_MS = 1200;
+    const PLACEMENT_WAIT_MS = 8000;
+    const POSITION_SLIDE_MS = 550;
 
     const CSS = `
 .time-announcer-ui>.nsws-share-row{display:flex;justify-content:center;margin-top:18px;opacity:0;transition:opacity .4s ease-in-out;pointer-events:none;}
@@ -155,8 +157,7 @@
         return !color || color === "transparent" || /rgba\([^)]*,\s*0\)$/.test(color);
     }
 
-    function drawText(ctx, node, cs, k, secret, clip) {
-        let text = node.textContent;
+    function drawText(ctx, node, cs, k, secret, clip, text = node.textContent) {
         if (!text.trim()) return;
         const range = document.createRange();
         range.selectNodeContents(node);
@@ -200,7 +201,7 @@
 
     // Draws the banner as the page shows it: backgrounds, images and text at their on-screen boxes,
     // clipped only where the page clips (overflow hidden, e.g. a long track name).
-    function drawElement(ctx, node, k, secret, alpha, clip = null) {
+    function drawElement(ctx, node, k, secret, alpha, clip = null, placement = null) {
         if (node.classList.contains("nsws-share-row")) return;
         // The improvement on the old PB; the other .difference block (with a .title) compares to an opponent.
         if (node.classList.contains("difference") && !node.querySelector(".title")) secret = false;
@@ -221,8 +222,8 @@
         }
         for (const child of node.childNodes) {
             ctx.globalAlpha = opacity;
-            if (child.nodeType === Node.TEXT_NODE) drawText(ctx, child, cs, k, secret, clip);
-            else if (child.nodeType === Node.ELEMENT_NODE) drawElement(ctx, child, k, secret, opacity, clip);
+            if (child.nodeType === Node.TEXT_NODE) drawText(ctx, child, cs, k, secret, clip, node === placement?.node ? placement.text : child.textContent);
+            else if (child.nodeType === Node.ELEMENT_NODE) drawElement(ctx, child, k, secret, opacity, clip, placement);
         }
         ctx.globalAlpha = 1;
     }
@@ -258,7 +259,38 @@
         ctx.textAlign = "left";
     }
 
-    async function renderShot(panel, trackId, secret) {
+    function delay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function whenClass(node, name, ms) {
+        if (node.classList.contains(name)) return Promise.resolve();
+        return new Promise((resolve) => {
+            const done = () => {
+                observer.disconnect();
+                clearTimeout(timer);
+                resolve();
+            };
+            const observer = new MutationObserver(() => node.classList.contains(name) && done());
+            const timer = setTimeout(done, ms);
+            observer.observe(node, { attributes: true, attributeFilter: ["class"] });
+        });
+    }
+
+    // The banner shows the placement once the upload answers, slides it in, then counts down to the new
+    // rank. The image waits for the slide and draws the final rank.
+    function settledPlacement(panel, position) {
+        const node = panel.querySelector(".current > .position");
+        if (!node || !position) return Promise.resolve(null);
+        return position.then((text) => {
+            if (!text) return null;
+            return whenClass(node.parentElement, "show-position", 3000)
+                .then(() => delay(POSITION_SLIDE_MS))
+                .then(() => (node.parentElement.classList.contains("show-position") ? { node, text } : null));
+        }).catch(() => null);
+    }
+
+    async function renderShot(panel, trackId, secret, placement) {
         await document.fonts?.ready;
         const screen = document.getElementById("screen");
         const vw = window.innerWidth;
@@ -277,7 +309,7 @@
             const r = screen.getBoundingClientRect();
             ctx.drawImage(screen, r.left * k, r.top * k, r.width * k, r.height * k);
         }
-        if (panel.isConnected) drawElement(ctx, panel, k, secret, 1);
+        if (panel.isConnected) drawElement(ctx, panel, k, secret, 1, null, placement);
         await drawFooter(ctx, w, h, trackId);
         return new Promise((resolve, reject) => canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("no image"))), "image/png"));
     }
@@ -308,12 +340,12 @@
         view.note.className = "note" + (kind ? " " + kind : "");
     }
 
-    async function openShare(panel, trackId, trackName) {
+    async function openShare(panel, trackId, trackName, placement) {
         if (view) return;
         const week = window.__nswsTrackWeek?.(trackId);
         const secret = week != null && week === window.__nswsCurrentWeek;
-        // Taken before the window opens, so the shot is the PB screen and not this window.
-        const shot = renderShot(panel, trackId, secret);
+        const shot = Promise.race([placement, delay(PLACEMENT_WAIT_MS).then(() => null)])
+            .then((settled) => renderShot(panel, trackId, secret, settled));
 
         const overlay = el("div");
         overlay.id = "nsws-share";
@@ -410,10 +442,11 @@
         const panel = e.detail?.panel;
         const trackId = window.__getCurrentTrack?.()?.getId?.();
         if (!panel || !trackId || window.__nswsCupApp?.inCup?.()) return;
+        const placement = settledPlacement(panel, e.detail.position);
         const row = el("div", "nsws-share-row");
         const b = button(" Share PB", (ev) => {
             ev.stopPropagation();
-            openShare(panel, trackId, e.detail.trackName);
+            openShare(panel, trackId, e.detail.trackName, placement);
         }, "images/share.svg");
         // Never take focus: Enter and Space are driving keys.
         b.addEventListener("mousedown", (ev) => ev.preventDefault());

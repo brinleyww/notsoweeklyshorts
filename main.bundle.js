@@ -41981,7 +41981,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (_wasPB && getAutoClipOnPB()) createClip();
                     else if (getAutoClipOnEveryRun()) createClip();
                     // Share button and bingo squares (mod/nsws_share.js, mod/nsws_bingo.js).
-                    if (_wasPB) window.dispatchEvent(new CustomEvent("nsws-pb", { detail: { panel: C.get(this, Ye, "f"), trackName: i } }));
+                    if (_wasPB) window.dispatchEvent(new CustomEvent("nsws-pb", { detail: { panel: C.get(this, Ye, "f"), trackName: i, position: l.then((e => Number.isInteger(e?.newPosition) && e.newPosition > 0 ? Ke(e.newPosition) : null), (() => null)) } }));
                 }
                 if (null == o)
                     A.className = "hidden";
