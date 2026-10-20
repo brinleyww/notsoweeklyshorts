@@ -7,6 +7,8 @@
 // [u32 link][u16 channel][u8 kind][u32 length][bytes] (kind 0 = text, 1 = binary).
 // The pace is 200 ms while this page drives (or organizes a live round) and longer otherwise;
 // the cup sets window.__nswsMuxPace, and window.__nswsMuxFlush() sends at once (a click, a finish).
+// A racer's batch goes the moment its car state that closes the pace is queued (the game samples
+// one every 50 ms, so the fifth at 200 ms: a batch every 250 ms), not on a timer that races it.
 // On a network that blocks WebSockets the socket is mod/nsws_socket.js's HTTPS fallback; while that
 // sends one POST per batch, it sets window.__nswsMuxMinPace so batches go out a little less often.
 //
@@ -20,6 +22,10 @@ const FLUSH_MS = 200;
 // Bumper cars send every 100 ms while driving (app.ts).
 const MIN_PACE_MS = 100;
 const pace = () => Math.max(MIN_PACE_MS, Number(window.__nswsMuxMinPace) || 0, Math.min(1000, Number(window.__nswsMuxPace) || FLUSH_MS));
+// How many of the racer's own car states a batch holds: from its first to its last is the pace.
+// Read at every check, so a pace change applies at once.
+const SAMPLE_MS = 50;
+const carsPerFrame = () => Math.round(pace() / SAMPLE_MS) + 1;
 // Past this much queued, flush at once (track transfers) instead of waiting for the timer.
 const FLUSH_BYTES = 256 * 1024;
 const MAX_EARLY = 64;
@@ -67,16 +73,22 @@ function stamped(bytes) {
 }
 
 // The game's client only reads other cars from the organizer's batches ([3][u32 session][zlib of
-// [u32 id][u32 resets][state]...]), so a racer's [1][u32 session][u32 resets][state] is rewrapped
-// as one, in stored (uncompressed) zlib blocks.
-function asHostCars(id, bytes) {
-    const payload = new Uint8Array(bytes.length - 1);
-    new DataView(payload.buffer).setUint32(0, id >>> 0, true);
-    payload.set(bytes.subarray(5), 4);
+// [u32 id][u32 resets][state]...]), so a racer's [1][u32 session][u32 resets][state]s (one session)
+// are rewrapped as one, in stored (uncompressed) zlib blocks. The game inflates once per message,
+// with a fresh 64 KB window each time, so a frame's states go as one message.
+function asHostCars(id, states) {
+    const payload = new Uint8Array(states.reduce((n, s) => n + s.length - 1, 0));
+    const ids = new DataView(payload.buffer);
+    let p = 0;
+    for (const s of states) {
+        ids.setUint32(p, id >>> 0, true);
+        payload.set(s.subarray(5), p + 4);
+        p += s.length - 1;
+    }
     const blocks = Math.max(1, Math.ceil(payload.length / 65535));
     const out = new Uint8Array(5 + 2 + payload.length + blocks * 5 + 4);
     out[0] = HOST_CARS;
-    out.set(bytes.subarray(1, 5), 1);
+    out.set(states[0].subarray(1, 5), 1);
     out[5] = 0x78;
     out[6] = 0x01;
     let at = 7;
@@ -103,6 +115,11 @@ function sameBytes(a, b) {
     if (!a || a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
     return true;
+}
+
+function passCars(batch) {
+    if (batch) batch.pc._deliver(batch.channel, 1, asHostCars(batch.id, batch.states));
+    return null;
 }
 
 // "send", "drop" or "hold".
@@ -159,6 +176,10 @@ class Mux {
         this.queue = [];
         this.bytes = 0;
         this.queuedAt = 0;
+        // The racer's own car states in the queue, and when the first of them was queued.
+        this.cars = 0;
+        this.carAt = 0;
+        this.frames = 0;
         this.heldAt = 0;
         this.timer = 0;
         this.controls = [];
@@ -253,6 +274,7 @@ class Mux {
         if (!this.queue.some((r) => r.pc === pc)) return;
         this.queue = this.queue.filter((r) => r.pc !== pc);
         this.bytes = this.queue.reduce((n, r) => n + 11 + r.bytes.length, 0);
+        if (pc.side === "client") this.cars = 0;
     }
 
     control(data) {
@@ -286,7 +308,8 @@ class Mux {
     enqueue(pc, channel, kind, bytes) {
         const sort = sortRecord(pc, channel, kind, bytes);
         if (sort === "drop") return;
-        if (channel === UNRELIABLE && pc._lastCar === bytes) {
+        const car = channel === UNRELIABLE && pc._lastCar === bytes;
+        if (car) {
             pc._held = null;
             const fan = pc._fan && pc.side === "client" ? stamped(bytes) : null;
             if (fan) {
@@ -299,10 +322,30 @@ class Mux {
             this.heldAt ||= performance.now();
             return;
         }
-        if (!this.queue.length) this.queuedAt = performance.now();
+        const now = performance.now();
+        if (!this.queue.length) {
+            this.queuedAt = now;
+            this.cars = 0;
+        }
         this.push(pc, channel, kind, bytes);
-        if (this.bytes >= FLUSH_BYTES) this.flush();
-        else if (!this.timer) this.timer = setTimeout(() => this.flush(), pace());
+        // The racer's first car state restarts the batch's clock, and what was queued before rides
+        // along, unless it has already waited a pace (it was queued at the slow pace). A hidden tab
+        // isn't counted: its timers crawl, so it has always sent less often, on the ticker.
+        if (car && pc.side === "client" && !document.hidden && !this.cars++) {
+            this.carAt = now;
+            clearTimeout(this.timer);
+            this.timer = 0;
+            if (now - this.queuedAt >= pace()) return this.flush();
+        }
+        if (this.bytes >= FLUSH_BYTES || (this.cars && now >= this.due())) this.flush();
+        else if (!this.timer) this.timer = setTimeout(() => this.flush(), this.due() - now);
+    }
+
+    // When the queue goes without waiting for more. With the racer's car states in it, they decide
+    // (a SAMPLE_MS past the pace is the backstop for a stalled car); otherwise a pace after the first record.
+    due() {
+        if (!this.cars) return this.queuedAt + pace();
+        return this.cars >= carsPerFrame() ? 0 : this.carAt + pace() + SAMPLE_MS;
     }
 
     push(pc, channel, kind, bytes) {
@@ -363,6 +406,8 @@ class Mux {
         }
         this.queue = waiting;
         this.bytes -= size;
+        this.cars = 0;
+        this.frames++;
         try {
             this.ws.send(frame);
         } catch {}
@@ -399,6 +444,7 @@ class Mux {
         }
         const frame = new Uint8Array(data);
         const view = new DataView(data);
+        let batch = null;
         let at = 0;
         while (at + 11 <= frame.length) {
             const link = view.getUint32(at, true);
@@ -408,28 +454,39 @@ class Mux {
             const end = at + 11 + length;
             if (end > frame.length) break;
             const pc = this.links.get(link);
-            if (pc && kind === FAN_KIND) this.fanned(pc, channel, frame.subarray(at + 11, end));
+            if (pc && kind === FAN_KIND) batch = this.fanned(pc, channel, frame.subarray(at + 11, end), batch);
             else if (pc) {
+                batch = passCars(batch);
                 if (pc.side === "host" && channel === UNRELIABLE && kind === 1 && frame[at + 11] === CLIENT_CAR) pc._carDirect = false;
                 pc._recv++;
                 pc._deliver(channel, kind, frame.subarray(at + 11, end));
             }
             at = end;
         }
+        passCars(batch);
     }
 
-    fanned(pc, channel, bytes) {
-        if (bytes.length <= FAN_HEADER + 9) return;
+    // One racer's states in a row (same link, session and start) reach the game as one message;
+    // the start changes when the car resets, and each state must still see its own in __nswsCarClocks.
+    fanned(pc, channel, bytes, batch) {
+        if (bytes.length <= FAN_HEADER + 9) return batch;
         const view = new DataView(bytes.buffer, bytes.byteOffset, FAN_HEADER);
         const id = window.__nswsFanIds?.get(view.getUint32(0, true));
         const start = view.getFloat64(4, true);
-        if (id != null && Number.isFinite(start)) (window.__nswsCarClocks ??= new Map()).set(id, start);
         const game = bytes.subarray(FAN_HEADER);
+        const joins = !!batch && pc.side !== "host" && batch.pc === pc && batch.channel === channel && batch.id === id &&
+            Object.is(batch.start, start) && sameBytes(batch.states[0].subarray(1, 5), game.subarray(1, 5));
+        if (!joins) batch = passCars(batch);
+        if (id != null && Number.isFinite(start)) (window.__nswsCarClocks ??= new Map()).set(id, start);
         if (pc.side === "host") {
             pc._carDirect = true;
             pc._recv++;
             pc._deliver(channel, 1, game);
-        } else if (id != null && game[0] === CLIENT_CAR) pc._deliver(channel, 1, asHostCars(id, game));
+        } else if (id != null && game[0] === CLIENT_CAR) {
+            if (joins) batch.states.push(game);
+            else batch = { pc, channel, id, start, states: [game] };
+        }
+        return batch;
     }
 
     closed() {
@@ -674,22 +731,25 @@ export function installTransport() {
     // Soon rather than now, so everything the same click queues still goes out together.
     window.__nswsMuxFlush = () => {
         for (const mux of muxes.values()) {
-            if (!mux.queue.length || mux.soon) continue;
+            if (!mux.queue.length) continue;
+            mux.soonAfter = mux.frames;
+            if (mux.soon) continue;
             mux.soon = true;
             setTimeout(() => {
                 mux.soon = false;
-                mux.flush();
+                // A frame that went meanwhile took everything asked for.
+                if (mux.frames === mux.soonAfter) mux.flush();
             }, 15);
         }
     };
     if (!window.__nswsTicker) {
         window.__nswsTicker = createTicker();
-        // Flushes whatever has waited a full pace: in a hidden tab (whose timers crawl), and as soon as
+        // Flushes whatever is due (Mux.due): in a hidden tab (whose timers crawl), and as soon as
         // the pace drops (a car starts moving), so a batch queued at the slow pace doesn't hold it up.
         window.__nswsTicker.every(100, () => {
             const now = performance.now();
             for (const mux of muxes.values()) {
-                if (mux.queue.length && now - mux.queuedAt >= pace()) mux.flush();
+                if (mux.queue.length && now >= mux.due()) mux.flush();
                 else if (mux.heldAt && !window.__nswsMuxQuiet && now - mux.heldAt >= HOLD_MS) mux.flush(true);
             }
         });

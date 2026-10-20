@@ -42916,7 +42916,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 o.quaternion.y /= e,
                                 o.quaternion.z /= e,
                                 o.quaternion.w /= e),
-                                t.unsentCarStates.push(o)
+                                t.unsentCarStates.push(o);
+                                // Not So Weekly Shorts: the organizer's own page gets each racer's state as it
+                                // lands (the cup's drawing and live timing), not at the next 100 ms relay (zn).
+                                for (const cb of C.get(this, wn, "f"))
+                                    try {
+                                        cb(C.get(this, hn, "f"), t.id, t.resetCounter, o)
+                                    } catch (x) {
+                                        console.error(x)
+                                    }
                             }
                         break
                     }
@@ -42998,7 +43006,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 n.id != e && C.get(this, en, "m", Rn).call(this, n.peerConnection, n.dataChannel, e, t)
         }
         ,
-        In = function e(t, n, i) {
+        In = function e(t, n, i, frames) {
             const r = C.get(this, An, "f") - 5
               , a = i.reduce(( (e, t) => e + t.length), 0)
               , s = new Uint8Array(a);
@@ -43021,6 +43029,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 e[3] = C.get(this, hn, "f") >> 16 & 255,
                 e[4] = C.get(this, hn, "f") >> 24 & 255,
                 e.set(c, 5);
+                if (frames)
+                    return void frames.push(e);
                 try {
                     n.send(e)
                 } catch (e) {
@@ -43033,8 +43043,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , s = i.slice(r);
                 if (0 == a.length || 0 == s.length)
                     throw new Error("Cannot split car update data further");
-                C.get(this, en, "m", e).call(this, t, n, a),
-                C.get(this, en, "m", e).call(this, t, n, s)
+                C.get(this, en, "m", e).call(this, t, n, a, frames),
+                C.get(this, en, "m", e).call(this, t, n, s, frames)
             }
         }
         ,
@@ -43093,27 +43103,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ,
         zn = function() {
-            for (const e of C.get(this, mn, "f")) {
-                const t = [];
-                if (C.get(this, fn, "f").unsentCarStates.length > 0)
-                    for (const e of C.get(this, fn, "f").unsentCarStates)
-                        t.push({
-                            id: C.get(this, fn, "f").id,
-                            resetCounter: C.get(this, fn, "f").resetCounter,
-                            carState: e
-                        });
-                for (const n of C.get(this, mn, "f"))
-                    if (n != e && n.unsentCarStates.length > 0 && !window.__nswsCupDirect?.(n.id, e.id))
-                        for (const e of n.unsentCarStates)
-                            t.push({
-                                id: n.id,
-                                resetCounter: n.resetCounter,
-                                carState: e
-                            });
-                const n = [];
-                for (const e of t) {
-                    const t = Kt._c(e.carState)
-                      , i = new Uint8Array(8 + t.length);
+            // Not So Weekly Shorts: each state is packed once per relay, and pages that get the same list
+            // of cars (with states going straight between pages, nearly all of them) share one message.
+            const packed = new Map
+              , made = new Map
+              , pack = (e, n) => {
+                let i = packed.get(n);
+                if (null == i) {
+                    const t = Kt._c(n);
+                    i = new Uint8Array(8 + t.length),
                     i[0] = 255 & e.id,
                     i[1] = e.id >> 8 & 255,
                     i[2] = e.id >> 16 & 255,
@@ -43123,15 +43121,39 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     i[6] = e.resetCounter >> 16 & 255,
                     i[7] = e.resetCounter >> 24 & 255,
                     i.set(t, 8),
-                    n.push(i)
+                    packed.set(n, i)
                 }
-                C.get(this, en, "m", In).call(this, e.peerConnection, e.unreliableDataChannel, n)
+                return i
             }
-            for (const e of C.get(this, wn, "f"))
+            ;
+            for (const e of C.get(this, mn, "f")) {
+                const n = []
+                  , from = [];
+                if (C.get(this, fn, "f").unsentCarStates.length > 0) {
+                    from.push(C.get(this, fn, "f").id);
+                    for (const t of C.get(this, fn, "f").unsentCarStates)
+                        n.push(pack(C.get(this, fn, "f"), t))
+                }
                 for (const t of C.get(this, mn, "f"))
-                    if (t.unsentCarStates.length > 0)
-                        for (const n of t.unsentCarStates)
-                            e(C.get(this, hn, "f"), t.id, t.resetCounter, n);
+                    if (t != e && t.unsentCarStates.length > 0 && !window.__nswsCupDirect?.(t.id, e.id)) {
+                        from.push(t.id);
+                        for (const i of t.unsentCarStates)
+                            n.push(pack(t, i))
+                    }
+                const key = from.join();
+                let frames = made.get(key);
+                null == frames && (frames = [],
+                C.get(this, en, "m", In).call(this, e.peerConnection, e.unreliableDataChannel, n, frames),
+                made.set(key, frames));
+                for (const t of frames)
+                    try {
+                        e.unreliableDataChannel.send(t)
+                    } catch (t) {
+                        console.error("Failed to send CarUpdate message:", t),
+                        e.peerConnection.close();
+                        break
+                    }
+            }
             C.get(this, fn, "f").unsentCarStates.length = 0;
             for (const e of C.get(this, mn, "f"))
                 e.unsentCarStates.length = 0
@@ -45089,6 +45111,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
           , cupCollisionCups = new WeakSet;
         // Called by every race session once a frame, after the cars moved and before the frame is drawn.
         let cupFrameHook = null;
+        // Called once a frame just before the other cars are moved and drawn.
+        let cupCarsHook = null;
         // Game access for Competitions (competitions/src/game.ts). Names are the race session's
         // private fields: Sa multiplayer, wa car, ya keyboard, Ba free camera, ea HUD, Ra other cars.
         const cupNative = (y, x, w, S) => {
@@ -45132,6 +45156,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 onFrame: fn => {
                     cupFrameHook = fn;
                 },
+                onCars: fn => {
+                    cupCarsHook = fn;
+                },
+                lerpCarState: (a, b, t) => Mr(a, b, Math.max(0, Math.min(1, t))),
                 leaderboardUploads: (() => {
                     const defaults = new WeakMap;
                     return (g, enabled) => {
@@ -46012,6 +46040,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             e.hasEnded || e.car.setVisible(!ghostsHidden),
                             e.hasEnded || ghostsHidden || C.get(this, Ba, "f").isEnabled ? e.car.audioVolume = 0 : e.car.audioVolume = C.get(this, Oa, "f")
                         }
+                    cupCarsHook?.(this, n);
                     const remoteDelay = C.get(this, Sa, "f")?.multiplayerConnection.remoteDelay ?? .15;
                     for (const e of C.get(this, Ra, "f").values()) {
                         if (e.car.isPaused = !1,

@@ -6,12 +6,31 @@ export interface Controls {
   down: boolean;
   left: boolean;
 }
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+export interface Quat extends Vec3 {
+  w: number;
+}
 export interface CarState {
   frames: number;
   speedKmh: number;
   hasStarted: boolean;
   finishFrames: number | null;
   nextCheckpointIndex: number;
+  hasCheckpointToRespawnAt: boolean;
+  position: Vec3;
+  quaternion: Quat;
+  collisionImpulses: number[];
+  wheelContact: ({ position: Vec3; normal: Vec3 } | null)[];
+  wheelSuspensionLength: number[];
+  wheelSuspensionVelocity: number[];
+  wheelDeltaRotation: number[];
+  wheelSkidInfo: number[];
+  steering: number;
+  brakeLightEnabled: boolean;
   controls: Controls & { reset: boolean };
 }
 export interface Car {
@@ -57,6 +76,7 @@ export interface Connection {
   reportCupStatus?(status: unknown): void;
   addCarUpdateCallback(cb: CarUpdate): void;
   removeCarUpdateCallback(cb: CarUpdate): void;
+  addCarResetCallback(cb: (session: number, id: number, resets: number) => void): void;
   addNewSessionCallback(session: number | null, cb: (session: number, mode: number, meta: TrackMeta, data: TrackData) => void): void;
   removeNewSessionCallback(cb: unknown): void;
 }
@@ -90,6 +110,9 @@ export interface Native {
     ): void;
   };
   onFrame(fn: ((game: Game, dt: number) => void) | null): void;
+  // Missing on a page that loaded the game before they existed.
+  onCars?(fn: ((game: Game, dt: number) => void) | null): void;
+  lerpCarState?(a: CarState, b: CarState, t: number): CarState;
   read(g: Game): GameInfo;
   presentation(g: Game, cup: boolean, watching: boolean): void;
   leaderboardUploads(g: Game, enabled?: boolean): void;

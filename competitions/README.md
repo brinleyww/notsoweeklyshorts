@@ -36,25 +36,36 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
     back at the start with the clock still running; restart pressed twice within 2 s retires. Time attack: restarts are free.
   - `spectate.ts`: watching. The camera rides another racer's car using that car's own chase or
     cockpit camera, so nothing is streamed. Director (auto), Follow (◀ ▶) or Free camera.
-  - `smooth.ts`: draws every other car where it is now. Each page stamps its car's states with when
-    that car started on the cup clock (`transport.js`), so a state's age is known; the car is drawn at
-    (cup time now - its start), between real states or carried on from the newest along its path (up to
-    1.2 s), and a correction after a brake, crash or landing fades out over ~0.1 s. The game's own remote
-    playback (a buffer drawn 0.6 s behind, which skipped 50 ms a frame whenever a 200 ms bunch over- or
-    under-filled it) gets no states. The organizer's own car goes out in its batches, so its start is in
-    the cup state (`clk`). Measured with three pages at over 100 km/h: 33-58 m behind before, 0.3-1.2 m
-    off (p95 0.8-2.4 m) now. Other cars are hidden while results, votes or loading cover the race.
-    Live timing still reads states as they arrive. Bumper cars don't guess (a guessed car would be one
-    you crash into): their pages send every 100 ms while driving and the game's own playback draws
-    other cars 0.25 s behind its newest state (about 0.3-0.37 s behind the real car, was 0.5-0.57 s),
-    which costs about twice the messages while racing, in bumper cups only.
+  - `smooth.ts`: draws every other car a little in the past, always between two real states this page
+    already has, so nothing is guessed and no car is ever drawn past the newest state its page sent.
+    Each car has its own delay: the 98th percentile over the last 10 s of how long after a newest state
+    the next states landed, plus about a frame. Its playback runs at most 5% fast or slow to follow that
+    delay; when states are late it eases to a stop at the newest one and goes on when they land (after a
+    stall of over 0.5 s it jumps on instead), and the delay goes up at once and back down at 100 ms a
+    second. Positions follow a curve through the real states (cubic Hermite), rotations slerp, and the
+    rest (wheels, suspension, steering, speed) is the game's own interpolation (`lerpCarState`), with
+    checkpoints, the finish and crash sounds when the drawn car gets there. A respawn, a lost stretch of
+    states, a reset press or the start is never drawn as motion: the car holds, then shows the new place;
+    a restart (the game's car reset) ends the old run at once. Timing is this page's own
+    `performance.now()`, so clock syncs never move a drawn car (the start stamps `transport.js` adds
+    aren't used for drawing). It runs just before the game moves the other cars (`cupCarsHook`), so a
+    followed car and its camera use the same state. The game's own remote playback gets no states.
+    Node harness at the 200 ms pace (batches of 4-5 states, 1% network stalls): about 0.33 s behind the
+    real car on a near connection, 0.46 s on a typical one and 0.9 s on bad Wi-Fi (13, 18 and 34 m at
+    150 km/h), drawn within 2 cm (p95) of the real path; not yet measured in browsers. Other cars are
+    hidden while results, votes or loading cover the race. Live timing still reads states as they
+    arrive. Bumper cars keep the game's own playback: their pages send every 100 ms while driving and
+    it draws other cars 0.25 s behind its newest state (about 0.3-0.37 s behind the real car), which
+    costs about twice the messages while racing, in bumper cups only.
   - Car states go straight between pages: the room passes a racer's stamped states (`kind 2` records)
     to every other page as well as the organizer (PROXY.md, "Competitions"), so they skip the organizer's
     page and its batching. The room stamps each copy with the link it came in on, and pages trust only
     the organizer's list of whose link is whose (`lk` in the cup state). The organizer's game then leaves them out of its batches to pages that get
     them this way (`window.__nswsCupDirect`, set in `app.ts` from `transport.js`), so each state is
     decoded once; with an older page or Worker on either end it relays them as before, and `smooth.ts`
-    drops any copy it already has.
+    drops any copy it already has. The relay packs each state once, and pages that get the same list
+    of cars share one compressed message. On the organizer's own page a racer's state reaches the cup
+    (smooth.ts, live timing) as it lands, not at the next 100 ms relay.
   - `live.ts`: live timing from the car states the game already sends: checkpoints, running order,
     gaps and splits, at no network cost.
 - `ui/`: everything is in one shadow root over the game, scaled by the game's `--ui-scale-factor`.
@@ -85,7 +96,8 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   chat key opens a quick message line (`mod/nsws_chat.js`).
 
 Game access is `window.__nswsCup` in `main.bundle.js` (`cupNative`, types in `game.ts`). The race
-session calls the cup once a frame before drawing (`cupFrameHook`).
+session calls the cup once a frame before drawing (`cupFrameHook`), and just before it moves the other
+cars (`cupCarsHook`).
 
 ## Formats and rules
 
@@ -140,8 +152,12 @@ white underline), plain headings and no gradients; gold only marks 1st place. Fi
 
 Incoming WebSocket messages are billed, so a page batches what it sends: every 200 ms while its
 car is moving (racers from the countdown on; the organizer while anyone's car moves or a round
-runs), and every 1 s otherwise; the transport re-checks the pace every 100 ms, so a batch queued at
-the slow pace never holds up a car that just started. Clicks,
+runs), and every 1 s otherwise. A racer's batch leaves the moment the car state that closes the
+pace is queued (the game samples one every 50 ms, so five states every 250 ms while driving), not
+on a timer that raced that state (a lost race sent four states a frame and a frame more for no
+newer state: 4.35 frames a second in a simulation, now 4.0). A hidden tab keeps the old timing.
+The transport re-checks the pace every 100 ms, so a batch queued at the slow pace never holds up a
+car that just started. Clicks,
 finishes and phase changes flush at once. Live timing and spectating need no messages of their
 own. On the game's unreliable channel the transport also drops what carries nothing: the empty car
 batch the organizer's game sends everyone every 100 ms, repeated car states, pings beyond one per
@@ -155,9 +171,10 @@ Measured with two pages (frames a second, before -> after): driving 4.0 -> 3.9 (
 the organizer in a countdown 3.6 -> 1.4, results 1.3-1.5 -> 0.3-0.4, votes and lobby 0.9-1.05 ->
 0.1-0.27, a hidden page between rounds ~1 -> 0, a player who left 0. A 16-racer cup works out at
 about 135 requests a minute before and 114 after while racing; driving is the floor at this pace.
-With prediction (`smooth.ts`) the pace no longer shows as lag, only as guessing error: three weaving
-racers at 110-156 km/h were drawn a median 1.1-1.9 m off (p95 2-6 m) at a 400 ms pace, against
-0.3-1.2 m (p95 0.8-2.4 m) at 200 ms, for about half the driving frames.
+Nothing is guessed (`smooth.ts`), so the driving pace shows as delay: a car is drawn about one batch
+interval plus the network's latency and jitter behind the real one (0.33-0.46 s at this pace on near
+and typical connections, Node harness). Only a faster driving pace (more messages) or a lower latency
+path draws them closer.
 
 A player who closes the tab by accident is offered the cup again from the menu
 (`mod/nsws_cup_rejoin.js`, the game's own confirm box): while they are in a cup (not organizing it),

@@ -8,7 +8,7 @@ import { background, site } from './game.ts';
 import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
-import { installSmoothing, predictCars } from './smooth.ts';
+import { drawCars, installSmoothing } from './smooth.ts';
 import { VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
@@ -31,7 +31,7 @@ export interface Note {
 const HELLO_MS = 2000;
 const CLOCK_MS = 30_000;
 const PACE_DRIVING = 200;
-// Bumper cars draw other cars with the game's own playback, not guessed ahead (smooth.ts), so they go twice as often.
+// Bumper cars draw other cars with the game's own playback (smooth.ts), and go twice as often so it can sit closer to live.
 const PACE_BUMPER = 100;
 const PACE_IDLE = 1000;
 const REJOIN_KEY = 'nsws-sc-rejoin';
@@ -122,6 +122,13 @@ export class App {
     this.native.onFrame((g, dt) => {
       try {
         this.#frame(g, dt);
+      } catch (error) {
+        this.fail(error);
+      }
+    });
+    this.native.onCars?.((g, dt) => {
+      try {
+        this.#cars(g, dt);
       } catch (error) {
         this.fail(error);
       }
@@ -285,13 +292,7 @@ export class App {
       this.live.local(this.selfPid, own && this.driver.offset ? { ...own, frames: own.frames + this.driver.offset } : own);
       this.#noteCarClock(own);
     }
-    predictCars(
-      info.connection,
-      (id) => this.native.remoteCar(g, id),
-      this.now(),
-      (id) => site.__nswsCarClocks?.get(id) ?? this.playerByPid(id)?.clk,
-      s.rules.collisions,
-    );
+    if (!this.native.onCars) this.#cars(g, dt);
     if (s.id !== this.#cupId) {
       this.#cupId = s.id;
       this.driver.runs = [];
@@ -324,6 +325,15 @@ export class App {
         : null,
     );
     this.native.leaderboardUploads(g, s.rules.uploads && !s.rules.collisions);
+  }
+
+  // Just before the game moves and draws the other cars, so the spectator camera and the car it
+  // follows show the same state.
+  #cars(g: Game, dt: number) {
+    const s = this.state,
+      info = this.info;
+    if (!s || !info || this.game !== g || info.disposed) return;
+    drawCars(info.connection, info.sessionId, (id) => this.native.remoteCar(g, id), performance.now(), dt * 1000, s.rules.collisions);
   }
 
   // ---- Ten times a second ----
