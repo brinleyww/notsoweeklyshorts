@@ -3643,6 +3643,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     d.get(this, a, "f").count = 0,
                     d.get(this, a, "f").instanceMatrix.needsUpdate = !0
                 }
+                set hidden(e) {
+                    d.get(this, a, "f").visible = !e
+                }
                 spawn(e, t, n) {
                     d.get(this, s, "f").push({
                         x: e + .25 * (Math.random() - .5),
@@ -10308,6 +10311,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                 set skidmarksHidden(e) {
                     for (const t of l.get(this, Le, "f"))
                         t.hidden = e
+                }
+                // Not So Weekly Shorts: a cup hiding this car hides what it leaves behind too (marks, drift smoke).
+                set effectsHidden(e) {
+                    this.skidmarksHidden = e,
+                    null != l.get(this, De, "f") && (l.get(this, De, "f").hidden = e)
                 }
                 // Not So Weekly Shorts: cup collisions, through this car's own simulation.
                 setCollisionCars(e) {
@@ -45331,7 +45339,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         for (const [id, r] of cars) {
                             const show = null === ids || ids.includes(id);
                             r.car.setVisible(show);
-                            r.car.skidmarksHidden = !show;
+                            r.car.effectsHidden = !show;
+                            r.car.__cupHidden = !show;
+                            r.car.audioCulled = !show;
                         }
                 },
                 drivingView: g => !C.get(g, Ba, "f").isEnabled && C.get(g, zr, "f").camera === C.get(g, wa, "f").cameraCockpit ? 1 : 0,
@@ -46159,7 +46169,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         this.__botsLoud = bots && eye && bots.size > 2 ? new Set([...bots.values()].sort((x, y) => x.car.getPosition().distanceToSquared(eye) - y.car.getPosition().distanceToSquared(eye)).slice(0, 2)) : null;
                     const loud = this.__botsLoud;
                     for (const e of bots?.values() ?? [])
-                        e.car.audioCulled = null != loud && !loud.has(e),
+                        e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
