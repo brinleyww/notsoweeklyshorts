@@ -19,7 +19,7 @@ const SLEW = 0.05;
 const SNAP_MS = 250;
 // With no frames drawn for this long (a hidden tab), live timing is kept from the tick instead.
 const STALE_MS = 500;
-const GAP_MS = 250;
+const GAP_MS = 1000;
 
 interface Bot {
   u: number;

@@ -271,9 +271,10 @@ function pump() {
     progressAt = now;
     progress(now);
   }
-  // Far enough ahead of the race: leave the CPU to the page.
+  // Well ahead of the race (GO waits for a lead, and pages need a few seconds of it): leave most of the
+  // CPU to the game, which on a weak device shares its cores with this.
   const ahead = planner.frontier - raceNow();
-  const rest = ahead > 40_000 ? SLICE_MS * 3 : ahead > 15_000 ? SLICE_MS : 0;
+  const rest = ahead > 35_000 ? SLICE_MS * 8 : ahead > 20_000 ? SLICE_MS * 3 : ahead > 12_000 ? SLICE_MS : 0;
   setTimeout(pump, rest);
 }
 

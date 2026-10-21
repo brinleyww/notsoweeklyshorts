@@ -9866,8 +9866,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.get(this, M, "f").scene.remove(l.get(this, _, "f"))
                 }
                 clear() {
-                    for (let e = 0; e < l.get(this, C, "f").length; ++e)
-                        l.get(this, C, "f")[e] = 0;
+                    l.get(this, C, "f").fill(0);
                     l.get(this, R, "f").clearUpdateRanges(),
                     l.get(this, R, "f").needsUpdate = !0,
                     l.set(this, I, 0, "f"),
@@ -46151,7 +46150,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         }
                         e.car.update(n)
                     }
-                    for (const e of cupBotCars.get(this)?.values() ?? [])
+                    // Not So Weekly Shorts: only the two bots nearest the camera make engine sounds (each car's
+                    // audio is an engine and five 3D panners, updated every frame), picked twice a second so
+                    // two bots about as near don't swap every frame.
+                    const bots = cupBotCars.get(this), eye = C.get(this, zr, "f").camera?.position, now = performance.now();
+                    if (!(now - (this.__botsLoudAt ?? -1 / 0) < 500))
+                        this.__botsLoudAt = now,
+                        this.__botsLoud = bots && eye && bots.size > 2 ? new Set([...bots.values()].sort((x, y) => x.car.getPosition().distanceToSquared(eye) - y.car.getPosition().distanceToSquared(eye)).slice(0, 2)) : null;
+                    const loud = this.__botsLoud;
+                    for (const e of bots?.values() ?? [])
+                        e.car.audioCulled = null != loud && !loud.has(e),
                         e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),

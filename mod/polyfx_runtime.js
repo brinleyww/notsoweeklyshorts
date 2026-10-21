@@ -17758,6 +17758,9 @@ void main() {
 
   // src/car_lights.js
   var _worldPos = new Vector3();
+  // three compiles every lit shader once per number of visible lights; _prewarmLightVariants warms
+  // 0..MAX_CAR_SPOTS, so no more are ever lit at once (a cup full of bots braking together would go past it).
+  var MAX_CAR_SPOTS = 6;
   var CarLights = class {
     constructor() {
       this.cars = new Map();
@@ -17810,10 +17813,18 @@ void main() {
       const litOtherRoots = new Set(
         this.cfg.otherHeadlightsEnabled ? others.slice(0, this.cfg.maxLitOtherCars).map((e) => e.root) : []
       );
-      for (const [root, car] of this.cars) {
+      const order = ownRoot ? [ownRoot, ...others.map((e) => e.root)] : [...this.cars.keys()];
+      let spots = MAX_CAR_SPOTS;
+      for (const root of order) {
+        const car = this.cars.get(root);
         const isOwn = root === ownRoot;
-        this._applyHeadlights(car, headlightsOn && (isOwn || litOtherRoots.has(root)));
+        this._applyHeadlights(car, headlightsOn && (isOwn || litOtherRoots.has(root)) && spots >= 2);
+        if (car.headL.spot.visible) spots -= 2;
         this._applyBrake(car, headlightsOn);
+        if (car.brakeSpot.visible) {
+          if (spots > 0) spots--;
+          else car.brakeSpot.visible = false;
+        }
       }
     }
     setEnabled(on) {
@@ -19553,6 +19564,14 @@ uniform float polyfxGlowIntensity;`
       const headlights = !!(this.carLightsEnabled && lights.cfg.enabled && (this.headlightsForce || this.weatherHeadlights || this.skyActive && !this.envOnly && this.sky && this.sky.sunDir.y < 0.1));
       const sig = [lights.version, this.preset, this._appliedColorCorrect, this.photoWasActive, renderer.shadowMap.enabled, renderer.shadowMap.type, !!scene.fog, scene.environment ? scene.environment.uuid : "", headlights].join();
       if (sig === this._prewarmSig) return;
+      // Cars join a race one a frame (a cup's bots): warm once they have settled, not once per car.
+      const now = performance.now();
+      if (sig !== this._prewarmNext) {
+        this._prewarmNext = sig;
+        this._prewarmAt = now;
+        return;
+      }
+      if (now - this._prewarmAt < 500) return;
       this._prewarmSig = sig;
       const cars = [...lights.cars.values()];
       const spots = cars.map((c) => c.brakeSpot);
@@ -19563,7 +19582,7 @@ uniform float polyfxGlowIntensity;`
       // The composer's target, so the programs match the ones the RenderPass will ask for.
       renderer.setRenderTarget(this.composer.renderTarget1);
       try {
-        for (let k = 0; k <= Math.min(spots.length, 6); k++) {
+        for (let k = 0; k <= Math.min(spots.length, MAX_CAR_SPOTS); k++) {
           if (k === current) continue;
           spots.forEach((s, i) => s.visible = i < k);
           renderer.compileAsync(scene, camera).catch(() => {
