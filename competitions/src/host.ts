@@ -1,12 +1,15 @@
 // The organizer's side of a cup: the authoritative state, the round clock, track loading and
 // the replay checks. Everyone else only sees the state it broadcasts.
 import type { App } from './app.ts';
+import { BotManager } from './bots/manager.ts';
+import { BOT_NAMES, botStyle, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
+import type { RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
-import type { LoadedTrack } from './game.ts';
+import type { LoadedTrack, TrackData } from './game.ts';
 import { site } from './game.ts';
 import type { Msg } from './protocol.ts';
-import { cleanRules, type Rules } from './rules.ts';
-import { byPid, player, roundDone, standings, type CupState, type RoundResult, type TrackRef, type Category } from './state.ts';
+import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
+import { botPid, byPid, isBot, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category } from './state.ts';
 
 const LOAD_WAIT_MS = 15_000;
 const SESSION_RETRY_MS = 8_000;
@@ -19,6 +22,12 @@ const LINK_SETTLE_MS = 1_000;
 const STATUS_MS = 2_000;
 const OUTAGE_GRACE_MS = 10_000;
 const RECENT_TRACKS = 8;
+// GO waits at most this much longer for the bots' plans.
+const BOT_WAIT_MS = 15_000;
+// How far a bot's run is planned in a round without a time limit.
+const BOT_PLAN_MS = 600_000;
+// The cup's own fastest checked runs per track, which bots may follow.
+const CUP_REFS = 3;
 
 export interface PoolTrack extends TrackRef {
   load: () => Promise<LoadedTrack>;
@@ -29,6 +38,8 @@ interface Peer {
   key: string | null;
   hist: number;
   greeted: boolean;
+  // A bot chunk didn't reach this page: it gets the whole round's chunks again.
+  botsStale?: boolean;
   // Each player's link as last sent to this page, and when it was first sent.
   links?: Map<number, { link: number; at: number }>;
 }
@@ -74,6 +85,11 @@ export class Organizer {
   #runHashes = new Map<string, Set<number>>();
   #visited = new Set<string>();
   #poolAt = 0;
+  #bots: BotManager | null = null;
+  #botNames: number[] = [];
+  #botTier = '';
+  #planTrack: { ref: TrackRef; data: TrackData } | null = null;
+  #cupRuns = new Map<string, RefInput[]>();
 
   constructor(
     private app: App,
@@ -82,6 +98,8 @@ export class Organizer {
     this.state = E.createCup({ id: randomId(), name: o.name, format: o.format, rules: o.rules, now: Date.now() });
     const me = this.#addPlayer('organizer', app.selfPid, o.role);
     this.state.host = me.u;
+    this.#botNames = nameOrder(seedOf(this.state.id));
+    this.#syncBots();
     // The new session's id straight from the game (works in a hidden tab, where frames stop).
     app.connection?.addNewSessionCallback(null, (id) => this.#sessionStarted(id));
   }
@@ -190,19 +208,21 @@ export class Organizer {
       p = this.#addPlayer(key, pid, role);
       u = p.u;
       this.notifyAll(`${p.name} joined ${p.role === 'racer' ? 'the grid' : 'as a spectator'}`, 'info');
+      this.#syncBots();
     }
     peer.key = key;
     peer.greeted = true;
     peer.hist = 0;
     this.app.net.send(pid, { k: 'you', u: p.u });
     this.#sendTo(pid);
+    this.#sendBots(pid, peer);
     this.touch();
   }
 
   #syncLobby(now: number) {
     const lobby = this.app.lobby;
     for (const p of this.state.players) {
-      if (p.pid == null) continue;
+      if (p.pid == null || p.bot) continue;
       const seen = lobby.find((l) => l.id === p.pid);
       if (seen) {
         if (seen.nickname && seen.nickname !== p.name && p.u !== this.me) {
@@ -223,6 +243,238 @@ export class Organizer {
     const self = player(this.state, this.me);
     if (self && self.pid !== this.app.selfPid) self.pid = this.app.selfPid;
     void now;
+  }
+
+  // ---- Bots ----
+
+  #manager() {
+    return (this.#bots ??= new BotManager({
+      native: this.app.native,
+      local: (n, g, u, seq, data) => this.app.bots.local(n, g, u, seq, data),
+      note: (text) => this.app.notify(text, 'bad'),
+    }));
+  }
+
+  #seatedBots() {
+    return this.state.players.filter((p) => p.bot && p.role === 'racer' && !p.out).sort((a, b) => a.u - b.u);
+  }
+
+  // Keeps rules.bots computer racers on the grid. Once the cup has started a bot taken off stays as a
+  // benched spectator, so its results keep a name. A human can always take a bot's slot, and bumper
+  // cars have no bots (a planned run can't take a shove).
+  #syncBots() {
+    const s = this.state;
+    const lobby = s.phase === 'lobby';
+    const seated = this.#seatedBots();
+    let target = s.rules.collisions ? 0 : Math.max(0, Math.min(s.rules.bots, MAX_RACERS - E.humanRacers(s).length));
+    // A knockout's grid is locked once it starts.
+    if (!lobby && s.rules.mode === 'knockout') target = Math.min(target, seated.length);
+    let changed = false;
+    const fresh = new Set<Player>();
+    while (seated.length > target) {
+      const p = seated.pop()!;
+      if (lobby) p.role = 'spectator';
+      else E.setRole(s, p.u, 'spectator');
+      changed = true;
+    }
+    for (const p of s.players)
+      if (seated.length < target && p.bot && p.role !== 'racer' && !p.out) {
+        p.role = 'racer';
+        seated.push(p);
+        changed = true;
+      }
+    while (seated.length < target) {
+      const p = this.#newBot();
+      if (!p) break;
+      seated.push(p);
+      fresh.add(p);
+      changed = true;
+    }
+    if (lobby && s.players.some((p) => p.bot && p.role !== 'racer')) s.players = s.players.filter((p) => !p.bot || p.role === 'racer');
+    seated.sort((a, b) => a.u - b.u);
+    // Skills are spread again only when the organizer changes the tier or the count, so a bot keeps
+    // its skill through knockouts. Match the field starts everyone at medium once, then they adapt.
+    const tier = s.rules.botSkill;
+    const sig = `${tier}:${s.rules.bots}`;
+    const spread = tier === 'match' ? !this.#botTier.startsWith('match:') : sig !== this.#botTier;
+    const skills = tierSkills(tier, seated.length);
+    seated.forEach((p, i) => {
+      if (spread || fresh.has(p)) p.bot!.s = Math.round(skills[i] * 100);
+    });
+    if (sig !== this.#botTier) {
+      this.#botTier = sig;
+      changed = true;
+    }
+    if (!changed) return;
+    this.#botsReady();
+    if (s.phase === 'draft') this.#botDraft();
+    if (s.phase === 'loading' || s.phase === 'warmup') this.#planBots();
+    if (s.phase === 'results') this.#prePlan();
+    this.touch(true);
+  }
+
+  #newBot() {
+    const s = this.state;
+    const taken = new Set(s.players.filter((p) => p.bot).map((p) => p.name));
+    const k = this.#botNames.find((i) => !taken.has(BOT_NAMES[i]));
+    if (k == null) return null;
+    const u = this.#nextU++;
+    const p: Player = { u, pid: botPid(u), name: BOT_NAMES[k], cc: null, role: 'racer', pts: 0, wins: 0, places: [], bot: { s: 50, cs: botStyle(k) } };
+    s.players.push(p);
+    return p;
+  }
+
+  // Takes one bot off the grid, and the bot count down with it.
+  removeBot(u: number) {
+    const s = this.state,
+      p = player(s, u);
+    if (!p?.bot) return;
+    if (p.role === 'racer' && !p.out) s.rules = cleanRules({ ...s.rules, bots: Math.max(0, this.#seatedBots().length - 1) });
+    if (s.phase === 'lobby') s.players = s.players.filter((x) => x !== p);
+    else if (p.role === 'racer') E.setRole(s, u, 'spectator');
+    this.#syncBots();
+    this.touch(true);
+  }
+
+  // Bots never hold up the end of a warm-up.
+  #botsReady() {
+    const s = this.state,
+      r = s.round;
+    if (s.phase !== 'warmup' || !r) return;
+    for (const u of r.racers) {
+      const p = player(s, u);
+      if (p?.bot) p.ready = 1;
+    }
+  }
+
+  // Bots ban and pick at random, straight away (a track nobody picked yet if there is one).
+  #botDraft() {
+    const s = this.state,
+      d = s.draft;
+    if (!d || s.phase !== 'draft') return;
+    const quota = d.stage === 'ban' ? s.rules.bans : s.rules.picks;
+    const book = d.stage === 'ban' ? d.bans : d.picks;
+    for (const p of E.racers(s)) {
+      if (!p.bot) continue;
+      for (let tries = 0; (book[p.u]?.length ?? 0) < quota && tries < 8; tries++) {
+        const taken = new Set([...Object.values(d.bans), ...Object.values(d.picks)].flat());
+        const banned = new Set(Object.values(d.bans).flat());
+        const free = d.opts.filter((t) => !banned.has(t.id) && !(book[p.u] ?? []).includes(t.id));
+        const fresh = free.filter((t) => !taken.has(t.id));
+        const from = fresh.length ? fresh : free;
+        if (!from.length) break;
+        E.draftChoose(s, p.u, d.stage, from[Math.floor(Math.random() * from.length)].id);
+      }
+    }
+    this.touch();
+  }
+
+  // The bots in the current round: its racers, and before GO also those who join it then.
+  #roundBots(atGo = false) {
+    const s = this.state,
+      r = s.round;
+    if (!r) return [];
+    const joining = !atGo && r.startAt == null && s.rules.lateJoin;
+    return this.#seatedBots().filter((p) => r.racers.includes(p.u) || joining);
+  }
+
+  // Starts (or tops up) the plans of round n on the loaded track; with no bots it ends the running plan.
+  #planBots(n = this.state.round?.n, bots = this.#roundBots()) {
+    const s = this.state,
+      t = this.#planTrack;
+    const mgr = bots.length ? this.#manager() : this.#bots;
+    if (n == null || !t || !mgr) return;
+    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), bots.map((p) => p.bot!.s / 100));
+    list.forEach((persona, i) => (persona.u = bots[i].u));
+    mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS });
+    const r = s.round;
+    if (mgr.failed && r && r.startAt == null) r.racers = r.racers.filter((u) => !isBot(player(s, u)));
+  }
+
+  // Another round on the same track: its bots plan during the results.
+  #prePlan() {
+    const s = this.state,
+      r = s.round;
+    if (s.phase !== 'results' || s.winner != null || !r || E.needsNewTrack(s) || this.#queued || this.#planTrack?.ref.id !== r.track.id) return;
+    this.#planBots(s.rounds + 1, this.#seatedBots());
+  }
+
+  // GO waits a little for the bots' plans (at most BOT_WAIT_MS); bots that can't be planned at all
+  // stay out of the round.
+  #botsGo(now: number) {
+    const s = this.state,
+      r = s.round!;
+    const bots = this.#roundBots(true);
+    this.#planBots(r.n, bots);
+    if (!bots.length) return;
+    const mgr = this.#bots;
+    if (!mgr || mgr.broken) {
+      r.racers = r.racers.filter((u) => !isBot(player(s, u)));
+      return;
+    }
+    const normal = r.startAt!;
+    const startAt = Math.min(normal + BOT_WAIT_MS, Math.max(normal, now + mgr.readyIn() + 600));
+    r.startAt = startAt;
+    if (r.endAt != null) r.endAt += startAt - normal;
+    s.nextAt = startAt;
+    mgr.go(r.n, startAt, r.endAt != null ? r.endAt - startAt : BOT_PLAN_MS, s.rules.style === 'timeattack');
+  }
+
+  // Bots' finishes and retirements, each once the race clock reaches it. They are checked runs by
+  // construction, earn no PB or WR badges, and don't start the finish window (that stays the humans').
+  #botResults(now: number) {
+    const s = this.state,
+      r = s.round,
+      mgr = this.#bots;
+    if (!r || r.startAt == null) return;
+    let changed = false;
+    const sat: string[] = [];
+    for (const d of mgr?.due(now) ?? []) {
+      if (!r.racers.includes(d.u)) continue;
+      if (d.dnf) {
+        if (E.recordDnf(s, d.u)) {
+          changed = true;
+          if (d.sat) sat.push(player(s, d.u)?.name ?? '?');
+        }
+        continue;
+      }
+      const f = d.finish ?? d.runFinish;
+      if (f == null) continue;
+      const close = r.closeAt;
+      const got = E.recordFinish(s, d.u, f, now, r.startAt + f);
+      if (!got) continue;
+      r.closeAt = close;
+      if (got === true) r.runs[d.u].chk = 1;
+      changed = true;
+    }
+    // A bot whose plan is gone can't finish any more.
+    for (const u of r.racers) if (isBot(player(s, u)) && !roundDone(s, u) && !mgr?.drives(r.n, u)) changed = E.recordDnf(s, u) || changed;
+    if (sat.length) this.app.notify(`${sat.join(', ')} ${sat.length > 1 ? "weren't" : "wasn't"} ready in time and ${sat.length > 1 ? 'sit' : 'sits'} this round out`, 'info');
+    if (changed) this.touch();
+  }
+
+  // Match the field: each bot that finished moves toward the humans' median time.
+  #matchField(result: RoundResult) {
+    const s = this.state;
+    if (s.rules.botSkill !== 'match') return;
+    const times = result.rows.filter((row) => row[1] != null && !isBot(player(s, row[0]))).map((row) => row[1]!);
+    if (!times.length) return;
+    times.sort((a, b) => a - b);
+    const mid = times.length >> 1;
+    const median = times.length % 2 ? times[mid] : (times[mid - 1] + times[mid]) / 2;
+    for (const row of result.rows) {
+      const p = player(s, row[0]);
+      if (p?.bot && row[1] != null) p.bot.s = Math.round(matchStep(p.bot.s / 100, row[1], median) * 100);
+    }
+  }
+
+  // A checked run the bots may follow on this track later.
+  #keepRun(trackId: string, u: number, rec: string | undefined, frames: number | null) {
+    if (!rec || frames == null || this.state.rules.collisions) return;
+    const list = (this.#cupRuns.get(trackId) ?? []).filter((r) => r.recording !== rec);
+    list.push({ id: `cup:${u}:${frames}`, kind: 'cup', recording: rec, frames });
+    list.sort((a, b) => a.frames - b.frames);
+    this.#cupRuns.set(trackId, list.slice(0, CUP_REFS));
   }
 
   // ---- Messages ----
@@ -261,7 +513,10 @@ export class Organizer {
         return;
       case 'act':
         if (m.a === 'role') {
-          if (E.setRole(s, p.u, m.v === 'spectator' ? 'spectator' : 'racer')) this.touch(true);
+          if (E.setRole(s, p.u, m.v === 'spectator' ? 'spectator' : 'racer')) {
+            this.#syncBots();
+            this.touch(true);
+          }
           else if (m.v === 'racer') this.app.net.send(pid, { k: 'note', text: 'The grid is closed right now', tone: 'bad' });
         } else if (m.a === 'ready') {
           if (s.phase === 'warmup' && r?.racers.includes(p.u)) {
@@ -312,6 +567,7 @@ export class Organizer {
     if (u === this.me || s.rules.collisions || !this.app.game) {
       run.chk = 1;
       if (ta) this.#taBest.set(u, run.f);
+      this.#keepRun(r.track.id, u, m.rec, af);
     } else if (!m.rec || !consistent) reject("couldn't be checked");
     else {
       this.#flagRepeat(u, r.track.id, m.rec);
@@ -330,6 +586,7 @@ export class Organizer {
           else {
             mine.chk = 1;
             if (ta) this.#taBest.set(u, mine.f);
+            this.#keepRun(cur.track.id, u, m.rec, af);
           }
           this.touch(true);
         });
@@ -400,6 +657,36 @@ export class Organizer {
     for (const pid of links.keys()) if (!this.state.players.some((p) => p.pid === pid && p.lk != null)) links.delete(pid);
   }
 
+  // The round's bot chunks so far, for a page that just said hello (or missed some).
+  #sendBots(pid: number, peer: Peer) {
+    const n = this.state.round?.n;
+    peer.botsStale = false;
+    if (n == null || !this.#bots) return;
+    for (const m of this.#bots.chunksFor(n))
+      if (!this.app.net.send(pid, m)) {
+        peer.botsStale = true;
+        return;
+      }
+  }
+
+  // New bot chunks ride the next flush to every page, like the state (never a frame of their own).
+  #shipBots(now: number) {
+    const out = this.#bots?.take(now, this.state.round?.n);
+    if (!out) return;
+    for (const [pid, peer] of this.#peers) {
+      if (!peer.greeted) continue;
+      if (peer.botsStale) {
+        this.#sendBots(pid, peer);
+        continue;
+      }
+      for (const m of out)
+        if (!this.app.net.send(pid, m)) {
+          peer.botsStale = true;
+          break;
+        }
+    }
+  }
+
   #broadcast(now: number) {
     // While cars race the organizer sends every 200 ms anyway, so a soft change costs nothing extra.
     const soft = this.#soft && ((site.__nswsMuxPace ?? 1000) <= 200 || now - this.#sentAt >= SOFT_MS);
@@ -454,6 +741,7 @@ export class Organizer {
     const entry = this.pool().find((t) => t.id === ref.id);
     if (!entry) throw new Error(`${ref.name} isn't in this cup's maps any more.`);
     const wr = this.#wr.has(ref.id) || ref.cat === 'custom' ? Promise.resolve() : this.app.native.worldRecord(ref.id, true).then((f) => void this.#wr.set(ref.id, f));
+    if (this.#seatedBots().length) this.#manager().prefetch(ref.id, ref.cat === 'custom');
     const track = await entry.load();
     await Promise.race([wr, new Promise((r) => setTimeout(r, 3000))]);
     if (epoch !== this.#epoch) return;
@@ -466,6 +754,8 @@ export class Organizer {
     this.#retries = 0;
     this.#ready.clear();
     this.#taBest.clear();
+    this.#planTrack = { ref, data: track.trackData };
+    this.#planBots();
     this.#startSession();
     this.touch(true);
   }
@@ -522,6 +812,8 @@ export class Organizer {
     // The organizer gets three times as long, since they can browse every track.
     const ms = s.rules.voteSeconds * 1000 * (kind === 'host' ? 3 : 1);
     s.vote = { kind, opts, until: now + ms, ballots: {}, picker: chooser };
+    // A bot picks at random on the spot.
+    if (chooser != null && isBot(player(s, chooser))) s.vote.ballots[chooser] = Math.floor(Math.random() * opts.length);
     E.setPhase(s, 'vote', now, now + ms);
     this.touch(true);
   }
@@ -567,6 +859,7 @@ export class Organizer {
       case 'draft':
         if (!this.#pending && (now >= (s.draft?.until ?? 0) || E.draftComplete(s))) {
           if (E.draftAdvance(s, now)) this.#chooseTrack(now);
+          else this.#botDraft();
           this.touch(true);
         }
         break;
@@ -584,6 +877,7 @@ export class Organizer {
         }
         break;
       case 'racing':
+        this.#botResults(now);
         if (E.roundOver(s, now) && this.#outageFrom(now) == null) {
           if (this.#pendingChecks()) {
             E.setPhase(s, 'checking', now, now + CHECK_WAIT_MS);
@@ -600,7 +894,7 @@ export class Organizer {
       case 'vote': {
         const vote = s.vote;
         if (!vote || this.#pending) break;
-        const voters = vote.kind === 'vote' ? s.players.filter((p) => p.role === 'racer' && !p.out && !p.away).map((p) => p.u) : [vote.picker];
+        const voters = vote.kind === 'vote' ? s.players.filter((p) => p.role === 'racer' && !p.out && !p.away && !p.bot).map((p) => p.u) : [vote.picker];
         const all = voters.length > 0 && voters.every((u) => u != null && u in vote.ballots);
         if (now >= vote.until || all) {
           this.#loadTrack(vote.opts[E.tally(vote.opts, vote.ballots)]);
@@ -608,6 +902,7 @@ export class Organizer {
         break;
       }
     }
+    this.#shipBots(now);
     this.#broadcast(now);
     this.#reportStatus(now);
   }
@@ -631,8 +926,11 @@ export class Organizer {
       }
       return;
     }
-    const waiting = r.racers.filter((u) => u !== this.me && !player(s, u)?.away && this.#ready.get(u) !== r.session);
+    const waiting = r.racers.filter((u) => u !== this.me && !player(s, u)?.away && !player(s, u)?.bot && this.#ready.get(u) !== r.session);
     if (waiting.length && now - (l?.sessionAt ?? 0) < LOAD_WAIT_MS) return;
+    // Until the bots' planners say how fast they go, GO can't be timed for them (a few seconds at most).
+    const mgr = this.#bots;
+    if (mgr && !mgr.broken && this.#roundBots(true).length && mgr.readyIn() === Infinity && now - (l?.sessionAt ?? 0) < BOT_WAIT_MS) return;
     this.#loading = null;
     const fresh = !this.#visited.has(r.track.id);
     this.#visited.add(r.track.id);
@@ -640,6 +938,7 @@ export class Organizer {
     if (warm) {
       r.warmupUntil = now + this.#warmupMs(r.track.id);
       E.setPhase(s, 'warmup', now, r.warmupUntil);
+      this.#botsReady();
       this.touch(true);
     } else this.#go(now);
   }
@@ -648,6 +947,7 @@ export class Organizer {
     const s = this.state;
     E.scheduleStart(s, now, this.#limitMs(s.round!.track.id));
     this.#taBest.clear();
+    this.#botsGo(now);
     this.touch(true);
   }
 
@@ -661,7 +961,8 @@ export class Organizer {
       return pid == null ? -1 : live.score(pid);
     });
     this.history.push(result);
-    const best = result.rows.find((row) => row[1] != null)?.[1];
+    // The auto time limit goes by people: a bot's time says nothing about how long they need.
+    const best = result.rows.find((row) => row[1] != null && !isBot(player(s, row[0])))?.[1];
     if (best != null) {
       const id = s.round!.track.id;
       this.#best.set(id, Math.min(best, this.#best.get(id) ?? Infinity));
@@ -671,6 +972,8 @@ export class Organizer {
     if (s.winner != null) s.nextAt = now + Math.max(5000, s.rules.breakSeconds * 1000);
     if (winner) this.app.native.sound('record');
     this.#announce(result, leaderBefore, finalistsBefore);
+    this.#matchField(result);
+    this.#prePlan();
     this.touch(true);
   }
 
@@ -704,10 +1007,11 @@ export class Organizer {
     if (s.winner != null) {
       E.setPhase(s, 'podium', now);
       s.round = null;
+      this.#bots?.drop();
       this.touch(true);
       return;
     }
-    if (E.racers(s).filter((p) => !p.away).length === 0) {
+    if (E.humanRacers(s).filter((p) => !p.away).length === 0) {
       s.hold = true;
       this.touch();
       return;
@@ -733,7 +1037,7 @@ export class Organizer {
     const status = {
       phase,
       round: s.round?.n ?? s.rounds,
-      racers: E.racers(s).length,
+      racers: E.humanRacers(s).length,
       canRace: E.canRace(s),
       format: s.format.slice(0, 24),
     };
@@ -752,12 +1056,14 @@ export class Organizer {
   start() {
     const s = this.state;
     if (s.phase !== 'lobby') return;
-    if (E.racers(s).filter((p) => !p.away).length < 1) throw new Error('Nobody is on the grid yet.');
+    if (E.humanRacers(s).filter((p) => !p.away).length < 1) throw new Error('Nobody is on the grid yet.');
+    this.#syncBots();
     if (s.rules.draft) {
       const n = Math.min(24, Math.max(8, E.racers(s).length * (s.rules.bans + s.rules.picks) + 3));
       const opts = this.#randomTracks(n);
       if (opts.length < 2) throw new Error('A pick and ban needs at least two tracks in the cup.');
       E.startDraft(s, opts, Date.now());
+      this.#botDraft();
       this.touch(true);
       return;
     }
@@ -770,17 +1076,19 @@ export class Organizer {
     s.format = format.slice(0, 40);
     s.rules = cleanRules(rules);
     this.#poolAt = 0;
-    for (const p of s.players) if (p.role === 'racer' && !E.canRace(s, p.u)) p.role = 'spectator';
+    for (const p of s.players) if (p.role === 'racer' && !p.bot && !E.canRace(s, p.u)) p.role = 'spectator';
+    this.#syncBots();
     this.touch(true);
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill'>>) {
     const s = this.state;
     const next = { ...change };
     // The points cap can still move during a cup, but never onto a total someone already has.
     if (next.target != null && s.phase !== 'lobby') next.target = Math.max(next.target, E.leaderPoints(s) + 1);
     s.rules = cleanRules({ ...s.rules, ...next });
+    this.#syncBots();
     this.touch(true);
   }
 
@@ -792,7 +1100,12 @@ export class Organizer {
   }
 
   setRole(u: number, role: 'racer' | 'spectator') {
+    if (isBot(player(this.state, u))) {
+      if (role === 'spectator') this.removeBot(u);
+      return;
+    }
     if (!E.setRole(this.state, u, role)) throw new Error(role === 'racer' ? 'The grid is closed or full.' : 'Nothing to change.');
+    this.#syncBots();
     this.touch(true);
   }
 
@@ -800,6 +1113,7 @@ export class Organizer {
     const s = this.state,
       p = player(s, u);
     if (!p || u === this.me) return;
+    if (p.bot) return this.removeBot(u);
     for (const [key, id] of this.#keys) if (id === u) this.#banned.add(key);
     if (p.pid != null) {
       this.app.net.send(p.pid, { k: 'bye', why: 'The organizer removed you from this cup.' }, true);
@@ -812,6 +1126,7 @@ export class Organizer {
     }
     s.players = s.players.filter((x) => x !== p);
     this.notifyAll(`${p.name} was removed`, 'bad');
+    this.#syncBots();
     this.touch(true);
   }
 
@@ -869,7 +1184,7 @@ export class Organizer {
       r = s.round;
     if (!s.rules.skipVotes || !r || !r.racers.includes(u) || !['warmup', 'countdown', 'racing'].includes(s.phase)) return;
     r.skip = r.skip.includes(u) ? r.skip.filter((x) => x !== u) : [...r.skip, u];
-    const here = r.racers.filter((x) => !player(s, x)?.away);
+    const here = r.racers.filter((x) => !player(s, x)?.away && !player(s, x)?.bot);
     if (r.skip.filter((x) => here.includes(x)).length * 2 > here.length) {
       r.skip = [];
       if (Object.keys(r.runs).length) {
@@ -913,6 +1228,7 @@ export class Organizer {
     E.setPhase(s, 'podium', Date.now());
     s.round = null;
     s.vote = null;
+    this.#bots?.drop();
     this.touch(true);
   }
 
@@ -929,6 +1245,9 @@ export class Organizer {
     if (newTracks) this.#recent = [];
     s.id = randomId();
     E.setPhase(s, 'lobby', Date.now());
+    this.#bots?.drop();
+    this.#botTier = '';
+    this.#syncBots();
     this.touch(true);
   }
 
@@ -938,6 +1257,7 @@ export class Organizer {
     if (peer) {
       peer.hist = 0;
       this.#sendTo(pid);
+      this.#sendBots(pid, peer);
     }
   }
 }

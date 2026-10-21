@@ -44,7 +44,20 @@ export interface Player {
   clk?: number;
   // The player's link to the organizer in the relay, so pages know whose car a direct copy is.
   lk?: number;
+  // A computer racer, driven by the organizer's page.
+  bot?: BotInfo;
 }
+
+export interface BotInfo {
+  // Skill 0..100.
+  s: number;
+  // Car style string (CarStyle.serialize()).
+  cs: string;
+}
+
+export const isBot = (p: Player | undefined) => !!p?.bot;
+// Bots' cars use negative ids, clear of real players and of the -1 "no car" sentinel.
+export const botPid = (u: number) => -(10 + u);
 
 export interface Run {
   f: number;

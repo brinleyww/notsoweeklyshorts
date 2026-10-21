@@ -45066,7 +45066,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         $a = function() {
             const solid = cupCollisionCups.has(this)
               , e = C.get(this, wa, "f").getPosition()
-              , t = C.get(this, xa, "f").map((e => e.car)).filter((e => null != e)).concat(solid ? [] : Array.from(C.get(this, Ra, "f").values()).map((e => e.car)));
+              , t = C.get(this, xa, "f").map((e => e.car)).filter((e => null != e)).concat(solid ? [] : Array.from(C.get(this, Ra, "f").values()).map((e => e.car)), Array.from(cupBotCars.get(this)?.values() ?? [], (e => e.car)));
             for (const n of t) {
                 const t = n.getPosition().distanceTo(e)
                   , i = Math.max(0, Math.min(1, t / 5));
@@ -45109,6 +45109,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         // Not So Weekly Shorts: race sessions in a collision cup, and the racers each one can hit now.
         const cupCollisions = new WeakMap
           , cupCollisionCups = new WeakSet;
+        // Cuppa bots' cars per race session (id -> {car, style, nickname}), drawn like the other racers' cars.
+        // null once the session is disposed, so a late call can't add cars to the shared scene.
+        const cupBotCars = new WeakMap;
+        // Builds the Init message the game's physics workers get; set at startup.
+        let cupPhysicsInit = null;
         // Called by every race session once a frame, after the cars moved and before the frame is drawn.
         let cupFrameHook = null;
         // Called once a frame just before the other cars are moved and drawn.
@@ -45200,6 +45205,33 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                 },
                 personalBest: id => S.getRecordTime(w.profileSlot, id)?.numberOfFrames ?? null,
+                // The top of a track's board with each shown run's recording, best first; [] when it can't be read.
+                // Hidden runs (the live week) and runs without a public id have no recording to fetch.
+                boardRuns: async (id, amount) => {
+                    try {
+                        const board = await x.getLeaderboard(w.getCurrentUserProfile().tokenHash, id, 0, amount, !1)
+                          , shown = board.entries.map((e, i) => ({ entry: e, rank: i + 1 })).filter(({entry: e}) => !e.hidden && e.id > 0);
+                        if (!shown.length)
+                            return [];
+                        const runs = await x.getRecordings(shown.map(({entry: e}) => e.id));
+                        return shown.flatMap(({entry: e, rank}, i) => null == runs[i] ? [] : [{
+                            rank,
+                            nickname: e.nickname,
+                            frames: runs[i].time.numberOfFrames,
+                            recording: runs[i].recording.serialize()
+                        }]);
+                    } catch (e) {
+                        return [];
+                    }
+                },
+                personalBestRun: id => {
+                    try {
+                        const record = S.getRecord(w.profileSlot, id);
+                        return null == record ? null : { frames: record.time.numberOfFrames, recording: record.recording.serialize() };
+                    } catch (e) {
+                        return null;
+                    }
+                },
                 carThumbnail: style => ir.F(style, new rr.A),
                 clearInput: g => {
                     const controls = C.get(g, ya, "f");
@@ -45233,7 +45265,36 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         checkpointCount: C.get(g, Pr, "f").getTotalNumberOfCheckpointIndices()
                     };
                 },
-                remoteCar: (g, id) => C.get(g, Ra, "f").get(id)?.car,
+                remoteCar: (g, id) => C.get(g, Ra, "f").get(id)?.car ?? cupBotCars.get(g)?.get(id)?.car,
+                bots: (g, list) => {
+                    let cars = cupBotCars.get(g);
+                    if (null === cars || !cars && !list.length)
+                        return;
+                    cars || cupBotCars.set(g, cars = new Map);
+                    for (const [id, bot] of cars)
+                        list.some(b => b.id === id) || (bot.car.dispose(), cars.delete(id));
+                    for (const {id, style, nickname} of list) {
+                        let bot = cars.get(id);
+                        if (!bot) {
+                            const start = C.get(g, Pr, "f").getStartTransform();
+                            if (null == start)
+                                return;
+                            // An empty recording rather than null: a car made with null takes over the clip recorder.
+                            bot = {
+                                car: new VisualCar(null, start, new ie.A, null, C.get(g, zr, "f"), C.get(g, Nr, "f"), C.get(g, Ir, "f"), C.get(g, Pr, "f"), C.get(g, Yr, "f"), C.get(g, Gr, "f"), null),
+                                style: null,
+                                nickname: null
+                            };
+                            // Shown by the session's next frame, once update() has placed it.
+                            bot.car.setVisible(!1);
+                            bot.car.audioVolume = C.get(g, Oa, "f");
+                            cars.set(id, bot);
+                        }
+                        bot.style !== style && (bot.car.setCarStyle(jt.A.deserializeSafe(style)), bot.style = style);
+                        bot.nickname !== nickname && (bot.car.setNameTag(null, nickname), bot.nickname = nickname);
+                    }
+                },
+                botState: (g, id, state, reset) => cupBotCars.get(g)?.get(id)?.car.setCarState(state, reset),
                 autoSpectate: () => getCupAutoSpectate(),
                 restartPressed: (g, e) => {
                     const car = C.get(g, wa, "f"), settings = settingsOf(g);
@@ -45267,11 +45328,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 },
                 visibility: (g, ids, self) => {
                     C.get(g, wa, "f").setVisible(null === ids || ids.includes(self));
-                    for (const [id, r] of C.get(g, Ra, "f")) {
-                        const show = null === ids || ids.includes(id);
-                        r.car.setVisible(show);
-                        r.car.skidmarksHidden = !show;
-                    }
+                    for (const cars of [C.get(g, Ra, "f"), cupBotCars.get(g) ?? []])
+                        for (const [id, r] of cars) {
+                            const show = null === ids || ids.includes(id);
+                            r.car.setVisible(show);
+                            r.car.skidmarksHidden = !show;
+                        }
                 },
                 drivingView: g => !C.get(g, Ba, "f").isEnabled && C.get(g, zr, "f").camera === C.get(g, wa, "f").cameraCockpit ? 1 : 0,
                 release: (g, view) => {
@@ -45281,9 +45343,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     renderer.setCamera(cockpit ? car.cameraCockpit : car.cameraOrbit);
                     car.audioVolume = 1;
                     for (const r of C.get(g, Ra, "f").values()) r.car.audioVolume = C.get(g, Oa, "f");
+                    for (const r of cupBotCars.get(g)?.values() ?? []) r.car.audioVolume = C.get(g, Oa, "f");
                 },
                 followCar: (g, id, cockpit, dt) => {
-                    const r = C.get(g, Ra, "f").get(id);
+                    const r = C.get(g, Ra, "f").get(id) ?? cupBotCars.get(g)?.get(id);
                     if (!r) return !1;
                     const renderer = C.get(g, zr, "f"), spectator = C.get(g, Ba, "f");
                     spectator.isEnabled && (spectator.isEnabled = !1);
@@ -45292,6 +45355,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     renderer.camera !== camera && renderer.setCamera(camera);
                     C.get(g, wa, "f").audioVolume = 0;
                     for (const [peer, other] of C.get(g, Ra, "f")) other.car.audioVolume = peer === id ? 1 : .15;
+                    for (const [bot, other] of cupBotCars.get(g) ?? []) other.car.audioVolume = bot === id ? 1 : .15;
                     return !0;
                 },
                 peers: c => c instanceof Fn ? mn.get(c).map(p => ({ id: p.id, pc: p.peerConnection })) : gl.get(c) ? [{ id: 0, pc: gl.get(c) }] : [],
@@ -45324,6 +45388,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     };
                 },
                 inviteError: c => c instanceof Fn ? c.getInviteError() : null,
+                // null until the part and car models have loaded.
+                physicsInit: () => cupPhysicsInit?.() ?? null,
+                trackPayload: data => {
+                    const payload = window.__nswsVerifyPayload(data);
+                    return payload && { ...payload, mountainVertices: new Float32Array(payload.mountainVertices) };
+                },
                 // The organizer replays a racer's run through the physics; null when it can't be checked.
                 verifyRun: (g, recording, frames) => {
                     const sim = C.get(g, Rr, "f")
@@ -45989,6 +46059,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     e.replay = null;
                 for (const e of C.get(this, Ra, "f").values())
                     e.car.dispose();
+                for (const e of cupBotCars.get(this)?.values() ?? [])
+                    e.car.dispose();
+                cupBotCars.set(this, null),
                 C.get(this, Ra, "f").clear(),
                 window.removeEventListener("keydown", C.get(this, Na, "f")),
                 window.removeEventListener("keyup", C.get(this, Da, "f")),
@@ -46078,6 +46151,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         }
                         e.car.update(n)
                     }
+                    for (const e of cupBotCars.get(this)?.values() ?? [])
+                        e.car.isPaused = !1,
+                        e.car.setVisible(!ghostsHidden),
+                        e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
+                        e.car.update(n);
                     // Not So Weekly Shorts: the cars this one can hit, as drawn now plus where they go next.
                     const collide = cupCollisions.get(this);
                     if (collide || this.__cupCollide) {
@@ -46124,6 +46202,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         e.car.audioVolume = 0,
                         e.car.update(n));
                     for (const e of C.get(this, Ra, "f").values())
+                        e.car.isPaused = !0,
+                        e.car.audioVolume = 0,
+                        e.car.update(n);
+                    for (const e of cupBotCars.get(this)?.values() ?? [])
                         e.car.isPaused = !0,
                         e.car.audioVolume = 0,
                         e.car.update(n);
@@ -61824,6 +61906,32 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
               , p = new Lu.A(!0,d,t)
               , f = new Lu.A(!1,d,t)
               , g = p.testDeterminism();
+            // The same Init as Lu.A's g() posts, for workers the game didn't make (Cuppa's bot planner).
+            cupPhysicsInit = () => {
+                if (null == VisualCar.models)
+                    return null;
+                try {
+                    return {
+                        messageType: 0,
+                        version: "0.6.0",
+                        isRealtime: !1,
+                        trackParts: d.getPhysicsParts().map((e => ({
+                            id: e.id,
+                            vertices: e.vertices,
+                            detector: null == e.detector ? null : {
+                                type: e.detector.type,
+                                center: e.detector.center,
+                                size: e.detector.size
+                            },
+                            startOffset: e.startOffset
+                        }))),
+                        carCollisionShapeVertices: VisualCar.models.collisionShapeVertices,
+                        carMassOffset: VisualCar.massOffset
+                    };
+                } catch (e) {
+                    return null;
+                }
+            };
             t.addResource(),
             t.addResource(),
             t.addResource(),

@@ -37,14 +37,18 @@ export function setPhase(s: CupState, phase: Phase, now: number, nextAt: number 
 }
 
 export const started = (s: CupState) => s.phase !== 'lobby';
+// Racers include the bots; the human-only lists are for whatever waits on real people.
 export const racers = (s: CupState) => s.players.filter((p) => p.role === 'racer' && !p.out);
 export const activeRacers = (s: CupState) => racers(s).filter((p) => !p.away);
+export const humans = (s: CupState) => s.players.filter((p) => !p.bot);
+export const humanRacers = (s: CupState) => racers(s).filter((p) => !p.bot);
 
+// A human can always take a bot's grid slot (the organizer then benches a bot).
 export function canRace(s: CupState, u?: number) {
   const p = player(s, u);
   if (p?.out) return false;
   if (s.phase === 'podium') return false;
-  if (racers(s).filter((r) => r.u !== u).length >= MAX_RACERS) return false;
+  if (humanRacers(s).filter((r) => r.u !== u).length >= MAX_RACERS) return false;
   if (!started(s)) return true;
   return s.rules.lateJoin && s.rules.mode !== 'knockout';
 }
@@ -127,7 +131,11 @@ export function roundOver(s: CupState, now: number) {
   if (r.endAt != null && now >= r.endAt) return true;
   if (r.closeAt != null && now >= r.closeAt) return true;
   const live = r.racers.filter((u) => !player(s, u)?.away);
-  if (s.rules.style === 'timeattack') return live.every((u) => r.dnf.includes(u));
+  if (s.rules.style === 'timeattack') {
+    // Bots attack until the end; once every human has retired there is nobody left to race them.
+    const people = live.filter((u) => !player(s, u)?.bot);
+    return (people.length ? people : live).every((u) => r.dnf.includes(u));
+  }
   return live.every((u) => roundDone(s, u));
 }
 
@@ -182,7 +190,8 @@ export function closeRound(s: CupState, progress: (u: number) => number): RoundR
       }
     }
     const left = s.players.filter((p) => p.role === 'racer' && !p.out);
-    if (left.length <= 1) s.winner = left[0]?.u ?? standings(s)[0]?.u ?? null;
+    // With no human left in, the bots don't knock each other out on their own.
+    if (left.length <= 1 || !left.some((p) => !p.bot)) s.winner = (left.length === 1 ? left[0].u : standings(s)[0]?.u) ?? null;
   } else if (rules.mode === 'points' && rules.finalist) {
     // A finalist who wins a round outright takes the cup; reaching the target makes a finalist.
     const first = timed.filter((u) => place.get(u) === 1);
@@ -278,7 +287,7 @@ export function draftComplete(s: CupState) {
   if (!d) return false;
   const quota = d.stage === 'ban' ? s.rules.bans : s.rules.picks;
   const book = d.stage === 'ban' ? d.bans : d.picks;
-  const voters = racers(s).filter((p) => !p.away);
+  const voters = humanRacers(s).filter((p) => !p.away);
   return voters.length > 0 && voters.every((p) => (book[p.u]?.length ?? 0) >= quota);
 }
 
@@ -293,7 +302,9 @@ export function draftAdvance(s: CupState, now: number, random = Math.random) {
   }
   const banned = new Set(Object.values(d.bans).flat());
   const free = () => d.opts.filter((t) => !banned.has(t.id));
-  const order = racers(s).map((p) => p.u).sort(() => random() - 0.5);
+  // Humans' picks are played before the bots'.
+  const shuffled = (list: number[]) => list.sort(() => random() - 0.5);
+  const order = [...shuffled(humanRacers(s).map((p) => p.u)), ...shuffled(racers(s).filter((p) => p.bot).map((p) => p.u))];
   const lists = order.map((u) => {
     const mine = [...(d.picks[u] ?? [])];
     while (mine.length < s.rules.picks) {

@@ -1,15 +1,24 @@
 // The cup panel (Tab): overview and setup, standings, rounds, players, tracks and rules,
 // with the cup chat alongside.
 import type { App } from '../app.ts';
-import { canRace, leaderPoints, racers } from '../engine.ts';
-import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
-import { player, standings, type Category, type CupState, type TrackRef, isFinalist } from '../state.ts';
+import { canRace, humanRacers, leaderPoints, racers } from '../engine.ts';
+import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_BOTS, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
+import { player, standings, type Category, type CupState, type Player, type TrackRef, isFinalist } from '../state.ts';
 import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { site } from '../game.ts';
 
 type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
+
+const botTag = (p: Player | undefined) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, 'BOT') : null);
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+// "3 racers + 2 bots": people and bots on the grid, counted apart.
+function gridCount(s: CupState) {
+  const people = humanRacers(s).length,
+    bots = racers(s).length - people;
+  return plural(people, 'racer') + (bots ? ` + ${plural(bots, 'bot')}` : '');
+}
 
 const PHASE_TEXT: Record<CupState['phase'], string> = {
   lobby: 'Lobby',
@@ -113,7 +122,7 @@ export class Panel {
           'div',
           { class: 'meta' },
           h('span', { class: 'chip ' + (['racing', 'countdown'].includes(s.phase) ? 'live' : 'amber') }, PHASE_TEXT[s.phase]),
-          h('span', { class: 'ell' }, `${formatById(s.format)?.name ?? s.format} · ${rulesSummary(s.rules)}`),
+          h('span', { class: 'ell' }, `${formatById(s.format)?.name ?? s.format} · ${rulesSummary(s.rules)}${s.rules.bots && !s.rules.collisions ? ` · ${plural(s.rules.bots, 'bot')}` : ''}`),
         ),
       ),
       app.code
@@ -132,7 +141,7 @@ export class Panel {
       ['cup', 'Cup', 'cuppa', null],
       ['standings', 'Standings', 'trophy', null],
       ['rounds', 'Rounds', 'flag', app.history.filter((x) => !x.void).length || null],
-      ['players', 'Players', 'users', s.players.filter((p) => !p.away).length],
+      ['players', 'Players', 'users', s.players.filter((p) => !p.away && !(p.bot && p.role !== 'racer')).length],
     ];
     tabs.push(['tracks', 'Tracks', 'search', null]);
     const tabBar = h(
@@ -281,7 +290,7 @@ export class Panel {
       s.rules.mode === 'rounds'
         ? `Round ${s.rounds} of ${s.rules.rounds}`
         : s.rules.mode === 'knockout'
-          ? `${racers(s).length} racers left`
+          ? `${gridCount(s)} left`
           : s.rules.finalist
             ? `Finalist at ${s.rules.target} pts`
             : `First to ${s.rules.target} pts`;
@@ -299,7 +308,7 @@ export class Panel {
     const app = this.app,
       r = s.round;
     if (!s.rules.skipVotes || !r || app.me == null || !r.racers.includes(app.me) || !['warmup', 'countdown', 'racing'].includes(s.phase)) return null;
-    const here = r.racers.filter((u) => !player(s, u)?.away).length;
+    const here = r.racers.filter((u) => !player(s, u)?.away && !player(s, u)?.bot).length;
     const mine = r.skip.includes(app.me);
     return h(
       'div',
@@ -317,7 +326,7 @@ export class Panel {
     const count = racers(s).length;
     const best = app.bestRun();
     const open = s.rules.lateJoin && s.rules.mode !== 'knockout';
-    const head = lobby && !app.isHost ? 'Waiting for the organizer' : lobby && count >= 2 ? `${count} racers on the grid` : 'Invite some racers';
+    const head = lobby && !app.isHost ? 'Waiting for the organizer' : lobby && count >= 2 ? `${gridCount(s)} on the grid` : 'Invite some racers';
     const body = lobby
       ? app.isHost
         ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practice on this track until you start.`
@@ -354,7 +363,7 @@ export class Panel {
       'div',
       { class: 'prow' + (u === this.app.me ? ' me' : '') + (p.away ? ' away' : '') },
       h('span', { class: 'pos mono ' + (pos === 1 ? 'amber' : '') }, String(pos)),
-      h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`), sub.length ? h('div', { class: 'sub ell' }, sub.join(' · ')) : null),
+      h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`, botTag(p)), sub.length ? h('div', { class: 'sub ell' }, sub.join(' · ')) : null),
       h('span', { class: 'pts mono' }, s.rules.mode === 'knockout' ? (p.out ? '—' : 'IN') : isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p.pts)),
     );
   }
@@ -417,7 +426,7 @@ export class Panel {
                 { class: 'rows' },
                 r.rows.map((row) => [
                   h('span', { class: 'mono ' + (row[2] === 1 ? 'amber' : 'dim') }, row[2] ? String(row[2]) : '–'),
-                  h('span', { class: 'ell' }, player(s, row[0])?.name ?? 'Left', row[4] ? h('span', { class: 'bad', style: 'font-size:12px' }, '  OUT') : null),
+                  h('span', { class: 'ell' }, player(s, row[0])?.name ?? 'Left', botTag(player(s, row[0])), row[4] ? h('span', { class: 'bad', style: 'font-size:12px' }, '  OUT') : null),
                   h('span', { class: 'mono' + (row[1] == null ? ' bad' : '') }, row[1] != null ? fmtTime(row[1]) : 'DNF'),
                   h('span', { class: 'mono amber' }, row[3] ? `+${row[3]}` : ''),
                 ]),
@@ -437,30 +446,36 @@ export class Panel {
       const ping = p.u === s.host ? 0 : p.ping;
       const pingCls = ping == null ? '' : ping < 120 ? '' : ping < 250 ? 'mid' : 'bad';
       const pingText = p.u === s.host ? 'organizer' : ping == null ? '…' : `${ping} ms`;
+      const sub = p.away ? 'Disconnected · can rejoin with the same link' : p.out ? `Knocked out in round ${p.out}` : p.bot ? `Computer racer · skill ${p.bot.s}` : p.role === 'racer' ? 'Racing' : 'Watching';
       return h(
         'div',
         { class: 'prow' + (p.u === app.me ? ' me' : '') + (p.away ? ' away' : '') },
         h('span', { class: 'dot' + (p.away ? ' off' : '') }),
-        h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`, p.u === s.host ? h('span', { class: 'chip amber', style: 'margin-left:8px' }, 'Organizer') : null), h('div', { class: 'sub' }, p.away ? 'Disconnected · can rejoin with the same link' : p.out ? `Knocked out in round ${p.out}` : p.role === 'racer' ? 'Racing' : 'Watching')),
-        h('span', { class: 'ping mono ' + pingCls, title: 'Round trip to the organizer' }, p.pid == null ? '' : pingText),
+        h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`, p.u === s.host ? h('span', { class: 'chip amber', style: 'margin-left:8px' }, 'Organizer') : null, botTag(p)), h('div', { class: 'sub' }, sub)),
+        h('span', { class: 'ping mono ' + pingCls, title: 'Round trip to the organizer' }, p.pid == null || p.bot ? '' : pingText),
         host && p.u !== app.me
           ? h(
               'div',
               { class: 'acts' },
-              p.role === 'racer'
-                ? btn([icon('eye')], () => app.org!.setRole(p.u, 'spectator'), 'small ghost icon', 'Move to spectators')
-                : btn([icon('flag')], () => app.org!.setRole(p.u, 'racer'), 'small ghost icon', 'Put on the grid'),
-              confirmBtn('Remove', () => app.org!.kick(p.u), 'small danger', 'Remove from the cup'),
+              p.bot
+                ? null
+                : p.role === 'racer'
+                  ? btn([icon('eye')], () => app.org!.setRole(p.u, 'spectator'), 'small ghost icon', 'Move to spectators')
+                  : btn([icon('flag')], () => app.org!.setRole(p.u, 'racer'), 'small ghost icon', 'Put on the grid'),
+              p.bot ? confirmBtn('Remove', () => app.org!.removeBot(p.u), 'small danger', 'Take this bot off the grid (one bot fewer)') : confirmBtn('Remove', () => app.org!.kick(p.u), 'small danger', 'Remove from the cup'),
             )
           : null,
       );
     };
     const racersList = s.players.filter((p) => p.role === 'racer');
-    const watchers = s.players.filter((p) => p.role !== 'racer');
+    // Bots taken off the grid aren't watching anything.
+    const watchers = s.players.filter((p) => p.role !== 'racer' && !p.bot);
+    const people = racersList.filter((p) => !p.bot).length,
+      bots = racersList.length - people;
     const known = new Set(s.players.map((p) => p.pid));
     const joining = app.lobby.filter((l) => !known.has(l.id));
     return [
-      h('div', { class: 'sect' }, h('h3', null, `On the grid · ${racersList.length}/${MAX_RACERS}`), racersList.length ? h('div', { class: 'list' }, racersList.map(row)) : h('div', { class: 'empty' }, 'Nobody is racing yet.')),
+      h('div', { class: 'sect' }, h('h3', null, `On the grid · ${people}/${MAX_RACERS}${bots ? ` + ${plural(bots, 'bot')}` : ''}`), racersList.length ? h('div', { class: 'list' }, racersList.map(row)) : h('div', { class: 'empty' }, 'Nobody is racing yet.')),
       h('div', { class: 'sect' }, h('h3', null, `Watching · ${watchers.length}`), watchers.length ? h('div', { class: 'list' }, watchers.map(row)) : h('div', { class: 'empty' }, 'No spectators.')),
       joining.length ? h('div', { class: 'sect' }, h('h3', null, 'Joining'), h('div', { class: 'list' }, joining.map((l) => h('div', { class: 'prow away' }, h('span', { class: 'spinner', style: 'width:16px;height:16px;border-width:3px' }), h('span', { class: 'grow ell' }, l.nickname))))) : null,
     ];
@@ -529,7 +544,7 @@ export class Panel {
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target'];
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
     const toggle = (field: keyof Rules, label: string, hint: string) => {
@@ -648,12 +663,35 @@ export class Panel {
       r.warmupMode !== 'off' && r.warmupTiming === 'wr' ? slider('warmupMin', 'Shortest warm-up', '', 10, 300, 5, sec) : null,
       r.warmupMode !== 'off' ? toggle('readyEnds', 'Ready ends it', 'Starts once every racer is ready') : null,
     );
+    // A knockout's grid is locked once it starts (bots can still be taken off in Players).
+    const botsLocked = r.collisions || (!lobby && r.mode === 'knockout');
+    const botCount = row(
+      'Bots',
+      r.collisions ? 'Computer racers. Off in bumper cars' : botsLocked ? 'Computer racers. Fixed once a knockout starts' : 'Computer racers',
+      h(
+        'div',
+        { class: 'seg' },
+        Array.from({ length: MAX_BOTS + 1 }, (_, n) => h('button', { class: r.bots === n ? 'on' : '', disabled: !live('bots') || botsLocked, onclick: click(() => set({ bots: n })) }, n ? String(n) : 'Off')),
+      ),
+    );
+    botCount.classList.add('wide');
     const players = sect(
       'Players',
       toggle('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
       toggle('freecam', 'Spectator free camera', 'Let spectators fly around'),
       toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
       toggle('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+      botCount,
+      r.bots && !r.collisions
+        ? seg('botSkill', 'Bot skill', r.botSkill === 'match' ? 'They start at medium and follow the humans\' pace round by round' : r.botSkill === 'mixed' ? 'From easy to expert' : 'How fast and how boldly they drive', [
+            ['easy', 'Easy'],
+            ['medium', 'Medium'],
+            ['hard', 'Hard'],
+            ['expert', 'Expert'],
+            ['mixed', 'Mixed'],
+            ['match', 'Match the field'],
+          ])
+        : null,
     );
     return [
       lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules'),

@@ -139,6 +139,91 @@ PB and WR badges mark finishes that beat the racer's own best or the track's wor
 bumper cars). Notices call out photo finishes, lead changes, new finalists, match points and the
 final round. The organizer is warned (privately) when a racer sends a run identical to an earlier one.
 
+## Bots
+
+The setup page's **Bots** row (Off, 1-8, `MAX_BOTS`) puts computer racers on the grid, and **Bot skill**
+picks how good they are: Easy, Medium, Hard, Expert, Mixed (spread from easy to expert), or Match the
+field (after every round each bot's skill moves toward the humans' median time). Bots are ordinary
+players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
+standings, knockouts, the director camera and Follow all treat them like racers, with a BOT tag. They
+never vote, ban, pick, ready up or keep a round waiting, their finishes don't start the finish window,
+a joining human takes a bot's place on a full grid, and bumper-car cups have no bots (they can't react
+to a hit).
+
+How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/cuppa_bots.js`):
+- Workers: 1-3 copies of the game's own `simulation_worker.bundle.js`, named `nsws-cuppa-bots`, which
+  then load `mod/cuppa_bots.js` and drive cars through the internals the worker exposes
+  (`self.__nswsSimInternals`). It is the game's exact physics.
+- References: the track's world record and three more board runs (`native.boardRuns`, one leaderboard
+  and one recordings request per track, cached a day in `nsws-cuppa-refs:<id>`), the organizer's own
+  PB, and the cup's best checked runs on that track. Each is replayed once and kept frame by frame. On
+  the week in progress the proxy hides other players' runs, so unless the owner organizes, bots there
+  follow the organizer's PB and the cup's own runs (from the second round on the track).
+- With nothing to follow, `explore.ts` maps the drivable surfaces with rays, connects them (ramps,
+  ledges, short jumps), and runs A* through the checkpoints to the finish. That works on ordinary
+  roads; tracks built on walls, loops or long jumps it can't find a way through, and the bots then sit
+  the track out.
+- The driver (`driver.ts`) copies the reference's keys exactly while it is on the reference's state
+  (the strongest bots replay the record until they leave it), otherwise follows the reference's steering
+  input with lateral and heading correction, and caps speed from the reference's (times `pace` in corners
+  and braking zones, never before a jump or in the fast run-up to a long flight). Rays measure the room left and right of every reference
+  (`clearance.ts`) and weaker bots keep a margin from walls and edges where the record shaves them.
+- The planner (`planner.ts`) runs every bot of a worker in 200 ms ticks and keeps a copy of the whole
+  physics heap at tick boundaries (exact: all physics state lives in the wasm's memory). A bot that
+  leaves its line, falls, spins, wrecks, gets stuck or misses a checkpoint is taken back a few ticks
+  (the other bots replay their logged keys) and tries again with other settings: slower, or faster when
+  it failed for lack of speed or at a jump, on grip instead of copying a drift, offset, and on another
+  player's line. When it keeps failing it does what a player would: respawn at its last checkpoint, or
+  restart before the first one. A respawn that gets it nowhere (failing again before the next
+  checkpoint, or too slow there for what comes next) goes the same way every time, so then it starts
+  over and drives the slowest recorded run's own keys, a sure but late finish. Only a bot with no
+  recorded run to copy (an explored route) retires. Careless bots also make and keep the odd mistake.
+- Bots of skill 0.95 and up (the best of Mixed, most of Expert) don't drive on their own: they replay the
+  fastest recorded run's keys with one throttle lift or brake tap, timed so they finish 0.1-0.3 s behind it
+  (about 0.1 s at 0.98 and 0.3 s at 0.95, give or take 0.06 s). The planner finds the lift by trying it on a car of its own before the
+  race, from a spot picked at random each round (near the end first, then earlier, then a smaller loss
+  if nothing else lands), so the same bot drives a slightly different run every round; with no recorded run
+  that allows it, the bot drives like the others. Measured on 10 hard community tracks and NyQuill
+  (your PB as the record): 0.10-0.32 s behind every time.
+- On a track of more than 4000 parts, every bot's physics world holds only the parts within 60 units of
+  a reference plus every checkpoint, start and finish (`routeTrack`): a car never gets that far from one
+  without being taken back. NyQuill's 63,183 parts become 3,298, and four bots take 51 MB of physics
+  memory instead of 126 MB. The snapshot ring keeps fewer copies when the heap is big (320 MB at most).
+  Runs copied from a recording use the whole track, where they were driven.
+
+Bots reach pages as their car states, not their inputs, so pages never simulate them: keyframes every
+50 ms plus every checkpoint, finish, hit and respawn (`codec.ts`), deflated, in `{k:'bots'}` chunks of
+about 2 s of driving. Planning runs ahead of the race (GO waits, up to 15 s, until every bot has 6 s
+planned), and a frame becomes final 3 s after it is planned, so every page has a bot's states well
+before it needs them and draws it at exactly `cupNow - startAt` (`bots/view.ts`, `timeline.ts`:
+Hermite positions, slerped rotation, the game's `lerpCarState` for the rest). Live timing, splits and
+results come from the same states: the organizer records a bot's finish when the race clock reaches it.
+Pages that join late get every chunk of the round so far.
+
+Cost: about 330-400 bytes a second per bot per page after deflate, riding the organizer's normal
+batches, and no Worker change. Measured in a browser cup (organizer and one racer, Sky Bound, 5 bots
+against none): the organizer sent 3.46 frames a second while racing against 3.42 without bots, and the
+bots' first chunks added about two frames in the countdown; its upload went from 2.7 to 4.1 KB/s. The
+only Worker requests are the leaderboard and recordings reads for a track's references, once a day.
+
+Pages get states rather than inputs on purpose. A bot's run does replay bit for bit from its keys alone
+(`botlab/t20_keys.mjs`: 10,599 keyframes over 8 tracks, NyQuill included, all identical), and keys would
+be 55-90 bytes a second per bot instead of 330-400 (bots tap the steering keys 300-500 times a second).
+But then every page would simulate every bot: 11-20 us per bot per 1 ms frame on a fast desktop,
+several times that on the weak devices week 10 already strains, plus a physics world per bot. Billed
+frames would stay the same, since bytes aren't billed and the chunks already ride batches that go anyway.
+
+Planning 3-4 bots runs at 10-30 times real time on a desktop. On the 71 community tracks (4 bots per
+track following the world record and three more board runs, `cup-test-tools/botlab`), 283 of 284 runs
+finished, a median 2.7% behind the record at skill 0.97, 5.8% at 0.85, 10.4% at 0.6 and 19.1% at 0.3. About one
+run in ten, mostly weak bots on tracks with long fast flights, only finished by starting over (1.5-2.5 times
+the record); keeping the record's speed through the run-up to a long flight (`Reference.runUp`) came after
+that benchmark and fixed Zenith's ending for a 0.6 bot.
+Tests: `cup-test-tools/cdp/sc_bots.mjs` (a race with bots on the test track), `sc_botwr.mjs <ct>` (a
+Kodub community track with its stored WR served through a faked leaderboard), `sc_botwatch.mjs` (a
+spectator following bots), `sc_botcost.mjs` (frames and bytes each page sends, per phase, while one of
+those runs).
+
 ## Organizer tools
 
 Start, pause between rounds, next now, end round now, +30 s, restart round, void round (press

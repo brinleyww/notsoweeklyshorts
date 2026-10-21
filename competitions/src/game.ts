@@ -152,6 +152,25 @@ export interface Native {
   carStyle(g: Game): string;
   freecamKeys(g: Game): string[];
   restartKeys(g: Game): string[];
+  // Bots. Missing on a page that loaded the game before they existed.
+  physicsInit?(): unknown;
+  trackPayload?(trackData: TrackData): TrackPayload;
+  boardRuns?(trackId: string, amount: number): Promise<BoardRun[]>;
+  personalBestRun?(trackId: string): { frames: number; recording: string } | null;
+  // The game's cars for these bots in session g (created, restyled, or disposed to match), drawn like remote cars.
+  bots?(g: Game, list: { id: number; style: string; nickname: string }[]): void;
+  botState?(g: Game, id: number, state: CarState, reset: boolean): void;
+}
+export interface TrackPayload {
+  trackData: string;
+  mountainVertices: Float32Array;
+  mountainOffset: Vec3;
+}
+export interface BoardRun {
+  rank: number;
+  nickname: string;
+  frames: number;
+  recording: string;
 }
 export interface Bridge {
   Host: new (loc: unknown, api: unknown, maxPlayers: number, profiles: unknown) => Connection & {

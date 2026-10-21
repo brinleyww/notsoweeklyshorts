@@ -19,7 +19,7 @@ export class Spectate {
 
   constructor(private app: App) {}
 
-  // Racers (by game id) who can be watched now.
+  // Racers (by game id) who can be watched now; bots while their cars are on the track.
   watchable() {
     const app = this.app,
       s = app.state,
@@ -30,6 +30,7 @@ export class Spectate {
       const p = player(s, u);
       if (!p || p.pid == null || p.away || u === app.me) continue;
       if (s.phase !== 'checking' && roundDone(s, u)) continue;
+      if (p.bot && !app.bots.shows(p.pid)) continue;
       ids.push(p.pid);
     }
     return ids;

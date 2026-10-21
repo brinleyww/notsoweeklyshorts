@@ -25,4 +25,6 @@ export type Msg =
   | { k: 't1'; a: number; h: number }
   | { k: 'you'; u: number }
   | { k: 'note'; text: string; tone?: 'good' | 'bad' | 'info' }
-  | { k: 'bye'; why: string };
+  | { k: 'bye'; why: string }
+  // Bot keyframe chunks for round n, plan generation g: [bot u, seq from 0, base64url deflated chunk].
+  | { k: 'bots'; n: number; g: number; c: [number, number, string][] };

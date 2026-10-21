@@ -8,6 +8,18 @@ import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText,
 
 const BOARD_FULL = 10;
 
+const botTag = (p: Player | undefined) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, 'BOT') : null);
+
+// Bots have no lobby entry; their car style is a CarStyle string, and the thumbnail needs the object.
+function botCarStyle(cs: string) {
+  const CarStyle = (window as unknown as { __clipCarStyleClass?: { deserializeSafe(s: string): unknown } }).__clipCarStyleClass;
+  try {
+    return CarStyle?.deserializeSafe(cs) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export class Hud {
   el = h('div', { class: 'hud', hidden: true });
   #bar = h('div', { class: 'roundbar', hidden: true });
@@ -281,7 +293,7 @@ export class Hud {
       const pos = run && run.chk !== 2 ? Object.values(r.runs).filter((x) => x.chk !== 2 && x.f < run.f).length + 1 : order.indexOf(u) + 1;
       const isDnf = live && (r.dnf.includes(u) || run?.chk === 2);
       const val = h('span', { class: 'val mono' });
-      const name = h('span', { class: 'name ell' }, live && isFinalist(s, p) ? h('span', { class: 'tag fin', title: 'Finalist' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?');
+      const name = h('span', { class: 'name ell' }, live && isFinalist(s, p) ? h('span', { class: 'tag fin', title: 'Finalist' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?', botTag(p));
       const cls = ['row', `p${pos}`];
       if (u === app.me) cls.push('me');
       if (isDnf) cls.push('dnf');
@@ -398,6 +410,7 @@ export class Hud {
               'td',
               { class: 'name' },
               p ? `${flag(p.cc)} ${p.name}` : 'Left the cup',
+              botTag(p),
               (row[5] ?? 0) & 2 ? h('span', { class: 'badge wr' }, 'WR') : (row[5] ?? 0) & 1 ? h('span', { class: 'badge' }, 'PB') : null,
               row[4] ? h('span', { class: 'badge', style: 'color:var(--bad)' }, 'OUT') : null,
             ),
@@ -611,7 +624,10 @@ export class Hud {
     if (!visible) return;
     const me = app.self;
     const r = s.round!;
-    const ready = r.racers.filter((u) => player(s, u)?.ready).length;
+    const ready = r.racers.filter((u) => {
+      const p = player(s, u);
+      return p?.ready || p?.bot;
+    }).length;
     if (!this.#changed('warm', JSON.stringify([me?.ready, ready, r.racers.length]))) return;
     fill(this.#warm, 
       h('span', null, icon('flag'), ' Warm-up'),
@@ -645,7 +661,7 @@ export class Hud {
     const target = w.mode === 'free' ? null : app.playerByPid(w.target);
     if (!this.#changed('spec', JSON.stringify([w.mode, target?.u, target?.name, w.cockpit, s.rules.freecam]))) return;
     const keys = [h('i'), h('i'), h('i'), h('i')];
-    const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? `${flag(target.cc)} ${target.name}` : '—');
+    const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? [`${flag(target.cc)} ${target.name}`, botTag(target)] : '—');
     const speed = h('b', { class: 'mono' }),
       cp = h('b', { class: 'mono' }),
       time = h('b', { class: 'mono' });
@@ -709,18 +725,18 @@ export class Hud {
     const step = (p: Player | undefined, place: number) => {
       if (!p) return h('div', { class: `step s${place}`, style: 'visibility:hidden' }, h('div', { class: 'block' }));
       const img = h('img', { class: 'car', alt: '' }) as HTMLImageElement;
-      const lobby = app.lobby.find((l) => l.id === p.pid);
-      if (lobby?.carStyle) app.native.carThumbnail(lobby.carStyle).then((url) => (img.src = url)).catch(() => {});
+      const style = p.bot ? botCarStyle(p.bot.cs) : app.lobby.find((l) => l.id === p.pid)?.carStyle;
+      if (style) app.native.carThumbnail(style).then((url) => (img.src = url)).catch(() => {});
       return h(
         'div',
         { class: `step s${place}` },
         img,
-        h('div', { class: 'pname ell' }, `${flag(p.cc)} ${p.name}`),
+        h('div', { class: 'pname ell' }, `${flag(p.cc)} ${p.name}`, botTag(p)),
         h('div', { class: 'ppts' }, s.rules.mode === 'knockout' ? (place === 1 ? 'Last one standing' : `Out in round ${p.out ?? '?'}`) : `${p.pts} pts · ${p.wins} win${p.wins === 1 ? '' : 's'}`),
         h('div', { class: 'block' }, String(place)),
       );
     };
-    const rest = table.slice(3).map((p, i) => h('span', null, `${ordinal(i + 4)} ${p.name} · ${s.rules.mode === 'knockout' ? `R${p.out ?? '-'}` : p.pts}`));
+    const rest = table.slice(3).map((p, i) => h('span', null, `${ordinal(i + 4)} ${p.name}`, botTag(p), ` · ${s.rules.mode === 'knockout' ? `R${p.out ?? '-'}` : p.pts}`));
     const acts: HTMLElement[] = [];
     const best = app.bestRun();
     if (best) acts.push(btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'ghost'));

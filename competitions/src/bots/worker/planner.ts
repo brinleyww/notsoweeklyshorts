@@ -1,0 +1,852 @@
+// Plans every bot run in this worker, frame by frame on the game's own physics. All of the worker's
+// bots advance together in ticks; a full copy of the wasm heap is kept at each tick boundary. When a
+// bot fails (off its line, fallen, stuck, wrecked, a missed checkpoint), the heap goes back a few
+// ticks, the other bots replay their logged keys to where they were, and the failed bot tries again
+// with other settings. When it keeps failing it lives with it: it respawns at its last checkpoint,
+// or restarts, like a player would.
+//
+// Time is bot time: ms since GO. The physics step taken at time t gives the car's state at t + 1.
+import type { Persona } from '../wire.ts';
+import { DEFAULT_PARAMS, Driver, newDriverState, type DriverParams, type DriverState } from './driver.ts';
+import { clearanceOf, marginOffsets, type Clearance } from './clearance.ts';
+import type { TrackRays } from './rays.ts';
+import type { Reference } from './reference.ts';
+import { axes, newRaw, readRaw, type Keys, type Raw, type Sim, type TrackLoad } from './sim.ts';
+
+export const TICK = 200;
+// Frames each bot may still change; older keyframes are final and can be sent.
+export const HOLD = 3000;
+export const KEY_EVERY = 50;
+// Heap copies kept for going back, in bytes at most (fewer of them on a big track).
+const SNAP_BUDGET = 320 * 1024 * 1024;
+// Rolling after the finish: a single run stops sending after AFTER_RUN; time attack restarts after AFTER_TA.
+const AFTER_RUN = 2500;
+// The best bots drive the fastest recorded run's own keys and lift off the throttle (or tap the brake)
+// once near the end, for just long enough to finish 0.1-0.3 s behind it (found by trying: the physics is exact).
+const EXPERT = 0.95;
+const COPY_SLOT = 63;
+const AFTER_TA = 1000;
+
+export interface Out {
+  f: number;
+  raw: Uint8Array;
+  cut: boolean;
+}
+
+export interface JobSpec {
+  id: string;
+  bot: Persona;
+  mode: 'run' | 'ta';
+  end: number;
+}
+
+export type Why = 'lost' | 'fell' | 'stuck' | 'crash' | 'missed' | 'flipped' | 'spun';
+type Status = 'run' | 'after' | 'done' | 'dnf';
+
+// Every car's physics world holds every part it is given (~30 MB a car on a 60k-part deco track), but a
+// bot is never long more than 12 units off a reference ('lost'), so on a big track it gets only the parts
+// near one (part positions are in 5-unit tiles). Gates and start parts stay wherever they are.
+const ROUTE_PARTS = 4000;
+const ROUTE_REACH = 60;
+const ROUTE_CELL = 20;
+
+export function routeTrack(sim: Sim, t: TrackLoad, refs: Reference[], gate: (id: number) => boolean): TrackLoad {
+  let parts = 0;
+  t.track.forEachPart(() => parts++);
+  if (parts < ROUTE_PARTS || !refs.length) return t;
+  const key = (x: number, y: number, z: number) => ((x & 1023) << 20) | ((y & 1023) << 10) | (z & 1023);
+  const near = new Set<number>();
+  const r = Math.ceil(ROUTE_REACH / ROUTE_CELL);
+  for (const ref of refs) {
+    let lx = Infinity, ly = 0, lz = 0;
+    for (let i = 0; i < ref.n; i++) {
+      const x = ref.px[i], y = ref.py[i], z = ref.pz[i];
+      if ((x - lx) ** 2 + (y - ly) ** 2 + (z - lz) ** 2 < 25 && i < ref.n - 1) continue;
+      lx = x;
+      ly = y;
+      lz = z;
+      const cx = Math.floor(x / ROUTE_CELL), cy = Math.floor(y / ROUTE_CELL), cz = Math.floor(z / ROUTE_CELL);
+      for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) for (let c = -r; c <= r; c++) near.add(key(cx + a, cy + b, cz + c));
+    }
+  }
+  return sim.prune(t, (x, y, z, id, cp, start) => cp != null || start != null || gate(id) || near.has(key(Math.floor((x * 5) / ROUTE_CELL), Math.floor((y * 5) / ROUTE_CELL), Math.floor((z * 5) / ROUTE_CELL))));
+}
+
+interface Saved {
+  t: number;
+  car: number;
+  runStart: number;
+  st: DriverState;
+  cutNext: boolean;
+  status: Status;
+  runs: number;
+  bestArc: number;
+  bestArcAt: number;
+  farFrames: number;
+  lastCp: number;
+  airSince: number;
+  respawns: number;
+  resetAt: number;
+  finishedAt: number;
+  mistakeUntil: number;
+  speedHist: number[];
+  prev: Uint8Array;
+  hasPrev: boolean;
+  // Off the reference line by this much when saved (a good place to go back to is close to it).
+  lat: number;
+  refIdx: number;
+}
+
+// Small seeded generator (mulberry32).
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export class Job {
+  readonly id: string;
+  readonly bot: Persona;
+  readonly mode: 'run' | 'ta';
+  readonly end: number;
+  readonly rand: () => number;
+  ref: Reference;
+  readonly p: DriverParams;
+  driver: Driver;
+  // Reference runs this bot can follow, fastest first, and the one it follows now.
+  readonly refs: Reference[];
+  refIdx = 0;
+  #drivers = new Map<number, Driver>();
+  readonly #clear: Map<Reference, Clearance>;
+  car = 0;
+  runStart = 0;
+  // Next step happens at this time.
+  t = 0;
+  keys = new Uint8Array(1 << 16);
+  out: Out[] = [];
+  cutNext = true;
+  committed = 0;
+  status: Status = 'run';
+  runs: [number, number | null][] = [];
+  st: DriverState = newDriverState();
+  bestArc = 0;
+  bestArcAt = 0;
+  farFrames = 0;
+  offFrames = 0;
+  lastCp = 0;
+  // In the air since this time (-1 on the ground).
+  airSince = -1;
+  respawns = 0;
+  resetAt = -1;
+  finishedAt = -1;
+  mistakeUntil = -1;
+  speedHist: number[] = [];
+  // The car's state at time t (after the last step).
+  prev = new Uint8Array(256);
+  hasPrev = false;
+  prevSpeed = 0;
+  failAt = -1;
+  failWhy: Why | null = null;
+  failArc = 0;
+  failJump = false;
+  // Much slower than the reference where it failed: it needs more speed there, not less.
+  failSlow = false;
+  // Restarts from the start line this round (before any checkpoint, a respawn can't help).
+  restarts = 0;
+  // Respawns in a row that failed again before the next checkpoint.
+  respawnCp = -1;
+  cpRespawns = 0;
+  // This run drives a recorded run's own keys from the start (a sure finish: the physics is exact):
+  // an expert's planned near-copy, or because the bot's own driving got nowhere.
+  copy: { keys: Uint8Array; n: number } | null = null;
+  tries = new Map<number, number>();
+  dnfAt: number | null = null;
+  forceReset = false;
+  // Mistakes kept this run.
+  kept = 0;
+
+  constructor(spec: JobSpec, refs: Reference[], clear: Map<Reference, Clearance>) {
+    this.id = spec.id;
+    this.bot = spec.bot;
+    this.mode = spec.mode;
+    this.end = spec.end;
+    this.rand = rng(spec.bot.seed);
+    const b = spec.bot;
+    // Riskier bots follow the fastest reference; careful ones a slower run when there is one.
+    const sorted = [...refs].sort((a, c) => a.n - c.n);
+    this.refs = sorted;
+    this.#clear = clear;
+    this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
+    this.ref = sorted[this.refIdx];
+    const jitter = (this.rand() - 0.5) * 0.03 * (1 - b.skill);
+    // An explored route's speeds are already careful, and nothing on it is worth copying exactly.
+    this.p = this.ref.kind === 'explore'
+      ? { ...DEFAULT_PARAMS, pace: Math.min(1, 0.9 + 0.1 * b.skill + jitter), imitate: 0, drift: false }
+      : { ...DEFAULT_PARAMS, pace: Math.min(1, 0.78 + 0.22 * b.skill + jitter), imitate: b.skill >= 0.85 ? 0.05 : 0, drift: b.skill >= 0.5 };
+    this.driver = this.#driverFor(this.refIdx);
+  }
+
+  #driverFor(i: number) {
+    let d = this.#drivers.get(i);
+    if (!d) {
+      const ref = this.refs[i];
+      d = new Driver(ref, this.p);
+      // Room to spare from walls and edges: a little for a sharp bot, more for a careful one.
+      const c = this.#clear.get(ref);
+      if (c) d.offsets = marginOffsets(ref, c, 0.15 + 0.55 * (1 - this.bot.skill));
+      this.#drivers.set(i, d);
+    }
+    return d;
+  }
+
+  // Follows another reference from here on (its progress index is found from the car's position).
+  useRef(i: number) {
+    if (i === this.refIdx) return;
+    this.refIdx = i;
+    this.ref = this.refs[i];
+    this.driver = this.#driverFor(i);
+  }
+
+  save(): Saved {
+    return {
+      t: this.t, car: this.car, runStart: this.runStart, st: { ...this.st }, cutNext: this.cutNext,
+      status: this.status, runs: this.runs.length, bestArc: this.bestArc, bestArcAt: this.bestArcAt, farFrames: this.farFrames,
+      lastCp: this.lastCp, airSince: this.airSince, respawns: this.respawns, resetAt: this.resetAt, finishedAt: this.finishedAt, mistakeUntil: this.mistakeUntil,
+      speedHist: [...this.speedHist], prev: this.prev.slice(), hasPrev: this.hasPrev,
+      lat: Math.abs(this.driver.lat) + Math.abs(this.driver.headPath) * 5,
+      refIdx: this.refIdx,
+    };
+  }
+
+  load(s: Saved) {
+    this.useRef(s.refIdx);
+    this.t = s.t;
+    this.car = s.car;
+    this.runStart = s.runStart;
+    this.st = { ...s.st };
+    // Keyframes past the snapshot are from the attempt being thrown away (commits shift the list, so
+    // its length then says nothing).
+    while (this.out.length && this.out[this.out.length - 1].f > s.t) this.out.pop();
+    this.cutNext = s.cutNext;
+    this.status = s.status;
+    this.runs.length = s.runs;
+    if (this.runs.length && s.finishedAt < 0) this.runs[this.runs.length - 1][1] = null;
+    this.bestArc = s.bestArc;
+    this.bestArcAt = s.bestArcAt;
+    this.farFrames = s.farFrames;
+    this.lastCp = s.lastCp;
+    this.airSince = s.airSince;
+    this.respawns = s.respawns;
+    this.resetAt = s.resetAt;
+    this.finishedAt = s.finishedAt;
+    this.mistakeUntil = s.mistakeUntil;
+    this.speedHist = [...s.speedHist];
+    this.prev.set(s.prev);
+    this.hasPrev = s.hasPrev;
+    this.failAt = -1;
+    this.failWhy = null;
+    this.forceReset = false;
+  }
+
+  log(t: number, k: Keys) {
+    if (t >= this.keys.length) {
+      const n = new Uint8Array(Math.max(this.keys.length * 2, t + 1024));
+      n.set(this.keys);
+      this.keys = n;
+    }
+    this.keys[t] = (k.up ? 1 : 0) | (k.right ? 2 : 0) | (k.down ? 4 : 0) | (k.left ? 8 : 0) | (k.reset ? 16 : 0);
+  }
+
+  get live() {
+    return this.status === 'run' || this.status === 'after';
+  }
+}
+
+const keysOf = (b: number, k: Keys) => {
+  k.up = (b & 1) !== 0;
+  k.right = (b & 2) !== 0;
+  k.down = (b & 4) !== 0;
+  k.left = (b & 8) !== 0;
+  k.reset = (b & 16) !== 0;
+  return k;
+};
+
+interface Snap {
+  slot: number;
+  tick: number;
+  jobs: Map<string, Saved>;
+}
+
+export class Planner {
+  readonly sim: Sim;
+  readonly track: TrackLoad;
+  // The whole track, for runs that copy a recording (it was made there; routeTrack may leave parts out).
+  readonly full: TrackLoad;
+  readonly refs: Reference[];
+  readonly jobs: Job[] = [];
+  readonly ringSize: number;
+  #ring: Snap[] = [];
+  #tick = 0;
+  #raw: Raw = newRaw();
+  #fw = new Float32Array(3);
+  #up = new Float32Array(3);
+  #vel = new Float32Array(3);
+  #k: Keys = { up: false, right: false, down: false, left: false, reset: false };
+  // A job changed cars since the last snapshot: older snapshots no longer hold its car.
+  #carChanged = false;
+  onCommit: (job: Job, outs: Out[]) => void = () => {};
+  onDone: (job: Job) => void = () => {};
+  onFail: (job: Job, why: Why, r: Raw) => void = () => {};
+  stats = { ticks: 0, rebuilds: 0, restores: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, fails: {} as Record<string, number> };
+
+  readonly clear = new Map<Reference, Clearance>();
+
+  constructor(sim: Sim, track: TrackLoad, refs: Reference[], ringSize = 5, rays: TrackRays | null = null, full = track) {
+    if (rays) for (const ref of refs) this.clear.set(ref, clearanceOf(ref, rays));
+    this.sim = sim;
+    this.track = track;
+    this.full = full;
+    this.refs = refs;
+    this.ringSize = ringSize;
+  }
+
+  add(spec: JobSpec) {
+    const job = new Job(spec, this.refs, this.clear);
+    this.#startRun(job, 0, job.bot.skill >= EXPERT ? this.#closeCopy(job) : null);
+    this.jobs.push(job);
+    return job;
+  }
+
+  cancel(id: string) {
+    const i = this.jobs.findIndex((j) => j.id === id);
+    if (i < 0) return;
+    const job = this.jobs[i];
+    if (job.car) this.sim.deleteCar(job.car);
+    job.car = 0;
+    this.jobs.splice(i, 1);
+    this.#ring = [];
+  }
+
+  dispose() {
+    for (const j of this.jobs) if (j.car) this.sim.deleteCar(j.car);
+    this.jobs.length = 0;
+    this.#ring = [];
+    this.sim.freeSlots();
+  }
+
+  get busy() {
+    return this.jobs.some((j) => j.live);
+  }
+
+  // Lowest time still being planned among running bots (Infinity when all are done).
+  get frontier() {
+    let m = Infinity;
+    for (const j of this.jobs) if (j.live) m = Math.min(m, j.t);
+    return m;
+  }
+
+  tick() {
+    const live = this.jobs.filter((j) => j.live);
+    if (!live.length) return false;
+    this.#snapshot();
+    for (const job of live) this.#run(job, job.t + TICK);
+    const failed = live.filter((j) => j.failAt >= 0);
+    if (failed.length) this.#recover(failed, live);
+    for (const job of this.jobs) this.#commit(job);
+    this.#tick++;
+    this.stats.ticks++;
+    return true;
+  }
+
+  #startRun(job: Job, at: number, copy: { keys: Uint8Array; n: number } | null = null) {
+    if (job.car) this.sim.deleteCar(job.car);
+    job.copy = copy;
+    job.car = this.sim.newCar(copy ? this.full : this.track);
+    this.#carChanged = true;
+    job.runStart = at;
+    job.t = at;
+    job.st = newDriverState();
+    if (job.ref.kind === 'explore') job.st.gripUntil = Infinity;
+    job.st.imitating = job.p.imitate > 0;
+    job.bestArc = 0;
+    job.bestArcAt = at;
+    job.farFrames = 0;
+    job.lastCp = 0;
+    job.airSince = -1;
+    job.respawns = 0;
+    job.respawnCp = -1;
+    job.cpRespawns = 0;
+    job.resetAt = -1;
+    job.finishedAt = -1;
+    job.speedHist = [];
+    job.hasPrev = false;
+    job.cutNext = true;
+    job.kept = 0;
+    job.runs.push([at, null]);
+    job.status = 'run';
+  }
+
+  // The fastest recorded run's keys with one throttle lift or brake tap that makes them finish 0.1-0.3 s
+  // later (less for a better bot), tried on a car of its own; null when nothing near the end lands on that.
+  #closeCopy(job: Job): { keys: Uint8Array; n: number } | null {
+    const ref = job.refs.find((r) => r.kind !== 'explore');
+    if (!ref) return null;
+    const lose = Math.round(Math.min(350, Math.max(80, 100 + (0.98 - job.bot.skill) * 6667 + (job.rand() - 0.5) * 120)));
+    const sim = this.sim, k = this.#k, r = this.#raw, n = ref.n;
+    const slow = (b: number, brake: boolean) => (brake ? (b & ~1) | 4 : b & ~1);
+    // Tries ground frames from `first` to `last` every 0.5 s, each with a lift and a brake tap.
+    const attempt = (target: number, first: number, last: number) => {
+      const car = sim.newCar(this.full);
+      this.#carChanged = true;
+      const drive = (from: number, to: number, until: number, brake = false) => {
+        for (let f = from; f < to; f++) {
+          const b = ref.keys[Math.min(f, n - 1)];
+          readRaw(sim.step(car, keysOf(f < until ? slow(b, brake) : b, k)), r);
+          if (r.finished) return r.finishFrames;
+        }
+        return -1;
+      };
+      try {
+        let at = 0;
+        for (let s = first; s < last; s += 500) {
+          if (drive(at, s, -1) >= 0) return null;
+          at = s;
+          if (ref.wheels[s] < 3) continue;
+          sim.save(COPY_SLOT);
+          for (const brake of ref.keys[s] & 1 ? [false, true] : [true]) {
+            let lo = 0, hi = Math.min(brake ? 1000 : 3000, n - s);
+            while (hi - lo > 1) {
+              const d = (lo + hi) >> 1;
+              sim.restore(COPY_SLOT);
+              const fin = drive(s, n + 5000, s + d, brake);
+              if (fin >= 0 && Math.abs(fin - target) <= 10) {
+                const keys = ref.keys.slice();
+                for (let f = s; f < s + d; f++) keys[f] = slow(keys[f], brake);
+                return { keys, n };
+              }
+              if (fin < 0 || fin > target) hi = d;
+              else lo = d;
+            }
+          }
+          sim.restore(COPY_SLOT);
+        }
+        return null;
+      } finally {
+        sim.deleteCar(car);
+        sim.dropSlot(COPY_SLOT);
+      }
+    };
+    // Near the end first, from a spot picked at random each round (the rest of that stretch after it, then
+    // before it); failing that (a last jump that needs all the speed), earlier; failing that, losing less.
+    const near = Math.max(0, n - 6000), pick = near + Math.floor(job.rand() * Math.max(1, n - 300 - near));
+    const far = Math.max(0, n - 20000), pickFar = far + Math.floor(job.rand() * Math.max(1, near - far));
+    for (const l of [lose, 200, 100]) {
+      if (l > lose) continue;
+      const got =
+        attempt(n + l, pick, n - 300) ??
+        attempt(n + l, near, pick) ??
+        (near > 0 ? attempt(n + l, pickFar, near) ?? attempt(n + l, far, pickFar) : null);
+      if (got) return got;
+    }
+    return null;
+  }
+
+  #keep(job: Job, f: number, raw: Uint8Array) {
+    const last = job.out[job.out.length - 1];
+    if (last && last.f >= f) return;
+    job.out.push({ f, raw: raw.slice(0, this.sim.I.stateSize), cut: job.cutNext });
+    job.cutNext = false;
+  }
+
+  // Steps a bot until time `to`, a failure, or the end of its run.
+  #run(job: Job, to: number) {
+    const sim = this.sim, r = this.#raw, k = this.#k;
+    const ref = job.ref, drv = job.driver, st = job.st;
+    to = Math.min(to, job.end);
+    while (job.t < to && job.live) {
+      const t = job.t;
+      const s = sim.steerInput(job.car);
+      if (job.status === 'after') {
+        k.up = k.left = k.right = k.reset = false;
+        // Roll, then brake to a stop (holding brake at a standstill would reverse).
+        k.down = t - job.finishedAt > 600 && job.prevSpeed > 3;
+      } else this.#decide(job, t, s, k);
+      job.log(t, k);
+      const buf = sim.step(job.car, k);
+      readRaw(buf, r);
+      this.stats.frames++;
+      const now = t + 1;
+      job.t = now;
+      const jumped = k.reset && job.hasPrev && this.#jumped(job.prev, r);
+      if (jumped) {
+        this.#keep(job, t, job.prev);
+        job.cutNext = true;
+      }
+      // A hit: both sides of the sudden change, so pages don't smooth it over.
+      const hit = job.hasPrev && Math.abs(r.speed - job.prevSpeed) > 5;
+      if (hit) this.#keep(job, t, job.prev);
+      if (hit || jumped || job.cutNext || now % KEY_EVERY === 0 || r.cp !== job.lastCp || (r.finished && job.status === 'run')) this.#keep(job, now, buf);
+      job.prevSpeed = r.speed;
+      job.prev.set(buf.subarray(0, Math.min(buf.length, 256)));
+      job.hasPrev = true;
+      job.lastCp = r.cp;
+      if (r.wheels > 0) job.airSince = -1;
+      else if (job.airSince < 0) job.airSince = now;
+      if (job.status === 'after') {
+        const left = (job.mode === 'ta' ? AFTER_TA : AFTER_RUN) - (now - job.finishedAt);
+        if (left <= 0) {
+          if (job.mode === 'ta' && now + 2000 < job.end) {
+            this.#keep(job, now, buf);
+            this.#startRun(job, now);
+          } else this.#finishJob(job, 'done');
+        }
+        continue;
+      }
+      if (r.finished) {
+        job.finishedAt = now;
+        job.runs[job.runs.length - 1][1] = job.runStart + r.finishFrames;
+        job.status = 'after';
+        continue;
+      }
+      if (jumped) {
+        drv.anchor(r, st);
+        job.bestArc = ref.arc[st.k];
+        job.bestArcAt = now;
+        job.farFrames = 0;
+        job.speedHist = [];
+        continue;
+      }
+      if ((now & 3) === 0 && !job.copy) {
+        axes(r, this.#fw, this.#up);
+        drv.track(r, st);
+        const why = this.#check(job, r, now);
+        if (why) {
+          job.failAt = now;
+          job.failWhy = why;
+          job.failArc = ref.arc[st.k];
+          // Went wrong where the reference was in the air or had just taken off: a jump it reached too
+          // slowly or badly. (Airborne where the reference wasn't means too fast or off its line.)
+          job.failJump = ref.wheels[st.k] === 0 || ref.jumpIn(Math.max(0, st.k - 1500), 1500) !== Infinity;
+          job.failSlow = (job.speedHist[0] ?? r.speed) < 0.85 * Math.abs(ref.speed[st.k]);
+          this.stats.fails[why] = (this.stats.fails[why] ?? 0) + 1;
+          this.onFail(job, why, r);
+          return;
+        }
+      }
+    }
+    if (job.live && job.t >= job.end) this.#finishJob(job, job.status === 'after' || job.mode === 'ta' ? 'done' : 'dnf');
+  }
+
+  #finishJob(job: Job, how: 'done' | 'dnf') {
+    if (how === 'dnf' && job.dnfAt == null) job.dnfAt = job.t;
+    job.status = how;
+    // The car stays (never stepped again) until dispose: deleting it now would make every snapshot
+    // older than this unusable for the bots still driving.
+    this.onDone(job);
+  }
+
+  #jumped(prev: Uint8Array, r: Raw) {
+    const dv = new DataView(prev.buffer, prev.byteOffset, prev.byteLength);
+    const off = (prev[11] & 2 ? 3 : 0) + 14;
+    const dx = r.x - dv.getFloat32(off, true), dy = r.y - dv.getFloat32(off + 4, true), dz = r.z - dv.getFloat32(off + 8, true);
+    return dx * dx + dy * dy + dz * dz > 9;
+  }
+
+  #decide(job: Job, t: number, s: number, k: Keys) {
+    const st = job.st, ref = job.ref, r = this.#raw;
+    if (job.copy) {
+      keysOf(job.copy.keys[Math.min(t - job.runStart, job.copy.n - 1)], k);
+      return;
+    }
+    k.reset = false;
+    if (!job.hasPrev) {
+      keysOf(ref.keys[0] & 15, k);
+      return;
+    }
+    readRaw(job.prev, r);
+    if (job.forceReset) {
+      job.forceReset = false;
+      k.up = k.down = k.left = k.right = false;
+      k.reset = true;
+      job.resetAt = t;
+      return;
+    }
+    axes(r, this.#fw, this.#up);
+    this.sim.velocity(job.car, this.#vel);
+    // Respawn where the reference respawned (tracks built around it), once on the same checkpoint.
+    const tp = ref.teleportAfter(st.k - 4);
+    if (tp > 0 && st.k >= tp - 3 && r.cp === ref.cp[tp - 1] && job.resetAt < t - 300) {
+      k.up = k.down = k.left = k.right = false;
+      k.reset = true;
+      job.resetAt = t;
+      return;
+    }
+    job.driver.decide(t, r, this.#vel, s, this.#fw, st, k);
+    // Mistakes: a twitch of the wheel or a lift, now and then.
+    if (st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
+      if (job.rand() < 0.5) {
+        st.bias = (job.rand() < 0.5 ? -1 : 1) * (0.15 + 0.35 * job.rand());
+        st.biasUntil = t + 120 + Math.floor(job.rand() * 250);
+      } else {
+        st.paceMul = 0.75 + 0.15 * job.rand();
+        st.paceUntil = t + 500 + Math.floor(job.rand() * 800);
+      }
+      job.mistakeUntil = Math.max(st.biasUntil, st.paceUntil) + 1500;
+    }
+  }
+
+  #check(job: Job, r: Raw, now: number): Why | null {
+    const ref = job.ref, drv = job.driver, k = job.st.k;
+    if (drv.dist > 12) job.farFrames += 4;
+    else job.farFrames = 0;
+    if (job.farFrames > 400) return 'lost';
+    // Flying off the line where the reference stayed on the ground.
+    if (r.wheels === 0 && ref.wheels[k] > 0 && drv.dist > 4) {
+      job.offFrames += 4;
+      if (job.offFrames > 160) return 'fell';
+    } else job.offFrames = 0;
+    // Sideways at speed, off the line. Not just after a respawn, where the car faces the gate, not the line.
+    const settled = now - job.runStart > 1500 && now - job.resetAt > 1500;
+    if (settled && r.speed > 25 && Math.min(Math.abs(drv.head), Math.abs(drv.headPath)) > 0.45 && Math.abs(drv.lat) > 1 && r.wheels > 0) return 'spun';
+    if (r.y < ref.minY - 15 || (r.wheels === 0 && r.y < ref.py[k] - 10)) return 'fell';
+    const arc = ref.arc[k];
+    if (arc > job.bestArc + 2) {
+      job.bestArc = arc;
+      job.bestArcAt = now;
+    } else if (now - job.bestArcAt > 1600 && job.resetAt < now - 1600) return 'stuck';
+    const need = ref.cp[k];
+    if (need > r.cp && arc - ref.arc[ref.cpAt[need] ?? k] > 12) return 'missed';
+    const h = job.speedHist;
+    h.push(r.speed);
+    if (h.length > 25) h.shift();
+    if (h.length === 25 && h[0] - r.speed > 45 && ref.speed[k] > r.speed + 40) return 'crash';
+    const upDot = this.#up[0] * ref.ux[k] + this.#up[1] * ref.uy[k] + this.#up[2] * ref.uz[k];
+    if (upDot < -0.3 && r.wheels === 0 && now - job.bestArcAt > 600) return 'flipped';
+    return null;
+  }
+
+  #snapshot() {
+    if (this.#carChanged) {
+      this.#carChanged = false;
+      this.#ring = [];
+    }
+    let slot: number;
+    const cap = Math.max(2, Math.min(this.ringSize, Math.floor(SNAP_BUDGET / this.sim.heap.length)));
+    while (this.#ring.length > cap) this.sim.dropSlot(this.#ring.shift()!.slot);
+    if (this.#ring.length >= cap) {
+      // Thin out so the kept snapshots reach back roughly geometrically: drop the one whose
+      // neighbours are closest together for its age.
+      let drop = 0, best = Infinity;
+      const ring = this.#ring;
+      for (let i = 1; i < ring.length - 1; i++) {
+        const density = (ring[i + 1].tick - ring[i - 1].tick) / (this.#tick - ring[i].tick);
+        if (density < best) {
+          best = density;
+          drop = i;
+        }
+      }
+      if (this.#tick - ring[0].tick > (HOLD / TICK) * 1.2) drop = 0;
+      slot = ring.splice(drop, 1)[0].slot;
+    } else {
+      const used = new Set(this.#ring.map((s) => s.slot));
+      slot = 0;
+      while (used.has(slot)) slot++;
+    }
+    this.sim.save(slot);
+    const jobs = new Map<string, Saved>();
+    for (const j of this.jobs) if (j.live) jobs.set(j.id, j.save());
+    this.#ring.push({ slot, tick: this.#tick, jobs });
+  }
+
+  #recover(failed: Job[], live: Job[]) {
+    // A snapshot can only be restored while every running bot still has the car it held then.
+    const usable = this.#carChanged ? [] : this.#ring.filter((s) => live.every((j) => s.jobs.get(j.id)?.car === j.car));
+    const plans: { job: Job; snap: Snap | null; rebuildTo: number }[] = [];
+    for (const job of failed) {
+      const bucket = Math.floor(job.failArc / 20);
+      const n = (job.tries.get(bucket) ?? 0) + 1;
+      job.tries.set(bucket, n);
+      readRaw(job.prev, this.#raw);
+      // Before the first checkpoint giving up means a restart, so keep trying much longer there.
+      const limit = this.#raw.respawnable ? 6 + Math.round(4 * job.bot.skill) : 12;
+      // A mistake the bot made itself, and a careless bot keeps it, a couple of times a run at most,
+      // and only where a respawn (not a restart) gets it going again.
+      const keep = job.mistakeUntil >= job.failAt && this.#raw.respawnable && job.kept < Math.round(2.5 * job.bot.mistakes) && job.rand() < job.bot.mistakes;
+      if (keep) job.kept++;
+      let snap: Snap | null = null;
+      let rebuildTo = -1;
+      if (n <= limit && !keep) {
+        const back = (job.failJump || job.failSlow ? [5, 8, 12, 8, 13, 10, 13, 13] : [2, 3, 5, 4, 8, 5, 10, 13])[Math.min(7, (n - 1) % 8)];
+        const want = this.#tick - back;
+        for (let i = usable.length - 1; i >= 0; i--) {
+          const saved = usable[i].jobs.get(job.id)!;
+          if (saved.t < job.committed) break;
+          snap = usable[i];
+          // Far enough back, and on the line there (going further back while still off it), and on the
+          // ground before a flight that went wrong (nothing done in the air changes where it lands).
+          if (usable[i].tick <= want && saved.lat < 0.6 && (job.airSince < 0 || saved.t < job.airSince - 300)) break;
+        }
+        // No snapshot holds this car any more (another bot changed cars): replay its own keys instead.
+        if (!snap) rebuildTo = Math.max(job.committed, job.runStart, job.failAt - back * TICK);
+      }
+      plans.push({ job, snap, rebuildTo });
+    }
+    const restoring = plans.filter((p) => p.snap);
+    if (restoring.length) {
+      const oldest = restoring.reduce((a, b) => (a.snap!.tick <= b.snap!.tick ? a : b)).snap!;
+      this.sim.restore(oldest.slot);
+      this.stats.restores++;
+      for (const job of live) {
+        const from = oldest.jobs.get(job.id)!;
+        const plan = restoring.find((p) => p.job === job);
+        if (plan) {
+          const target = plan.snap!.jobs.get(job.id)!;
+          this.#replay(job, from.t, target.t);
+          job.load(target);
+          this.#vary(job, plan.job.failArc);
+        } else this.#replay(job, from.t, job.t);
+      }
+      this.#ring = this.#ring.filter((s) => s.tick <= oldest.tick);
+    }
+    for (const p of plans) {
+      if (p.snap) continue;
+      if (p.rebuildTo >= 0 && p.rebuildTo > p.job.runStart) this.#rebuild(p.job, p.rebuildTo);
+      else this.#accept(p.job);
+    }
+  }
+
+  // A new car for this bot, driven through its own logged keys from the start of its run to time `to`.
+  // Slower than a snapshot (it replays the whole run so far), so only for when no snapshot will do.
+  #rebuild(job: Job, to: number) {
+    this.stats.rebuilds++;
+    if (job.car) this.sim.deleteCar(job.car);
+    job.car = this.sim.newCar(job.copy ? this.full : this.track);
+    this.#carChanged = true;
+    const k = this.#k;
+    let buf: Uint8Array | null = null;
+    for (let t = job.runStart; t < to; t++) buf = this.sim.step(job.car, keysOf(job.keys[t], k));
+    this.stats.replay += to - job.runStart;
+    job.t = to;
+    if (buf) {
+      job.prev.set(buf.subarray(0, Math.min(buf.length, 256)));
+      job.hasPrev = true;
+      readRaw(buf, this.#raw);
+      job.lastCp = this.#raw.cp;
+      job.prevSpeed = this.#raw.speed;
+      job.driver.anchor(this.#raw, job.st);
+    }
+    while (job.out.length && job.out[job.out.length - 1].f > to) job.out.pop();
+    job.bestArc = job.ref.arc[job.st.k];
+    job.bestArcAt = to;
+    job.farFrames = job.offFrames = 0;
+    job.speedHist = [];
+    job.failAt = -1;
+    job.resetAt = -1;
+    job.airSince = -1;
+    this.#vary(job, job.failArc);
+    job.failWhy = null;
+  }
+
+  // Steps a bot's car through its logged keys (physics only).
+  #replay(job: Job, from: number, to: number) {
+    const k = this.#k;
+    for (let t = from; t < to; t++) this.sim.step(job.car, keysOf(job.keys[t], k));
+    this.stats.replay += Math.max(0, to - from);
+  }
+
+  // Settings for the next try at the place that failed: slower first, faster for missed jumps,
+  // then other lines.
+  #vary(job: Job, arc: number) {
+    const st = job.st, n = job.tries.get(Math.floor(arc / 20)) ?? 1;
+    const until = job.t + 2500;
+    // A jump wants the reference's own speed (and a little either side); anything else, slower.
+    const full = 1 / Math.max(0.5, job.p.pace);
+    const faster = job.failJump || job.failSlow;
+    const paces = faster ? [full, full * 1.02, full * 0.98, full * 1.04, full * 0.96, full, full * 0.92, full * 1.06] : [0.95, 0.9, 0.85, 0.92, 0.8, 0.88, 0.75, 0.7];
+    st.paceMul = paces[(n - 1) % paces.length];
+    st.paceUntil = until;
+    if (n >= 3) {
+      st.bias = (job.rand() - 0.5) * 0.3;
+      st.biasUntil = job.t + 200 + Math.floor(job.rand() * 400);
+    }
+    // A drift that went wrong: take that part on grip.
+    if (job.ref.kind !== 'explore' && ((job.failWhy === 'spun' && n % 2 === 1) || n === 3 || n === 6)) st.gripUntil = until;
+    if (n >= 4) {
+      st.off = (job.rand() - 0.5) * 1.2;
+      st.offUntil = until;
+    }
+    // Still failing here: try another player's line through it, from where the car is.
+    if (n >= 4 && n % 2 === 0 && job.refs.length > 1) {
+      job.useRef((job.refIdx + 1) % job.refs.length);
+      readRaw(job.prev, this.#raw);
+      job.driver.anchor(this.#raw, job.st);
+      job.bestArc = job.ref.arc[job.st.k];
+    }
+    st.imitating = false;
+  }
+
+  // Keeps going from a failure: respawn at the last checkpoint, or restart the run.
+  #accept(job: Job) {
+    this.stats.accepted++;
+    const why = job.failWhy;
+    job.failAt = -1;
+    job.failWhy = null;
+    if (why === 'crash') {
+      job.speedHist = [];
+      return;
+    }
+    job.respawns++;
+    readRaw(job.prev, this.#raw);
+    const again = this.#raw.cp === job.respawnCp;
+    job.cpRespawns = again ? job.cpRespawns + 1 : 1;
+    job.respawnCp = this.#raw.cp;
+    // A respawn that keeps failing before the next checkpoint is a dead end (it goes the same way every
+    // time), and so is one that can't get up to the speed the place needs.
+    if (job.respawns > 6 || job.cpRespawns > 3 || (again && job.failSlow)) {
+      this.#startOver(job);
+      return;
+    }
+    if (this.#raw.respawnable) {
+      job.forceReset = true;
+      job.bestArcAt = job.t;
+      job.farFrames = 0;
+      job.st.biasUntil = job.st.paceUntil = job.st.offUntil = -1;
+      this.stats.respawns++;
+    } else if (job.mode === 'ta' || job.restarts < 1) {
+      job.restarts++;
+      job.tries.clear();
+      this.#keep(job, job.t, job.prev);
+      this.#startRun(job, job.t);
+      this.stats.restarts++;
+    } else this.#startOver(job);
+  }
+
+  // Nothing the bot does itself gets it through: it starts over on the slowest recorded run's own keys.
+  // In time attack only until it has a time; with no recorded run (an explored route) it gives up.
+  #startOver(job: Job) {
+    const copy = [...job.refs].reverse().find((r) => r.kind !== 'explore') ?? null;
+    const useCopy = copy && (job.mode === 'run' || !job.runs.some((r) => r[1] != null)) ? copy : null;
+    if (!useCopy && job.mode === 'run') {
+      this.#finishJob(job, 'dnf');
+      return;
+    }
+    job.tries.clear();
+    this.#keep(job, job.t, job.prev);
+    this.#startRun(job, job.t, useCopy);
+    this.stats.restarts++;
+    if (useCopy) this.stats.copies++;
+  }
+
+  #commit(job: Job) {
+    const limit = job.live ? job.t - HOLD : Infinity;
+    if (limit <= job.committed) return;
+    let n = 0;
+    while (n < job.out.length && job.out[n].f < limit) n++;
+    if (n) this.onCommit(job, job.out.splice(0, n));
+    job.committed = Math.max(job.committed, Math.min(limit, job.t));
+  }
+}

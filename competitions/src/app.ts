@@ -1,6 +1,7 @@
 // One page's view of a cup: follows the game's multiplayer connection, talks to the organizer,
 // and runs the local car, the spectator camera and live timing. The organizer's page also runs
 // the Organizer (host.ts).
+import { BotView } from './bots/view.ts';
 import { CupChat } from './chat.ts';
 import { Driver } from './driver.ts';
 import type { Bridge, Connection, Game, GameInfo, LobbyPlayer, Native } from './game.ts';
@@ -12,7 +13,7 @@ import { drawCars, installSmoothing } from './smooth.ts';
 import { VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
-import { byPid, LIVE_PHASES, player, roundDone, type CupState, type RoundResult } from './state.ts';
+import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult } from './state.ts';
 
 export interface HostPlan {
   name: string;
@@ -79,6 +80,8 @@ export class App {
   revision = 0;
   net: Net;
   live = new LiveTiming();
+  // Bot cars and their live timing; the organizer's bot planner hands its chunks to bots.receive().
+  bots: BotView;
   driver: Driver;
   watch: Spectate;
   chat: CupChat;
@@ -109,6 +112,7 @@ export class App {
     this.bridge = bridge;
     this.native = bridge.native();
     installSmoothing(this.native);
+    this.bots = new BotView(this.native, this.live);
     this.net = new Net(
       (from, m) => this.#receive(from, m),
       () => this.changed(),
@@ -212,6 +216,7 @@ export class App {
   #reset() {
     this.net.dispose();
     this.live.attach(null);
+    this.bots.reset();
     this.state = null;
     this.history = [];
     this.me = null;
@@ -308,7 +313,11 @@ export class App {
     const covered = COVERED.includes(s.phase);
     if (covered) this.native.visibility(g, this.selfPid == null ? [] : [this.selfPid], this.selfPid);
     else if (onRound) {
-      const pids = r!.racers.map((u) => player(s, u)?.pid).filter((id): id is number => id != null);
+      const pids: number[] = [];
+      for (const u of r!.racers) {
+        const p = player(s, u);
+        if (p?.pid != null && (!p.bot || this.bots.shows(p.pid))) pids.push(p.pid);
+      }
       let shown = pids;
       if (this.watch.ghostsHidden && !s.rules.collisions) shown = pids.filter((id) => id === this.selfPid || (this.watch.active && id === this.watch.target));
       this.native.visibility(g, shown, this.selfPid);
@@ -319,7 +328,7 @@ export class App {
       g,
       crashing
         ? r!.racers
-            .filter((u) => u !== this.me && !roundDone(s, u))
+            .filter((u) => u !== this.me && !roundDone(s, u) && !isBot(player(s, u)))
             .map((u) => player(s, u)?.pid)
             .filter((id): id is number => id != null)
         : null,
@@ -334,6 +343,14 @@ export class App {
       info = this.info;
     if (!s || !info || this.game !== g || info.disposed) return;
     drawCars(info.connection, info.sessionId, (id) => this.native.remoteCar(g, id), performance.now(), dt * 1000, s.rules.collisions);
+    this.bots.sync(s);
+    this.bots.frame(g, this.#botRound(s, info), this.now(), !COVERED.includes(s.phase));
+  }
+
+  // The round whose bots this page draws: only on that round's own race session.
+  #botRound(s: CupState, info: GameInfo) {
+    const r = s.round;
+    return r && r.session === info.sessionId && s.phase !== 'lobby' && s.phase !== 'draft' ? r : null;
   }
 
   // ---- Ten times a second ----
@@ -356,6 +373,12 @@ export class App {
     this.chat.tick();
     if (this.org) this.org.tick(Date.now());
     else this.#clientTick();
+    const s = this.state,
+      info = this.info;
+    if (s && info && !info.disposed) {
+      this.bots.sync(s);
+      this.bots.tick(this.#botRound(s, info), this.now());
+    }
     this.#watchSync();
     this.#bumps();
     this.#pace();
@@ -532,6 +555,9 @@ export class App {
       case 'bump':
         if (this.game && Array.isArray(m.i) && m.n === this.state?.round?.n) this.native.bump(this.game, m.i);
         return;
+      case 'bots':
+        this.bots.receive(m);
+        return;
       case 'bye':
         this.onLeave(typeof m.why === 'string' ? m.why.slice(0, 200) : 'You left the cup.');
         return;
@@ -541,6 +567,8 @@ export class App {
   #apply(next: CupState) {
     const prev = this.state;
     this.state = next;
+    // At once, not on the next frame: bot chunks sent after a new cup's first state belong to that cup.
+    this.bots.sync(next);
     if (prev?.round && next.round && (prev.round.n !== next.round.n || prev.round.try !== next.round.try)) this.live.clear();
     if (prev && prev.phase !== next.phase && next.phase === 'countdown') this.watch.target = null;
     this.changed();

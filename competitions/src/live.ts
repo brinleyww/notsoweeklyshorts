@@ -86,6 +86,21 @@ export class LiveTiming {
     if (this.#self != null) this.#cars.delete(this.#self);
   }
 
+  // A bot's car where this page draws it (bots/view.ts). Going back a checkpoint, or losing a finish,
+  // is a new run.
+  bot(id: number, state: CarState) {
+    let car = this.#cars.get(id);
+    if (!car || (state.nextCheckpointIndex | 0) < car.cp || (car.finished != null && state.finishFrames == null)) {
+      car = { cp: 0, at: 0, frames: 0, speed: 0, finished: null, started: false, controls: null, splits: [], resets: 0 };
+      this.#cars.set(id, car);
+    }
+    this.#apply(car, state);
+  }
+
+  forget(id: number) {
+    this.#cars.delete(id);
+  }
+
   get(id: number): Progress | undefined {
     return this.#cars.get(id);
   }

@@ -1,5 +1,6 @@
 export const PRODUCT = 'Cuppa';
 export const MAX_RACERS = 25;
+export const MAX_BOTS = 8;
 
 export type Mode = 'points' | 'rounds' | 'knockout';
 export type Style = 'race' | 'timeattack';
@@ -7,6 +8,7 @@ export type NextTrack = 'random' | 'vote' | 'winner' | 'last' | 'host';
 export type Limit = 'auto' | 'fixed' | 'off';
 export type WarmupMode = 'off' | 'first' | 'every';
 export type WarmupTiming = 'fixed' | 'wr';
+export type BotSkill = 'easy' | 'medium' | 'hard' | 'expert' | 'mixed' | 'match';
 
 export interface Rules {
   mode: Mode;
@@ -43,6 +45,8 @@ export interface Rules {
   lateJoin: boolean;
   freecam: boolean;
   uploads: boolean;
+  bots: number;
+  botSkill: BotSkill;
 }
 
 export interface Format {
@@ -111,7 +115,9 @@ const base: Rules = {
   collisions: false,
   lateJoin: true,
   freecam: true,
-  uploads: false,
+  uploads: true,
+  bots: 0,
+  botSkill: 'mixed',
 };
 
 const format = (id: string, name: string, icon: string, blurb: string, rules: Partial<Rules>): Format => ({
@@ -224,6 +230,8 @@ export function cleanRules(value: unknown): Rules {
     lateJoin: bool(o.lateJoin, base.lateJoin),
     freecam: bool(o.freecam, base.freecam),
     uploads: bool(o.uploads, base.uploads),
+    bots: int(o.bots, 0, MAX_BOTS, base.bots),
+    botSkill: pick(o.botSkill, ['easy', 'medium', 'hard', 'expert', 'mixed', 'match'] as const, base.botSkill),
   };
   if (r.collisions) r.uploads = false;
   if (r.mode === 'knockout') r.lateJoin = false;

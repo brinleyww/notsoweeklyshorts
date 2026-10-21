@@ -13602,6 +13602,9 @@
             function a(e, i) {
                 return stepCar(e, i).slice().buffer
             }
+            // Cuppa's bot planner (mod/cuppa_bots.js) runs in a worker of this file named nsws-cuppa-bots and drives cars through these.
+            self.__nswsSimInternals = { module: t, create: r, step: stepCar, Track: Zo, Recording: Qa, Controls: tr, Vec3: R, carPointer: __royaleCarPointer, stateAddr: n, stateSize: s };
+            "nsws-cuppa-bots" === self.name && importScripts("mod/cuppa_bots.js");
             // One buffer per message: a buffer per car state is 1000 ArrayBuffers a second for the page's GC to sweep.
             function stateBatch(e) {
                 let t = new Uint8Array(s * Math.max(1, e))
