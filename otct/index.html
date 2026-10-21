@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>Official &amp; Community Tracks</title>
+        <meta name="description" content="Play PolyTrack's official tracks and the community tracks in your browser, on Not So Weekly Shorts.">
+        <meta name="theme-color" content="#28346a">
+        <meta property="og:type" content="website">
+        <meta property="og:site_name" content="Not So Weekly Shorts">
+        <meta property="og:title" content="Official &amp; Community Tracks">
+        <meta property="og:description" content="Play PolyTrack's official tracks and the community tracks in your browser. Free, no download.">
+        <meta property="og:url" content="https://notweeklyshorts.github.io/otct">
+        <meta property="og:image" content="https://notweeklyshorts.github.io/images/og.png">
+        <meta property="og:image:width" content="1200">
+        <meta property="og:image:height" content="630">
+        <meta property="og:image:alt" content="Not So Weekly Shorts: PolyTrack community tracks">
+        <meta name="twitter:card" content="summary_large_image">
+        <link rel="icon" href="../images/icon.svg" type="image/svg+xml"/>
+        <script>
+            // GitHub Pages serves files, not routes, so /otct is this folder. It hands the game
+            // ?otct=1, which main.bundle.js (__nswsOtctOnLoad) turns into the Play menu opened on
+            // Kodub's Official & Community tabs. The path is worked out rather than hardcoded,
+            // because the site also runs under /notsoweeklyshorts/ on brinleyww.github.io.
+            (function () {
+                var root = location.pathname.replace(/index\.html$/i, "").replace(/\/otct\/?$/i, "/") || "/";
+                var params = new URLSearchParams(location.search);
+                params.set("otct", "1");
+                location.replace(root + "?" + params.toString() + location.hash);
+            })();
+        </script>
+        <meta http-equiv="refresh" content="0;url=../?otct=1">
+    </head>
+    <body style="background-color:#28346a">
+        <a href="../?otct=1" style="color:#fff;font-family:sans-serif">Official &amp; Community tracks</a>
+    </body>
+</html>

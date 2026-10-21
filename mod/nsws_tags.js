@@ -313,12 +313,12 @@
         return n + (n === 1 ? " WR" : " WRs");
     }
 
-    // Tags that come by themselves. A new one is put on when the player wears no tag or a smaller one
-    // of the same kind; rank orders them within their kind.
+    // Tags that come by themselves. A new hours tag is put on when the player wears no tag or a smaller
+    // one; bingo tags never are. rank orders them within their kind.
     const EARNED = [
         { kind: "blackout", has: (t) => !!t.blackout, rank: () => 1 },
         { kind: "bingo", has: (t) => t.bingos > 0, rank: (t) => t.bingos },
-        { kind: "hours", has: (t) => t.hours > 0, rank: (t) => t.hours },
+        { kind: "hours", has: (t) => t.hours > 0, rank: (t) => t.hours, autoWear: true },
     ];
 
     function earnedKind(tag) {
@@ -373,7 +373,7 @@
             const fresh = earned.filter((t) => kind.has(t) && !seenIds.includes(t.id));
             const top = fresh[fresh.length - 1];
             if (!top) continue;
-            const better = next.equipped == null || (earnedKind(worn) === kind && kind.rank(worn) < kind.rank(top));
+            const better = kind.autoWear && (next.equipped == null || (earnedKind(worn) === kind && kind.rank(worn) < kind.rank(top)));
             if (!wear && better) wear = top.id;
             const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
                 : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"

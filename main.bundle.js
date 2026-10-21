@@ -508,6 +508,22 @@ window.__nswsAutoGhostNote = function(trackId) {
         loadCompetitions().then(app => app.join(code), err => window.__nswsMessageBox?.show(err.message, "Ok", null));
         return true;
     };
+    // GitHub Pages can only serve files, so /otct is a folder whose index.html redirects here with
+    // ?otct=1. That opens the Play menu on Kodub's Official & Community tabs instead of the shorts.
+    let otctLink = false;
+    try {
+        const url = new URL(location.href);
+        if (url.searchParams.has("otct")) {
+            otctLink = true;
+            url.searchParams.delete("otct");
+            history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+        }
+    } catch (e) {}
+    window.__nswsOtctOnLoad = () => {
+        if (!otctLink) return false;
+        otctLink = false;
+        return !!window.__nswsOpenOfficialAndCommunity?.();
+    };
     const VISUALFX_KEYBIND_STORAGE_KEY = "_visualFxKeyBind";
     const DEFAULT_VISUALFX_KEYBIND = "KeyV";
     function getVisualFxKeyBind() {
@@ -11236,6 +11252,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                     trackMode = "nsws";
                 return "kodub" == e ? "community" : e
             };
+            // Set before the list is shown, so applyTrackMode opens the right tabs (the /otct link).
+            window.__nswsTrackMode = mode => {
+                trackMode = "kodub" == mode ? "kodub" : "nsws"
+            }
+            ;
             y = new WeakMap,
             b = new WeakMap,
             w = new WeakMap,
@@ -56154,6 +56175,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Rc, "f").show());
                 return !!window.__bw_selectTrackById?.(trackId)
             };
+            // Where the /otct link lands: the Play menu, already switched to Kodub's Official &
+            // Community tabs. show() reads the mode, so it has to be set first.
+            window.__nswsOpenOfficialAndCommunity = () => {
+                window.__nswsTrackMode?.("kodub"),
+                document.querySelector(".track-selection-ui:not(.hidden)") || (C.get(this, vc, "m", qc).call(this),
+                C.get(this, vc, "m", Xc).call(this)),
+                C.get(this, Rc, "f").show();
+                return !0
+            };
             const M = document.createElement("p");
             if (M.textContent = t.get("Play"),
             T.appendChild(M),
@@ -57018,7 +57048,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             hasChosenDevicePreset() || autoPickDevicePreset(C.get(this, bc, "f"), d, r) ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
                             flushGraphicsNote(),
-                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
+                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsOtctOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }
