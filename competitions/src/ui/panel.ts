@@ -212,8 +212,9 @@ export class Panel {
       h('h3', null, 'You'),
       h(
         'div',
-        { class: 'tile flat', style: 'display:flex;align-items:center;gap:14px;flex-wrap:wrap' },
-        h('span', { style: 'font-size:20px;flex:1' }, me.out ? `Knocked out in round ${me.out}` : racing ? 'You are on the grid' : 'You are spectating'),
+        { class: 'you' + (me.out ? ' out' : racing ? ' racing' : '') },
+        h('span', { class: 'mark' }, icon(me.out ? 'skull' : racing ? 'flag' : 'eye')),
+        h('span', { class: 'state' }, me.out ? `Knocked out in round ${me.out}` : racing ? 'You are on the grid' : 'You are spectating'),
         me.out
           ? null
           : h(
@@ -224,6 +225,7 @@ export class Panel {
             ),
         !allowed && !racing ? h('span', { class: 'dim', style: 'font-size:14px;width:100%' }, s.rules.mode === 'knockout' ? 'Knockout cups lock the grid once they start.' : 'The grid is closed or full.') : null,
         racing && s.phase !== 'lobby' ? h('span', { class: 'dim', style: 'font-size:14px;width:100%' }, 'Switching to Watch during a round retires you from it.') : null,
+        app.bestRun() ? h('div', { class: 'clip' }, btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'small ghost')) : null,
       ),
     );
   }
@@ -324,24 +326,27 @@ export class Panel {
     const app = this.app;
     const lobby = s.phase === 'lobby';
     const count = racers(s).length;
-    const best = app.bestRun();
     const open = s.rules.lateJoin && s.rules.mode !== 'knockout';
     const head = lobby && !app.isHost ? 'Waiting for the organizer' : lobby && count >= 2 ? `${gridCount(s)} on the grid` : 'Invite some racers';
     const body = lobby
       ? app.isHost
-        ? `Share the code ${app.code ?? '…'} or the invite link. Everyone can practice on this track until you start.`
+        ? 'Share the code or the invite link. Everyone can practice on this track until you start.'
         : 'Practice on this track while you wait. The cup starts when the organizer is ready.'
-      : `Share the code ${app.code ?? '…'} or the invite link. ${open ? 'Newcomers can still take a grid slot.' : 'The grid is closed, so they come in to watch.'}`;
+      : `Share the code or the invite link. ${open ? 'Newcomers can still take a grid slot.' : 'The grid is closed, so they come in to watch.'}`;
     return h(
       'div',
       { class: 'hero' },
-      h('span', { class: 'big amber' }, icon('flag')),
+      h('span', { class: 'mark' }, icon(lobby && !app.isHost ? 'clock' : 'users')),
       h('div', { class: 'grow' }, h('div', { class: 'big' }, head), h('p', null, body)),
-      best ? btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'small ghost') : null,
-      app.code ? btn([icon('link'), 'Copy invite link'], () => this.#copy(this.#link(), 'Invite link copied')) : null,
-      app.isHost && !app.code && app.connection
-        ? h('span', { class: app.native.inviteError(app.connection) ? 'bad' : 'dim' }, app.native.inviteError(app.connection) ?? 'Getting a code…')
-        : null,
+      h(
+        'div',
+        { class: 'share' },
+        app.code ? h('button', { class: 'joincode', type: 'button', title: 'Copy the code', onclick: click(() => this.#copy(app.code!, 'Code copied')) }, h('small', null, 'Code'), h('b', null, app.code)) : null,
+        app.code ? btn([icon('link'), 'Copy invite link'], () => this.#copy(this.#link(), 'Invite link copied')) : null,
+        app.isHost && !app.code && app.connection
+          ? h('span', { class: app.native.inviteError(app.connection) ? 'bad' : 'dim' }, app.native.inviteError(app.connection) ?? 'Getting a code…')
+          : null,
+      ),
     );
   }
 
