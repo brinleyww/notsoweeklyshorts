@@ -133,7 +133,8 @@ Worker, then push the site:
 the page closes; a hidden tab sends nothing. A beat carries a random session id
 (one per tab), a random visitor id kept in `localStorage` (`nsws_visitor`, so all
 tabs of one browser on one site share it; each site has its own `localStorage`),
-the nickname, what the player is doing, and counts
+an account key (`a`, the first half of `sha256("nsws-online:" + token)`), the
+nickname, what the player is doing, and counts
 of races, finishes, uploads and so on. It never carries the account token. The
 Worker adds a coarse country, device, system and browser, and stores everything in
 one SQLite Durable Object, `TrafficStats` (`proxy/src/traffic.js`). IP addresses
@@ -141,10 +142,12 @@ are only held in memory to cap new sessions at 120 per address per hour; they ar
 never stored. The reply to a beat is `{"online": n, "away": m, "nv": s, ...}`; the
 chat window shows "n online".
 
-- **Online counts browsers, not tabs.** `TrafficStats` groups its live sessions by
-  visitor id, so all tabs of one browser count as one person (one browser on both
-  sites counts twice). A visitor with a tab
-  whose beats come on time is active. A visitor whose tabs are all hidden past their
+- **Online counts people, not tabs.** `TrafficStats` groups its live sessions by
+  visitor id and by account key (`personOf`): all tabs of one browser count as one
+  person, and so does one account open in several browsers, on several devices or on
+  both sites. Pages from before the account key (an unsynced fork) count per browser.
+  A person with a tab
+  whose beats come on time is active. A person whose tabs are all hidden past their
   promised beat is away: still online, and counted in `away`, until each tab says
   goodbye on close, however long it stays hidden. A tab that dies without a goodbye
   (a phone closing a frozen tab, a crash) stays until `TrafficStats` restarts, and a
@@ -153,7 +156,7 @@ chat window shows "n online".
   "Online now", the last-3-hours chart, the peaks and an announcement's "online when
   sent" use the same count. Its live list has one row per person (the active tab
   that beat last, "N tabs" when there are several, on the site since the earliest
-  tab opened); the visitor id never reaches the panel.
+  tab opened); the visitor id and account key never reach the panel.
 - **Runtime and the beat budget count tabs.** Every shown tab beats and adds its own
   runtime, so the live reply's `pending` and `activeTabs` are per tab and the
   all-time odometer climbs by `activeTabs`. Past 20 shown tabs

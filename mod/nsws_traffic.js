@@ -1,6 +1,6 @@
 // Site traffic for the owner dashboard, the owner's anti-cheat track sync, and the notice
 // shown when a run fails the anti-cheat. Beats carry random ids, the nickname and what the
-// player is doing; never the account token.
+// player is doing; never the account token, only a one-way hash of it.
 (function () {
     const API = window.__nswsApiBase;
     if (!API || !window.fetch || !window.crypto || !crypto.getRandomValues) return;
@@ -37,6 +37,21 @@
             return null;
         }
     }
+
+    // sha256("nsws-online:" + token), so one account open in several browsers counts once online.
+    let accountKey = null;
+    let hashedToken = null;
+    function refreshAccountKey() {
+        const token = readProfile()?.token;
+        if (token === hashedToken) return;
+        hashedToken = token;
+        accountKey = null;
+        if (typeof token !== "string" || !TRACK_ID.test(token) || !crypto.subtle) return;
+        crypto.subtle.digest("SHA-256", new TextEncoder().encode("nsws-online:" + token)).then((digest) => {
+            if (hashedToken === token) accountKey = Array.from(new Uint8Array(digest).slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
+        }, () => {});
+    }
+    refreshAccountKey();
 
     let runtime = 0;
     let focus = 0;
@@ -91,6 +106,8 @@
             ev: events,
             tr: tracks,
         };
+        if (accountKey) body.a = accountKey;
+        refreshAccountKey();
         if (end) body.end = 1;
         if (seenAnn) body.an = seenAnn;
         const watching = window.__nswsAnnounce?.watching?.();

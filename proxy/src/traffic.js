@@ -1,5 +1,6 @@
 // Site traffic for the owner dashboard. One Durable Object ("global") holds it all in
-// SQLite. Visitors are random ids the page makes up; no token or IP is ever stored.
+// SQLite. Visitors are random ids the page makes up; no token or IP is ever stored, only a
+// one-way hash of the token (`account`) so one account open in several browsers counts once.
 
 import { DurableObject } from "cloudflare:workers";
 
@@ -178,6 +179,8 @@ export class TrafficStats extends DurableObject {
         // Person-seconds online for the odometer. Buckets from before it existed stay NULL and count their runtime.
         if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "online_s"))
             this.sql.exec("ALTER TABLE buckets ADD COLUMN online_s REAL");
+        if (!this.sql.exec("PRAGMA table_info(sessions)").toArray().some((c) => c.name === "account"))
+            this.sql.exec("ALTER TABLE sessions ADD COLUMN account TEXT");
     }
 
     notePlay(visitor, seconds) {
@@ -221,7 +224,7 @@ export class TrafficStats extends DurableObject {
             "SELECT * FROM sessions WHERE start > ? AND ended = 0", now - RESTORE_MS).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
-                id: row.id, visitor: row.visitor, start: row.start, last: row.last,
+                id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last,
                 expires: row.last + RESTORE_LIVE_S * 1000, runtime: row.runtime, ended: false,
                 nickname: row.nickname, country: row.country, device: row.device, os: row.os,
                 browser: row.browser, site: row.site, state: "menu", track: null,
@@ -243,20 +246,50 @@ export class TrafficStats extends DurableObject {
         c.at = Math.max(c.at, now);
     }
 
+    // Live sessions that share a visitor id (all tabs of one browser) or an account are one person.
+    // Returns session -> that person's key.
+    personOf() {
+        const parent = new Map();
+        const find = (k) => {
+            let root = k;
+            while (parent.get(root) !== root) root = parent.get(root);
+            while (k !== root) {
+                const next = parent.get(k);
+                parent.set(k, root);
+                k = next;
+            }
+            return root;
+        };
+        for (const s of this.online.values()) {
+            if (s.ended) continue;
+            const v = "v" + s.visitor;
+            if (!parent.has(v)) parent.set(v, v);
+            if (!s.account) continue;
+            const a = "a" + s.account;
+            if (!parent.has(a)) parent.set(a, a);
+            const rv = find(v);
+            const ra = find(a);
+            if (rv !== ra) parent.set(ra, rv);
+        }
+        return (s) => find("v" + s.visitor);
+    }
+
     // Active sessions beat on time; away ones stopped beating but never said goodbye. People are
-    // counted by visitor id, which all tabs of a browser share: any active tab makes them active, and
-    // `people` includes the away ones. Each shown tab beats, so the beat budget uses `activeTabs`.
+    // counted by personOf: any active tab makes them active, and `people` includes the away ones.
+    // Each shown tab beats, so the beat budget uses `activeTabs`.
     liveCounts(now) {
         let activeTabs = 0;
-        // visitor -> has an active tab
+        const person = this.personOf();
+        // person -> has an active tab
         const people = new Map();
         for (const s of this.online.values()) {
             if (s.ended) continue;
+            const p = person(s);
             if (s.expires > now) {
                 activeTabs++;
-                people.set(s.visitor, true);
-            } else if (!people.has(s.visitor)) {
-                people.set(s.visitor, false);
+                people.set(p, true);
+            } else if (!people.has(p)) {
+                people.set(p, false);
             }
         }
         let away = 0;
@@ -300,12 +333,12 @@ export class TrafficStats extends DurableObject {
         if (isNew) this.sql.exec("INSERT INTO visitors (id, first, last, opens) VALUES (?, ?, ?, 1)", b.v, now, now);
         else this.sql.exec("UPDATE visitors SET last = ?, opens = opens + 1 WHERE id = ?", now, b.v);
         const start = now - b.rt * 1000;
-        this.sql.exec(`INSERT INTO sessions (id, visitor, start, last, repeat_visit, nickname, country, device, os, browser, referrer, site)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            b.s, b.v, start, start, isNew ? 0 : 1, b.nick, meta.country, meta.device, meta.os, meta.browser, b.ref, meta.site);
+        this.sql.exec(`INSERT INTO sessions (id, visitor, account, start, last, repeat_visit, nickname, country, device, os, browser, referrer, site)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            b.s, b.v, b.a, start, start, isNew ? 0 : 1, b.nick, meta.country, meta.device, meta.os, meta.browser, b.ref, meta.site);
         return {
             session: {
-                id: b.s, visitor: b.v, start, last: start, expires: 0, runtime: 0, ended: false,
+                id: b.s, visitor: b.v, account: b.a, start, last: start, expires: 0, runtime: 0, ended: false,
                 nickname: b.nick, country: meta.country, device: meta.device, os: meta.os,
                 browser: meta.browser, site: meta.site, state: "menu", track: null,
             },
@@ -338,7 +371,7 @@ export class TrafficStats extends DurableObject {
                 // Another visitor's session id is never taken over.
                 if (row.visitor !== b.v) return;
                 s = {
-                    id: row.id, visitor: row.visitor, start: row.start, last: row.last, expires: 0,
+                    id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last, expires: 0,
                     runtime: row.runtime, ended: false, nickname: row.nickname, country: row.country,
                     device: row.device, os: row.os, browser: row.browser, site: row.site, state: "menu", track: null,
                 };
@@ -363,13 +396,15 @@ export class TrafficStats extends DurableObject {
         s.ended = !!b.end;
         s.expires = now + b.nx * 1000 + LIVE_GRACE_MS;
         if (b.nick) s.nickname = b.nick;
+        if (b.a) s.account = b.a;
         if (b.st) s.state = b.st;
         s.track = b.tk;
 
         const ev = b.ev;
         this.sql.exec(`UPDATE sessions SET last = ?, runtime = runtime + ?, focus = focus + ?, driving = driving + ?,
-            attempts = attempts + ?, finishes = finishes + ?, ended = ?, nickname = COALESCE(?, nickname) WHERE id = ?`,
-            now, runtime, focus, driving, ev.attempts, ev.finishes, s.ended ? 1 : 0, b.nick, b.s);
+            attempts = attempts + ?, finishes = finishes + ?, ended = ?, nickname = COALESCE(?, nickname),
+            account = COALESCE(?, account) WHERE id = ?`,
+            now, runtime, focus, driving, ev.attempts, ev.finishes, s.ended ? 1 : 0, b.nick, b.a, b.s);
 
         const counts = this.liveCounts(now);
         const online = counts.people;
@@ -542,17 +577,19 @@ export class TrafficStats extends DurableObject {
     // One row per person (see liveCounts), showing their active tab over an away one, then the one that
     // beat last. `pending` is the odometer's seconds not credited yet, which keeps its running total exact.
     liveView(now) {
-        // visitor -> { s: the tab shown, isAway, tabs, since }
+        // person -> { s: the tab shown, isAway, tabs, since }
         const people = new Map();
+        const person = this.personOf();
         const credit = this.onlineCredit;
         let pending = credit.people * Math.max(0, now - credit.at) / 1000;
         for (const seconds of credit.owed.values()) pending += seconds;
         for (const s of this.online.values()) {
             if (s.ended) continue;
             const isAway = s.expires <= now;
-            const p = people.get(s.visitor);
+            const key = person(s);
+            const p = people.get(key);
             if (!p) {
-                people.set(s.visitor, { s, isAway, tabs: 1, since: s.start });
+                people.set(key, { s, isAway, tabs: 1, since: s.start });
                 continue;
             }
             p.tabs++;
@@ -768,7 +805,8 @@ export function readBeat(text) {
     return {
         s: raw.s,
         v: raw.v,
-        rt: clampNumber(raw.rt, MAX_BEAT_S),
+        a: id.test(raw.a ?? "") ? raw.a : null,
+        rt:clampNumber(raw.rt, MAX_BEAT_S),
         ft: clampNumber(raw.ft, MAX_BEAT_S),
         dt: clampNumber(raw.dt, MAX_BEAT_S),
         nx: Math.max(20, Math.min(MAX_NEXT_S, clampNumber(raw.nx, MAX_NEXT_S) || 60)),
