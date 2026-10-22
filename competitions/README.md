@@ -213,6 +213,13 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   its line (up to 1.5 units, kept off walls and out of a jump's run-up) and how early it turns in. A new
   bot starts from rules hashed from its name, and every race run drives each section a little differently
   from that run's seed, so no two rounds are alike and it's all deterministic.
+- The top expert (the one hinted by the fastest run) also searches its own run as the planner goes: before
+  each section it tries four other ways through it from the same exact physics state, as in practice
+  below, and drives on with the fastest, with no random inputs. The tries come from its round's seed, so
+  every round differs. It costs 4-5 times that bot's planning, so it only runs before GO or while planning is
+  more than 8 s ahead of the race clock (`Planner.roomy`). Lab, one expert, four seeds each (record, then
+  with the search and without): Anubis 28.592 / 28.577 (28.51-28.63) / 28.73; Sky Bound 40.590 / 41.05 /
+  41.62; Solaris 27.220 / 28.21 / 32.05; Natsu 26.042 / 26.87 (best 26.21) / 28.29.
 - Experts learn in practice, in the learning worker (below), one expert after another: a run where before
   each section of its notes the bot tries four other ways through it, each from the same exact physics state to the end of the next section, and drives on with
   the fastest (time, less 10 ms per km/h it leaves with; a try that goes wrong is out). The notes that run

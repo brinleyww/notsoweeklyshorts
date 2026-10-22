@@ -26,6 +26,9 @@ const SLICE_MS = 25;
 const PROGRESS_MS = 250;
 // Planned less than this far ahead of the race clock, bots stop retrying failures until they're ahead again.
 const HURRY_MS = 2500;
+// The top expert searches its run (Planner.roomy) only before GO or this far ahead of the race clock: it
+// costs several times the planning, which the other bots on a weak device can't spare.
+const DRILL_AHEAD_MS = 8000;
 
 interface TrackState {
   key: string;
@@ -111,7 +114,7 @@ function handle(m: ToWorker) {
         return;
       }
       if (streams.has(m.id)) return;
-      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null });
+      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null, drill: !!m.drill });
       streams.set(m.id, { job, enc: new KeyframeEncoder(), seq: 0, pending: 0, from: -1, last: 0, chain: Promise.resolve(), at: performance.now(), was: 0, rate: 0, results: 0, sent: 0 });
       kick();
       return;
@@ -211,6 +214,7 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
   if (track.planner) {
     const planner = track.planner;
     planner.hurry = () => startAt != null && planner.frontier - raceNow() < HURRY_MS;
+    planner.roomy = () => startAt == null || planner.frontier - raceNow() > DRILL_AHEAD_MS;
     track.planner.onCommit = commit;
     track.planner.onDone = done;
   }

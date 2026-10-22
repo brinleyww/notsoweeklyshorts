@@ -42,7 +42,8 @@ export type ToWorker =
   | { b: 'track'; key: string; trackId: string; payload: Payload; refs: RefInput[] }
   // brain: the bot's network weights (worker/brain.ts), none for driving without it.
   // notes: an expert's notes (worker/notes.ts) by hint run.
-  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null; notes: Record<string, Float32Array> | null }
+  // drill: the top expert, which searches its own run as it goes.
+  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null; notes: Record<string, Float32Array> | null; drill?: boolean }
   // Weights a running bot takes up from its next run.
   | { b: 'brain'; id: string; w: Float32Array | null }
   // To the learning worker: keep improving these weights on the track (worker/learn.ts).

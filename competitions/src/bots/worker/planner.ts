@@ -27,6 +27,8 @@ const AFTER_RUN = 400;
 const AFTER_TA = 400;
 // Heap slot for practice (learn.ts): the state a section's tries all start from.
 const DRILL_SLOT = 63;
+// Ways tried through each section by a top expert in a race.
+const DRILL_TRIES = 4;
 // A practice try's cost: ms to the end of the next section, less this much per km/h it leaves with.
 const EXIT_MS_PER_KMH = 10;
 
@@ -47,6 +49,8 @@ export interface JobSpec {
   notes?: Record<string, Float32Array> | null;
   // A practice run (learn.ts): the notes exactly as they are, no random inputs or mistakes.
   practice?: boolean;
+  // The top expert in a race: it searches its own run as it goes, like practice (see Planner.practise).
+  drill?: boolean;
 }
 
 // Now and then (about every 12 s of driving) a small input the driver didn't choose, for 40-150 ms: it
@@ -199,8 +203,9 @@ export class Job {
   hint = -1;
   sections: Float32Array | null = null;
   readonly practice: boolean;
-  // Practice: the hint run's section the car is in, when it left each one and how fast, and the last
-  // section practised.
+  readonly drill: boolean;
+  // Practice and drilling: the hint run's section the car is in, when it left each one and how fast, and the
+  // last section practised.
   sec = -1;
   tout = new Float64Array(0);
   vout = new Float64Array(0);
@@ -223,6 +228,7 @@ export class Job {
     this.ref = sorted[this.refIdx];
     this.name = b.name ?? b.u;
     this.practice = !!spec.practice;
+    this.drill = !!spec.drill;
     if (b.skill >= EXPERT_SKILL && this.ref.kind !== 'explore') {
       const notes = new Notes(this.ref, this.name, spec.notes?.[refKey(this.ref)]);
       this.notes = notes;
@@ -369,6 +375,8 @@ export class Planner {
   onFail: (job: Job, why: Why, r: Raw) => void = () => {};
   // Set by the worker: planning has fallen close behind the race clock.
   hurry: () => boolean = () => false;
+  // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
+  roomy: () => boolean = () => true;
   stats = { ticks: 0, rebuilds: 0, restores: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, fails: {} as Record<string, number> };
 
   readonly clear = new Map<Reference, Clearance>();
@@ -406,15 +414,16 @@ export class Planner {
   // its hint run it tries other ways through it (from `rand`), each from the same exact state to the end of
   // the next section, and drives on with the fastest.
   practise(rand: () => number, tries: number) {
-    const job = this.jobs[0];
-    if (job?.notes && job.status === 'run' && !job.copy && job.refIdx === job.hint && job.hasPrev) {
-      const s = Math.floor(job.st.k / SECTION) + 1;
-      if (s > job.drilled && s < job.notes.n - 1) {
-        job.drilled = s;
-        this.#drill(job, s, rand, tries);
-      }
-    }
+    if (this.jobs[0]) this.#drillNext(this.jobs[0], rand, tries);
     return this.tick();
+  }
+
+  #drillNext(job: Job, rand: () => number, tries: number) {
+    if (!job.notes || job.status !== 'run' || job.copy || job.refIdx !== job.hint || !job.hasPrev || job.t + 5 * SECTION >= job.end) return;
+    const s = Math.floor(job.st.k / SECTION) + 1;
+    if (s <= job.drilled || s >= job.notes.n - 1) return;
+    job.drilled = s;
+    this.#drill(job, s, rand, tries);
   }
 
   #drill(job: Job, s: number, rand: () => number, tries: number) {
@@ -479,6 +488,7 @@ export class Planner {
   tick() {
     const live = this.jobs.filter((j) => j.live);
     if (!live.length) return false;
+    if (this.roomy()) for (const job of live) if (job.drill) this.#drillNext(job, job.rand, DRILL_TRIES);
     this.#snapshot();
     for (const job of live) this.#run(job, job.t + TICK);
     const failed = live.filter((j) => j.failAt >= 0);
@@ -588,7 +598,7 @@ export class Planner {
         continue;
       }
       if (r.finished) {
-        if (job.practice && job.sec >= 0) {
+        if ((job.practice || job.drill) && job.sec >= 0) {
           job.tout[job.sec] = now;
           job.vout[job.sec] = r.speed;
         }
@@ -608,7 +618,7 @@ export class Planner {
       if ((now & 3) === 0 && !job.copy) {
         axes(r, this.#fw, this.#up);
         drv.track(r, st);
-        if (job.practice && job.refIdx === job.hint) this.#section(job, r, now);
+        if ((job.practice || job.drill) && job.refIdx === job.hint) this.#section(job, r, now);
         const why = this.#check(job, r, now);
         if (why) {
           job.failAt = now;
@@ -677,7 +687,7 @@ export class Planner {
     }
     job.driver.decide(t, r, this.#vel, s, this.#fw, st, k);
     // Mistakes: a twitch of the wheel or a lift, now and then.
-    if (!job.practice && st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
+    if (!job.practice && !job.drill && st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
       if (job.rand() < 0.5) {
         st.bias = (job.rand() < 0.5 ? -1 : 1) * (0.15 + 0.35 * job.rand());
         st.biasUntil = t + 120 + Math.floor(job.rand() * 250);
@@ -687,7 +697,7 @@ export class Planner {
       }
       job.mistakeUntil = Math.max(st.biasUntil, st.paceUntil) + 1500;
     }
-    if (!job.practice && st.noiseUntil < t && t - job.runStart > 2000 && job.rand() < NOISE_RATE && !ref.runUp(st.k) && ref.jumpIn(st.k, 2500) === Infinity) {
+    if (!job.practice && !job.drill && st.noiseUntil < t && t - job.runStart > 2000 && job.rand() < NOISE_RATE && !ref.runUp(st.k) && ref.jumpIn(st.k, 2500) === Infinity) {
       st.noiseLift = job.rand() < 0.3;
       st.noise = st.noiseLift ? 0 : (job.rand() < 0.5 ? -1 : 1) * (0.05 + 0.12 * job.rand());
       st.noiseUntil = t + 40 + Math.floor(job.rand() * 110);

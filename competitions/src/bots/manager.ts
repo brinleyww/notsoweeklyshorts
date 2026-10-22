@@ -371,7 +371,8 @@ export class BotManager {
     b.slot = slot;
     slot.jobs++;
     const notes = b.persona.skill >= EXPERT_SKILL ? this.#notesFor(plan.trackId, b.persona) : null;
-    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes });
+    const drill = b.persona.skill >= EXPERT_SKILL && b.persona.copy === 0;
+    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill });
   }
 
   #cancel(b: Bot) {
