@@ -681,7 +681,7 @@ export class Panel {
     );
     botCount.classList.add('wide');
     const skillHint =
-      r.botSkill === 'match' ? "They start at medium and follow the humans' pace round by round" : r.botSkill === 'mixed' ? 'From easy to expert, one of each' : 'How fast and how boldly they drive';
+      r.botSkill === 'match' ? "They start at medium and follow the humans' pace round by round" : r.botSkill === 'mixed' ? 'A quarter each of easy, medium, hard and expert' : 'How fast and how boldly they drive';
     const bots = sect(
       'Bots',
       botCount,

@@ -11,7 +11,7 @@ const TIERS = {
   hard: [0.72, 0.82],
   expert: [1, 1],
 } as const;
-const MIXED = [0.15, 0.95] as const;
+const MIXED = ['easy', 'medium', 'hard', 'expert'] as const;
 
 export function mix(a: number, b: number) {
   let h = (a ^ Math.imul((b + 0x9e3779b9) | 0, 0x85ebca6b)) | 0;
@@ -73,8 +73,24 @@ function rank(i: number, count: number) {
 }
 
 export function tierSkills(skill: BotSkill, count: number) {
-  const [lo, hi] = skill === 'mixed' ? MIXED : TIERS[skill === 'match' ? 'medium' : skill];
+  if (skill === 'mixed') return mixedSkills(count);
+  const [lo, hi] = TIERS[skill === 'match' ? 'medium' : skill];
   return Array.from({ length: count }, (_, i) => lo + (hi - lo) * rank(i, count));
+}
+
+// Mixed: a quarter each of easy, medium, hard and expert, as near as the count allows: how many of each
+// for 1 to 8 bots.
+const MIXED_COUNTS = [[0, 1, 0, 0], [1, 0, 0, 1], [1, 0, 1, 1], [1, 1, 1, 1], [2, 1, 1, 1], [2, 1, 1, 2], [2, 2, 1, 2], [2, 2, 2, 2]];
+
+function mixedSkills(count: number) {
+  const counts = MIXED_COUNTS[count - 1] ?? [0, 1, 2, 3].map((t) => Math.floor((count + 3 - t) / 4));
+  const at = counts.flatMap((n, t) => Array<number>(n).fill(t));
+  return Array.from({ length: count }, (_, i) => {
+    const q = Math.round(rank(i, count) * (count - 1));
+    const t = at[q], same = at.filter((x) => x === t).length, nth = at.slice(0, q).filter((x) => x === t).length;
+    const [lo, hi] = TIERS[MIXED[t]];
+    return lo + (hi - lo) * (same > 1 ? nth / (same - 1) : 0.5);
+  });
 }
 
 // Driving personalities for `count` bot slots (u is the slot; callers put the bot's own id in).

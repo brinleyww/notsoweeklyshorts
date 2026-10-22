@@ -142,8 +142,8 @@ final round. The organizer is warned (privately) when a racer sends a run identi
 ## Bots
 
 The setup page's **Bots** section, the first of the rules, has a count (Off, 1-8, `MAX_BOTS`) that puts
-computer racers on the grid and **Bot skill** for how good they are: Easy, Medium, Hard, Expert, Mixed (one
-of each from easy to expert), or Match the field (after every round each bot's skill moves toward the
+computer racers on the grid and **Bot skill** for how good they are: Easy, Medium, Hard, Expert, Mixed (a
+quarter each of easy, medium, hard and expert), or Match the field (after every round each bot's skill moves toward the
 humans' median time). Every bot is the default car with eight-sided wheels (`VisualCar.lowPolyWheels`),
 686 triangles against the default car's 3,102 and up to 117,444 for the F1 body, in its own colours and
 pattern (`botStyle`, from its name), and like every other car that isn't yours it casts no shadow and gets
@@ -152,7 +152,7 @@ out near your car (replay ghosts still are), so they stand on the grid in the co
 after a respawn. A cup with only bots racing keeps going while someone watches (the organizer's page in
 front, or another person in the cup), and pauses before the next round once nobody does. Skill is how well a bot drives: how close to the reference's speed it takes corners,
 how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Easy is skill
-0.12-0.25 (Mixed starts at 0.15), Medium 0.5-0.62, Hard 0.72-0.82. Experts never slip up, leave walls no
+0.12-0.25, Medium 0.5-0.62, Hard 0.72-0.82; Mixed is a quarter of each tier, expert included. Experts never slip up, leave walls no
 margin, weave least, and take their hints from the three fastest runs. Expert is
 skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
