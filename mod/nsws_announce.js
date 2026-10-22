@@ -8,11 +8,13 @@
     const SEEN_KEY = "nsws_ann_seen";
     const SEEN_KEPT = 30;
     const POLL_KEY = "nsws_poll_open";
+    const LIKED_KEY = "nsws_ann_liked";
     // Matches POLL_OPEN_MS in proxy/src/traffic.js.
     const POLL_OPEN_MS = 7 * 86_400_000;
     const FADE_IN_MS = 450;
     const FADE_OUT_MS = 2800;
     const DEFAULT_COLOR = "#b3c1ff";
+    const HEART = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5l-1.4-1.3C5.4 14.5 2 11.4 2 7.6 2 4.5 4.4 2.1 7.5 2.1c1.7 0 3.4.8 4.5 2.1 1.1-1.3 2.8-2.1 4.5-2.1 3.1 0 5.5 2.4 5.5 5.5 0 3.8-3.4 6.9-8.6 11.6L12 20.5z"/></svg>';
 
     const CSS = `
 #nsws-ann{position:fixed;left:0;right:0;top:calc(var(--safe-area-top-unscaled,0px) + 12px);z-index:10010;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;}
@@ -36,6 +38,11 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
 #nsws-ann .res .r.mine>i{opacity:.45;}
 #nsws-ann .res .r>span{position:relative;}
 #nsws-ann .res .r>span:last-child{font-variant-numeric:tabular-nums;white-space:nowrap;}
+#nsws-ann .like{pointer-events:auto;display:inline-flex;align-items:center;gap:.3em;margin-left:.6em;padding:2px 8px;vertical-align:.1em;background:rgba(255,255,255,.08);border:none;color:inherit;font:inherit;font-style:normal;font-size:.7em;line-height:1.3;font-variant-numeric:tabular-nums;cursor:pointer;opacity:.7;}
+#nsws-ann .like:hover{opacity:1;background:rgba(255,255,255,.16);}
+#nsws-ann .like svg{width:1.05em;height:1.05em;fill:none;stroke:currentColor;stroke-width:2.2;}
+#nsws-ann .like.on{opacity:1;color:#ff6b8b;}
+#nsws-ann .like.on svg{fill:currentColor;}
 #nsws-ann .total,#nsws-ann .msg{font-size:.65em;opacity:.6;margin-top:6px;}
 `;
 
@@ -53,6 +60,23 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
         list.push(id);
         try {
             localStorage.setItem(SEEN_KEY, JSON.stringify(list.slice(-SEEN_KEPT)));
+        } catch {}
+    }
+
+    function readLiked() {
+        try {
+            const list = JSON.parse(localStorage.getItem(LIKED_KEY));
+            return Array.isArray(list) ? list : [];
+        } catch {
+            return [];
+        }
+    }
+
+    function saveLiked(id, on) {
+        const list = readLiked().filter((x) => x !== id);
+        if (on) list.push(id);
+        try {
+            localStorage.setItem(LIKED_KEY, JSON.stringify(list.slice(-SEEN_KEPT)));
         } catch {}
     }
 
@@ -87,6 +111,12 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
         }
     }
 
+    // Holds the banner while the pointer is on a link or the like button so it can't fade out from under the click.
+    function holdWhileHovered(node) {
+        node.addEventListener("pointerenter", () => shown?.el.contains(node) && shown.anim?.playState === "running" && shown.anim.pause());
+        node.addEventListener("pointerleave", () => shown?.el.contains(node) && shown.anim?.playState === "paused" && shown.anim.play());
+    }
+
     function appendText(m, text) {
         let last = 0;
         for (const match of text.matchAll(LINK)) {
@@ -100,9 +130,7 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
             a.target = "_blank";
             a.rel = "noopener noreferrer";
             ownClicks(a);
-            // Hold the banner while the pointer is on a link so it can't fade out from under the click.
-            a.addEventListener("pointerenter", () => shown?.el.contains(a) && shown.anim?.playState === "running" && shown.anim.pause());
-            a.addEventListener("pointerleave", () => shown?.el.contains(a) && shown.anim?.playState === "paused" && shown.anim.play());
+            holdWhileHovered(a);
             m.append(a);
             last = match.index + raw.length;
         }
@@ -159,13 +187,58 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
         return box;
     }
 
-    function card(a, preview) {
+    function card(entry) {
+        const { a, preview } = entry;
         const m = make("div", "m");
         m.style.setProperty("--c", /^#[0-9a-f]{6}$/i.test(a.color) ? a.color : DEFAULT_COLOR);
         m.append(make("span", "nick", a.name || "Owner"), ": ");
         appendText(m, a.text);
+        m.appendChild(likeButton(entry));
         if (preview) m.appendChild(make("span", "note", "preview, only you see this"));
         return m;
+    }
+
+    function likeButton(entry) {
+        if (entry.likes == null) entry.likes = Number.isSafeInteger(entry.a.likes) && entry.a.likes > 0 ? entry.a.likes : 0;
+        if (entry.liked == null) entry.liked = !entry.preview && readLiked().includes(entry.a.id);
+        const b = make("button", "like");
+        b.type = "button";
+        ownClicks(b);
+        holdWhileHovered(b);
+        b.addEventListener("click", () => toggleLike(entry, b));
+        paintLike(entry, b);
+        return b;
+    }
+
+    function paintLike(entry, b) {
+        b.classList.toggle("on", entry.liked);
+        b.innerHTML = HEART;
+        if (entry.likes > 0) b.append(String(entry.likes));
+        b.title = entry.liked ? "Unlike" : "Like";
+        b.setAttribute("aria-pressed", String(entry.liked));
+    }
+
+    async function toggleLike(entry, b) {
+        if (entry.likeBusy) return;
+        const before = { liked: entry.liked, likes: entry.likes };
+        const on = !entry.liked;
+        entry.liked = on;
+        entry.likes = Math.max(0, entry.likes + (on ? 1 : -1));
+        paintLike(entry, b);
+        if (entry.preview) return;
+        entry.likeBusy = true;
+        try {
+            const data = await window.__nswsTraffic.like(entry.a.id, on);
+            entry.likes = data.likes;
+            entry.liked = !!data.liked;
+        } catch (err) {
+            Object.assign(entry, before);
+            if (Number.isSafeInteger(err?.likes)) entry.likes = err.likes;
+        }
+        entry.likeBusy = false;
+        saveLiked(entry.a.id, entry.liked);
+        paintLike(entry, b);
+        if (poll === entry) savePoll();
     }
 
     function fadeOut(el, anim) {
@@ -190,11 +263,11 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
     function show(a, preview) {
         if (pollOf(a)) return showPoll({ a, preview: !!preview, choice: null, votes: null, open: true, change: !!a.change }, true);
         hide(true);
-        const el = card(a, preview);
+        const entry = { a, el: null, preview: !!preview, at: performance.now(), anim: null };
+        const el = (entry.el = card(entry));
         stack().appendChild(el);
         const hold = Math.max(3, Number(a.show) || 10) * 1000;
         const total = FADE_IN_MS + hold + FADE_OUT_MS;
-        const entry = { a, el, preview: !!preview, at: performance.now(), anim: null };
         if (el.animate) {
             entry.anim = el.animate([
                 { opacity: 0, transform: "translateY(-16px)", easing: "ease-out" },
@@ -222,8 +295,8 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
     function savePoll() {
         if (!poll || poll.preview) return;
         try {
-            const { a, choice, votes, open, change } = poll;
-            localStorage.setItem(POLL_KEY, JSON.stringify({ a, choice, votes, open, change }));
+            const { a, choice, votes, open, change, likes } = poll;
+            localStorage.setItem(POLL_KEY, JSON.stringify({ a, choice, votes, open, change, likes }));
         } catch {}
     }
 
@@ -238,6 +311,7 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
                 votes: Array.isArray(p.votes) ? p.votes : null,
                 open: p.open !== false,
                 change: !!p.change,
+                likes: Number.isSafeInteger(p.likes) && p.likes > 0 ? p.likes : null,
             };
         } catch {
             return null;
@@ -249,7 +323,7 @@ body:has(#nrc-overlay) #nsws-ann>.m.poll{display:none;}
             poll.el.remove();
             poll = null;
         }
-        entry.el = card(entry.a, entry.preview);
+        entry.el = card(entry);
         entry.el.classList.add("poll");
         entry.at = performance.now();
         ownClicks(entry.el);

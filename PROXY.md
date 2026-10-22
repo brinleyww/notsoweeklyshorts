@@ -382,6 +382,11 @@ chat font), stays for 6–30 s and fades out. `mod/nsws_announce.js` draws it.
   carries `pv` (`{id, votes, open, change}`). That costs no extra request, and recent poll rows are
   cached in memory so it reads no rows. Clicking a poll in Race Control's Recent announcements opens
   its results.
+- **Likes:** every announcement and poll card has a heart. `POST /nsws/like` (`{v, id, on}`) is open
+  to the site like a vote, with the same beat and per-IP rules (30 new likes per announcement), for
+  7 days after sending; `on: false` takes the like back. Likes are rows in `ann_likes`; the count is
+  the announcement row's `likes`, which the announcement itself carries (`ann.likes`) and Race
+  Control shows. The page remembers its likes in `nsws_ann_liked`.
 
 ## Accounts (names and clips)
 

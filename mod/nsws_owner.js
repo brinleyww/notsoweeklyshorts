@@ -1640,8 +1640,9 @@
         } else {
             ui.annLive.appendChild(annLine(live));
             const tiles = el("div", "nrc-tiles");
-            tiles.style.cssText = "margin:12px 0;grid-template-columns:repeat(2,minmax(0,1fr));";
+            tiles.style.cssText = "margin:12px 0;grid-template-columns:repeat(3,minmax(0,1fr));";
             tiles.appendChild(tile("Seen by", num(live.seen), num(live.online) + " online when sent"));
+            tiles.appendChild(tile("Likes", num(live.likes ?? 0)));
             tiles.appendChild(tile("Reaches new players", "until " + fmt.time(live.until), fmt.date(live.until)));
             ui.annLive.appendChild(tiles);
             const stop = el("button", "button", "Stop it");
@@ -1667,14 +1668,14 @@
             return;
         }
         ui.annList.appendChild(table(
-            [["Sent", "num"], ["Message", "name"], ["Shown", "num"], ["Seen by", "num"], ["Status"]],
+            [["Sent", "num"], ["Message", "name"], ["Shown", "num"], ["Seen by", "num"], ["Likes", "num"], ["Status"]],
             a.list.map((r) => {
                 const msg = el("span", null, r.text);
                 msg.title = r.text;
                 const status = r.live ? "Live" : r.stopped != null && r.stopped < r.until ? "Stopped" : "Ended";
                 const cell = r.poll ? el("span") : msg;
                 if (r.poll) cell.append(msg, pollSummary(r));
-                return [fmt.dateTime(r.at), cell, r.poll ? "Poll" : r.show + "s", num(r.seen) + " / " + num(r.online), status];
+                return [fmt.dateTime(r.at), cell, r.poll ? "Poll" : r.show + "s", num(r.seen) + " / " + num(r.online), num(r.likes ?? 0), status];
             })));
         ui.annList.querySelectorAll("tbody tr").forEach((tr, i) => {
             const r = a.list[i];

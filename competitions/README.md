@@ -151,7 +151,9 @@ none of PolyFX's lights, shine or reflections (`VisualCar.ghostLook`). Other rac
 out near your car (replay ghosts still are), so they stand on the grid in the countdown and show up at once
 after a respawn. A cup with only bots racing keeps going while someone watches (the organizer's page in
 front, or another person in the cup), and pauses before the next round once nobody does. Skill is how well a bot drives: how close to the reference's speed it takes corners,
-how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Expert is
+how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Easy is skill
+0.12-0.25 (Mixed starts at 0.15), Medium 0.5-0.62, Hard 0.72-0.82. Experts never slip up, leave walls no
+margin, weave least, and take their hints from the three fastest runs. Expert is
 skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
 standings, knockouts, the director camera and Follow all treat them like racers, with a BOT tag. They

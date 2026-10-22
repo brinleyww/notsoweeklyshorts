@@ -6,12 +6,12 @@ import { EXPERT_SKILL, type Persona } from './wire.ts';
 export const BOT_NAMES = ['Apex', 'Torque', 'Nitro', 'Camber', 'Redline', 'Gearbox', 'Piston', 'Slick', 'Drift', 'Turbo', 'Axle', 'Boost', 'Clutch', 'Kerb', 'Diesel', 'Spoiler'];
 
 const TIERS = {
-  easy: [0.25, 0.4],
+  easy: [0.12, 0.25],
   medium: [0.5, 0.62],
   hard: [0.72, 0.82],
   expert: [1, 1],
 } as const;
-const MIXED = [0.3, 0.95] as const;
+const MIXED = [0.15, 0.95] as const;
 
 export function mix(a: number, b: number) {
   let h = (a ^ Math.imul((b + 0x9e3779b9) | 0, 0x85ebca6b)) | 0;
@@ -90,7 +90,8 @@ export function personas(skill: BotSkill, count: number, seedBase: number, adapt
       name: names?.[i],
       skill: s,
       risk: clamp01(s ** 1.5 + (unit(mix(seed, 1)) - 0.5) * 0.1),
-      mistakes: clamp01((1 - s) * 0.8 + (unit(mix(seed, 2)) - 0.5) * 0.1),
+      // Experts never slip up; easy bots often do.
+      mistakes: s >= EXPERT_SKILL ? 0 : clamp01((1 - s) * 0.8 + (s < 0.3 ? 0.15 : 0) + (unit(mix(seed, 2)) - 0.5) * 0.1),
       seed,
     };
   });

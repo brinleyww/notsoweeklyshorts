@@ -60,8 +60,10 @@ const POLL_OPTION_TEXT = 40;
 // A poll takes votes until the owner closes it, or for this long. It stays on a player's screen until they close it.
 const POLL_OPEN_MS = 7 * DAY_MS;
 const POLL_CACHE = 20;
-// New votes per IP address per poll. Schools share one address.
+// New votes (and new likes) per IP address per announcement. Schools share one address.
 const VOTES_PER_IP = 30;
+// Likes are taken for this long after an announcement goes out.
+const LIKE_OPEN_MS = 7 * DAY_MS;
 
 function pollOptions(row) {
     if (!row?.poll) return null;
@@ -174,6 +176,10 @@ export class TrafficStats extends DurableObject {
         }
         this.sql.exec(`CREATE TABLE IF NOT EXISTS poll_votes (
             ann INTEGER NOT NULL, voter TEXT NOT NULL, choice INTEGER NOT NULL, at INTEGER NOT NULL,
+            PRIMARY KEY (ann, voter)) WITHOUT ROWID`);
+        if (!columns.has("likes")) this.sql.exec("ALTER TABLE announcements ADD COLUMN likes INTEGER NOT NULL DEFAULT 0");
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS ann_likes (
+            ann INTEGER NOT NULL, voter TEXT NOT NULL, at INTEGER NOT NULL,
             PRIMARY KEY (ann, voter)) WITHOUT ROWID`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
         // Person-seconds online for the odometer. Buckets from before it existed stay NULL and count their runtime.
@@ -466,7 +472,7 @@ export class TrafficStats extends DurableObject {
         if (!a || a.until <= Date.now()) return null;
         return {
             id: a.id, at: a.at, until: a.until, name: a.name, color: a.color, text: a.text, show: a.show_s, cup: a.cup ?? null,
-            poll: pollOptions(a), change: !!a.poll_change,
+            poll: pollOptions(a), change: !!a.poll_change, likes: a.likes ?? 0,
         };
     }
 
@@ -545,6 +551,31 @@ export class TrafficStats extends DurableObject {
         return { votes, choice };
     }
 
+    // One like per visitor per announcement; `on` false takes it back. The reply carries the count.
+    like(visitor, id, on, ip) {
+        const now = Date.now();
+        const row = this.ann?.id === id ? this.ann : this.pollRow(id);
+        if (!row) return { error: "closed" };
+        const likes = row.likes ?? 0;
+        if (!(now < row.at + LIKE_OPEN_MS)) return { error: "closed", likes };
+        if (!this.sql.exec("SELECT 1 FROM visitors WHERE id = ?", visitor).toArray().length) return { error: "unknown" };
+        const had = this.sql.exec("SELECT 1 FROM ann_likes WHERE ann = ? AND voter = ?", id, visitor).toArray().length > 0;
+        if (had === on) return { likes, liked: had };
+        if (on) {
+            const key = (ip || "?") + " like " + id;
+            const used = this.votesByIp.get(key) ?? 0;
+            if (used >= VOTES_PER_IP) return { error: "busy" };
+            if (this.votesByIp.size > 5000) this.votesByIp.clear();
+            this.votesByIp.set(key, used + 1);
+            this.sql.exec("INSERT INTO ann_likes (ann, voter, at) VALUES (?, ?, ?)", id, visitor, now);
+        } else {
+            this.sql.exec("DELETE FROM ann_likes WHERE ann = ? AND voter = ?", id, visitor);
+        }
+        const count = this.sql.exec("UPDATE announcements SET likes = MAX(0, likes + ?) WHERE id = ? RETURNING likes", on ? 1 : -1, id).one().likes;
+        for (const r of [row, this.ann, this.polls.get(id)]) if (r?.id === id) r.likes = count;
+        return { likes: count, liked: on };
+    }
+
     // Without an id, stops whatever is live (Race Control). With one, only that announcement, so a
     // cup that closes never ends someone else's message.
     stopAnnouncement(id) {
@@ -566,7 +597,7 @@ export class TrafficStats extends DurableObject {
                 const poll = pollOptions(r);
                 return {
                     id: r.id, at: r.at, until: r.until, name: r.name, color: r.color, text: r.text, show: r.show_s,
-                    online: r.online, seen: r.seen, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
+                    online: r.online, seen: r.seen, likes: r.likes ?? 0, stopped: r.stopped, live: r.id === current?.id, cup: r.cup ?? null,
                     poll, votes: poll ? pollVotes(r, poll.length) : null,
                     change: !!r.poll_change, open: !!poll && pollOpen(this.polls.get(r.id) ?? r, now),
                 };
@@ -872,6 +903,18 @@ export function readVote(text) {
     if (!/^[0-9a-f]{32}$/.test(raw?.v ?? "") || !Number.isSafeInteger(raw.id) || raw.id <= 0) return null;
     if (!Number.isSafeInteger(raw.c) || raw.c < 0 || raw.c >= POLL_OPTIONS) return null;
     return { visitor: raw.v, id: raw.id, choice: raw.c };
+}
+
+// A player's like: { visitor, id, on }, or null.
+export function readLike(text) {
+    let raw;
+    try {
+        raw = JSON.parse(text);
+    } catch {
+        return null;
+    }
+    if (!/^[0-9a-f]{32}$/.test(raw?.v ?? "") || !Number.isSafeInteger(raw.id) || raw.id <= 0 || typeof raw.on !== "boolean") return null;
+    return { visitor: raw.v, id: raw.id, on: raw.on };
 }
 
 // Coarse labels only; the raw user agent is never stored.

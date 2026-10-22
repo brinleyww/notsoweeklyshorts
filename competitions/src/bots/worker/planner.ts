@@ -210,8 +210,8 @@ export class Job {
     this.refs = sorted;
     this.#clear = clear;
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
-    // Each bot its own top run as a hint (Persona.copy).
-    if (b.copy != null && sorted.length) this.refIdx = b.copy % sorted.length;
+    // Each bot its own top run as a hint (Persona.copy); experts one of the three fastest.
+    if (b.copy != null && sorted.length) this.refIdx = b.copy % (b.skill >= EXPERT_SKILL ? Math.min(3, sorted.length) : sorted.length);
     this.ref = sorted[this.refIdx];
     this.name = b.name ?? b.u;
     this.practice = !!spec.practice;
@@ -243,7 +243,7 @@ export class Job {
       // Room to spare from walls and edges: a little for a sharp bot, more for a careful one.
       const c = this.#clear.get(ref);
       if (c) {
-        d.offsets = marginOffsets(ref, c, 0.15 + 0.55 * (1 - this.bot.skill));
+        d.offsets = marginOffsets(ref, c, this.bot.skill >= EXPERT_SKILL ? 0 : 0.15 + 0.55 * (1 - this.bot.skill));
         d.clear = c;
       }
       this.#drivers.set(i, d);
@@ -688,7 +688,7 @@ export class Planner {
   // A new way of driving for this run, or for the rest of it after a respawn (see DriverState.style).
   #roll(job: Job) {
     const r = job.rand, s = job.st.style, loose = 1 - job.bot.skill;
-    const amp = 0.1 + 0.5 * loose;
+    const amp = job.bot.skill >= EXPERT_SKILL ? 0.05 : 0.1 + 0.5 * loose;
     s[0] = amp * (0.4 + 0.6 * r());
     s[1] = 60 + 140 * r();
     s[2] = TAU * r();

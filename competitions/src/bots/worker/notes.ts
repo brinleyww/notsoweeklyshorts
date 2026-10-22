@@ -15,8 +15,8 @@ const LIMITS = [
   [-10, 40],
 ] as const;
 // A bot's own rules to start from, a race run's variety, and a practice try.
-const OWN = [0.005, 0.25, 4];
-const VARIETY = [0.006, 0.2, 3];
+const OWN = [0.005, 0.1, 4];
+const VARIETY = [0.004, 0.1, 3];
 const TRY = [0.02, 0.5, 12];
 
 const hash = (a: number, b: number) => {

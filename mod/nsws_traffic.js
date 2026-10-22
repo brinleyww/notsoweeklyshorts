@@ -216,6 +216,19 @@
             if (!response.ok || !Array.isArray(data?.votes)) throw { status: response.status, error: data?.error, votes: data?.votes };
             return data;
         },
+        // Resolves to { likes, liked }, or rejects with { status, error, likes }.
+        async like(id, on) {
+            const response = await fetch(API + "nsws/like", {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify({ v: visitorId, id, on }),
+                credentials: "omit",
+                cache: "no-store",
+            });
+            const data = await response.json().catch(() => null);
+            if (!response.ok || !Number.isSafeInteger(data?.likes)) throw { status: response.status, error: data?.error, likes: data?.likes };
+            return data;
+        },
         // The beat reply carries the same online count Race Control shows.
         refreshOnline() {
             if (performance.now() - lastBeat >= MIN_GAP_MS * visibleGap / BEAT_VISIBLE_S) beat(false);

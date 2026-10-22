@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, readAnnouncement, readVote, describeClient } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
@@ -1115,6 +1115,14 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (result.error) return json(result, origin, result.error === "busy" ? 429 : 409);
         return json(result, origin);
     }
+    if (url.pathname === TRAFFIC_PREFIX + "like") {
+        const like = readLike(text);
+        if (!like) return plain(400, "Bad request", origin);
+        if (doLimited()) return busy(origin);
+        const result = await stub.like(like.visitor, like.id, like.on, request.headers.get("CF-Connecting-IP"));
+        if (result.error) return json(result, origin, result.error === "busy" ? 429 : 409);
+        return json(result, origin);
+    }
 
     let body;
     try {
@@ -1570,7 +1578,7 @@ export default {
                 }
             }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
-            if (!fromSite && (url.pathname === TRAFFIC_PREFIX + "beat" || url.pathname === TRAFFIC_PREFIX + "poll")) return forbidden();
+            if (!fromSite && ["beat", "poll", "like"].some((p) => url.pathname === TRAFFIC_PREFIX + p)) return forbidden();
             const origin = requestOrigin || "*";
             if (request.method === "OPTIONS") {
                 return new Response(null, { status: 204, headers: corsHeaders(origin) });
