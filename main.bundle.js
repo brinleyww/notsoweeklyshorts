@@ -56936,6 +56936,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             async function updateCommitMessage() {
                 const textElement = document.getElementById("copyright-text");
 
+                if (window.__nswsLoadedVersion) {
+                    const version = await window.__nswsLoadedVersion;
+                    textElement.textContent = version ? `© 2026 brinleyww - ${version}` : "© 2026 brinleyww";
+                    return;
+                }
+
                 try {
                     const response = await fetch("https://api.github.com/repos/brinleyww/notsoweeklyshorts/commits/main");
 

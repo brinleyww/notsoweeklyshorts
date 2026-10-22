@@ -10,6 +10,7 @@ import { EXPERT_SKILL, type Persona } from '../wire.ts';
 import { Brain } from './brain.ts';
 import { copyDriverState, DEFAULT_PARAMS, Driver, newDriverState, type DriverParams, type DriverState } from './driver.ts';
 import { clearanceOf, marginOffsets, type Clearance } from './clearance.ts';
+import { FIELDS, Notes, refKey, SECTION } from './notes.ts';
 import type { TrackRays } from './rays.ts';
 import type { Reference } from './reference.ts';
 import { axes, newRaw, readRaw, type Keys, type Raw, type Sim, type TrackLoad } from './sim.ts';
@@ -24,9 +25,10 @@ const SNAP_BUDGET = 320 * 1024 * 1024;
 // would wreck it): a single run stops sending after AFTER_RUN, time attack restarts after AFTER_TA.
 const AFTER_RUN = 400;
 const AFTER_TA = 400;
-// Experts replay a recorded run's own keys, each its own run, and lift off the throttle (or tap the brake)
-// once for just long enough to finish a little behind it (found by trying: the physics is exact).
-const COPY_SLOT = 63;
+// Heap slot for practice (learn.ts): the state a section's tries all start from.
+const DRILL_SLOT = 63;
+// A practice try's cost: ms to the end of the next section, less this much per km/h it leaves with.
+const EXIT_MS_PER_KMH = 10;
 
 export interface Out {
   f: number;
@@ -41,6 +43,10 @@ export interface JobSpec {
   end: number;
   // Network weights (brain.ts) for this bot; none drives without the network.
   brain?: Float32Array | null;
+  // An expert's notes (notes.ts), by hint run (refKey).
+  notes?: Record<string, Float32Array> | null;
+  // A practice run (learn.ts): the notes exactly as they are, no random inputs or mistakes.
+  practice?: boolean;
 }
 
 // Now and then (about every 12 s of driving) a small input the driver didn't choose, for 40-150 ms: it
@@ -105,6 +111,7 @@ interface Saved {
   // Off the reference line by this much when saved (a good place to go back to is close to it).
   lat: number;
   refIdx: number;
+  sec: number;
 }
 
 // Small seeded generator (mulberry32).
@@ -170,14 +177,26 @@ export class Job {
   // Respawns in a row that failed again before the next checkpoint.
   respawnCp = -1;
   cpRespawns = 0;
-  // This run drives a recorded run's own keys from the start (a sure finish: the physics is exact):
-  // an expert's planned near-copy, or because the bot's own driving got nowhere.
+  // This run drives a recorded run's own keys from the start (a sure finish: the physics is exact),
+  // because the bot's own driving got nowhere.
   copy: { keys: Uint8Array; n: number } | null = null;
   tries = new Map<number, number>();
   dnfAt: number | null = null;
   forceReset = false;
   // Mistakes kept this run.
   kept = 0;
+  // An expert's own notes on its hint run (refs[hint]) and this run's way of driving them (notes.ts).
+  readonly name: number;
+  notes: Notes | null = null;
+  hint = -1;
+  sections: Float32Array | null = null;
+  readonly practice: boolean;
+  // Practice: the hint run's section the car is in, when it left each one and how fast, and the last
+  // section practised.
+  sec = -1;
+  tout = new Float64Array(0);
+  vout = new Float64Array(0);
+  drilled = -1;
 
   constructor(spec: JobSpec, refs: Reference[], clear: Map<Reference, Clearance>) {
     this.id = spec.id;
@@ -191,9 +210,19 @@ export class Job {
     this.refs = sorted;
     this.#clear = clear;
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
-    // An expert with no run of its own to replay follows the one it was dealt.
-    if (b.copy != null && sorted.length) this.refIdx = (b.copy + (b.spin ?? 0)) % sorted.length;
+    // Each bot its own top run as a hint (Persona.copy).
+    if (b.copy != null && sorted.length) this.refIdx = b.copy % sorted.length;
     this.ref = sorted[this.refIdx];
+    this.name = b.name ?? b.u;
+    this.practice = !!spec.practice;
+    if (b.skill >= EXPERT_SKILL && this.ref.kind !== 'explore') {
+      const notes = new Notes(this.ref, this.name, spec.notes?.[refKey(this.ref)]);
+      this.notes = notes;
+      this.hint = this.refIdx;
+      this.sections = new Float32Array(notes.n * FIELDS);
+      this.tout = new Float64Array(notes.n);
+      this.vout = new Float64Array(notes.n);
+    }
     const jitter = (this.rand() - 0.5) * 0.03 * (1 - b.skill);
     // An explored route's speeds are already careful, and nothing on it is worth copying exactly.
     this.p = this.ref.kind === 'explore'
@@ -210,6 +239,7 @@ export class Job {
       d = new Driver(ref, this.p);
       d.skill = this.bot.skill;
       d.brain = this.#brain;
+      if (i === this.hint) d.sections = this.sections;
       // Room to spare from walls and edges: a little for a sharp bot, more for a careful one.
       const c = this.#clear.get(ref);
       if (c) {
@@ -245,6 +275,7 @@ export class Job {
       speedHist: [...this.speedHist], prev: this.prev.slice(), hasPrev: this.hasPrev,
       lat: Math.abs(this.driver.lat) + Math.abs(this.driver.headPath) * 5,
       refIdx: this.refIdx,
+      sec: this.sec,
     };
   }
 
@@ -273,6 +304,7 @@ export class Job {
     this.speedHist = [...s.speedHist];
     this.prev.set(s.prev);
     this.hasPrev = s.hasPrev;
+    this.sec = s.sec;
     this.failAt = -1;
     this.failWhy = null;
     this.forceReset = false;
@@ -346,7 +378,7 @@ export class Planner {
 
   add(spec: JobSpec) {
     const job = new Job(spec, this.refs, this.clear);
-    this.#startRun(job, 0, job.bot.skill >= EXPERT_SKILL ? this.#closeCopy(job) : null);
+    this.#startRun(job, 0);
     this.jobs.push(job);
     return job;
   }
@@ -355,6 +387,57 @@ export class Planner {
   brain(id: string, w: Float32Array | null) {
     const job = this.jobs.find((j) => j.id === id);
     if (job) job.nextBrain = w;
+  }
+
+  // An expert's notes learned in practice, from its next run.
+  notes(name: number, key: string, v: Float32Array) {
+    for (const j of this.jobs) if (j.notes && j.name === name && refKey(j.notes.ref) === key && v.length === j.notes.v.length) j.notes.v.set(v);
+  }
+
+  // One tick of an expert's practice run (learn.ts), the only job of this planner. Before each section of
+  // its hint run it tries other ways through it (from `rand`), each from the same exact state to the end of
+  // the next section, and drives on with the fastest.
+  practise(rand: () => number, tries: number) {
+    const job = this.jobs[0];
+    if (job?.notes && job.status === 'run' && !job.copy && job.refIdx === job.hint && job.hasPrev) {
+      const s = Math.floor(job.st.k / SECTION) + 1;
+      if (s > job.drilled && s < job.notes.n - 1) {
+        job.drilled = s;
+        this.#drill(job, s, rand, tries);
+      }
+    }
+    return this.tick();
+  }
+
+  #drill(job: Job, s: number, rand: () => number, tries: number) {
+    const p = job.sections!, o = s * FIELDS, sim = this.sim;
+    const was = p.slice(o, o + FIELDS);
+    const saved = job.save();
+    sim.save(DRILL_SLOT);
+    let best = was, least = Infinity;
+    try {
+      for (let i = 0; i <= tries; i++) {
+        const way = i === 0 ? was : job.notes!.vary(p, s, rand);
+        if (i > 0) {
+          sim.restore(DRILL_SLOT);
+          job.load(saved);
+        }
+        p.set(way, o);
+        job.tout[s + 1] = -1;
+        const until = job.t + 4 * SECTION;
+        while (job.status === 'run' && job.failAt < 0 && job.tout[s + 1] < 0 && job.t < until) this.#run(job, job.t + TICK);
+        const cost = job.failAt < 0 && job.tout[s + 1] >= 0 ? job.tout[s + 1] - EXIT_MS_PER_KMH * job.vout[s + 1] : Infinity;
+        if (cost < least) {
+          least = cost;
+          best = way;
+        }
+      }
+    } finally {
+      sim.restore(DRILL_SLOT);
+      sim.dropSlot(DRILL_SLOT);
+      job.load(saved);
+      p.set(best, o);
+    }
   }
 
   cancel(id: string) {
@@ -411,6 +494,9 @@ export class Planner {
     }
     job.st = newDriverState();
     if (!copy) this.#roll(job);
+    if (job.notes && !copy) job.notes.plan(job.rand, job.sections!, job.practice);
+    job.sec = -1;
+    job.drilled = -1;
     if (job.ref.kind === 'explore') job.st.gripUntil = Infinity;
     job.st.imitating = job.p.imitate > 0;
     job.bestArc = 0;
@@ -431,81 +517,14 @@ export class Planner {
     job.status = 'run';
   }
 
-  // An expert's run: the recorded run dealt to it (Persona.copy), slowed once so it finishes up to 0.2 s
-  // behind that run and never within 0.08 s of the fastest; if no slowdown lands, that run exactly (it
-  // can't crash). Null when there are more experts than runs: that one drives itself.
-  #closeCopy(job: Job): { keys: Uint8Array; n: number } | null {
-    const recorded = job.refs.filter((r) => r.kind !== 'explore');
-    const k = job.bot.copy ?? 0;
-    if (k >= recorded.length) return null;
-    const ref = recorded[(k + (job.bot.spin ?? 0)) % recorded.length];
-    const best = recorded[0].n;
-    // Each later time-attack run aims a little closer.
-    const done = job.runs.filter((r) => r[1] != null).length;
-    const lose = Math.round(Math.max(0, best + 80 - ref.n) + job.rand() * 200 * 0.85 ** done);
-    return this.#liftCopy(job, ref, ref.n, lose) ?? { keys: ref.keys, n: ref.n };
-  }
-
-  // A recording's keys with one throttle lift or brake tap that makes them finish `lose` ms (or a little
-  // less) behind `best`, tried on a car of its own; null when nothing lands on that.
-  #liftCopy(job: Job, ref: Reference, best: number, lose: number): { keys: Uint8Array; n: number } | null {
-    const sim = this.sim, k = this.#k, r = this.#raw, n = ref.n;
-    const slow = (b: number, brake: boolean) => (brake ? (b & ~1) | 4 : b & ~1);
-    // Tries ground frames from `first` to `last` every 0.5 s, each with a lift and a brake tap.
-    const attempt = (target: number, first: number, last: number) => {
-      const car = sim.newCar(this.full);
-      this.#carChanged = true;
-      const drive = (from: number, to: number, until: number, brake = false) => {
-        for (let f = from; f < to; f++) {
-          const b = ref.keys[Math.min(f, n - 1)];
-          readRaw(sim.step(car, keysOf(f < until ? slow(b, brake) : b, k)), r);
-          if (r.finished) return r.finishFrames;
-        }
-        return -1;
-      };
-      try {
-        let at = 0;
-        for (let s = first; s < last; s += 500) {
-          if (drive(at, s, -1) >= 0) return null;
-          at = s;
-          if (ref.wheels[s] < 3) continue;
-          sim.save(COPY_SLOT);
-          for (const brake of ref.keys[s] & 1 ? [false, true] : [true]) {
-            let lo = 0, hi = Math.min(brake ? 1000 : 3000, n - s);
-            while (hi - lo > 1) {
-              const d = (lo + hi) >> 1;
-              sim.restore(COPY_SLOT);
-              const fin = drive(s, n + 5000, s + d, brake);
-              if (fin >= 0 && Math.abs(fin - target) <= 10) {
-                const keys = ref.keys.slice();
-                for (let f = s; f < s + d; f++) keys[f] = slow(keys[f], brake);
-                return { keys, n };
-              }
-              if (fin < 0 || fin > target) hi = d;
-              else lo = d;
-            }
-          }
-          sim.restore(COPY_SLOT);
-        }
-        return null;
-      } finally {
-        sim.deleteCar(car);
-        sim.dropSlot(COPY_SLOT);
-      }
-    };
-    // Near the end first, from a spot picked at random each round (the rest of that stretch after it, then
-    // before it); failing that (a last jump that needs all the speed), earlier; failing that, losing less.
-    const near = Math.max(0, n - 6000), pick = near + Math.floor(job.rand() * Math.max(1, n - 300 - near));
-    const far = Math.max(0, n - 20000), pickFar = far + Math.floor(job.rand() * Math.max(1, near - far));
-    for (const l of [lose, 200, 100]) {
-      if (l > lose || best + l < n + 30) continue;
-      const got =
-        attempt(best + l, pick, n - 300) ??
-        attempt(best + l, near, pick) ??
-        (near > 0 ? attempt(best + l, pickFar, near) ?? attempt(best + l, far, pickFar) : null);
-      if (got) return got;
+  // Practice: the time an expert's car leaves each section of its hint run, and its speed then.
+  #section(job: Job, r: Raw, now: number) {
+    const s = Math.min(job.notes!.n - 1, Math.floor(job.st.k / SECTION));
+    if (s > job.sec && job.sec >= 0) {
+      job.tout[job.sec] = now;
+      job.vout[job.sec] = r.speed;
     }
-    return null;
+    job.sec = s;
   }
 
   #keep(job: Job, f: number, raw: Uint8Array) {
@@ -554,12 +573,16 @@ export class Planner {
         if (left <= 0) {
           if (job.mode === 'ta' && now + 2000 < job.end) {
             this.#keep(job, now, buf);
-            this.#startRun(job, now, job.bot.skill >= EXPERT_SKILL ? this.#closeCopy(job) : null);
+            this.#startRun(job, now);
           } else this.#finishJob(job, 'done');
         }
         continue;
       }
       if (r.finished) {
+        if (job.practice && job.sec >= 0) {
+          job.tout[job.sec] = now;
+          job.vout[job.sec] = r.speed;
+        }
         job.finishedAt = now;
         job.runs[job.runs.length - 1][1] = job.runStart + r.finishFrames;
         job.status = 'after';
@@ -576,6 +599,7 @@ export class Planner {
       if ((now & 3) === 0 && !job.copy) {
         axes(r, this.#fw, this.#up);
         drv.track(r, st);
+        if (job.practice && job.refIdx === job.hint) this.#section(job, r, now);
         const why = this.#check(job, r, now);
         if (why) {
           job.failAt = now;
@@ -644,7 +668,7 @@ export class Planner {
     }
     job.driver.decide(t, r, this.#vel, s, this.#fw, st, k);
     // Mistakes: a twitch of the wheel or a lift, now and then.
-    if (st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
+    if (!job.practice && st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
       if (job.rand() < 0.5) {
         st.bias = (job.rand() < 0.5 ? -1 : 1) * (0.15 + 0.35 * job.rand());
         st.biasUntil = t + 120 + Math.floor(job.rand() * 250);
@@ -654,7 +678,7 @@ export class Planner {
       }
       job.mistakeUntil = Math.max(st.biasUntil, st.paceUntil) + 1500;
     }
-    if (st.noiseUntil < t && t - job.runStart > 2000 && job.rand() < NOISE_RATE && !ref.runUp(st.k) && ref.jumpIn(st.k, 2500) === Infinity) {
+    if (!job.practice && st.noiseUntil < t && t - job.runStart > 2000 && job.rand() < NOISE_RATE && !ref.runUp(st.k) && ref.jumpIn(st.k, 2500) === Infinity) {
       st.noiseLift = job.rand() < 0.3;
       st.noise = st.noiseLift ? 0 : (job.rand() < 0.5 ? -1 : 1) * (0.05 + 0.12 * job.rand());
       st.noiseUntil = t + 40 + Math.floor(job.rand() * 110);
@@ -817,6 +841,7 @@ export class Planner {
       job.prevSpeed = this.#raw.speed;
       job.driver.anchor(this.#raw, job.st);
     }
+    job.sec = -1;
     while (job.out.length && job.out[job.out.length - 1].f > to) job.out.pop();
     job.bestArc = job.ref.arc[job.st.k];
     job.bestArcAt = to;

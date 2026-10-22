@@ -67,7 +67,7 @@ export function freshBrain(seed: number): Float32Array {
   return w;
 }
 
-// Bots learn per track in four skill groups (experts copy a recording and don't need it); each group's
+// Bots learn per track in four skill groups (experts learn their own notes instead, notes.ts); each group's
 // weights are tested at its typical skill.
 export function brainGroup(skill: number): { key: string; skill: number } | null {
   if (skill >= EXPERT_SKILL) return null;

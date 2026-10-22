@@ -193,21 +193,36 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   keeps racing: pages draw it from where its plan has got to, its result stands, and within 2.5 s of the
   race clock its planner stops retrying failures until it is ahead again. Only the round's time limit (as
   for players) or a planner worker that dies can end a bot's round early.
-- Every run, and the rest of a run after a respawn, drives a little differently, from the bot's seed (the
-  cup and round): two slow weaves across the line (wider for weaker bots, kept off walls, faded out in a
+- Every bot follows its own top run (`Persona.copy`, fastest first: experts, then the rest by skill) while
+  there are enough, and has its own seed every round (the cup, the round and its name). Every run, and the
+  rest of a run after a respawn, drives a little differently from that seed: two slow weaves across the line (wider for weaker bots, kept off walls, faded out in a
   jump's run-up) and corner pace that swings a few percent. About every 12 s a bot also gets a small input
   it didn't choose (a 40-150 ms nudge of the wheel or lift of the throttle, never just before a jump):
   sometimes that finds a better line, sometimes it costs a little.
 - Past the finish a bot brakes and, like a ghost, leaves the track 0.4 s later (scenery past a finish,
   like chezbug's, would otherwise wreck it in front of everyone).
-- Bots of skill 0.95 and up (Expert, and the best of Mixed) don't drive on their own: each round the
-  experts are dealt the recorded runs in a new order (`Persona.copy`, `spin`), so every expert replays a
-  different player's run, on that player's line the whole way. Each finishes up to 0.2 s behind its own run
-  (never within 0.08 s of the fastest) with one throttle lift or brake tap that the planner finds by trying
-  it on a car of its own before the race (near the end first, then earlier, then a smaller loss); if
-  nothing lands, the bot replays its run exactly, so it can't crash. With more experts than runs, the rest
-  drive themselves at skill 1 along the run they were dealt. In time attack every later run aims a little
-  closer. Five experts on chezbug (its top 8 runs, record 18.875 s): 19.12 to 19.43 s, all different.
+- Bots of skill 0.95 and up (Expert, and the best of Mixed) drive themselves and learn the track their own
+  way (`notes.ts`). Each takes one top run as a hint (the fastest ones, by name, so the same one every
+  round): the driver follows its line and speeds, but how the bot drives each
+  one-second section of it is in the bot's own notes: speed against the hint's (-4% to +6%), how far beside
+  its line (up to 1.5 units, kept off walls and out of a jump's run-up) and how early it turns in. A new
+  bot starts from rules hashed from its name, and every race run drives each section a little differently
+  from that run's seed, so no two rounds are alike and it's all deterministic.
+- Experts learn in practice, in the learning worker (below), one expert after another: a run on its notes
+  as they are, then the same run (same seed) where before each section the bot tries four other ways
+  through it, each from the same exact physics state to the end of the next section, and drives on with
+  the fastest (time, less 10 ms per km/h it leaves with; a try that goes wrong is out). The notes that run
+  ends with then race the old ones on three fresh race runs (with a race's variety and random inputs) and
+  are kept only if they are no slower on any of them and 0.03 s faster in all: like the network, an expert
+  never keeps what drove worse on its tests, and it can end up faster than its hint. Its next round on the track (in time attack, its next run)
+  drives them. Notes are kept per track, bot name and hint run in localStorage (`nsws-cuppa-notes:<id>`,
+  24 tracks). Without the learning worker (under 6 cores or 8 GB) experts drive their notes as they are.
+  Measured on Anubis (record 28.592 s, \`botlab/t25_notes.mjs\`, two experts, four race runs each on fixed
+  seeds; that run's tests used two fresh runs, now three): before practice 28.78 s (0.19 behind) and 30.86 s
+  (on the second-best run, with wrecks); after 12 minutes of practice 29.24 s (two runs at 28.47 and 28.51 s,
+  under the record, and one wreck at 30.55 s) and 29.44 s (no more wrecks). So practice makes a struggling
+  expert steadier and lets a good one beat its hint, but its runs swing more: it isn't yet faster on average
+  than the copied runs experts used to replay (0.1-0.3 s behind).
 - Bots have a neural network (`brain.ts`, 24 inputs, two hidden layers of 16, 706 weights) on top of the
   driver: each frame it reads the car (speed, steering, slip, how far off the line and how it points), the
   reference ahead (speed, steering input and curve 0.1-1 s on, a jump coming) and the room to the walls,
@@ -220,7 +235,7 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   overall. So it only ever keeps what drove better on its test.
 - The learning runs during a cup on the organizer's page, in one more worker (only with at least 6 cores
   and 8 GB, at most half that worker's time), per track and per skill group (under 0.45, to 0.7, to
-  0.9, to 0.95; experts don't need it). It keeps going through rounds and breaks; bots take up the best
+  0.9, to 0.95), and the experts' practice. It keeps going through rounds and breaks; bots take up the best
   weights at the next round on the track, and in time attack at their next run. What they learned is kept
   per track in localStorage (`nsws-cuppa-brain:<id>`, 40 tracks), so the next cup on that track starts
   from there. Measured in the lab (`botlab/t24_learn.mjs`, 15 minutes, then six unseen seeds): chezbug at

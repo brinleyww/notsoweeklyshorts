@@ -6,6 +6,7 @@
 //   low enough for the steering to hold the line (the reference may drift where a slower car can't).
 import { BRAIN_IN, BRAIN_OUT, type Brain } from './brain.ts';
 import type { Clearance } from './clearance.ts';
+import { SECTION } from './notes.ts';
 import type { Reference } from './reference.ts';
 import type { Keys, Raw } from './sim.ts';
 
@@ -90,6 +91,8 @@ export class Driver {
   // Room left and right of the reference line, for keeping the weave off walls.
   clear: Clearance | null = null;
   brain: Brain | null = null;
+  // An expert's way of driving each section of this reference this run (notes.ts): pace, offset, turn-in.
+  sections: Float32Array | null = null;
   skill = 1;
   readonly #x = new Float32Array(BRAIN_IN);
   readonly #y = new Float32Array(BRAIN_OUT);
@@ -152,11 +155,13 @@ export class Driver {
     const lx = uy * tz - uz * ty, ly = uz * tx - ux * tz, lz = ux * ty - uy * tx;
     const ex = r.x - ref.px[k], ey = r.y - ref.py[k], ez = r.z - ref.pz[k];
     let offset = (st.offUntil >= f ? st.off : p.offset) + (this.offsets ? this.offsets[Math.min(ref.n - 1, k + 20)] : 0);
-    const sty = st.style;
-    const calm = free && sty[0] + sty[3] > 0 ? this.#calm(k) : 0;
+    const sty = st.style, sec = this.sections;
+    const si = sec ? 3 * Math.min(sec.length / 3 - 1, Math.floor(k / SECTION)) : 0;
+    const secOff = sec ? sec[si + 1] : 0;
+    const calm = free && (sty[0] + sty[3] > 0 || secOff !== 0) ? this.#calm(k) : 0;
     if (calm > 0) {
       const a = ref.arc[k];
-      const w = calm * (sty[0] * Math.sin((TAU * a) / sty[1] + sty[2]) + sty[3] * Math.sin((TAU * a) / sty[4] + sty[5]));
+      const w = calm * (secOff + sty[0] * Math.sin((TAU * a) / sty[1] + sty[2]) + sty[3] * Math.sin((TAU * a) / sty[4] + sty[5]));
       const kk = Math.min(ref.n - 1, k + 20);
       const hi = this.clear ? this.clear.left[kk] - STYLE_ROOM : Infinity, lo = this.clear ? STYLE_ROOM - this.clear.right[kk] : -Infinity;
       if (hi > lo) offset = Math.max(Math.min(offset + w, Math.max(hi, offset)), Math.min(lo, offset));
@@ -194,7 +199,7 @@ export class Driver {
     const vref = Math.abs(ref.speed[k]) || 1;
     const drift = p.drift && st.gripUntil < f ? Math.max(0, Math.min(1, (Math.abs(kmh) / vref - 0.95) / 0.03)) : 0;
 
-    const lead = Math.min(ref.n - 1, k + 12);
+    const lead = Math.min(ref.n - 1, k + 12 + (sec && free ? Math.round(sec[si + 2]) : 0));
     const amax = maxAngle(Math.abs(kmh));
     const closeDist = Math.max(3, p.latTime * Math.max(vms, 6));
     const wantHead = -Math.atan(lat / closeDist);
@@ -251,7 +256,7 @@ export class Driver {
     const rk = ref.keys[Math.min(ref.n - 1, k + 1)];
     let up = (rk & 1) !== 0, down = (rk & 4) !== 0;
     const pace = p.pace * (st.paceUntil >= f ? st.paceMul : 1);
-    let allow = this.#allowed(k, vms, pace, grip === 1, st) * Math.exp(paceAdj);
+    let allow = this.#allowed(k, vms, pace, grip === 1, st) * Math.exp(paceAdj + (sec && st.paceUntil < f ? sec[si] : 0));
     // Steering already at full lock and still drifting wide: the corner is too fast for this line.
     const wide = target * lat > 0 ? 0 : Math.abs(lat);
     if (Math.abs(target) > 0.97 && wide > 0.3) allow = Math.min(allow, vms - 1 - 4 * wide);

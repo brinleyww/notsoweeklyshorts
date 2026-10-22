@@ -384,7 +384,7 @@ export class Organizer {
       t = this.#planTrack;
     const mgr = bots.length ? this.#manager() : this.#bots;
     if (n == null || !t || !mgr) return;
-    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), bots.map((p) => p.bot!.s / 100));
+    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), bots.map((p) => p.bot!.s / 100), bots.map((p) => BOT_NAMES.indexOf(p.name)));
     list.forEach((persona, i) => (persona.u = bots[i].u));
     mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS });
     const r = s.round;

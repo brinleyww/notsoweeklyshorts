@@ -3,17 +3,18 @@
 
 export const WORKER_NAME = 'nsws-cuppa-bots';
 
-// From this skill a bot replays a recorded run instead of driving itself (an expert).
+// From this skill a bot is an expert: it takes a top run of its own as a hint and learns its own way of
+// driving the track, round after round (worker/notes.ts).
 export const EXPERT_SKILL = 0.95;
 
 export interface Persona {
   u: number;
+  // The bot's name (index in BOT_NAMES): what it has learned is kept under it.
+  name?: number;
   // 0..1
   skill: number;
-  // Experts: the bot's place in the round's deal of recorded runs (each expert gets its own run while
-  // there are enough), and the round's shift of that deal.
+  // Which top run (fastest first) is the bot's hint: each bot its own while there are enough.
   copy?: number;
-  spin?: number;
   // 0..1: how readily it takes a reference's risky sections (cuts, long jumps).
   risk: number;
   // 0..1: how often it makes a mistake and lives with it.
@@ -40,11 +41,15 @@ export type ToWorker =
   | { b: 'init'; init: unknown }
   | { b: 'track'; key: string; trackId: string; payload: Payload; refs: RefInput[] }
   // brain: the bot's network weights (worker/brain.ts), none for driving without it.
-  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null }
+  // notes: an expert's notes (worker/notes.ts) by hint run.
+  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null; notes: Record<string, Float32Array> | null }
   // Weights a running bot takes up from its next run.
   | { b: 'brain'; id: string; w: Float32Array | null }
   // To the learning worker: keep improving these weights on the track (worker/learn.ts).
-  | { b: 'learn'; key: string; tasks: { key: string; skill: number; w: Float32Array }[] }
+  // practice: experts to drive practice runs with, and their notes by hint run.
+  | { b: 'learn'; key: string; tasks: { key: string; skill: number; w: Float32Array }[]; practice: { bot: Persona; notes: Record<string, Float32Array> }[] }
+  // An expert's notes on its hint run (ref) learned in practice, from its next run.
+  | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array }
   // GO on the cup clock (null until set); cup clock = Date.now() + offset.
   | { b: 'clock'; startAt: number | null; offset: number }
   | { b: 'cancel'; id: string }
@@ -61,4 +66,6 @@ export type FromWorker =
   | { b: 'progress'; id: string; frontier: number; rate: number }
   | { b: 'error'; id?: string; message: string }
   // The learning worker found better weights for a task: cost (lower is better) now and before.
-  | { b: 'learned'; key: string; task: string; w: Float32Array; cost: number; was: number };
+  | { b: 'learned'; key: string; task: string; w: Float32Array; cost: number; was: number }
+  // An expert's notes on its hint run (ref) got better in practice: a run costs `cost` now, `was` before.
+  | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array; cost: number; was: number };

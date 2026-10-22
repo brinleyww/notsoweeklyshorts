@@ -9,8 +9,11 @@
     if (!site) return;
 
     const POLL_MS = 60000;
-    const RUNS_API = "https://api.github.com/repos/" + site.repo + "/actions/runs?event=dynamic&branch=main&per_page=5";
+    const RUNS_API = "https://api.github.com/repos/" + site.repo + "/actions/runs?event=dynamic&branch=main&per_page=20";
     const BUSY = ".game-ui, .editor-ui, .device-preset-ui, dialog[open], .clip-box-bg, #nrc-overlay";
+
+    // The title screen names the build this page was served from, which can trail the repo's newest commit.
+    window.__nswsLoadedVersion = versionName(loadedDeployTime());
 
     const CSS = `
 #nsws-update-bg{position:absolute;inset:0;z-index:100;display:flex;align-items:center;justify-content:center;background-color:rgba(20,20,30,.5);pointer-events:auto;}

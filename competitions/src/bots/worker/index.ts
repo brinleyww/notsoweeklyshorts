@@ -111,7 +111,7 @@ function handle(m: ToWorker) {
         return;
       }
       if (streams.has(m.id)) return;
-      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null });
+      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null });
       streams.set(m.id, { job, enc: new KeyframeEncoder(), seq: 0, pending: 0, from: -1, last: 0, chain: Promise.resolve(), at: performance.now(), was: 0, rate: 0, results: 0, sent: 0 });
       kick();
       return;
@@ -133,13 +133,25 @@ function handle(m: ToWorker) {
     case 'brain':
       track?.planner?.brain(m.id, m.w);
       return;
+    case 'notes':
+      if (track?.key !== m.key) return;
+      track.planner?.notes(m.name, m.ref, m.v);
+      learner?.merge(m.name, m.ref, m.v);
+      return;
     case 'learn': {
       learner?.dispose();
       learner = null;
       const t = track;
-      if (!sim || !t || t.key !== m.key || !t.planner || !m.tasks.length) return;
-      learner = new Learner({ sim, route: t.route, full: t.load, refs: t.refs, clear: t.planner.clear }, m.tasks.map((x) => ({ key: x.key, skill: x.skill, w: x.w })), m.tasks.length * 7919 + t.refs[0].n);
+      const practice = m.practice ?? [];
+      if (!sim || !t || t.key !== m.key || !t.planner || !(m.tasks.length || practice.length)) return;
+      learner = new Learner(
+        { sim, route: t.route, full: t.load, refs: t.refs, clear: t.planner.clear },
+        m.tasks.map((x) => ({ key: x.key, skill: x.skill, w: x.w })),
+        m.tasks.length * 7919 + practice.length * 104729 + t.refs[0].n,
+        practice.map((p) => ({ bot: p.bot, notes: { ...p.notes } })),
+      );
       learner.onBetter = (task, cost, was) => post({ b: 'learned', key: t.key, task: task.key, w: task.w.slice(), cost, was }, []);
+      learner.onNotes = (bot, ref, v, cost, was) => post({ b: 'notes', key: t.key, name: bot.name ?? bot.u, ref, v, cost, was });
       kick();
       return;
     }

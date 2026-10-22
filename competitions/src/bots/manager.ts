@@ -6,8 +6,9 @@ import type { Msg } from '../protocol.ts';
 import { MAX_BOTS } from '../rules.ts';
 import type { TrackRef } from '../state.ts';
 import { toB64 } from './codec.ts';
-import { WORKER_NAME, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
+import { EXPERT_SKILL, WORKER_NAME, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
 import { BASE_BRAIN, brainFromB64, brainGroup, brainToB64, freshBrain } from './worker/brain.ts';
+import { FIELDS, notesFromB64, notesToB64 } from './worker/notes.ts';
 
 export type BotsMsg = Extract<Msg, { k: 'bots' }>;
 export interface Due {
@@ -43,6 +44,10 @@ const MSG_CHARS = 48_000;
 // What the bots have learned, per track: each skill group's best network weights (worker/learn.ts).
 const BRAIN_KEY = 'nsws-cuppa-brain:';
 const BRAIN_KEEP = 40;
+// Each expert's notes on each track (worker/notes.ts), by bot name and hint run.
+const NOTES_KEY = 'nsws-cuppa-notes:';
+const NOTES_KEEP = 24;
+const NOTES_PER_TRACK = 32;
 // Workers go when the organizer stops ticking (the cup is gone) or nothing was planned for a while.
 const ORPHAN_MS = 15_000;
 const IDLE_MS = 120_000;
@@ -126,6 +131,7 @@ export class BotManager {
   #learner: Slot | null = null;
   #learnSig = '';
   #brains = new Map<string, Map<string, { w: Float32Array; cost: number }>>();
+  #notes = new Map<string, Map<string, Float32Array>>();
 
   constructor(private host: BotHost) {}
 
@@ -364,7 +370,8 @@ export class BotManager {
     }
     b.slot = slot;
     slot.jobs++;
-    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill) });
+    const notes = b.persona.skill >= EXPERT_SKILL ? this.#notesFor(plan.trackId, b.persona) : null;
+    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes });
   }
 
   #cancel(b: Bot) {
@@ -501,17 +508,70 @@ export class BotManager {
     } catch {}
   }
 
-  // Keeps the learning worker improving the weights of every skill group racing on this track.
+  #notesOf(trackId: string) {
+    let m = this.#notes.get(trackId);
+    if (!m) {
+      m = new Map();
+      try {
+        const saved = JSON.parse(localStorage.getItem(NOTES_KEY + trackId) ?? 'null') as { b?: Record<string, string> } | null;
+        for (const [k, v] of Object.entries(saved?.b ?? {})) {
+          const w = typeof v === 'string' ? notesFromB64(v) : null;
+          if (w) m.set(k, w);
+        }
+      } catch {}
+      this.#notes.set(trackId, m);
+    }
+    return m;
+  }
+
+  // An expert's notes on this track, by hint run.
+  #notesFor(trackId: string, p: Persona) {
+    const prefix = `${p.name ?? p.u}|`, out: Record<string, Float32Array> = {};
+    for (const [k, v] of this.#notesOf(trackId)) if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v.slice();
+    return out;
+  }
+
+  #saveNotes(trackId: string) {
+    const m = this.#notesOf(trackId);
+    // The oldest go first (a Map keeps the order they were last changed in).
+    for (const k of [...m.keys()].slice(0, Math.max(0, m.size - NOTES_PER_TRACK))) m.delete(k);
+    const b: Record<string, string> = {};
+    for (const [k, v] of m) b[k] = notesToB64(v);
+    try {
+      const old = Object.keys(localStorage)
+        .filter((k) => k.startsWith(NOTES_KEY) && k !== NOTES_KEY + trackId)
+        .map((k) => [k, Number(JSON.parse(localStorage.getItem(k) ?? '{}')?.at) || 0] as const)
+        .sort((a, b) => b[1] - a[1]);
+      for (const [k] of old.slice(NOTES_KEEP - 1)) localStorage.removeItem(k);
+      localStorage.setItem(NOTES_KEY + trackId, JSON.stringify({ at: Date.now(), b }));
+    } catch {}
+  }
+
+  // An expert's notes got better in practice: keep them, and its next run drives them.
+  #noted(m: Extract<FromWorker, { b: 'notes' }>) {
+    const t = this.#track;
+    if (!t || t.key !== m.key || !(m.v instanceof Float32Array) || !m.v.length || m.v.length % FIELDS) return;
+    const store = this.#notesOf(t.trackId), key = `${m.name}|${m.ref}`;
+    store.delete(key);
+    store.set(key, m.v.slice());
+    this.#saveNotes(t.trackId);
+    for (const s of this.#slots) if (!s.dead && s.key === t.key) this.#send(s, { b: 'notes', key: m.key, name: m.name, ref: m.ref, v: m.v });
+  }
+
+  // Keeps the learning worker improving the weights of every skill group racing on this track, and
+  // driving practice runs for its experts.
   #learn(plan: Plan) {
     const t = this.#track;
     if (this.#failed || !canLearn() || !t || t.bad || plan.key !== t.key) return;
     const groups = new Map<string, number>();
+    const experts: Persona[] = [];
     for (const b of plan.bots.values()) {
       const g = brainGroup(b.persona.skill);
       if (g) groups.set(g.key, g.skill);
+      if (b.persona.skill >= EXPERT_SKILL) experts.push(b.persona);
     }
-    const sig = t.key + ':' + [...groups.keys()].sort().join('');
-    if (!groups.size || sig === this.#learnSig) return;
+    const sig = t.key + ':' + [...groups.keys()].sort().join('') + ':' + experts.map((p) => `${p.name ?? p.u}/${p.copy}`).sort().join(',');
+    if ((!groups.size && !experts.length) || sig === this.#learnSig) return;
     this.#learnSig = sig;
     if (!this.#learner || this.#learner.dead) this.#learner = this.#spawn(false);
     const slot = this.#learner;
@@ -522,7 +582,8 @@ export class BotManager {
     }
     const saved = this.#brainsOf(plan.trackId);
     const tasks = [...groups].map(([key, skill], i) => ({ key, skill, w: (saved.get(key)?.w ?? base ?? freshBrain(i + 1)).slice() }));
-    this.#send(slot, { b: 'learn', key: t.key, tasks });
+    const practice = experts.map((bot) => ({ bot, notes: this.#notesFor(plan.trackId, bot) }));
+    this.#send(slot, { b: 'learn', key: t.key, tasks, practice });
   }
 
   #learned(m: Extract<FromWorker, { b: 'learned' }>) {
@@ -631,6 +692,7 @@ export class BotManager {
     if (!m || typeof m !== 'object') return;
     if (m.b === 'ready') return this.#init(slot);
     if (m.b === 'learned') return this.#learned(m);
+    if (m.b === 'notes') return this.#noted(m);
     if (m.b === 'track') {
       if (m.ok) return;
       if (this.#track?.key === m.key) this.#track.bad = true;
