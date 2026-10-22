@@ -2,14 +2,14 @@
 // the replay checks. Everyone else only sees the state it broadcasts.
 import type { App } from './app.ts';
 import { BotManager } from './bots/manager.ts';
-import { BOT_NAMES, botStyle, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
+import { BOT_NAMES, botStyle, matchStep, mix, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
 import type { RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
 import { site } from './game.ts';
 import type { Msg } from './protocol.ts';
 import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
-import { botPid, byPid, isBot, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category } from './state.ts';
+import { botPid, byPid, isBot, isFinalist, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category } from './state.ts';
 
 const LOAD_WAIT_MS = 15_000;
 const SESSION_RETRY_MS = 8_000;
@@ -26,6 +26,10 @@ const RECENT_TRACKS = 8;
 const BOT_WAIT_MS = 15_000;
 // How far a bot's run is planned in a round without a time limit.
 const BOT_PLAN_MS = 600_000;
+// Once anyone is a finalist, after every round each other bot may secretly drive as an expert for the next
+// SECRET_ROUNDS rounds. Only this page knows: the bot's shown skill and tag stay as they were.
+const SECRET_CHANCE = 0.2;
+const SECRET_ROUNDS = 2;
 // The cup's own fastest checked runs per track, which bots may follow.
 const CUP_REFS = 3;
 
@@ -90,6 +94,8 @@ export class Organizer {
   #botTier = '';
   #planTrack: { ref: TrackRef; data: TrackData } | null = null;
   #cupRuns = new Map<string, RefInput[]>();
+  // Bots secretly driving as experts, to the last round they do.
+  #secret = new Map<number, number>();
 
   constructor(
     private app: App,
@@ -384,7 +390,8 @@ export class Organizer {
       t = this.#planTrack;
     const mgr = bots.length ? this.#manager() : this.#bots;
     if (n == null || !t || !mgr) return;
-    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), bots.map((p) => p.bot!.s / 100), bots.map((p) => BOT_NAMES.indexOf(p.name)));
+    const skills = bots.map((p) => ((this.#secret.get(p.u) ?? 0) >= n ? 1 : p.bot!.s / 100));
+    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, bots.map((p) => BOT_NAMES.indexOf(p.name)));
     list.forEach((persona, i) => (persona.u = bots[i].u));
     mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS });
     const r = s.round;
@@ -459,8 +466,17 @@ export class Organizer {
     const median = times.length % 2 ? times[mid] : (times[mid - 1] + times[mid]) / 2;
     for (const row of result.rows) {
       const p = player(s, row[0]);
-      if (p?.bot && row[1] != null) p.bot.s = Math.round(matchStep(p.bot.s / 100, row[1], median) * 100);
+      if (p?.bot && row[1] != null && !((this.#secret.get(p.u) ?? 0) >= result.n)) p.bot.s = Math.round(matchStep(p.bot.s / 100, row[1], median) * 100);
     }
+  }
+
+  // The secret expert roll after a round, once anyone is a finalist (see SECRET_CHANCE).
+  #rollSecret() {
+    const s = this.state;
+    if (!s.players.some((p) => isFinalist(s, p))) return;
+    const seed = seedOf(`${s.id}:secret:${s.rounds}`);
+    for (const p of this.#seatedBots())
+      if (!isFinalist(s, p) && mix(seed, p.u) / 4294967296 < SECRET_CHANCE) this.#secret.set(p.u, s.rounds + SECRET_ROUNDS);
   }
 
   // A checked run the bots may follow on this track later.
@@ -968,6 +984,7 @@ export class Organizer {
     if (winner) this.app.native.sound('record');
     this.#announce(result, leaderBefore, finalistsBefore);
     this.#matchField(result);
+    this.#rollSecret();
     this.#prePlan();
     this.touch(true);
   }
@@ -1233,6 +1250,7 @@ export class Organizer {
   raceAgain(newTracks: boolean) {
     const s = this.state;
     E.resetScores(s);
+    this.#secret.clear();
     this.#epoch++;
     this.#loading = null;
     // App.history is this same array.
