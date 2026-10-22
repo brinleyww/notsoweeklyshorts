@@ -208,16 +208,15 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   its line (up to 1.5 units, kept off walls and out of a jump's run-up) and how early it turns in. A new
   bot starts from rules hashed from its name, and every race run drives each section a little differently
   from that run's seed, so no two rounds are alike and it's all deterministic.
-- Experts learn in practice, in the learning worker (below), one expert after another: a run on its notes
-  as they are, then the same run (same seed) where before each section the bot tries four other ways
-  through it, each from the same exact physics state to the end of the next section, and drives on with
+- Experts learn in practice, in the learning worker (below), one expert after another: a run where before
+  each section of its notes the bot tries four other ways through it, each from the same exact physics state to the end of the next section, and drives on with
   the fastest (time, less 10 ms per km/h it leaves with; a try that goes wrong is out). The notes that run
   ends with then race the old ones on three fresh race runs (with a race's variety and random inputs) and
   are kept only if they are no slower on any of them and 0.03 s faster in all: like the network, an expert
   never keeps what drove worse on its tests, and it can end up faster than its hint. Its next round on the track (in time attack, its next run)
   drives them. Notes are kept per track, bot name and hint run in localStorage (`nsws-cuppa-notes:<id>`,
   24 tracks). Without the learning worker (under 6 cores or 8 GB) experts drive their notes as they are.
-  Measured on Anubis (record 28.592 s, \`botlab/t25_notes.mjs\`, two experts, four race runs each on fixed
+  Measured on Anubis (record 28.592 s, `botlab/t25_notes.mjs`, two experts, four race runs each on fixed
   seeds; that run's tests used two fresh runs, now three): before practice 28.78 s (0.19 behind) and 30.86 s
   (on the second-best run, with wrecks); after 12 minutes of practice 29.24 s (two runs at 28.47 and 28.51 s,
   under the record, and one wreck at 30.55 s) and 29.44 s (no more wrecks). So practice makes a struggling
