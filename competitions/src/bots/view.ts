@@ -283,7 +283,7 @@ export class BotView {
       this.live.bot(b.pid, this.#raceTime(track, at.state, t));
       if (!g) continue;
       const was = this.#drawn.get(b.pid);
-      if (!show || this.#dnf.has(b.u) || t > tl.end + HOLD_MS) {
+      if (!show || this.#dnf.has(b.u) || t > tl.end + (this.#over.has(b.u) ? 0 : HOLD_MS)) {
         // Leaving the track: one last still state, so a hidden car doesn't keep its engine running.
         const last = this.#last.get(b.pid);
         if (was === this.#frameNo - 1 && last)

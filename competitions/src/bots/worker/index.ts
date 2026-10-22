@@ -5,6 +5,7 @@ import { deflate, KeyframeEncoder } from '../codec.ts';
 import type { FromWorker, RefInput, ToWorker } from '../wire.ts';
 import { explore } from './explore.ts';
 import { gatesOf } from './gates.ts';
+import { Learner } from './learn.ts';
 import { Planner, routeTrack, type Job, type Out } from './planner.ts';
 import { PartMeshes, TrackRays, type PlacedPart } from './rays.ts';
 import { Reference } from './reference.ts';
@@ -23,10 +24,13 @@ const post = (m: FromWorker, transfer?: Transferable[]) => scope.postMessage(m, 
 const CHUNK_FRAMES = 2000;
 const SLICE_MS = 25;
 const PROGRESS_MS = 250;
+// Planned less than this far ahead of the race clock, bots stop retrying failures until they're ahead again.
+const HURRY_MS = 2500;
 
 interface TrackState {
   key: string;
   load: TrackLoad;
+  route: TrackLoad;
   refs: Reference[];
   planner: Planner | null;
 }
@@ -59,6 +63,8 @@ let startAt: number | null = null;
 let offset = 0;
 let running = false;
 let progressAt = 0;
+// Only in the organizer's learning worker, which plans no bots.
+let learner: Learner | null = null;
 
 const ringSize = () => ((scope.navigator?.deviceMemory ?? 8) >= 8 ? 6 : 4);
 
@@ -105,7 +111,7 @@ function handle(m: ToWorker) {
         return;
       }
       if (streams.has(m.id)) return;
-      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end });
+      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null });
       streams.set(m.id, { job, enc: new KeyframeEncoder(), seq: 0, pending: 0, from: -1, last: 0, chain: Promise.resolve(), at: performance.now(), was: 0, rate: 0, results: 0, sent: 0 });
       kick();
       return;
@@ -124,10 +130,25 @@ function handle(m: ToWorker) {
     case 'drop':
       if (track?.key === m.key) dropTrack();
       return;
+    case 'brain':
+      track?.planner?.brain(m.id, m.w);
+      return;
+    case 'learn': {
+      learner?.dispose();
+      learner = null;
+      const t = track;
+      if (!sim || !t || t.key !== m.key || !t.planner || !m.tasks.length) return;
+      learner = new Learner({ sim, route: t.route, full: t.load, refs: t.refs, clear: t.planner.clear }, m.tasks.map((x) => ({ key: x.key, skill: x.skill, w: x.w })), m.tasks.length * 7919 + t.refs[0].n);
+      learner.onBetter = (task, cost, was) => post({ b: 'learned', key: t.key, task: task.key, w: task.w.slice(), cost, was }, []);
+      kick();
+      return;
+    }
   }
 }
 
 function dropTrack() {
+  learner?.dispose();
+  learner = null;
   track?.planner?.dispose();
   track = null;
   streams.clear();
@@ -174,8 +195,10 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
   }
   const ok = refs.length > 0;
   const route = ok ? routeTrack(sim, load, refs, (id) => detectors.has(id)) : load;
-  track = { key, load, refs, planner: ok ? new Planner(sim, route, refs, ringSize(), rays, load) : null };
+  track = { key, load, route, refs, planner: ok ? new Planner(sim, route, refs, ringSize(), rays, load) : null };
   if (track.planner) {
+    const planner = track.planner;
+    planner.hurry = () => startAt != null && planner.frontier - raceNow() < HURRY_MS;
     track.planner.onCommit = commit;
     track.planner.onDone = done;
   }
@@ -259,8 +282,14 @@ function kick() {
 function pump() {
   const planner = track?.planner;
   if (!planner || !planner.busy) {
-    running = false;
     if (planner) progress(performance.now());
+    if (learner) {
+      // Learning gets at most half of this worker's time.
+      learner.work(performance.now() + SLICE_MS * 2);
+      setTimeout(pump, SLICE_MS * 2);
+      return;
+    }
+    running = false;
     return;
   }
   const t0 = performance.now();

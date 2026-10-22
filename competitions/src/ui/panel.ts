@@ -680,15 +680,19 @@ export class Panel {
       ),
     );
     botCount.classList.add('wide');
-    const players = sect(
-      'Players',
-      toggle('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
-      toggle('freecam', 'Spectator free camera', 'Let spectators fly around'),
-      toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
-      toggle('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+    const skillHint: Record<Rules['botSkill'], string> = {
+      easy: 'Slow through corners, kept well off the walls',
+      medium: 'About 10% behind the world record',
+      hard: 'About 5% behind the world record',
+      expert: 'About 0.1 s behind the world record',
+      mixed: 'From easy to expert, one of each',
+      match: "They start at medium and follow the humans' pace round by round",
+    };
+    const bots = sect(
+      'Bots',
       botCount,
       r.bots && !r.collisions
-        ? seg('botSkill', 'Bot skill', r.botSkill === 'match' ? 'They start at medium and follow the humans\' pace round by round' : r.botSkill === 'mixed' ? 'From easy to expert' : 'How fast and how boldly they drive', [
+        ? seg('botSkill', 'Bot skill', skillHint[r.botSkill], [
             ['easy', 'Easy'],
             ['medium', 'Medium'],
             ['hard', 'Hard'],
@@ -698,8 +702,16 @@ export class Panel {
           ])
         : null,
     );
+    const players = sect(
+      'Players',
+      toggle('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
+      toggle('freecam', 'Spectator free camera', 'Let spectators fly around'),
+      toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
+      toggle('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+    );
     return [
       lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules'),
+      bots,
       winning,
       r.mode === 'knockout' ? null : this.#pointsSection(s, lobby && host, set),
       tracks,

@@ -32,7 +32,12 @@ export interface Payload {
 export type ToWorker =
   | { b: 'init'; init: unknown }
   | { b: 'track'; key: string; trackId: string; payload: Payload; refs: RefInput[] }
-  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number }
+  // brain: the bot's network weights (worker/brain.ts), none for driving without it.
+  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null }
+  // Weights a running bot takes up from its next run.
+  | { b: 'brain'; id: string; w: Float32Array | null }
+  // To the learning worker: keep improving these weights on the track (worker/learn.ts).
+  | { b: 'learn'; key: string; tasks: { key: string; skill: number; w: Float32Array }[] }
   // GO on the cup clock (null until set); cup clock = Date.now() + offset.
   | { b: 'clock'; startAt: number | null; offset: number }
   | { b: 'cancel'; id: string }
@@ -47,4 +52,6 @@ export type FromWorker =
   | { b: 'result'; id: string; finish: number | null; runs: [number, number | null][]; dnf: number | null; frontier: number }
   // frontier: committed bot frame; rate: bot frames planned per wall ms lately.
   | { b: 'progress'; id: string; frontier: number; rate: number }
-  | { b: 'error'; id?: string; message: string };
+  | { b: 'error'; id?: string; message: string }
+  // The learning worker found better weights for a task: cost (lower is better) now and before.
+  | { b: 'learned'; key: string; task: string; w: Float32Array; cost: number; was: number };

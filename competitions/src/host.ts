@@ -428,14 +428,10 @@ export class Organizer {
       mgr = this.#bots;
     if (!r || r.startAt == null) return;
     let changed = false;
-    const sat: string[] = [];
     for (const d of mgr?.due(now) ?? []) {
       if (!r.racers.includes(d.u)) continue;
       if (d.dnf) {
-        if (E.recordDnf(s, d.u)) {
-          changed = true;
-          if (d.sat) sat.push(player(s, d.u)?.name ?? '?');
-        }
+        if (E.recordDnf(s, d.u)) changed = true;
         continue;
       }
       const f = d.finish ?? d.runFinish;
@@ -449,7 +445,6 @@ export class Organizer {
     }
     // A bot whose plan is gone can't finish any more.
     for (const u of r.racers) if (isBot(player(s, u)) && !roundDone(s, u) && !mgr?.drives(r.n, u)) changed = E.recordDnf(s, u) || changed;
-    if (sat.length) this.app.notify(`${sat.join(', ')} ${sat.length > 1 ? "weren't" : "wasn't"} ready in time and ${sat.length > 1 ? 'sit' : 'sits'} this round out`, 'info');
     if (changed) this.touch();
   }
 

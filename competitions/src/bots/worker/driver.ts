@@ -4,6 +4,8 @@
 //   how it gets through drifts and risky lines, corrected for lateral and heading error.
 // - Slower than the reference it drives on grip: steering from the line's curvature, and a speed cap
 //   low enough for the steering to hold the line (the reference may drift where a slower car can't).
+import { BRAIN_IN, BRAIN_OUT, type Brain } from './brain.ts';
+import type { Clearance } from './clearance.ts';
 import type { Reference } from './reference.ts';
 import type { Keys, Raw } from './sim.ts';
 
@@ -39,11 +41,31 @@ export interface DriverState {
   offUntil: number;
   // Grip only until a frame (retries).
   gripUntil: number;
+  // This run's own way of driving, rolled from the bot's seed at every start and respawn: two slow
+  // weaves across the line (amplitude units, wavelength units, phase) and a pace that swings from
+  // corner to corner (share, wavelength, phase).
+  style: Float64Array;
+  // A small input the driver didn't choose (steering input added, or the throttle let off) until a frame.
+  noise: number;
+  noiseLift: boolean;
+  noiseUntil: number;
+  // A retry at a jump: the reference's own keys from its frame openFrom on (at time openAt), as they were,
+  // until a frame.
+  openFrom: number;
+  openAt: number;
+  openUntil: number;
 }
 
 export const newDriverState = (): DriverState => ({
   k: 0, imitating: true, bias: 0, biasUntil: -1, paceMul: 1, paceUntil: -1, off: 0, offUntil: -1, gripUntil: -1,
+  style: new Float64Array(9), noise: 0, noiseLift: false, noiseUntil: -1, openFrom: 0, openAt: 0, openUntil: -1,
 });
+
+export const copyDriverState = (st: DriverState): DriverState => ({ ...st, style: st.style.slice() });
+
+// Room kept from a wall or edge when the weave moves the line toward it, units.
+const STYLE_ROOM = 0.35;
+const TAU = Math.PI * 2;
 
 const WHEELBASE = 2.875;
 // Wheel angle at full steering input for a speed in km/h (fit to the physics).
@@ -65,6 +87,12 @@ export class Driver {
   readonly p: DriverParams;
   // Per reference frame: shift of the line away from walls and edges (units, + = left).
   offsets: Float32Array | null = null;
+  // Room left and right of the reference line, for keeping the weave off walls.
+  clear: Clearance | null = null;
+  brain: Brain | null = null;
+  skill = 1;
+  readonly #x = new Float32Array(BRAIN_IN);
+  readonly #y = new Float32Array(BRAIN_OUT);
   // From the last decision, for the planner: lateral error, heading error (rad), distance to the line.
   lat = 0;
   head = 0;
@@ -123,7 +151,16 @@ export class Driver {
     const ux = ref.ux[k], uy = ref.uy[k], uz = ref.uz[k];
     const lx = uy * tz - uz * ty, ly = uz * tx - ux * tz, lz = ux * ty - uy * tx;
     const ex = r.x - ref.px[k], ey = r.y - ref.py[k], ez = r.z - ref.pz[k];
-    const offset = (st.offUntil >= f ? st.off : p.offset) + (this.offsets ? this.offsets[Math.min(ref.n - 1, k + 20)] : 0);
+    let offset = (st.offUntil >= f ? st.off : p.offset) + (this.offsets ? this.offsets[Math.min(ref.n - 1, k + 20)] : 0);
+    const sty = st.style;
+    const calm = free && sty[0] + sty[3] > 0 ? this.#calm(k) : 0;
+    if (calm > 0) {
+      const a = ref.arc[k];
+      const w = calm * (sty[0] * Math.sin((TAU * a) / sty[1] + sty[2]) + sty[3] * Math.sin((TAU * a) / sty[4] + sty[5]));
+      const kk = Math.min(ref.n - 1, k + 20);
+      const hi = this.clear ? this.clear.left[kk] - STYLE_ROOM : Infinity, lo = this.clear ? STYLE_ROOM - this.clear.right[kk] : -Infinity;
+      if (hi > lo) offset = Math.max(Math.min(offset + w, Math.max(hi, offset)), Math.min(lo, offset));
+    }
     const lat = ex * lx + ey * ly + ez * lz - offset;
     // Heading against the reference car's forward, and against the path, about the reference's up.
     const angle = (ax: number, ay: number, az: number) => {
@@ -169,7 +206,40 @@ export class Driver {
     const grip = st.gripUntil >= f ? 1 : 0;
     const sGrip = Math.atan(ref.curv[lead] * WHEELBASE) / amax + fbPath;
     let target = grip ? sGrip : sDrift;
+    let paceAdj = 0;
+    if (this.brain) {
+      const x = this.#x, at = (ms: number) => Math.min(ref.n - 1, k + ms);
+      const clamp = (v: number, m: number) => (v > m ? m : v < -m ? -m : v);
+      x[0] = kmh / 100;
+      x[1] = s;
+      x[2] = clamp(target, 1.5);
+      x[3] = clamp(lat / 2, 2);
+      x[4] = clamp(headCar, 1.5);
+      x[5] = clamp(headPath, 1.5);
+      x[6] = clamp((kmh - ref.speed[k]) / 50, 2);
+      x[7] = ref.speed[k] / 100;
+      x[8] = ref.steer[at(100)];
+      x[9] = ref.steer[at(250)];
+      x[10] = ref.steer[at(500)];
+      x[11] = ref.steer[at(1000)];
+      x[12] = clamp(ref.curv[at(100)] * 3, 1);
+      x[13] = clamp(ref.curv[at(250)] * 3, 1);
+      x[14] = clamp(ref.curv[at(500)] * 3, 1);
+      x[15] = clamp(ref.curv[at(1000)] * 3, 1);
+      x[16] = this.clear ? clamp((this.clear.left[k] - offset) / 4, 2) : 1;
+      x[17] = this.clear ? clamp((this.clear.right[k] + offset) / 4, 2) : 1;
+      x[18] = r.wheels / 4;
+      x[19] = drift;
+      x[20] = clamp(vel[1] / 20, 2);
+      x[21] = clamp((vel[0] * lx + vel[1] * ly + vel[2] * lz) / Math.max(vms, 1), 1.5);
+      x[22] = this.skill;
+      x[23] = ref.jumpIn(k, 1000) === Infinity ? 0 : 1;
+      const y = this.brain.run(x, this.#y);
+      target += y[0];
+      paceAdj = y[1];
+    }
     if (st.biasUntil >= f) target += st.bias;
+    if (st.noiseUntil >= f) target += st.noise;
     if (kmh < -3) target = -target;
     target = target > 1 ? 1 : target < -1 ? -1 : target;
     // Each frame the input moves 0.01 toward +1 (left), -1 (right) or 0 (neither): pick the closest.
@@ -181,7 +251,7 @@ export class Driver {
     const rk = ref.keys[Math.min(ref.n - 1, k + 1)];
     let up = (rk & 1) !== 0, down = (rk & 4) !== 0;
     const pace = p.pace * (st.paceUntil >= f ? st.paceMul : 1);
-    let allow = this.#allowed(k, vms, pace, grip === 1);
+    let allow = this.#allowed(k, vms, pace, grip === 1, st) * Math.exp(paceAdj);
     // Steering already at full lock and still drifting wide: the corner is too fast for this line.
     const wide = target * lat > 0 ? 0 : Math.abs(lat);
     if (Math.abs(target) > 0.97 && wide > 0.3) allow = Math.min(allow, vms - 1 - 4 * wide);
@@ -202,13 +272,27 @@ export class Driver {
       up = (rk & 1) !== 0;
       down = (rk & 4) !== 0;
     }
+    if (st.noiseUntil >= f && st.noiseLift) up = false;
     out.up = up;
     out.down = down;
     out.reset = false;
   }
 
+  // How much of a run's own style may show here: none in a jump's run-up or just before a takeoff (where
+  // only the reference's own line and speed get there), faded in and out over 1.5 s.
+  #calm(k: number) {
+    const ref = this.ref;
+    let clear = 0;
+    for (let i = 0; i < 4; i++) {
+      const j = Math.min(ref.n - 1, k + i * 500);
+      if (!ref.runUp(j) && ref.jumpIn(j, 2200) === Infinity) clear++;
+    }
+    return clear / 4;
+  }
+
   // Highest speed (units/s) here from which every capped speed ahead can still be reached by braking.
-  #allowed(k: number, vms: number, pace: number, grip: boolean) {
+  #allowed(k: number, vms: number, pace: number, grip: boolean, st: DriverState) {
+    const sty = st.style;
     const ref = this.ref;
     const horizon = Math.max(30, (vms * vms) / (2 * this.p.brake) + 25);
     const a = ref.arc[k];
@@ -223,7 +307,8 @@ export class Driver {
       const slow = ((ref.keys[i] & 4) !== 0 || Math.abs(ref.steer[i]) > 0.3) && ref.jumpIn(i, 2200) === Infinity;
       // Before a long flight only a retry's own slowdown counts, not the bot's usual pace.
       const q = slow && ref.runUp(i) ? pace / this.p.pace : pace;
-      let cap = slow ? q * vr : vr + 1;
+      const swing = slow && !ref.runUp(i) ? 1 + sty[6] * Math.sin((TAU * ref.arc[i]) / (sty[7] || 1) + sty[8]) : 1;
+      let cap = slow ? q * vr * swing : vr + 1;
       if (grip) cap = Math.min(cap, gripSpeed(c));
       const reach = (cap * cap + 2 * this.p.brake * d) ** 0.5;
       if (reach < allow) allow = reach;

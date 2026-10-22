@@ -9,7 +9,7 @@ const TIERS = {
   easy: [0.25, 0.4],
   medium: [0.5, 0.62],
   hard: [0.72, 0.82],
-  expert: [0.9, 0.98],
+  expert: [1, 1],
 } as const;
 const MIXED = [0.3, 0.95] as const;
 

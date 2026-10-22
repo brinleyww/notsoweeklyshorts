@@ -141,9 +141,12 @@ final round. The organizer is warned (privately) when a racer sends a run identi
 
 ## Bots
 
-The setup page's **Bots** row (Off, 1-8, `MAX_BOTS`) puts computer racers on the grid, and **Bot skill**
-picks how good they are: Easy, Medium, Hard, Expert, Mixed (spread from easy to expert), or Match the
-field (after every round each bot's skill moves toward the humans' median time). Bots are ordinary
+The setup page's **Bots** section, the first of the rules, has a count (Off, 1-8, `MAX_BOTS`) that puts
+computer racers on the grid and **Bot skill** for how good they are: Easy, Medium, Hard, Expert, Mixed (one
+of each from easy to expert), or Match the field (after every round each bot's skill moves toward the
+humans' median time). Skill is how well a bot drives: how close to the reference's speed it takes corners,
+how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Expert is
+skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
 standings, knockouts, the director camera and Follow all treat them like racers, with a BOT tag. They
 never vote, ban, pick, ready up or keep a round waiting, their finishes don't start the finish window,
@@ -173,18 +176,52 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   leaves its line, falls, spins, wrecks, gets stuck or misses a checkpoint is taken back a few ticks
   (the other bots replay their logged keys) and tries again with other settings: slower, or faster when
   it failed for lack of speed or at a jump, on grip instead of copying a drift, offset, and on another
-  player's line. When it keeps failing it does what a player would: respawn at its last checkpoint, or
-  restart before the first one. A respawn that gets it nowhere (failing again before the next
-  checkpoint, or too slow there for what comes next) goes the same way every time, so then it starts
-  over and drives the slowest recorded run's own keys, a sure but late finish. Only a bot with no
-  recorded run to copy (an explored route) retires. Careless bots also make and keep the odd mistake.
-- Bots of skill 0.95 and up (the best of Mixed, most of Expert) don't drive on their own: they replay the
-  fastest recorded run's keys with one throttle lift or brake tap, timed so they finish 0.1-0.3 s behind it
-  (about 0.1 s at 0.98 and 0.3 s at 0.95, give or take 0.06 s). The planner finds the lift by trying it on a car of its own before the
-  race, from a spot picked at random each round (near the end first, then earlier, then a smaller loss
-  if nothing else lands), so the same bot drives a slightly different run every round; with no recorded run
-  that allows it, the bot drives like the others. Measured on 10 hard community tracks and NyQuill
-  (your PB as the record): 0.10-0.32 s behind every time.
+  player's line (only one that passes close by), and at a jump some tries fly it on the reference's own
+  keys from before the takeoff. When it keeps failing it does what a player would: respawn at its last
+  checkpoint, or restart before the first one. A respawn that gets it nowhere (failing again before the
+  next checkpoint, or too slow there for what comes next) goes the same way every time, so then it starts
+  over and drives the keys of the slowest recorded run that still finishes before the round ends, a sure
+  but late finish; with no recorded run (an explored route) it starts its own run over. Careless bots
+  also make and keep the odd mistake.
+- Bots don't DNF. One planned too little ahead at GO, or whose planning falls behind the race clock,
+  keeps racing: pages draw it from where its plan has got to, its result stands, and within 2.5 s of the
+  race clock its planner stops retrying failures until it is ahead again. Only the round's time limit (as
+  for players) or a planner worker that dies can end a bot's round early.
+- Every run, and the rest of a run after a respawn, drives a little differently, from the bot's seed (the
+  cup and round): two slow weaves across the line (wider for weaker bots, kept off walls, faded out in a
+  jump's run-up) and corner pace that swings a few percent. About every 12 s a bot also gets a small input
+  it didn't choose (a 40-150 ms nudge of the wheel or lift of the throttle, never just before a jump):
+  sometimes that finds a better line, sometimes it costs a little.
+- Past the finish a bot brakes and, like a ghost, leaves the track 0.4 s later (scenery past a finish,
+  like chezbug's, would otherwise wreck it in front of everyone).
+- Bots of skill 0.95 and up (Expert, and the best of Mixed) don't drive on their own: each round they
+  take one recorded run at random among those within reach of their gap and replay its keys with one
+  throttle lift or brake tap, timed so they finish 0.1-0.3 s behind the fastest recording (about 0.1 s at
+  skill 1 and 0.3 s at 0.95, give or take 0.06 s). The planner finds the lift by trying it on a car of its
+  own before the race, from a spot picked at random each round (near the end first, then earlier, then a
+  smaller loss if nothing else lands); if nothing lands at all, the bot replays the fastest recording
+  exactly, so it can't crash. In time attack every later run aims a little closer. Measured on 10 hard
+  community tracks, NyQuill (your PB as the record) and chezbug (its top 4 runs): 0.08-0.35 s behind.
+- Bots have a neural network (`brain.ts`, 24 inputs, two hidden layers of 16, 706 weights) on top of the
+  driver: each frame it reads the car (speed, steering, slip, how far off the line and how it points), the
+  reference ahead (speed, steering input and curve 0.1-1 s on, a jump coming) and the room to the walls,
+  and corrects the steering target and the speed limit (at most 0.25 input units and 6%). Its output
+  layer starts at zero, so untrained it changes nothing. It learns by evolution strategies, a kind of
+  reinforcement learning, on the game's own physics (`learn.ts`): a test plans one bot's whole run with
+  the planner (retries, respawns, restarts and all) and costs the finish time plus 1 s for every wreck
+  the bot had to live with; a random change to the weights and its opposite are tested on the same two
+  fresh seeds as the current weights, and one is kept only if it is no worse on either seed and better
+  overall. So it only ever keeps what drove better on its test.
+- The learning runs during a cup on the organizer's page, in one more worker (only with at least 6 cores
+  and 8 GB, at most half that worker's time), per track and per skill group (under 0.45, to 0.7, to
+  0.9, to 0.95; experts don't need it). It keeps going through rounds and breaks; bots take up the best
+  weights at the next round on the track, and in time attack at their next run. What they learned is kept
+  per track in localStorage (`nsws-cuppa-brain:<id>`, 40 tracks), so the next cup on that track starts
+  from there. Measured in the lab (`botlab/t24_learn.mjs`, 15 minutes, then six unseen seeds): chezbug at
+  0.6 from 22.99 to 21.13 s, Sky Bound at 0.8 from 42.51 to 41.47 s (faster on every seed), Anubis at 0.35
+  from 32.14 to 31.71 s; Solaris at 0.6 was faster on four seeds but wrecked on two others (32.94 to
+  33.72 s), so what it keeps drove better on its tests, not yet on every run. There are no offline-trained starting weights yet (`BASE_BRAIN` is empty):
+  a lab run across many tracks (`t23_train.mjs`) was too slow and too noisy to beat no network.
 - On a track of more than 4000 parts, every bot's physics world holds only the parts within 60 units of
   a reference plus every checkpoint, start and finish (`routeTrack`): a car never gets that far from one
   without being taken back. NyQuill's 63,183 parts become 3,298, and four bots take 51 MB of physics
@@ -219,10 +256,14 @@ finished, a median 2.7% behind the record at skill 0.97, 5.8% at 0.85, 10.4% at 
 run in ten, mostly weak bots on tracks with long fast flights, only finished by starting over (1.5-2.5 times
 the record); keeping the record's speed through the run-up to a long flight (`Reference.runUp`) came after
 that benchmark and fixed Zenith's ending for a 0.6 bot.
+On the tracks with long fast flights (Zenith, Frozen in Time, Flying Dreams) most bots below expert still
+lose too much speed through the lap to make the last flights, and finish only by starting over.
 Tests: `cup-test-tools/cdp/sc_bots.mjs` (a race with bots on the test track), `sc_botwr.mjs <ct>` (a
-Kodub community track with its stored WR served through a faked leaderboard), `sc_botwatch.mjs` (a
-spectator following bots), `sc_botcost.mjs` (frames and bytes each page sends, per phase, while one of
-those runs).
+Kodub community track with its stored WR served through a faked leaderboard), `sc_botweek.mjs` (the same
+for an NSWS week track from a runs file), `sc_botwatch.mjs` (a spectator following bots),
+`sc_botcost.mjs` (frames and bytes each page sends, per phase, while one of those runs),
+`sc_botsmooth.mjs` (frame times, bot stutter and sudden slow-downs on each page), `sc_botprof.mjs` (CPU
+profile with the CPU slowed down).
 
 ## Organizer tools
 

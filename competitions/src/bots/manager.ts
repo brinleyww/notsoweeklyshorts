@@ -6,14 +6,13 @@ import type { Msg } from '../protocol.ts';
 import type { TrackRef } from '../state.ts';
 import { toB64 } from './codec.ts';
 import { WORKER_NAME, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
+import { BASE_BRAIN, brainFromB64, brainGroup, brainToB64, freshBrain } from './worker/brain.ts';
 
 export type BotsMsg = Extract<Msg, { k: 'bots' }>;
 export interface Due {
   u: number;
   finish?: number;
   dnf?: true;
-  // The DNF is a bot that wasn't planned far enough ahead at GO.
-  sat?: true;
   runFinish?: number;
 }
 export interface BotJob {
@@ -34,14 +33,15 @@ export interface BotHost {
 export const LEAD = 6000;
 const READY_TIMEOUT_MS = 10_000;
 const HAND_MS = 500;
-// Planned this far behind the race clock, a bot would stand still on every screen: it retires.
-const LAG_MS = 4000;
 const REFS_KEY = 'nsws-cuppa-refs:';
 const REFS_TTL = 24 * 3600_000;
 const REFS_EMPTY_TTL = 3600_000;
 const REFS_KEEP = 24;
 const REFS_WAIT_MS = 8000;
 const MSG_CHARS = 48_000;
+// What the bots have learned, per track: each skill group's best network weights (worker/learn.ts).
+const BRAIN_KEY = 'nsws-cuppa-brain:';
+const BRAIN_KEEP = 40;
 // Workers go when the organizer stops ticking (the cup is gone) or nothing was planned for a while.
 const ORPHAN_MS = 15_000;
 const IDLE_MS = 120_000;
@@ -91,6 +91,15 @@ interface Plan {
   first: boolean;
 }
 
+// Learning takes a core of its own, so only where there are cores to spare.
+function canLearn() {
+  const cores = navigator.hardwareConcurrency || 4;
+  const memory = (navigator as { deviceMemory?: number }).deviceMemory;
+  return cores >= 6 && (memory == null || memory >= 8);
+}
+
+const base = BASE_BRAIN ? brainFromB64(BASE_BRAIN) : null;
+
 function poolSize() {
   const cores = navigator.hardwareConcurrency || 4;
   const memory = (navigator as { deviceMemory?: number }).deviceMemory;
@@ -112,6 +121,10 @@ export class BotManager {
   #keys = 0;
   #jobs = 0;
   #refs = new Map<string, Promise<RefInput[]>>();
+  // The learning worker (besides the planners) and the track key and groups it was given.
+  #learner: Slot | null = null;
+  #learnSig = '';
+  #brains = new Map<string, Map<string, { w: Float32Array; cost: number }>>();
 
   constructor(private host: BotHost) {}
 
@@ -145,6 +158,7 @@ export class BotManager {
       cur.mode = job.mode;
       cur.end = job.end;
       this.#reconcile(cur, job.bots);
+      this.#learn(cur);
       return;
     }
     this.#close();
@@ -160,6 +174,7 @@ export class BotManager {
         if (this.#plan !== plan) return;
         this.#loadTrack(plan, trackData, [...refs, ...cupRuns]);
         for (const b of plan.bots.values()) if (!b.slot && !b.over) this.#assign(plan, b);
+        this.#learn(plan);
       })
       .catch((error) => {
         console.warn('[Cuppa] bot planning', error);
@@ -210,13 +225,13 @@ export class BotManager {
     const ta = plan.mode === 'ta';
     for (const b of plan.bots.values()) {
       if (b.closed) continue;
+      // A bot that can't be planned at all (its worker failed) sits the try out. One planned too little
+      // ahead at GO still races: it is drawn from where its plan has got to, and its result stands.
       if (!b.checked) {
         b.checked = true;
-        // Not far enough ahead at GO: it sits this try out (and keeps planning for a restart).
-        const ahead = b.result != null || (b.frontier >= 2000 && (b.frontier >= LEAD || b.rate >= 1.2 || b.failed));
-        if (!ahead) {
+        if (b.failed && b.result == null && b.frontier < 2000) {
           b.closed = true;
-          out.push(b.failed ? { u: b.u, dnf: true } : { u: b.u, dnf: true, sat: true });
+          out.push({ u: b.u, dnf: true });
           continue;
         }
       }
@@ -253,12 +268,6 @@ export class BotManager {
           out.push({ u: b.u, dnf: true });
         }
         continue;
-      }
-      if (t - b.frontier > LAG_MS) {
-        this.#cancel(b);
-        b.failed = true;
-        b.closed = true;
-        out.push({ u: b.u, dnf: true });
       }
     }
     return out;
@@ -354,7 +363,7 @@ export class BotManager {
     }
     b.slot = slot;
     slot.jobs++;
-    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end });
+    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill) });
   }
 
   #cancel(b: Bot) {
@@ -455,6 +464,77 @@ export class BotManager {
     return toRefs(runs);
   }
 
+  // ---- Learning ----
+
+  #brainsOf(trackId: string) {
+    let m = this.#brains.get(trackId);
+    if (!m) {
+      m = new Map();
+      try {
+        const saved = JSON.parse(localStorage.getItem(BRAIN_KEY + trackId) ?? 'null') as { g?: Record<string, { w: string; c: number }> } | null;
+        for (const [k, v] of Object.entries(saved?.g ?? {})) {
+          const w = typeof v?.w === 'string' ? brainFromB64(v.w) : null;
+          if (w && Number.isFinite(v.c)) m.set(k, { w, cost: v.c });
+        }
+      } catch {}
+      this.#brains.set(trackId, m);
+    }
+    return m;
+  }
+
+  #brainFor(trackId: string, skill: number) {
+    const g = brainGroup(skill);
+    return g ? (this.#brainsOf(trackId).get(g.key)?.w ?? base) : null;
+  }
+
+  #saveBrains(trackId: string) {
+    const g: Record<string, { w: string; c: number }> = {};
+    for (const [k, v] of this.#brainsOf(trackId)) g[k] = { w: brainToB64(v.w), c: v.cost };
+    try {
+      const old = Object.keys(localStorage)
+        .filter((k) => k.startsWith(BRAIN_KEY) && k !== BRAIN_KEY + trackId)
+        .map((k) => [k, Number(JSON.parse(localStorage.getItem(k) ?? '{}')?.at) || 0] as const)
+        .sort((a, b) => b[1] - a[1]);
+      for (const [k] of old.slice(BRAIN_KEEP - 1)) localStorage.removeItem(k);
+      localStorage.setItem(BRAIN_KEY + trackId, JSON.stringify({ at: Date.now(), g }));
+    } catch {}
+  }
+
+  // Keeps the learning worker improving the weights of every skill group racing on this track.
+  #learn(plan: Plan) {
+    const t = this.#track;
+    if (this.#failed || !canLearn() || !t || t.bad || plan.key !== t.key) return;
+    const groups = new Map<string, number>();
+    for (const b of plan.bots.values()) {
+      const g = brainGroup(b.persona.skill);
+      if (g) groups.set(g.key, g.skill);
+    }
+    const sig = t.key + ':' + [...groups.keys()].sort().join('');
+    if (!groups.size || sig === this.#learnSig) return;
+    this.#learnSig = sig;
+    if (!this.#learner || this.#learner.dead) this.#learner = this.#spawn(false);
+    const slot = this.#learner;
+    if (!slot) return;
+    if (slot.key !== t.key) {
+      slot.key = t.key;
+      this.#send(slot, t.msg);
+    }
+    const saved = this.#brainsOf(plan.trackId);
+    const tasks = [...groups].map(([key, skill], i) => ({ key, skill, w: (saved.get(key)?.w ?? base ?? freshBrain(i + 1)).slice() }));
+    this.#send(slot, { b: 'learn', key: t.key, tasks });
+  }
+
+  #learned(m: Extract<FromWorker, { b: 'learned' }>) {
+    const t = this.#track;
+    if (!t || t.key !== m.key) return;
+    this.#brainsOf(t.trackId).set(m.task, { w: m.w, cost: m.cost });
+    this.#saveBrains(t.trackId);
+    // A time attack's bots drive their next runs with it.
+    const plan = this.#plan;
+    if (plan?.trackId === t.trackId && plan.mode === 'ta')
+      for (const b of plan.bots.values()) if (!b.over && b.slot && brainGroup(b.persona.skill)?.key === m.task) this.#send(b.slot, { b: 'brain', id: b.id, w: m.w });
+  }
+
   // ---- Workers ----
 
   #start() {
@@ -474,16 +554,18 @@ export class BotManager {
     for (let i = live.length; i < want; i++) this.#spawn();
   }
 
-  #spawn() {
+  // A planner worker, or (pool false) the learning worker, which plans no bots.
+  #spawn(pool = true): Slot | null {
     let w: Worker;
     try {
       w = new Worker('simulation_worker.bundle.js', { name: WORKER_NAME });
     } catch (error) {
       console.warn('[Cuppa] bot worker', error);
-      return this.#lost(null);
+      if (pool) this.#lost(null);
+      return null;
     }
     const slot: Slot = { w, ready: false, dead: false, queue: [], jobs: 0, key: null };
-    this.#slots.push(slot);
+    if (pool) this.#slots.push(slot);
     w.onmessage = (e: MessageEvent<FromWorker>) => this.#receive(slot, e.data);
     w.onerror = (e) => {
       e.preventDefault();
@@ -491,6 +573,7 @@ export class BotManager {
       this.#lost(slot);
     };
     setTimeout(() => !slot.ready && !slot.dead && this.#lost(slot), READY_TIMEOUT_MS);
+    return slot;
   }
 
   #send(slot: Slot, m: ToWorker) {
@@ -518,6 +601,13 @@ export class BotManager {
   }
 
   #lost(slot: Slot | null) {
+    if (slot && slot === this.#learner) {
+      slot.dead = true;
+      slot.w.terminate();
+      this.#learner = null;
+      this.#learnSig = '';
+      return;
+    }
     if (slot) {
       if (slot.dead) return;
       slot.dead = true;
@@ -539,6 +629,7 @@ export class BotManager {
   #receive(slot: Slot, m: FromWorker) {
     if (!m || typeof m !== 'object') return;
     if (m.b === 'ready') return this.#init(slot);
+    if (m.b === 'learned') return this.#learned(m);
     if (m.b === 'track') {
       if (m.ok) return;
       if (this.#track?.key === m.key) this.#track.bad = true;
@@ -589,6 +680,7 @@ export class BotManager {
       s.w.terminate();
     }
     this.#slots = [];
+    if (this.#learner) this.#lost(this.#learner);
     if (this.#watch) clearInterval(this.#watch);
     this.#watch = null;
   }
