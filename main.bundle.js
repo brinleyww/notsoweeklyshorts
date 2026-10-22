@@ -56594,6 +56594,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         if (!sorted.length) listWrap.innerHTML = '<div style="color:rgba(150,180,255,0.4);font-size:20px;padding:30px 8px;">No runs yet.</div>';
                     }
 
+                    function stTotals(maps) {
+                        const allNicks = new Set();
+                        maps.forEach(m => Object.keys(m).forEach(nm => allNicks.add(nm)));
+                        const pts = {};
+                        allNicks.forEach(nick => {
+                            let total = 0;
+                            maps.forEach(m => { if (m[nick]) total += stCalcPts(m[nick]); });
+                            pts[nick] = total;
+                        });
+                        return Object.entries(pts).sort((a,b) => b[1]-a[1]);
+                    }
+
                     async function stLoad(week) {
                         if (week == null) week = window.__nswsStandingsSelectedWeek ?? window.__nswsMaxWeek;
                         stCurrentWeek = week;
@@ -56618,8 +56630,6 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             colHdr.appendChild(c);
                         });
 
-                        // Locked (non-current) weeks: serve the cached snapshot instead of re-fetching,
-                        // so their standings stay frozen as of when they were first loaded.
                         if (!isCurrentWeek && stWeekCache[week]) {
                             const cached = stWeekCache[week];
                             stRenderRows(cached.sorted, cached.maps, gridTemplate, stContentWidth);
@@ -56629,6 +56639,26 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
                         listWrap.innerHTML = '<div style="color:var(--text-color);opacity:0.4;font-size:20px;padding:30px 8px;">Loading...</div>';
                         updatedEl.textContent = "";
+
+                        // Ended weeks are drawn from the boards as saved when the week ended, so runs set later
+                        // don't count. Only a week with no saved file falls back to the live boards.
+                        if (!isCurrentWeek) {
+                            const frozen = await fetch("tracks/community/standings/week" + week + ".json")
+                                .then(r => r.ok ? r.json() : null).catch(() => null);
+                            if (stCurrentWeek !== week) return;
+                            if (frozen && frozen.boards) {
+                                const maps = LB_TRACKS.map(t => {
+                                    const m = {};
+                                    (frozen.boards[t.id] || []).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
+                                    return m;
+                                });
+                                const sorted = stTotals(maps);
+                                stWeekCache[week] = { sorted, maps };
+                                stRenderRows(sorted, maps, gridTemplate, stContentWidth);
+                                updatedEl.textContent = "Locked";
+                                return;
+                            }
+                        }
                         try {
                             const [results, selfEntry] = await Promise.all([
                                 Promise.all(LB_TRACKS.map(t =>
@@ -56653,15 +56683,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 });
                                 return m;
                             });
-                            const allNicks = new Set();
-                            maps.forEach(m => Object.keys(m).forEach(nm => allNicks.add(nm)));
-                            const pts = {};
-                            allNicks.forEach(nick => {
-                                let total = 0;
-                                maps.forEach(m => { if (m[nick]) total += stCalcPts(m[nick]); });
-                                pts[nick] = total;
-                            });
-                            const sorted = Object.entries(pts).sort((a,b) => b[1]-a[1]);
+                            const sorted = stTotals(maps);
 
                             stRenderRows(sorted, maps, gridTemplate, stContentWidth);
 
