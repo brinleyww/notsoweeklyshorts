@@ -10095,7 +10095,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         l.set(this, se, n, "f")
                     }
                     l.set(this, Ce, S.A.default(), "f"),
-                    l.set(this, Te, l.get(F, F, "m", He).call(F, r, l.get(this, Ce, "f").pattern), "f"),
+                    this.__patternSize = F.nextPatternSize ?? 2048,
+                    l.set(this, Te, l.get(F, F, "m", He).call(F, r, l.get(this, Ce, "f").pattern, this.__patternSize), "f"),
                     l.set(this, Me, {
                         value: l.get(this, Te, "f")
                     }, "f"),
@@ -10132,8 +10133,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         ), "f"))
                     }
                     r.addContextRestoredEventListener(l.set(this, Ge, ( () => {
-                        l.get(this, Te, "f").dispose(),
-                        l.set(this, Te, l.get(F, F, "m", He).call(F, r, l.get(this, Ce, "f").pattern), "f"),
+                        l.get(this, Te, "f").needsUpdate = !0,
                         l.get(this, Me, "f").value = l.get(this, Te, "f"),
                         l.get(this, G, "m", We).call(this)
                     }
@@ -10154,7 +10154,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.get(this, Ae, "f").scene.remove(l.get(this, be, "f")),
                     l.set(this, be, null, "f")),
                     l.get(this, Ae, "f").scene.remove(l.get(this, ve, "f")),
-                    l.get(this, Te, "f").dispose(),
+                    F.releasePattern(l.get(this, Te, "f")),
                     l.get(this, ve, "f").traverse((e => {
                         e instanceof THREE.Mesh && l.get(this, Ae, "f").removeMaterial(e.material)
                     }
@@ -10250,8 +10250,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 setCarStyle(e) {
                     if (!l.get(this, Ce, "f").equals(e) || this.__bodyPending) {
-                        if (e.pattern != l.get(this, Ce, "f").pattern && (l.get(this, Te, "f").dispose(),
-                        l.set(this, Te, l.get(F, F, "m", He).call(F, l.get(this, Ae, "f"), e.pattern), "f"),
+                        if (e.pattern != l.get(this, Ce, "f").pattern && (F.releasePattern(l.get(this, Te, "f")),
+                        l.set(this, Te, l.get(F, F, "m", He).call(F, l.get(this, Ae, "f"), e.pattern, this.__patternSize), "f"),
                         l.get(this, Me, "f").value = l.get(this, Te, "f")),
                         e.rims != l.get(this, Ce, "f").rims)
                             for (let t = 0; t < l.get(this, ke, "f").length; t++) {
@@ -10508,6 +10508,14 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 // A wheel as the default one (tyre, rim, metal hub groups, axle along x) with eight sides: built once
                 // per source wheel, from its size.
+                static releasePattern(texture) {
+                    for (const [key, entry] of F.__patternTextures ?? [])
+                        if (entry.texture === texture) {
+                            --entry.users <= 0 && (texture.dispose(), F.__patternTextures.delete(key));
+                            return
+                        }
+                    texture.dispose()
+                }
                 static lowPolyWheel(src) {
                     let g = (F.__lowPolyWheels ??= new WeakMap).get(src);
                     if (g)
@@ -10834,13 +10842,23 @@ window.__nswsAutoGhostNote = function(trackId) {
                 l.get(this, Ae, "f").addMaterial(e.material)
             }
             ,
-            He = function(e, t) {
+            // Not So Weekly Shorts: cars with the same pattern share one texture (at 2048 px it is ~21 MB of GPU
+            // memory with mipmaps, for every car on track); a cup's bots use a smaller one.
+            He = function(e, t, size = 2048) {
                 if (null == F.patterns)
                     throw new Error("Car patterns are not loaded yet");
+                const key = t + ":" + size
+                  , shared = (F.__patternTextures ??= new Map).get(key);
+                if (shared)
+                    return shared.users++, shared.texture;
                 const n = document.createElement("canvas");
-                n.width = 2048,
-                n.height = 2048;
+                n.width = size,
+                n.height = size;
                 const i = new THREE.Texture(n);
+                F.__patternTextures.set(key, {
+                    texture: i,
+                    users: 1
+                });
                 i.flipY = !1,
                 i.anisotropy = e.getMaxAnisotropy(),
                 i.needsUpdate = !0;
@@ -45407,11 +45425,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             if (null == start)
                                 return;
                             // An empty recording rather than null: a car made with null takes over the clip recorder.
-                            bot = {
-                                car: new VisualCar(null, start, new ie.A, null, C.get(g, zr, "f"), C.get(g, Nr, "f"), C.get(g, Ir, "f"), C.get(g, Pr, "f"), C.get(g, Yr, "f"), C.get(g, Gr, "f"), null),
-                                style: null,
-                                nickname: null
-                            };
+                            VisualCar.nextPatternSize = 512;
+                            try {
+                                bot = {
+                                    car: new VisualCar(null, start, new ie.A, null, C.get(g, zr, "f"), C.get(g, Nr, "f"), C.get(g, Ir, "f"), C.get(g, Pr, "f"), C.get(g, Yr, "f"), C.get(g, Gr, "f"), null),
+                                    style: null,
+                                    nickname: null
+                                };
+                            } finally {
+                                VisualCar.nextPatternSize = void 0;
+                            }
                             // Shown by the session's next frame, once update() has placed it.
                             bot.car.setVisible(!1);
                             bot.car.audioVolume = C.get(g, Oa, "f");
@@ -46283,13 +46306,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         }
                         e.car.update(n)
                     }
-                    // Not So Weekly Shorts: only the two bots nearest the camera make engine sounds (each car's
-                    // audio is an engine and five 3D panners, updated every frame), picked twice a second so
-                    // two bots about as near don't swap every frame.
+                    // Not So Weekly Shorts: only the two bots nearest the camera, and within 60 m (5/60 of full volume
+                    // there), make engine sounds (each car's audio is an engine and five 3D panners, updated every
+                    // frame), picked twice a second so two bots about as near don't swap every frame.
                     const bots = cupBotCars.get(this), eye = C.get(this, zr, "f").camera?.position, now = performance.now();
                     if (!(now - (this.__botsLoudAt ?? -1 / 0) < 500))
                         this.__botsLoudAt = now,
-                        this.__botsLoud = bots && eye && bots.size > 2 ? new Set([...bots.values()].sort((x, y) => x.car.getPosition().distanceToSquared(eye) - y.car.getPosition().distanceToSquared(eye)).slice(0, 2)) : null;
+                        this.__botsLoud = bots && eye ? new Set([...bots.values()].map(e => [e, e.car.getPosition().distanceToSquared(eye)]).filter(([, d]) => d < 3600).sort((x, y) => x[1] - y[1]).slice(0, 2).map(([e]) => e)) : null;
                     const loud = this.__botsLoud;
                     for (const e of bots?.values() ?? [])
                         e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
@@ -46297,6 +46320,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         e.car.setVisible(!ghostsHidden),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
                         e.car.update(n);
+                    // Not So Weekly Shorts: other racers and bots are culled off screen and drawn simpler when small,
+                    // like replay ghosts (a car is ~20 draw calls); whether they show and sound stays the cup's call.
+                    const lodCars = this.__cupLodCars ??= [];
+                    lodCars.length = 0;
+                    for (const e of C.get(this, Ra, "f").values())
+                        lodCars.push(e.car);
+                    for (const e of bots?.values() ?? [])
+                        lodCars.push(e.car);
+                    window.__nswsGhostLod?.(lodCars, null, C.get(this, zr, "f").camera, void 0, !0);
                     // Not So Weekly Shorts: the cars this one can hit, as drawn now plus where they go next.
                     const collide = cupCollisions.get(this);
                     if (collide || this.__cupCollide) {

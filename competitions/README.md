@@ -147,7 +147,15 @@ quarter each of easy, medium, hard and expert), or Match the field (after every 
 humans' median time). Every bot is the default car with eight-sided wheels (`VisualCar.lowPolyWheels`),
 686 triangles against the default car's 3,102 and up to 117,444 for the F1 body, in its own colours and
 pattern (`botStyle`, from its name), and like every other car that isn't yours it casts no shadow and gets
-none of PolyFX's lights, shine or reflections (`VisualCar.ghostLook`). Other racers and bots are never faded
+none of PolyFX's lights, shine or reflections (`VisualCar.ghostLook`). Other racers and bots get the replay
+ghosts' level of detail (`__nswsGhostLod` with `detailOnly`, in `mod/nsws_cinematic.js`): culled off screen
+(the game drew every car mesh, ~20 draw calls a car, even behind the camera) and drawn simpler as they get
+small (one material per wheel, then for the body, then no wheels), while the cup still decides whether they
+show and sound. A bot's pattern texture is 512 px instead of 2048 (~21 MB of GPU memory each with
+mipmaps), cars with the same pattern share one, and only the two bots nearest the camera within 60 m make
+engine sounds. Measured on a racing guest with 8 bots on Anubis, CPU slowed 4x, same race in alternating
+1 s blocks: 12.9 to 8.1 ms of frame work and 258 to 104 draw calls; every bot on screen was still drawn
+(`cup-test-tools/cdp/sc_lodab.mjs`, `sc_cullcheck.mjs`). Other racers and bots are never faded
 out near your car (replay ghosts still are), so they stand on the grid in the countdown and show up at once
 after a respawn. A cup with only bots racing keeps going while someone watches (the organizer's page in
 front, or another person in the cup), and pauses before the next round once nobody does. Skill is how well a bot drives: how close to the reference's speed it takes corners,

@@ -1632,7 +1632,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     // With many ghosts each car costs ~20 draw calls, twice over with its shadow, and most of that
     // adds nothing: ghosts a few pixels tall, or too small to show their rims and suspension.
     // So: tiny ghosts are hidden; small ones drop the exhaust and
-    // suspension and draw each wheel (then the body) in one material; only the followed car and
+    // suspension and draw each wheel (then the body) in one material, and the smallest drop their
+    // wheels (a draw call each, a pixel or two there); only the followed car and
     // the nearest few ghosts cast shadows or make sound, and only the first 16 runs leave skid marks
     // (they all drive the same line). `cars` are the cars the caller is
     // showing this frame; this only ever hides or simplifies some of them.
@@ -1643,14 +1644,17 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     const lodParts = new WeakMap();
     let lodScratch = null;
 
+    // A car style that loads later (a body, rims) replaces meshes: those are taken apart again.
     function partsOf(car) {
         let parts = lodParts.get(car);
+        if (parts && parts.meshes.some((m) => !m.parent)) parts = null;
         if (!parts) {
-            parts = { meshes: [], casters: [], extras: [], multi: [] };
+            parts = { meshes: [], casters: [], extras: [], multi: [], wheels: [] };
             car.object3D?.traverse((m) => {
                 if (!m.isMesh) return;
                 parts.meshes.push(m);
                 if (m.castShadow) parts.casters.push(m);
+                if (/^Wheel/.test(m.name)) parts.wheels.push(m);
                 if (/^(Exhaust|Suspension)/.test(m.name)) parts.extras.push(m);
                 else if (Array.isArray(m.material) && m.material.length > 1) parts.multi.push({ mesh: m, materials: m.material, wheel: /^Wheel/.test(m.name) });
             });
@@ -1680,10 +1684,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     }
 
     // Detail 0 = full, 1 = no exhaust or suspension and one material per wheel, 2 = one material
-    // for the body too. A mesh given a single material is drawn in one call, whatever its groups.
+    // for the body too, 3 = no wheels. A mesh given a single material is drawn in one call, whatever its groups.
     function setDetail(car, level) {
         const parts = partsOf(car);
         for (const m of parts.extras) m.visible = level === 0;
+        for (const m of parts.wheels) m.visible = level < 3;
         for (const p of parts.multi) {
             const single = p.wheel ? level >= 1 : level >= 2;
             if (single && p.mesh.material === p.materials) p.mesh.material = p.materials[0];
@@ -1707,7 +1712,18 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     // Ghosts are never hidden for being close to another car: that made them blink whenever two
     // runs drove side by side. In a race the game itself fades ghosts near the player.
 
-    function ghostLod(cars, focusCar, cam, now = performance.now() / 1000) {
+    // `detailOnly`: culling and detail, for cars whose visibility and sound the caller decides (a cup's
+    // racers and bots).
+    const detailFor = (px, was) => px >= (was === 0 ? 50 : 60) ? 0 : px >= (was >= 2 ? 26 : 22) ? 1 : px >= (was === 3 ? 15 : 12) ? 2 : 3;
+
+    // State for a car seen before whose meshes were since replaced: they are full detail and unculled again.
+    function stateOf(car) {
+        const st = lodState.get(car);
+        if (!st || st.parts === partsOf(car)) return st;
+        return { ...st, cast: true, detail: 0, culled: false };
+    }
+
+    function ghostLod(cars, focusCar, cam, now = performance.now() / 1000, detailOnly = false) {
         if (!cam || !cars.length) return;
         const camPos = lodScratch ??= cam.position.clone();
         cam.getWorldPosition(camPos);
@@ -1719,7 +1735,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             list.push({ car, p, d: p.distanceTo(camPos), index });
         });
         if (focusCar) {
-            const st = lodState.get(focusCar);
+            const st = stateOf(focusCar);
             if (st) {
                 if (!st.cast) setCastShadow(focusCar, true);
                 if (st.detail) setDetail(focusCar, 0);
@@ -1727,15 +1743,22 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 if (st.culled) setCulling(focusCar, false);
                 if (st.noSkid) focusCar.skidmarksSuppressed = false;
             }
-            lodState.set(focusCar, { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false });
+            lodState.set(focusCar, { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false, parts: partsOf(focusCar) });
         }
         list.sort((a, b) => a.d - b.d);
         let shadows = 0, audible = 0;
         for (const g of list) {
-            const known = lodState.get(g.car);
+            const known = stateOf(g.car);
             const st = known ?? { vis: true, cast: true, detail: 0, mute: false, culled: false, noSkid: false };
             // Every test has hysteresis, so a ghost near a threshold doesn't flicker.
             const px = 4.5 * pxPerUnit / Math.max(g.d, 0.1);
+            const detail = detailFor(px, st.detail);
+            if (detailOnly) {
+                if (detail !== st.detail) setDetail(g.car, detail);
+                if (!st.culled) setCulling(g.car, true);
+                if (known !== st || detail !== st.detail || !st.culled || st.parts !== partsOf(g.car)) lodState.set(g.car, { ...st, detail, culled: true, parts: partsOf(g.car) });
+                continue;
+            }
             let vis = px >= (st.vis ? 5 : 7);
             let pending = null;
             if (known && vis !== st.vis) {
@@ -1747,7 +1770,6 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (cast) shadows++;
             const mute = !(vis && audible < LOD_AUDIBLE);
             if (!mute) audible++;
-            const detail = px >= (st.detail === 0 ? 50 : 60) ? 0 : px >= (st.detail === 2 ? 26 : 22) ? 1 : 2;
             if (g.car.object3D && g.car.object3D.visible !== vis) g.car.setVisible(vis);
             if (cast !== st.cast) setCastShadow(g.car, cast);
             if (vis && detail !== st.detail) setDetail(g.car, detail);
@@ -1758,13 +1780,13 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const order = st.order ?? g.index;
             const noSkid = Math.max(cars.length, st.total ?? 0) > LOD_SKID_RUNS && order >= LOD_SKID_RUNS;
             if (noSkid !== st.noSkid) g.car.skidmarksSuppressed = noSkid;
-            lodState.set(g.car, { vis, cast, detail: vis ? detail : st.detail, mute, culled: true, noSkid, order, total: Math.max(cars.length, st.total ?? 0), pending });
+            lodState.set(g.car, { vis, cast, detail: vis ? detail : st.detail, mute, culled: true, noSkid, order, total: Math.max(cars.length, st.total ?? 0), pending, parts: partsOf(g.car) });
         }
     }
 
     function resetGhostLod(cars) {
         for (const car of cars) {
-            const st = lodState.get(car);
+            const st = stateOf(car);
             if (!st) continue;
             if (!st.vis) car.setVisible(true);
             if (!st.cast) setCastShadow(car, true);
