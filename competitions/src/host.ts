@@ -2,7 +2,7 @@
 // the replay checks. Everyone else only sees the state it broadcasts.
 import type { App } from './app.ts';
 import { BotManager } from './bots/manager.ts';
-import { BOT_NAMES, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
+import { BOT_NAMES, botStyle, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
 import type { RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
@@ -319,7 +319,7 @@ export class Organizer {
     const k = this.#botNames.find((i) => !taken.has(BOT_NAMES[i]));
     if (k == null) return null;
     const u = this.#nextU++;
-    const p: Player = { u, pid: botPid(u), name: BOT_NAMES[k], cc: null, role: 'racer', pts: 0, wins: 0, places: [], bot: { s: 50, cs: '' } };
+    const p: Player = { u, pid: botPid(u), name: BOT_NAMES[k], cc: null, role: 'racer', pts: 0, wins: 0, places: [], bot: { s: 50, cs: botStyle(k) } };
     s.players.push(p);
     return p;
   }
@@ -1006,7 +1006,10 @@ export class Organizer {
       this.touch(true);
       return;
     }
-    if (E.humanRacers(s).filter((p) => !p.away).length === 0) {
+    // Nobody human racing: bots race on only while someone watches (the organizer's page in front, or
+    // another person in the cup); unwatched they would go on for hours.
+    const watched = !document.hidden || s.players.some((p) => !p.bot && !p.away && p.pid != null && p.u !== this.me);
+    if (E.humanRacers(s).filter((p) => !p.away).length === 0 && (!watched || !E.racers(s).some((p) => p.bot))) {
       s.hold = true;
       this.touch();
       return;

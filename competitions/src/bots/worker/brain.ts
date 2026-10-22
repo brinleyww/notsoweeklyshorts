@@ -4,6 +4,8 @@
 // nothing; it is trained by evolution strategies on the game's own physics (learn.ts), offline in the
 // lab for the weights shipped here and online per track during a cup.
 
+import { EXPERT_SKILL } from '../wire.ts';
+
 export const BRAIN_IN = 24;
 const H = 16;
 export const BRAIN_OUT = 2;
@@ -68,7 +70,7 @@ export function freshBrain(seed: number): Float32Array {
 // Bots learn per track in four skill groups (experts copy a recording and don't need it); each group's
 // weights are tested at its typical skill.
 export function brainGroup(skill: number): { key: string; skill: number } | null {
-  if (skill >= 0.95) return null;
+  if (skill >= EXPERT_SKILL) return null;
   if (skill < 0.45) return { key: 'a', skill: 0.35 };
   if (skill < 0.7) return { key: 'b', skill: 0.6 };
   if (skill < 0.9) return { key: 'c', skill: 0.8 };

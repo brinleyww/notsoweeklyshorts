@@ -6,7 +6,7 @@
 // or restarts, like a player would.
 //
 // Time is bot time: ms since GO. The physics step taken at time t gives the car's state at t + 1.
-import type { Persona } from '../wire.ts';
+import { EXPERT_SKILL, type Persona } from '../wire.ts';
 import { Brain } from './brain.ts';
 import { copyDriverState, DEFAULT_PARAMS, Driver, newDriverState, type DriverParams, type DriverState } from './driver.ts';
 import { clearanceOf, marginOffsets, type Clearance } from './clearance.ts';
@@ -24,9 +24,8 @@ const SNAP_BUDGET = 320 * 1024 * 1024;
 // would wreck it): a single run stops sending after AFTER_RUN, time attack restarts after AFTER_TA.
 const AFTER_RUN = 400;
 const AFTER_TA = 400;
-// The best bots drive the fastest recorded run's own keys and lift off the throttle (or tap the brake)
-// once near the end, for just long enough to finish 0.1-0.3 s behind it (found by trying: the physics is exact).
-const EXPERT = 0.95;
+// Experts replay a recorded run's own keys, each its own run, and lift off the throttle (or tap the brake)
+// once for just long enough to finish a little behind it (found by trying: the physics is exact).
 const COPY_SLOT = 63;
 
 export interface Out {
@@ -192,6 +191,8 @@ export class Job {
     this.refs = sorted;
     this.#clear = clear;
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
+    // An expert with no run of its own to replay follows the one it was dealt.
+    if (b.copy != null && sorted.length) this.refIdx = (b.copy + (b.spin ?? 0)) % sorted.length;
     this.ref = sorted[this.refIdx];
     const jitter = (this.rand() - 0.5) * 0.03 * (1 - b.skill);
     // An explored route's speeds are already careful, and nothing on it is worth copying exactly.
@@ -345,7 +346,7 @@ export class Planner {
 
   add(spec: JobSpec) {
     const job = new Job(spec, this.refs, this.clear);
-    this.#startRun(job, 0, job.bot.skill >= EXPERT ? this.#closeCopy(job) : null);
+    this.#startRun(job, 0, job.bot.skill >= EXPERT_SKILL ? this.#closeCopy(job) : null);
     this.jobs.push(job);
     return job;
   }
@@ -430,24 +431,19 @@ export class Planner {
     job.status = 'run';
   }
 
-  // An expert's run: a recorded run's keys, slowed once so it finishes 0.1-0.3 s behind the fastest
-  // recording (less for a better bot).
+  // An expert's run: the recorded run dealt to it (Persona.copy), slowed once so it finishes up to 0.2 s
+  // behind that run and never within 0.08 s of the fastest; if no slowdown lands, that run exactly (it
+  // can't crash). Null when there are more experts than runs: that one drives itself.
   #closeCopy(job: Job): { keys: Uint8Array; n: number } | null {
     const recorded = job.refs.filter((r) => r.kind !== 'explore');
-    if (!recorded.length) return null;
+    const k = job.bot.copy ?? 0;
+    if (k >= recorded.length) return null;
+    const ref = recorded[(k + (job.bot.spin ?? 0)) % recorded.length];
     const best = recorded[0].n;
     // Each later time-attack run aims a little closer.
     const done = job.runs.filter((r) => r[1] != null).length;
-    const lose = Math.round(Math.max(80, Math.min(350, 100 + (0.98 - job.bot.skill) * 6667 + (job.rand() - 0.5) * 120) * 0.85 ** done));
-    // Any recording that can still be slowed to the gap, starting from one picked at random this round.
-    const usable = recorded.filter((r) => r.n + 30 <= best + lose);
-    const first = Math.floor(job.rand() * usable.length);
-    for (let i = 0; i < usable.length; i++) {
-      const got = this.#liftCopy(job, usable[(first + i) % usable.length], best, lose);
-      if (got) return got;
-    }
-    // Nothing lands on the gap: the fastest recording exactly (it can't crash).
-    return { keys: recorded[0].keys, n: best };
+    const lose = Math.round(Math.max(0, best + 80 - ref.n) + job.rand() * 200 * 0.85 ** done);
+    return this.#liftCopy(job, ref, ref.n, lose) ?? { keys: ref.keys, n: ref.n };
   }
 
   // A recording's keys with one throttle lift or brake tap that makes them finish `lose` ms (or a little
@@ -558,7 +554,7 @@ export class Planner {
         if (left <= 0) {
           if (job.mode === 'ta' && now + 2000 < job.end) {
             this.#keep(job, now, buf);
-            this.#startRun(job, now, job.bot.skill >= EXPERT ? this.#closeCopy(job) : null);
+            this.#startRun(job, now, job.bot.skill >= EXPERT_SKILL ? this.#closeCopy(job) : null);
           } else this.#finishJob(job, 'done');
         }
         continue;

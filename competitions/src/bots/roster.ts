@@ -1,7 +1,7 @@
 // Computer racers: their names, paint jobs and driving personalities. Everything here is
 // deterministic, so a bot keeps its look and a cup's bots come out the same on every run.
 import type { BotSkill } from '../rules.ts';
-import type { Persona } from './wire.ts';
+import { EXPERT_SKILL, type Persona } from './wire.ts';
 
 export const BOT_NAMES = ['Apex', 'Torque', 'Nitro', 'Camber', 'Redline', 'Gearbox', 'Piston', 'Slick', 'Drift', 'Turbo', 'Axle', 'Boost', 'Clutch', 'Kerb', 'Diesel', 'Spoiler'];
 
@@ -38,6 +38,32 @@ export function nameOrder(seed: number) {
   return order;
 }
 
+function hsl(h: number, s: number, l: number) {
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+  return (f(0) << 16) | (f(8) << 8) | f(4);
+}
+
+const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// Each bot name's own paint: the default car (body, rims and exhaust 0) in its own colours and pattern.
+// The game's 16-byte CarStyle: [0, pattern, rims, exhaust | body << 4, then primary, secondary, frame and
+// rims colours as little-endian RGB], base64url like CarStyle.serialize().
+export function botStyle(name: number) {
+  const r = (k: number) => unit(mix(0x5eed + name, k));
+  // Neighbouring names get hues far apart.
+  const hue = (name * 137.508) % 360;
+  const primary = hsl(hue, 0.7 + r(2) * 0.2, 0.42 + r(3) * 0.12);
+  const secondary = [0xffffff, 0x161616, hsl((hue + 180) % 360, 0.8, 0.55), hsl((hue + 40) % 360, 0.85, 0.6)][name % 4];
+  const frame = [0x1c1c1c, 0x2b2b2b, hsl(hue, 0.5, 0.18)][Math.floor(r(5) * 3)];
+  const rims = [0xd0d0d0, 0x1e1e1e, 0xd4a017, secondary][Math.floor(r(6) * 4)];
+  const bytes = new Uint8Array(16);
+  bytes[1] = (name * 5 + 1) % 16;
+  [primary, secondary, frame, rims].forEach((hex, i) => bytes.set([hex & 255, (hex >> 8) & 255, (hex >> 16) & 255], 4 + i * 3));
+  return b64url(bytes);
+}
+
 // Slot i's rank among `count` slots: a fixed shuffle, so the first bots aren't always the slowest.
 function rank(i: number, count: number) {
   const key = (k: number) => (k * 0.6180339887) % 1;
@@ -54,7 +80,7 @@ export function tierSkills(skill: BotSkill, count: number) {
 // Driving personalities for `count` bot slots (u is the slot; callers put the bot's own id in).
 // adapt[i], when given, is that slot's skill instead of the tier's (Match the field keeps its own).
 export function personas(skill: BotSkill, count: number, seedBase: number, adapt?: number[]): Persona[] {
-  return tierSkills(skill, count).map((tier, i) => {
+  const list: Persona[] = tierSkills(skill, count).map((tier, i) => {
     const seed = mix(seedBase, i);
     const s = clamp01(adapt?.[i] ?? tier);
     return {
@@ -65,6 +91,14 @@ export function personas(skill: BotSkill, count: number, seedBase: number, adapt
       seed,
     };
   });
+  // Experts are dealt recorded runs in an order shuffled every round.
+  const experts = list.filter((p) => p.skill >= EXPERT_SKILL).sort((a, b) => mix(a.seed, 7) - mix(b.seed, 7));
+  const spin = mix(seedBase, 99) % 1000;
+  experts.forEach((p, k) => {
+    p.copy = k;
+    p.spin = spin;
+  });
+  return list;
 }
 
 // Match the field: after a round, a bot that finished in tb moves toward the humans' median th.

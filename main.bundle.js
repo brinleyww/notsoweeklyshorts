@@ -10300,6 +10300,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                 }
                 setOpacity(e) {
+                    if (this.__opacity === e)
+                        return;
+                    this.__opacity = e,
                     l.get(this, ve, "f").traverse((t => {
                         if (t instanceof THREE.Mesh) {
                             let n;
@@ -45190,17 +45193,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ,
         $a = function() {
-            const solid = cupCollisionCups.has(this)
-              , e = C.get(this, wa, "f").getPosition()
-              , t = C.get(this, xa, "f").map((e => e.car)).filter((e => null != e)).concat(solid ? [] : Array.from(C.get(this, Ra, "f").values()).map((e => e.car)), Array.from(cupBotCars.get(this)?.values() ?? [], (e => e.car)));
-            for (const n of t) {
-                const t = n.getPosition().distanceTo(e)
-                  , i = Math.max(0, Math.min(1, t / 5));
-                n.setOpacity(i)
-            }
-            if (solid)
-                for (const n of C.get(this, Ra, "f").values())
-                    n.car.setOpacity(1)
+            // Not So Weekly Shorts: other racers and a cup's bots are always drawn whole. They used to fade out
+            // near this car, so at the start and after a respawn they seemed to fade in. Replay ghosts still do.
+            const e = C.get(this, wa, "f").getPosition();
+            for (const n of C.get(this, xa, "f"))
+                null != n.car && n.car.setOpacity(Math.max(0, Math.min(1, n.car.getPosition().distanceTo(e) / 5)));
+            for (const n of C.get(this, Ra, "f").values())
+                n.car.setOpacity(1);
+            for (const n of cupBotCars.get(this)?.values() ?? [])
+                n.car.setOpacity(1)
         }
         ,
         es = function() {
@@ -45414,11 +45415,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             // Shown by the session's next frame, once update() has placed it.
                             bot.car.setVisible(!1);
                             bot.car.audioVolume = C.get(g, Oa, "f");
-                            // Every bot is the default car with low-poly wheels.
-                            bot.car.lowPolyWheels();
                             bot.car.ghostLook = !0;
                             cars.set(id, bot);
                         }
+                        // The default car in the bot's own colours, with low-poly wheels (a style rebuilds them).
+                        bot.style !== style && (bot.car.setCarStyle(jt.A.deserializeSafe(style)), bot.car.lowPolyWheels(), bot.style = style);
                         bot.nickname !== nickname && (bot.car.setNameTag(null, nickname), bot.nickname = nickname);
                     }
                 },

@@ -144,10 +144,13 @@ final round. The organizer is warned (privately) when a racer sends a run identi
 The setup page's **Bots** section, the first of the rules, has a count (Off, 1-8, `MAX_BOTS`) that puts
 computer racers on the grid and **Bot skill** for how good they are: Easy, Medium, Hard, Expert, Mixed (one
 of each from easy to expert), or Match the field (after every round each bot's skill moves toward the
-humans' median time). Every bot is the default car with eight-sided wheels (\`VisualCar.lowPolyWheels\`),
-686 triangles against the default car's 3,102 and up to 117,444 for a style a random bot used to get (the
-F1 body), and like every other car that isn't yours it casts no shadow and gets none of PolyFX's lights,
-shine or reflections (\`VisualCar.ghostLook\`). Skill is how well a bot drives: how close to the reference's speed it takes corners,
+humans' median time). Every bot is the default car with eight-sided wheels (`VisualCar.lowPolyWheels`),
+686 triangles against the default car's 3,102 and up to 117,444 for the F1 body, in its own colours and
+pattern (`botStyle`, from its name), and like every other car that isn't yours it casts no shadow and gets
+none of PolyFX's lights, shine or reflections (`VisualCar.ghostLook`). Other racers and bots are never faded
+out near your car (replay ghosts still are), so they stand on the grid in the countdown and show up at once
+after a respawn. A cup with only bots racing keeps going while someone watches (the organizer's page in
+front, or another person in the cup), and pauses before the next round once nobody does. Skill is how well a bot drives: how close to the reference's speed it takes corners,
 how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Expert is
 skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
@@ -160,7 +163,7 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
 - Workers: 1-3 copies of the game's own `simulation_worker.bundle.js`, named `nsws-cuppa-bots`, which
   then load `mod/cuppa_bots.js` and drive cars through the internals the worker exposes
   (`self.__nswsSimInternals`). It is the game's exact physics.
-- References: the track's world record and three more board runs (`native.boardRuns`, one leaderboard
+- References: the track's top 8 board runs (`native.boardRuns`, one leaderboard
   and one recordings request per track, cached a day in `nsws-cuppa-refs:<id>`), the organizer's own
   PB, and the cup's best checked runs on that track. Each is replayed once and kept frame by frame. On
   the week in progress the proxy hides other players' runs, so unless the owner organizes, bots there
@@ -197,14 +200,14 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   sometimes that finds a better line, sometimes it costs a little.
 - Past the finish a bot brakes and, like a ghost, leaves the track 0.4 s later (scenery past a finish,
   like chezbug's, would otherwise wreck it in front of everyone).
-- Bots of skill 0.95 and up (Expert, and the best of Mixed) don't drive on their own: each round they
-  take one recorded run at random among those within reach of their gap and replay its keys with one
-  throttle lift or brake tap, timed so they finish 0.1-0.3 s behind the fastest recording (about 0.1 s at
-  skill 1 and 0.3 s at 0.95, give or take 0.06 s). The planner finds the lift by trying it on a car of its
-  own before the race, from a spot picked at random each round (near the end first, then earlier, then a
-  smaller loss if nothing else lands); if nothing lands at all, the bot replays the fastest recording
-  exactly, so it can't crash. In time attack every later run aims a little closer. Measured on 10 hard
-  community tracks, NyQuill (your PB as the record) and chezbug (its top 4 runs): 0.08-0.35 s behind.
+- Bots of skill 0.95 and up (Expert, and the best of Mixed) don't drive on their own: each round the
+  experts are dealt the recorded runs in a new order (`Persona.copy`, `spin`), so every expert replays a
+  different player's run, on that player's line the whole way. Each finishes up to 0.2 s behind its own run
+  (never within 0.08 s of the fastest) with one throttle lift or brake tap that the planner finds by trying
+  it on a car of its own before the race (near the end first, then earlier, then a smaller loss); if
+  nothing lands, the bot replays its run exactly, so it can't crash. With more experts than runs, the rest
+  drive themselves at skill 1 along the run they were dealt. In time attack every later run aims a little
+  closer. Five experts on chezbug (its top 8 runs, record 18.875 s): 19.12 to 19.43 s, all different.
 - Bots have a neural network (`brain.ts`, 24 inputs, two hidden layers of 16, 706 weights) on top of the
   driver: each frame it reads the car (speed, steering, slip, how far off the line and how it points), the
   reference ahead (speed, steering input and curve 0.1-1 s on, a jump coming) and the room to the walls,

@@ -3,6 +3,7 @@
 // simulate bots), and each result is handed to the cup only once the race clock reaches it.
 import type { BoardRun, Native, TrackData } from '../game.ts';
 import type { Msg } from '../protocol.ts';
+import { MAX_BOTS } from '../rules.ts';
 import type { TrackRef } from '../state.ts';
 import { toB64 } from './codec.ts';
 import { WORKER_NAME, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
@@ -438,11 +439,11 @@ export class BotManager {
   }
 
   async #fetchRefs(trackId: string, custom: boolean): Promise<RefInput[]> {
+    // The top runs: each expert bot replays its own one (up to MAX_BOTS of them).
     const toRefs = (runs: BoardRun[]) => {
-      const sorted = [...runs].sort((a, b) => a.rank - b.rank);
-      const rest = sorted.slice(1);
-      const more = rest.length <= 3 ? rest : [rest[0], rest[Math.floor(rest.length / 2)], rest[rest.length - 1]];
-      return [sorted[0], ...more]
+      return [...runs]
+        .sort((a, b) => a.rank - b.rank)
+        .slice(0, MAX_BOTS)
         .filter((r): r is BoardRun => !!r && typeof r.recording === 'string' && r.frames > 0)
         .map((r): RefInput => ({ id: `board:${r.rank}`, kind: r.rank === 1 ? 'wr' : 'board', rank: r.rank, recording: r.recording, frames: r.frames }));
     };

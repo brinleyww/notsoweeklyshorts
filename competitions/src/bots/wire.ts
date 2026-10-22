@@ -3,10 +3,17 @@
 
 export const WORKER_NAME = 'nsws-cuppa-bots';
 
+// From this skill a bot replays a recorded run instead of driving itself (an expert).
+export const EXPERT_SKILL = 0.95;
+
 export interface Persona {
   u: number;
   // 0..1
   skill: number;
+  // Experts: the bot's place in the round's deal of recorded runs (each expert gets its own run while
+  // there are enough), and the round's shift of that deal.
+  copy?: number;
+  spin?: number;
   // 0..1: how readily it takes a reference's risky sections (cuts, long jumps).
   risk: number;
   // 0..1: how often it makes a mistake and lives with it.

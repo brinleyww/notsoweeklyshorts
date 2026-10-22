@@ -107,7 +107,7 @@ const base: Rules = {
   warmupMult: 1.5,
   warmupMin: 30,
   readyEnds: true,
-  breakSeconds: 8,
+  breakSeconds: 5,
   countdownSeconds: 3,
   voteSeconds: 15,
   draftSeconds: 30,
