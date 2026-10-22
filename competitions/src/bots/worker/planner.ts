@@ -114,6 +114,14 @@ interface Saved {
   sec: number;
 }
 
+// A bot's lane off the start: bots dealt neighbouring runs (Persona.copy) get lanes about a car apart,
+// left and right of the line in turn, and a little of their own on top.
+function laneOf(b: Persona) {
+  const k = b.copy ?? b.seed % 7;
+  const side = k % 2 ? -1 : 1;
+  return side * (0.6 + 0.9 * Math.ceil((k % 7) / 2)) * (k % 7 === 0 ? 0.4 : 1) + ((b.seed >>> 8) % 100) / 250 - 0.2;
+}
+
 // Small seeded generator (mulberry32).
 function rng(seed: number) {
   let a = seed >>> 0;
@@ -494,6 +502,7 @@ export class Planner {
     }
     job.st = newDriverState();
     if (!copy) this.#roll(job);
+    job.st.lane = laneOf(job.bot);
     if (job.notes && !copy) job.notes.plan(job.rand, job.sections!, job.practice);
     job.sec = -1;
     job.drilled = -1;

@@ -200,7 +200,10 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   rest of a run after a respawn, drives a little differently from that seed: two slow weaves across the line (wider for weaker bots, kept off walls, faded out in a
   jump's run-up) and corner pace that swings a few percent. About every 12 s a bot also gets a small input
   it didn't choose (a 40-150 ms nudge of the wheel or lift of the throttle, never just before a jump):
-  sometimes that finds a better line, sometimes it costs a little.
+  sometimes that finds a better line, sometimes it costs a little. Off the start each bot also takes its own
+  lane (up to about 3 units either side of its line, by its dealt run, kept off walls and out of a jump's
+  run-up, faded out by 220 units in), so a grid of bots doesn't leave in single file. Sky Bound, 6 bots: at
+  3 s they were spread from 1.9 left to 3.4 right of the record's line, against ±0.4 before.
 - Past the finish a bot brakes and, like a ghost, leaves the track 0.4 s later (scenery past a finish,
   like chezbug's, would otherwise wreck it in front of everyone).
 - Bots of skill 0.95 and up (Expert, and the best of Mixed) drive themselves and learn the track their own

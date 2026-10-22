@@ -55,17 +55,23 @@ export interface DriverState {
   openFrom: number;
   openAt: number;
   openUntil: number;
+  // The bot's own lane off the start (units beside the line, + = left), so a grid of bots doesn't leave in
+  // single file; it fades out by LANE_ARC.
+  lane: number;
 }
 
 export const newDriverState = (): DriverState => ({
   k: 0, imitating: true, bias: 0, biasUntil: -1, paceMul: 1, paceUntil: -1, off: 0, offUntil: -1, gripUntil: -1,
-  style: new Float64Array(9), noise: 0, noiseLift: false, noiseUntil: -1, openFrom: 0, openAt: 0, openUntil: -1,
+  style: new Float64Array(9), noise: 0, noiseLift: false, noiseUntil: -1, openFrom: 0, openAt: 0, openUntil: -1, lane: 0,
 });
 
 export const copyDriverState = (st: DriverState): DriverState => ({ ...st, style: st.style.slice() });
 
 // Room kept from a wall or edge when the weave moves the line toward it, units.
 const STYLE_ROOM = 0.35;
+// Distance along the line (units) where a bot's start lane has faded out, and over how much it fades.
+const LANE_ARC = 220;
+const LANE_FADE = 80;
 const TAU = Math.PI * 2;
 
 const WHEELBASE = 2.875;
@@ -158,10 +164,11 @@ export class Driver {
     const sty = st.style, sec = this.sections;
     const si = sec ? 3 * Math.min(sec.length / 3 - 1, Math.floor(k / SECTION)) : 0;
     const secOff = sec ? sec[si + 1] : 0;
-    const calm = free && (sty[0] + sty[3] > 0 || secOff !== 0) ? this.#calm(k) : 0;
+    const lane = st.lane !== 0 ? st.lane * Math.max(0, Math.min(1, (LANE_ARC - ref.arc[k]) / LANE_FADE)) : 0;
+    const calm = free && (sty[0] + sty[3] > 0 || secOff !== 0 || lane !== 0) ? this.#calm(k) : 0;
     if (calm > 0) {
       const a = ref.arc[k];
-      const w = calm * (secOff + sty[0] * Math.sin((TAU * a) / sty[1] + sty[2]) + sty[3] * Math.sin((TAU * a) / sty[4] + sty[5]));
+      const w = calm * (secOff + lane + sty[0] * Math.sin((TAU * a) / sty[1] + sty[2]) + sty[3] * Math.sin((TAU * a) / sty[4] + sty[5]));
       const kk = Math.min(ref.n - 1, k + 20);
       const hi = this.clear ? this.clear.left[kk] - STYLE_ROOM : Infinity, lo = this.clear ? STYLE_ROOM - this.clear.right[kk] : -Infinity;
       if (hi > lo) offset = Math.max(Math.min(offset + w, Math.max(hi, offset)), Math.min(lo, offset));
