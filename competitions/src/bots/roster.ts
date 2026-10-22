@@ -38,33 +38,6 @@ export function nameOrder(seed: number) {
   return order;
 }
 
-function hsl(h: number, s: number, l: number) {
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
-  return (f(0) << 16) | (f(8) << 8) | f(4);
-}
-
-const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-// The game's 16-byte CarStyle: [0, pattern, rims, exhaust | body << 4, then primary, secondary,
-// frame and rims colours as little-endian RGB], base64url like CarStyle.serialize().
-export function botStyle(name: number) {
-  const r = (k: number) => unit(mix(0x5eed + name, k));
-  // Neighbouring names get hues far apart.
-  const hue = ((name * 7) % 16) * 22.5 + r(1) * 10;
-  const primary = hsl(hue, 0.65 + r(2) * 0.25, 0.4 + r(3) * 0.14);
-  const secondary = [0xffffff, 0x161616, hsl((hue + 180) % 360, 0.75, 0.55), 0xf2c230][Math.floor(r(4) * 4)];
-  const frame = [0x1c1c1c, 0x2b2b2b, 0x3a3a3a][Math.floor(r(5) * 3)];
-  const rims = [0xc8c8c8, 0x1e1e1e, 0xd4a017, secondary][Math.floor(r(6) * 4)];
-  const bytes = new Uint8Array(16);
-  bytes[1] = Math.floor(r(7) * 16);
-  bytes[2] = Math.floor(r(8) * 12);
-  bytes[3] = Math.floor(r(9) * 8) | (Math.floor(r(10) * 6) << 4);
-  [primary, secondary, frame, rims].forEach((hex, i) => bytes.set([hex & 255, (hex >> 8) & 255, (hex >> 16) & 255], 4 + i * 3));
-  return b64url(bytes);
-}
-
 // Slot i's rank among `count` slots: a fixed shuffle, so the first bots aren't always the slowest.
 function rank(i: number, count: number) {
   const key = (k: number) => (k * 0.6180339887) % 1;

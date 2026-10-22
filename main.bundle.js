@@ -10320,6 +10320,26 @@ window.__nswsAutoGhostNote = function(trackId) {
                 get object3D() {
                     return l.get(this, ve, "f")
                 }
+                // Not So Weekly Shorts: someone else's car (a ghost, a cup racer, a bot) casts no shadow and gets none of
+                // the graphics presets' extras: PolyFX skips it (no lights, shine or reflections).
+                set ghostLook(e) {
+                    if (this.__ghost = !!e, !this.__ghost)
+                        return;
+                    const t = l.get(this, ve, "f");
+                    t.userData.__nswsGhost = !0,
+                    t.traverse(e => {
+                        if (e.isMesh) {
+                            e.castShadow = !1;
+                            for (const t of Array.isArray(e.material) ? e.material : [e.material])
+                                t.envMapIntensity = 0
+                        }
+                    })
+                }
+                // Not So Weekly Shorts: a cup's bots get eight-sided wheels (the default ones are 700 triangles each).
+                lowPolyWheels() {
+                    for (const e of l.get(this, ke, "f"))
+                        e.geometry = F.lowPolyWheel(e.geometry)
+                }
                 set skidmarksSuppressed(e) {
                     for (const t of l.get(this, Le, "f"))
                         t.suppressed = e
@@ -10480,6 +10500,52 @@ window.__nswsAutoGhostNote = function(trackId) {
                     const t = l.get(this, W, "f");
                     null != t && (e ? t.disconnect() : t.connect(l.get(this, O, "f").destinationSfx)),
                     this.audioVolume = l.get(this, V, "f")
+                }
+                // A wheel as the default one (tyre, rim, metal hub groups, axle along x) with eight sides: built once
+                // per source wheel, from its size.
+                static lowPolyWheel(src) {
+                    let g = (F.__lowPolyWheels ??= new WeakMap).get(src);
+                    if (g)
+                        return g;
+                    null == src.boundingBox && src.computeBoundingBox();
+                    const b = src.boundingBox
+                      , R = Math.max(b.max.y - b.min.y, b.max.z - b.min.z) / 2
+                      , W = (b.max.x - b.min.x) / 2
+                      , S = 8
+                      , pos = []
+                      , groups = [[], [], []]
+                      , ring = (r, x) => Array.from({ length: S }, (e, i) => [x, r * Math.cos(2 * Math.PI * i / S), r * Math.sin(2 * Math.PI * i / S)])
+                      , tri = (k, a, c, d, out) => {
+                            const u = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+                              , v = [d[0] - a[0], d[1] - a[1], d[2] - a[2]]
+                              , n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                            groups[k].push(...(n[0] * out[0] + n[1] * out[1] + n[2] * out[2] < 0 ? [a, d, c] : [a, c, d]))
+                        }
+                      , outerL = ring(R, -W), outerR = ring(R, W), innerL = ring(.62 * R, -W * .9), innerR = ring(.62 * R, W * .9), hubL = ring(.18 * R, -W * .95), hubR = ring(.18 * R, W * .95);
+                    for (let i = 0; i < S; i++) {
+                        const j = (i + 1) % S
+                          , mid = [0, outerL[i][1] + outerL[j][1], outerL[i][2] + outerL[j][2]];
+                        tri(0, outerL[i], outerR[i], outerR[j], mid),
+                        tri(0, outerL[i], outerR[j], outerL[j], mid);
+                        for (const [o, n, h, x] of [[outerL, innerL, hubL, -1], [outerR, innerR, hubR, 1]])
+                            tri(0, o[i], o[j], n[j], [x, 0, 0]),
+                            tri(0, o[i], n[j], n[i], [x, 0, 0]),
+                            tri(1, n[i], n[j], h[j], [x, 0, 0]),
+                            tri(1, n[i], h[j], h[i], [x, 0, 0]),
+                            tri(2, h[i], h[j], [x * W, 0, 0], [x, 0, 0])
+                    }
+                    g = new THREE.BufferGeometry;
+                    let at = 0;
+                    groups.forEach((list, k) => {
+                        for (const p of list)
+                            pos.push(p[0], p[1], p[2]);
+                        g.addGroup(at, list.length, k),
+                        at += list.length
+                    }),
+                    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pos),3)),
+                    g.computeVertexNormals(),
+                    F.__lowPolyWheels.set(src, g);
+                    return g
                 }
                 static async initResources() {
                     const e = await new Promise(( (e, t) => {
@@ -10743,7 +10809,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                             throw new Error("Brake light material must be MeshStandardMaterial");
                         l.set(this, Ee, e, "f")
                     }
-                e.castShadow = !0,
+                if (this.__ghost)
+                    for (const e of t)
+                        e.envMapIntensity = 0;
+                e.castShadow = !this.__ghost,
                 e.receiveShadow = !0,
                 e.frustumCulled = !1,
                 l.get(this, Ae, "f").addMaterial(e.material)
@@ -45076,6 +45145,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     if (null == C.get(this, Sa, "f")) {
                         const n = new VisualCar(null,t,e.settings.recording,null,C.get(this, zr, "f"),C.get(this, Nr, "f"),C.get(this, Ir, "f"),C.get(this, Pr, "f"),C.get(this, Yr, "f"),C.get(this, Gr, "f"),null);
                         n.setCarStyle(e.settings.carStyle),
+                        n.ghostLook = !0,
                         n.audioVolume = C.get(this, Oa, "f"),
                         C.get(this, _r, "m", $a).call(this),
                         e.car = n,
@@ -45316,9 +45386,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             // Shown by the session's next frame, once update() has placed it.
                             bot.car.setVisible(!1);
                             bot.car.audioVolume = C.get(g, Oa, "f");
+                            // Every bot is the default car with low-poly wheels.
+                            bot.car.lowPolyWheels();
+                            bot.car.ghostLook = !0;
                             cars.set(id, bot);
                         }
-                        bot.style !== style && (bot.car.setCarStyle(jt.A.deserializeSafe(style)), bot.style = style);
                         bot.nickname !== nickname && (bot.car.setNameTag(null, nickname), bot.nickname = nickname);
                     }
                 },
@@ -45752,6 +45824,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 bufferedCarStates: []
                             },
                             n.car.audioVolume = C.get(this, Oa, "f"),
+                            n.car.ghostLook = !0,
                             C.get(this, Ra, "f").set(e.id, n)),
                             n.car.setNameTag(e.countryCode, e.nickname),
                             n.car.setCarStyle(e.carStyle)

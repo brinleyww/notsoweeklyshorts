@@ -144,7 +144,10 @@ final round. The organizer is warned (privately) when a racer sends a run identi
 The setup page's **Bots** section, the first of the rules, has a count (Off, 1-8, `MAX_BOTS`) that puts
 computer racers on the grid and **Bot skill** for how good they are: Easy, Medium, Hard, Expert, Mixed (one
 of each from easy to expert), or Match the field (after every round each bot's skill moves toward the
-humans' median time). Skill is how well a bot drives: how close to the reference's speed it takes corners,
+humans' median time). Every bot is the default car with eight-sided wheels (\`VisualCar.lowPolyWheels\`),
+686 triangles against the default car's 3,102 and up to 117,444 for a style a random bot used to get (the
+F1 body), and like every other car that isn't yours it casts no shadow and gets none of PolyFX's lights,
+shine or reflections (\`VisualCar.ghostLook\`). Skill is how well a bot drives: how close to the reference's speed it takes corners,
 how much room it leaves walls and edges, how often it slips up, and whether it follows drifts. Expert is
 skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,

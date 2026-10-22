@@ -680,19 +680,13 @@ export class Panel {
       ),
     );
     botCount.classList.add('wide');
-    const skillHint: Record<Rules['botSkill'], string> = {
-      easy: 'Slow through corners, kept well off the walls',
-      medium: 'About 10% behind the world record',
-      hard: 'About 5% behind the world record',
-      expert: 'About 0.1 s behind the world record',
-      mixed: 'From easy to expert, one of each',
-      match: "They start at medium and follow the humans' pace round by round",
-    };
+    const skillHint =
+      r.botSkill === 'match' ? "They start at medium and follow the humans' pace round by round" : r.botSkill === 'mixed' ? 'From easy to expert, one of each' : 'How fast and how boldly they drive';
     const bots = sect(
       'Bots',
       botCount,
       r.bots && !r.collisions
-        ? seg('botSkill', 'Bot skill', skillHint[r.botSkill], [
+        ? seg('botSkill', 'Bot skill', skillHint, [
             ['easy', 'Easy'],
             ['medium', 'Medium'],
             ['hard', 'Hard'],

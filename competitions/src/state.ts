@@ -51,7 +51,7 @@ export interface Player {
 export interface BotInfo {
   // Skill 0..100.
   s: number;
-  // Car style string (CarStyle.serialize()).
+  // Car style string (CarStyle.serialize()); empty, as every bot drives the default car.
   cs: string;
 }
 

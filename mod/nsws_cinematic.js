@@ -1660,7 +1660,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
     }
 
     function setCastShadow(car, on) {
-        for (const m of partsOf(car).casters) m.castShadow = on;
+        for (const m of partsOf(car).casters) m.castShadow = on && !car.__ghost;
     }
 
     // The game draws every car mesh even when it is off screen. Ghosts are culled like the rest

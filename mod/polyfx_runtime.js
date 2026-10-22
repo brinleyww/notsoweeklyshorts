@@ -17684,6 +17684,11 @@ void main() {
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     return mats.some((m) => m && m.name === "BrakeLight");
   }
+  // Someone else's car (main.bundle.js VisualCar.ghostLook): it keeps the stock look.
+  function isGhost(o) {
+    for (let p = o; p; p = p.parent) if (p.userData && p.userData.__nswsGhost) return true;
+    return false;
+  }
   function rootOf(o, scene) {
     let p = o;
     while (p.parent && p.parent !== scene) p = p.parent;
@@ -18163,7 +18168,7 @@ void main() {
       if (!force && now - this.scanT < 1400) return;
       this.scanT = now;
       scene.traverse((o) => {
-        if (!o.isMesh || !o.material) return;
+        if (!o.isMesh || !o.material || isGhost(o)) return;
         const mats = materialList(o.material);
         for (const m of mats) {
           if (!m || !m.isMeshStandardMaterial || this.entries.has(m)) continue;
@@ -19807,7 +19812,7 @@ uniform float polyfxGlowIntensity;`
         if (!o.isMesh) return;
         if (isBrakeLightMesh(o)) {
           const root = rootOf(o, scene);
-          if (root) carRoots.add(root);
+          if (root && !isGhost(root)) carRoots.add(root);
         }
         if (smokeUnknown && !smoke && o.isInstancedMesh && o.material) {
           const m = o.material;

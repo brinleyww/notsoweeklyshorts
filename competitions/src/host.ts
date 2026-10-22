@@ -2,7 +2,7 @@
 // the replay checks. Everyone else only sees the state it broadcasts.
 import type { App } from './app.ts';
 import { BotManager } from './bots/manager.ts';
-import { BOT_NAMES, botStyle, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
+import { BOT_NAMES, matchStep, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
 import type { RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
@@ -319,7 +319,7 @@ export class Organizer {
     const k = this.#botNames.find((i) => !taken.has(BOT_NAMES[i]));
     if (k == null) return null;
     const u = this.#nextU++;
-    const p: Player = { u, pid: botPid(u), name: BOT_NAMES[k], cc: null, role: 'racer', pts: 0, wins: 0, places: [], bot: { s: 50, cs: botStyle(k) } };
+    const p: Player = { u, pid: botPid(u), name: BOT_NAMES[k], cc: null, role: 'racer', pts: 0, wins: 0, places: [], bot: { s: 50, cs: '' } };
     s.players.push(p);
     return p;
   }
