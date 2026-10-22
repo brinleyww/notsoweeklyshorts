@@ -107,3 +107,12 @@ export function matchStep(skill: number, tb: number, th: number) {
   const step = Math.max(-0.08, Math.min(0.08, 0.6 * Math.log(tb / th)));
   return Math.min(0.98, Math.max(0.15, skill + step));
 }
+
+// What a bot's tag calls its difficulty: the cup's Bot skill, except Mixed, where each bot is named for its own
+// skill (0-100) by the nearest tier.
+export function botLevel(rule: BotSkill, skill: number) {
+  if (rule === 'match') return 'Match';
+  const s = rule === 'mixed' ? skill / 100 : null;
+  const tier = s == null ? rule : s >= EXPERT_SKILL ? 'expert' : s >= 0.67 ? 'hard' : s >= 0.45 ? 'medium' : 'easy';
+  return tier[0].toUpperCase() + tier.slice(1);
+}

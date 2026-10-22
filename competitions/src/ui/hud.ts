@@ -3,12 +3,13 @@
 // clocks are written in place once a frame, and only when their text changes.
 import type { App } from '../app.ts';
 import { NEXT_LABEL, PRODUCT } from '../rules.ts';
+import { botLevel } from '../bots/roster.ts';
 import { isFinalist, player, standings, type CupState, type Player } from '../state.ts';
 import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
 
 const BOARD_FULL = 10;
 
-const botTag = (p: Player | undefined) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, 'BOT') : null);
+const botTag = (p: Player | undefined, s: CupState) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, `BOT · ${botLevel(s.rules.botSkill, p.bot.s)}`) : null);
 
 // Bots have no lobby entry; their car style is a CarStyle string, and the thumbnail needs the object.
 function botCarStyle(cs: string) {
@@ -277,7 +278,7 @@ export class Hud {
       more = order.length - shown.length;
     }
     const watched = app.watch.active ? app.watch.target : null;
-    const key = JSON.stringify([live, s.phase, shown, more, full, r?.runs, r?.dnf, watched, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away])]);
+    const key = JSON.stringify([live, s.phase, shown, more, full, r?.runs, r?.dnf, watched, s.rules.botSkill, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away, p.bot?.s])]);
     if (!this.#changed('board', key)) return;
     const head = h(
       'div',
@@ -293,7 +294,7 @@ export class Hud {
       const pos = run && run.chk !== 2 ? Object.values(r.runs).filter((x) => x.chk !== 2 && x.f < run.f).length + 1 : order.indexOf(u) + 1;
       const isDnf = live && (r.dnf.includes(u) || run?.chk === 2);
       const val = h('span', { class: 'val mono' });
-      const name = h('span', { class: 'name ell' }, live && isFinalist(s, p) ? h('span', { class: 'tag fin', title: 'Finalist' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?', botTag(p));
+      const name = h('span', { class: 'name ell' }, live && isFinalist(s, p) ? h('span', { class: 'tag fin', title: 'Finalist' }, 'F') : null, p ? flag(p.cc) + (p.cc ? ' ' : '') + p.name : '?', botTag(p, s));
       const cls = ['row', `p${pos}`];
       if (u === app.me) cls.push('me');
       if (isDnf) cls.push('dnf');
@@ -410,7 +411,7 @@ export class Hud {
               'td',
               { class: 'name' },
               p ? `${flag(p.cc)} ${p.name}` : 'Left the cup',
-              botTag(p),
+              botTag(p, s),
               (row[5] ?? 0) & 2 ? h('span', { class: 'badge wr' }, 'WR') : (row[5] ?? 0) & 1 ? h('span', { class: 'badge' }, 'PB') : null,
               row[4] ? h('span', { class: 'badge', style: 'color:var(--bad)' }, 'OUT') : null,
             ),
@@ -661,7 +662,7 @@ export class Hud {
     const target = w.mode === 'free' ? null : app.playerByPid(w.target);
     if (!this.#changed('spec', JSON.stringify([w.mode, target?.u, target?.name, w.cockpit, s.rules.freecam]))) return;
     const keys = [h('i'), h('i'), h('i'), h('i')];
-    const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? [`${flag(target.cc)} ${target.name}`, botTag(target)] : '—');
+    const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? [`${flag(target.cc)} ${target.name}`, botTag(target, s)] : '—');
     const speed = h('b', { class: 'mono' }),
       cp = h('b', { class: 'mono' }),
       time = h('b', { class: 'mono' });
@@ -731,12 +732,12 @@ export class Hud {
         'div',
         { class: `step s${place}` },
         img,
-        h('div', { class: 'pname ell' }, `${flag(p.cc)} ${p.name}`, botTag(p)),
+        h('div', { class: 'pname ell' }, `${flag(p.cc)} ${p.name}`, botTag(p, s)),
         h('div', { class: 'ppts' }, s.rules.mode === 'knockout' ? (place === 1 ? 'Last one standing' : `Out in round ${p.out ?? '?'}`) : `${p.pts} pts · ${p.wins} win${p.wins === 1 ? '' : 's'}`),
         h('div', { class: 'block' }, String(place)),
       );
     };
-    const rest = table.slice(3).map((p, i) => h('span', null, `${ordinal(i + 4)} ${p.name}`, botTag(p), ` · ${s.rules.mode === 'knockout' ? `R${p.out ?? '-'}` : p.pts}`));
+    const rest = table.slice(3).map((p, i) => h('span', null, `${ordinal(i + 4)} ${p.name}`, botTag(p, s), ` · ${s.rules.mode === 'knockout' ? `R${p.out ?? '-'}` : p.pts}`));
     const acts: HTMLElement[] = [];
     const best = app.bestRun();
     if (best) acts.push(btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'ghost'));
