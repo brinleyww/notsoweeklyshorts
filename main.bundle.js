@@ -10103,6 +10103,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         value: new THREE.Vector3(0,0,0)
                     }, "f"),
                     l.set(this, we, ((l.get(this, Ie, "f")?.getSettingBoolean(st.A.LowPerformanceMode) ? F.models.bodiesLow : F.models.bodies)?.get(l.get(this, Ce, "f").body) ?? F.models.chassis).clone(), "f"),
+                    F.waitForBody(this, l.get(this, Ce, "f").body),
                     l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
                     l.set(this, xe, F.models.suspension.clone(), "f"),
                     l.get(this, G, "m", Ve).call(this, l.get(this, xe, "f")),
@@ -10248,7 +10249,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     return l.get(this, Ce, "f")
                 }
                 setCarStyle(e) {
-                    if (!l.get(this, Ce, "f").equals(e)) {
+                    if (!l.get(this, Ce, "f").equals(e) || this.__bodyPending) {
                         if (e.pattern != l.get(this, Ce, "f").pattern && (l.get(this, Te, "f").dispose(),
                         l.set(this, Te, l.get(F, F, "m", He).call(F, l.get(this, Ae, "f"), e.pattern), "f"),
                         l.get(this, Me, "f").value = l.get(this, Te, "f")),
@@ -10265,12 +10266,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 l.get(this, ve, "f").add(i),
                                 l.get(this, ke, "f")[t] = i
                             }
-                        if (e.body != l.get(this, Ce, "f").body) {
+                        if (e.body != l.get(this, Ce, "f").body || this.__bodyPending) {
                             const t = l.get(this, we, "f");
                             t.remove(l.get(this, Se, "f")),
                             l.get(this, ve, "f").remove(t),
                             l.get(this, Ae, "f").removeMaterial(t.material),
                             l.set(this, we, ((l.get(this, Ie, "f")?.getSettingBoolean(st.A.LowPerformanceMode) ? F.models.bodiesLow : F.models.bodies)?.get(e.body) ?? F.models.chassis).clone(), "f"),
+                            F.waitForBody(this, e.body),
                             l.get(this, G, "m", Ve).call(this, l.get(this, we, "f")),
                             l.get(this, we, "f").matrixAutoUpdate = t.matrixAutoUpdate,
                             l.get(this, we, "f").matrix.copy(t.matrix),
@@ -10611,6 +10613,20 @@ window.__nswsAutoGhostNote = function(trackId) {
                               , carCollision = l.get(F, F, "m", rt).call(F, r("Collision", !0));
                             carBodies.set(0, a(r(S.A.bodies[0].model, !0))),
                             carBodiesLow.set(0, carBodies.get(0));
+                            F.models = {
+                                chassis: carBodies.get(0),
+                                bodies: carBodies,
+                                bodiesLow: carBodiesLow,
+                                suspension: carSuspension,
+                                rims: s,
+                                exhausts: o,
+                                collisionShapeVertices: carCollision
+                            },
+                            l.get(F, F, "m", at).call(F).then((t => {
+                                e(t)
+                            }
+                            )).catch(t);
+                            // The other bodies are 3 MB, so the menu doesn't wait for them; cars that need one show the default body until then.
                             const bodiesDraco = new DRACOLoader
                               , bodiesLoader = new d.B;
                             bodiesDraco.setDecoderPath("lib/draco/"),
@@ -10624,21 +10640,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                                     const lowModel = S.A.bodies[bodyIndex].lowModel;
                                     carBodiesLow.set(bodyIndex, lowModel == S.A.bodies[bodyIndex].model ? carBodies.get(bodyIndex) : a(r(lowModel, !0, bodiesGltf.scene, !0)))
                                 }
-                                F.models = {
-                                    chassis: carBodies.get(0),
-                                    bodies: carBodies,
-                                    bodiesLow: carBodiesLow,
-                                    suspension: carSuspension,
-                                    rims: s,
-                                    exhausts: o,
-                                    collisionShapeVertices: carCollision
-                                },
-                                l.get(F, F, "m", at).call(F).then((t => {
-                                    e(t)
+                                F.bodiesLoaded = !0;
+                                const waiting = [...F.pendingBodies];
+                                F.pendingBodies.clear();
+                                for (const e of waiting) {
+                                    const t = e.deref();
+                                    null == t || l.get(t, Fe, "f") || !t.__bodyPending || t.setCarStyle(t.getCarStyle())
                                 }
-                                )).catch(t)
                             }
-                            ), void 0, t)
+                            ), void 0, (e => {
+                                console.error("Failed to load car bodies", e)
+                            }
+                            ))
                         }
                         ), void 0, t)
                     }
@@ -11139,7 +11152,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                 value: .5
             },
             VisualCar.models = null,
-            VisualCar.patterns = null;
+            VisualCar.patterns = null,
+            VisualCar.bodiesLoaded = !1,
+            VisualCar.pendingBodies = new Set,
+            VisualCar.waitForBody = (e, t) => {
+                e.__bodyPending = !VisualCar.bodiesLoaded && !VisualCar.models.bodies.has(t),
+                e.__bodyPending && VisualCar.pendingBodies.add(new WeakRef(e))
+            };
             const ht = VisualCar
         }
         ,
@@ -32458,10 +32477,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                     ;
                     for (const e of m.get(this, s, "f").getAllParts())
-                        for (const [t,n] of e.colors) {
+                        for (const t of e.colors.keys()) {
                             const i = y.get(e)?.get(t);
                             if (null == i)
                                 continue;
+                            const n = e.colors.get(t);
                             if (null == n)
                                 throw new Error("Mesh is not loaded");
                             addInstanced(n, i, e == blockType ? v.blockMeshes : null)
@@ -41443,6 +41463,14 @@ window.__nswsAutoGhostNote = function(trackId) {
                     C.get(this, A, "f").loadedResource(),
                     null == t ? (console.warn('Audio "' + e + '" failed to load'),
                     C.get(this, y, "f").set(e, null)) : C.get(this, y, "f").set(e, t)
+                }
+                ))
+            }
+            // Like load(), but the loading screen doesn't wait for it.
+            loadLater(e, t) {
+                C.get(this, m, "m", k).call(this, t, (t => {
+                    null == t && console.warn('Audio "' + e + '" failed to load'),
+                    C.get(this, y, "f").set(e, t)
                 }
                 ))
             }
@@ -58194,6 +58222,30 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ;
         var od, ld, cd, hd, dd, DRACOLoader = i(1728).Z, BufferGeometryUtils = i(1566), Part = i(2203).A, PartCategory = i(1882).A, TrackPartColorId = i(4183).A, TrackPartRotationAxis = i(8566).A;
+        // A part's mesh in each colour. Only the first is built at startup; the rest are built the first time they are asked for.
+        class PartColors extends Map {
+            get(e) {
+                let t = super.get(e);
+                return null === t && null != this.build && (t = this.build(e),
+                super.set(e, t)),
+                t
+            }
+            *entries() {
+                for (const e of super.keys())
+                    yield [e, this.get(e)]
+            }
+            *values() {
+                for (const e of super.keys())
+                    yield this.get(e)
+            }
+            [Symbol.iterator]() {
+                return this.entries()
+            }
+            forEach(e, t) {
+                for (const [n,i] of this.entries())
+                    e.call(t, i, n, this)
+            }
+        }
         class vd {
             constructor() {
                 od.add(this),
@@ -58229,7 +58281,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         throw new Error("Track part types have same Id");
                     const n = {
                         configuration: e,
-                        colors: new Map(e.colors.map(( ({id: e}) => [e, null]))),
+                        colors: new PartColors(e.colors.map(( ({id: e}) => [e, null]))),
                         physicsShapeVertices: null
                     };
                     C.get(this, ld, "f").set(e.id, n);
@@ -58327,8 +58379,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         return s.attributes.color = new THREE.BufferAttribute(o,3),
                         s
                     }
-                    let l = null;
-                    for (const t of e.colors) {
+                    const build = t => {
                         const i = [];
                         for (const [n,r,s] of e.models) {
                             const e = a(n, r, s?.flipX ?? !1, s?.flipY ?? !1, s?.flipZ ?? !1, s?.offset ?? null, s?.scale ?? null, s?.quaternion ?? null, t.colors);
@@ -58337,11 +58388,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         }
                         const r = BufferGeometryUtils.mergeGeometries(i, !0).toNonIndexed();
                         r.computeVertexNormals();
-                        const o = BufferGeometryUtils.mergeVertices(r)
-                          , c = new THREE.Mesh(o,s);
-                        n.colors.set(t.id, c),
-                        l ?? (l = r)
+                        return [r, new THREE.Mesh(BufferGeometryUtils.mergeVertices(r),s)]
                     }
+                      , palettes = new Map(e.colors.map((t => [t.id, t])));
+                    let l = null;
+                    if (0 != e.colors.length) {
+                        const [t,i] = build(e.colors[0]);
+                        l = t,
+                        n.colors.set(e.colors[0].id, i)
+                    }
+                    n.colors.build = t => build(palettes.get(t))[1];
                     if (null == l)
                         throw new Error("Physics geometry is missing");
                     if (!(l.attributes.position instanceof THREE.BufferAttribute))
@@ -61983,7 +62039,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             const s = new bu
               , o = new kd(s)
               , l = new I(t,r);
-            l.load("music", ["audio/music.ogg", "audio/music.mp3"]),
+            t.addCompleteListener(( () => l.loadLater("music", ["audio/music.ogg", "audio/music.mp3"]))),
             l.load("click", ["audio/click.ogg", "audio/click.mp3"]),
             l.load("engine", ["audio/engine.ogg", "audio/engine.mp3"]),
             l.load("suspension", ["audio/suspension.ogg", "audio/suspension.mp3"]),
