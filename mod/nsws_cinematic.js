@@ -124,6 +124,21 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 .nsws-cine-card > .result { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; padding: 14px 26px 14px 22px; background: var(--surface-tertiary-color); }
 .nsws-cine-card > .result > small { font-size: 14px; opacity: 0.6; }
 .nsws-cine-card > .result > b { margin-top: 6px; font-weight: normal; font-size: 32px; font-variant-numeric: tabular-nums; }
+.nsws-save-menu > .col > .opt.edit { margin-top: auto; padding-top: 8px; }
+.nsws-save-menu > .col > .button.preview { margin-bottom: 6px; text-align: center; }
+.nsws-save-menu > .col > .button.preview + .button.go { margin-top: 0; }
+.nsws-export.nsws-preview { background: rgba(0, 0, 0, 0.82); }
+.nsws-export.nsws-preview > div { min-width: 0; max-width: none; padding: 14px 18px 16px 18px; }
+.nsws-preview .head { display: flex; align-items: baseline; margin: 0 4px 10px 4px; }
+.nsws-preview .head > p { margin: 0; }
+.nsws-preview .head > p.note { flex: 1; margin-left: 14px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nsws-preview .screen { position: relative; width: min(1100px, calc(92vw - 36px), calc((86vh - 150px) * 16 / 9)); aspect-ratio: 16 / 9; background: #000; }
+.nsws-preview .screen > canvas { display: block; width: 100%; height: 100%; }
+.nsws-preview .screen > span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 18px; opacity: 0.8; white-space: nowrap; }
+.nsws-preview .track { margin: 10px 0 12px 0; height: 5px; }
+.nsws-preview .btns { display: flex; justify-content: center; }
+.nsws-preview .btns > .button { margin: 0 4px; padding: 8px 26px; font-size: 20px; }
+.nsws-preview .btns > .button.go { box-shadow: inset 0 -3px 0 #7272c2; }
 `;
 
     const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -1917,16 +1932,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.saveBtn.innerHTML = '<img src="images/save.svg">';
             this.saveBtn.addEventListener("click", () => {
                 o.playClick?.();
-                if (this.exp) this.exp.cancel = true;
+                if (this.exp) this.cancelExport();
                 else if (this.rec) this.stopRecording();
                 else this.toggleSaveMenu();
             });
+            this.editOn = false;
+            try {
+                this.editOn = localStorage.getItem("nsws_save_edit") === "1";
+            } catch (e) {}
             this.onRecKey = (e) => {
                 if (this.exp) {
                     // The export drives playback; keys would pause or seek it.
                     e.preventDefault();
                     e.stopImmediatePropagation();
-                    if (e.code === "Escape") this.exp.cancel = true;
+                    if (e.code === "Escape") this.cancelExport();
                 } else if (this.menu && e.code === "Escape") {
                     e.preventDefault();
                     e.stopImmediatePropagation();
@@ -2010,7 +2029,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
         dispose() {
             this.disposed = true;
-            if (this.exp) this.exp.cancel = true;
+            if (this.exp) this.cancelExport();
             this.menuCleanup?.();
             this.menu?.remove();
             this.menu = null;
@@ -2317,9 +2336,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const run = this.o.getRuns()[this.o.getFocus()];
             const finish = (run?.settings.time?.numberOfFrames ?? 0) / 1000;
             const total = this.o.totalTime?.() ?? 0;
-            const D = Math.min(finish + 4, total > 0 ? total : finish + 4) + 0.1;
+            const end = Math.min(finish + 4, total > 0 ? total : finish + 4);
+            const edit = this.editOn && window.__nswsEdit ? this.editMap(end) : null;
+            const D = (edit ? edit.duration : end) + 0.1;
             const sound = window.__nswsVideoAudio && window.AudioEncoder && window.indexedDB ? this.soundOptions() : null;
-            const audioRate = audioRateFor(size, !!sound && (sound.cars || !!sound.song));
+            const audioRate = audioRateFor(size, !!sound && (sound.cars || !!sound.song || !!edit));
             const rate = videoRateFor(size, D, audioRate);
             const [, height, fps] = LADDER.find(([w, h, f]) => rate / (w * h * f) >= MIN_BPP) ?? LADDER[LADDER.length - 1];
             return { bytes: (rate + audioRate) * D / 8, seconds: D, height, fps };
@@ -2822,13 +2843,39 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     e.stopPropagation();
                     if (type === "keydown" && e.key === "Enter") go.click();
                 });
+            const editRow = el("div", "opt edit", right);
+            const editBtn = el("button", "button wide", editRow);
+            editBtn.title = "Slow motion on the big moments, strobes and flashes on the beat of the song, shakes, speed blur and sound effects";
+            const showEdit = () => {
+                editBtn.textContent = "Export as edit: " + (this.editOn ? "On" : "Off");
+                editBtn.classList.toggle("off", !this.editOn);
+            };
+            showEdit();
+            editBtn.addEventListener("click", () => {
+                this.o.playClick?.();
+                this.editOn = !this.editOn;
+                try {
+                    localStorage.setItem("nsws_save_edit", this.editOn ? "1" : "0");
+                } catch (e) {}
+                showEdit();
+                showEstimate();
+            });
+            const preview = el("button", "button preview", right);
+            preview.textContent = "Preview";
+            preview.title = "Watch the video as it will be saved";
+            const pick = () => [SAVE_SIZES.find((sz) => sz.id === chosen) ?? SAVE_SIZES[0], nameInput.value.trim() || this.defaultFileName()];
+            preview.addEventListener("click", () => {
+                this.o.playClick?.();
+                const [size, name] = pick();
+                this.toggleSaveMenu();
+                this.previewVideo(size, name);
+            });
             const go = el("button", "button go", right);
             go.innerHTML = '<img src="images/save.svg">';
             go.appendChild(document.createTextNode("Save video"));
             go.addEventListener("click", () => {
                 this.o.playClick?.();
-                const size = SAVE_SIZES.find((sz) => sz.id === chosen) ?? SAVE_SIZES[0];
-                const name = nameInput.value.trim() || this.defaultFileName();
+                const [size, name] = pick();
                 this.toggleSaveMenu();
                 this.exportVideo(size, name);
             });
@@ -2930,13 +2977,22 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.download(result.blob, "mp4", fileName || this.defaultFileName());
             const mb = (result.blob.size / 1048576).toFixed(1);
             let note = result.width + "\u00d7" + result.height + ", " + result.fps + " fps, " + mb + " MB";
+            if (result.edit) note = "Edit, " + note;
             if (result.sound === "failed") note += ", no sound (this browser can't encode audio)";
-            else if (result.sound) note += ", " + [result.sound.cars ? "car sounds" : null, result.sound.music].filter(Boolean).join(" + ");
+            else if (result.sound) note += ", " + [result.sound.cars ? "car sounds" : null, result.sound.music, result.sound.edit ? "sound effects" : null].filter(Boolean).join(" + ");
             if (result.height < 720) note += ". The resolution had to drop to " + result.height + "p to reach this size; pick a bigger size for a sharper video.";
             ui.done("Video saved", note);
         }
 
-        async runExport(exp, ui, size, begin) {
+        cancelExport() {
+            if (!this.exp) return;
+            this.exp.cancel = true;
+            this.exp.onCancel?.();
+        }
+
+        // Loads every watched replay to the end and plans the cinematic's shots, so frames can be
+        // drawn at any time. Returns the replay time to draw up to, or null when cancelled.
+        async prepareFrames(exp, ui) {
             const o = this.o, runs = o.getRuns(), focus = o.getFocus(), run = runs[focus];
             const total = o.totalTime?.() ?? 0;
             const finish = (run.settings.time?.numberOfFrames ?? 0) / 1000;
@@ -2969,10 +3025,95 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     await yieldTask();
                 }
             }
-            if (exp.cancel) return null;
-            const D = end + 0.1;
+            return exp.cancel ? null : end;
+        }
+
+        // The edit's clock (slow motion and speed-ups) for the followed run, ending a little after
+        // its finish instead of the plain video's 4 s.
+        editMap(end) {
+            const run = this.o.getRuns()[this.o.getFocus()];
+            const path = this.pathOf(run);
+            path.sync();
+            const finish = path.finish;
+            const stop = Math.max(DT, Math.min(end, null != finish ? finish + 2.6 : end, path.end));
+            const key = path.n + "|" + stop;
+            if (path.editMap?.key !== key) path.editMap = { key, map: window.__nswsEdit.timeMap({ spd: path.spd, events: path.events, finish, end: stop, dt: DT }) };
+            return path.editMap.map;
+        }
+
+        buildEdit(end, song) {
+            const E = window.__nswsEdit;
+            if (!E) return null;
+            const o = this.o, runs = o.getRuns(), focus = o.getFocus(), run = runs[focus];
+            const map = this.editMap(end);
+            const path = this.pathOf(run);
+            const cuts = [];
+            if (this.enabled) {
+                const shots = this.plannerFor(runs, focus).shots;
+                for (let i = 1; i < shots.length; i++) if (!shots[i].blend) cuts.push(shots[i].t0);
+            }
+            // A song left starting at 0:00 starts where its drop lands on the first big landing.
+            let beats = null, start = song?.start ?? 0, auto = false;
+            try {
+                if (song && !(start > 0)) {
+                    const slow = map.slows.find((s) => s.kind === "jump" && map.videoAt(s.land) >= 2.5 && map.videoAt(s.land) <= 12);
+                    const at = map.videoAt(slow ? slow.land : Math.min(3, map.end / 4));
+                    const s = E.dropStart(song.buffer, at);
+                    if (null != s) {
+                        start = s;
+                        auto = true;
+                    }
+                }
+                beats = song ? E.analyzeSong(song.buffer, start, map.duration) : null;
+            } catch (e) {
+                console.warn(e);
+            }
+            const edit = E.plan({
+                map,
+                song: beats,
+                cuts,
+                checkpoints: run.checkpointTimes.map((c) => c.numberOfFrames / 1000),
+                landings: path.events.filter((e) => e.type === "jump").map((e) => e.t1),
+                finish: path.finish,
+                seed: E.hash(o.trackId ?? o.trackName ?? "", run.settings.nickname ?? "", run.settings.time?.numberOfFrames ?? 0),
+                accent: colorOf(run)
+            });
+            edit.songStart = start;
+            edit.autoStart = auto;
+            return edit;
+        }
+
+        // Moves the replay from tPrev to t the way playback would (sound, skidmarks, cameras) and draws it.
+        stepTo(tPrev, t) {
+            const o = this.o;
+            this.expT = t;
+            o.setPaused(false);
+            o.setTime(tPrev);
+            o.step(t - tPrev);
+        }
+
+        // One finished frame: the 3D view (through the edit's effects when there is an edit) and
+        // the overlays. `te` is the video's time, `t` the replay's.
+        composeFrame(g, W, H, t, edit, fx, te) {
+            g.fillStyle = "#000";
+            g.fillRect(0, 0, W, H);
+            if (!edit) {
+                g.drawImage(this.o.render.canvas, 0, 0, W, H);
+                this.paintOverlay(g, W, H, t);
+                return;
+            }
+            const E = window.__nswsEdit, car = this.o.getRuns()[this.o.getFocus()].car;
+            const p = E.paramsAt(edit, te, Math.abs(car.getSpeedKmh()));
+            g.drawImage(fx.render(this.o.render.canvas, W, H, p), 0, 0, W, H);
+            this.paintOverlay(g, W, H, t);
+            E.paintTop(g, W, H, p, this.enabled ? Math.round(H * 0.065) : 0);
+        }
+
+        async runExport(exp, ui, size, begin) {
+            const end = await this.prepareFrames(exp, ui);
+            if (null == end) return null;
             const cap = size.cap ?? null;
-            const VA = window.__nswsVideoAudio;
+            const VA = window.__nswsVideoAudio, E = window.__nswsEdit;
             const sound = VA && window.AudioEncoder ? this.soundOptions() : null;
             let song = null;
             if (sound?.song) {
@@ -2982,7 +3123,14 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 } catch (e) {}
             }
             if (exp.cancel) return null;
-            const wantAudio = !!sound && (sound.cars || !!song);
+            let edit = null;
+            if (this.editOn && E) {
+                ui.set(song ? "Finding the beat" : "Planning the edit", null);
+                await yieldTask();
+                edit = this.buildEdit(end, song);
+            }
+            const D = (edit ? edit.duration : end) + 0.1;
+            const wantAudio = !!sound && (sound.cars || !!song || !!edit);
             const audioRate = audioRateFor(size, wantAudio);
             let rate = videoRateFor(size, D, audioRate);
             begin();
@@ -2991,16 +3139,16 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const cfg = await encoderConfig(rate, !!cap);
                 if (!cfg) return pass ? null : "fallback";
                 if (pass === 0 && sound?.cars) capture = { fps: cfg.framerate, frames: [], events: [] };
-                const video = await this.renderPass(exp, ui, cfg, end, pass, pass === 0 ? capture : null);
+                const video = await this.renderPass(exp, ui, cfg, end, pass, pass === 0 ? capture : null, edit);
                 if (!video) return null;
                 if (pass === 0 && wantAudio) {
                     ui.set("Mixing sound", null);
                     const dur = video.chunks.length / video.fps;
                     const cars = capture?.frames.length ? await VA.renderCars(capture, (name) => this.o.audio?.getBuffer?.(name) ?? null, dur) : null;
                     if (exp.cancel) return null;
-                    audio = await VA.encode(VA.mix(dur, cars, sound.carVolume ?? 1, song?.buffer ?? null, sound.volume, song?.start ?? 0), audioRate);
+                    audio = await VA.encode(VA.mix(dur, cars, sound.carVolume ?? 1, song?.buffer ?? null, sound.volume, edit?.songStart ?? song?.start ?? 0, edit ? E.sfx(edit, dur, VA.SR) : null), audioRate);
                 }
-                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, sound: wantAudio ? audio ? { cars: sound.cars, music: song ? song.name + (song.by ? " by " + song.by : "") : null } : "failed" : null };
+                const out = { blob: muxMp4({ ...video, audio }), width: video.width, height: video.height, fps: video.fps, edit: !!edit, sound: wantAudio ? audio ? { cars: sound.cars, music: song ? song.name + (song.by ? " by " + song.by : "") : null, edit: !!edit } : "failed" : null };
                 // The encoder only aims at the bitrate; when it overshoots the cap, go again smaller.
                 if (cap && out.blob.size > cap && pass < 2) {
                     rate *= cap / out.blob.size * 0.9;
@@ -3011,7 +3159,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return null;
         }
 
-        async renderPass(exp, ui, cfg, end, pass, capture) {
+        async renderPass(exp, ui, cfg, end, pass, capture, edit) {
             const o = this.o, W = cfg.width, H = cfg.height, fps = cfg.framerate;
             o.render.sizeOverride = { width: W, height: H };
             const canvas = document.createElement("canvas");
@@ -3032,15 +3180,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             });
             enc.configure(cfg);
             if (this.enabled) this.viewer.reset();
-            const n = Math.floor(end * fps) + 1;
+            const fx = edit ? new window.__nswsEdit.FX() : null;
+            const n = Math.floor((edit ? edit.duration : end) * fps) + 1;
+            const at = (k) => edit ? edit.replayAt(k / fps) : k / fps;
             // What the cars' sound code asks for each frame, for the soundtrack (see nsws_video_audio.js).
+            // In an edit's slow motion the engines drop in pitch with the picture.
             const runs = o.getRuns();
             const ids = new Map(runs.map((r, i) => [r.car, i]));
-            let cur = null;
+            let cur = null, pitch = 1;
             if (capture)
                 window.__nswsAudioTap = (car, kind, w, rate, gain) => {
                     const id = ids.get(car);
                     if (null == id || !cur) return;
+                    rate *= pitch;
                     if (kind >= 3) {
                         capture.events.push({ t: cur.t, car: id, kind, rate, gain });
                         return;
@@ -3056,11 +3208,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 for (let k = 0; k < n; k++) {
                     if (exp.cancel || this.disposed) return null;
                     if (failed) throw failed;
-                    this.expT = k / fps;
-                    o.setPaused(false);
-                    o.setTime(k ? (k - 1) / fps : 0);
-                    if (capture) cur = { t: this.expT, cars: new Map(), cam: null };
-                    o.step(k ? 1 / fps : 0);
+                    const te = k / fps, t = at(k);
+                    if (capture) cur = { t: te, cars: new Map(), cam: null };
+                    if (edit) pitch = Math.pow(clamp(edit.map.rateAt(t), 0.45, 1), 0.6);
+                    this.stepTo(k ? at(k - 1) : 0, t);
                     if (capture) {
                         const cam = o.render.camera;
                         cam.getWorldPosition(cp);
@@ -3073,10 +3224,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                         }
                         capture.frames.push(cur);
                     }
-                    g.fillStyle = "#000";
-                    g.fillRect(0, 0, W, H);
-                    g.drawImage(o.render.canvas, 0, 0, W, H);
-                    this.paintOverlay(g, W, H, this.expT);
+                    this.composeFrame(g, W, H, t, edit, fx, te);
                     const frame = new VideoFrame(canvas, { timestamp: Math.round(k * 1e6 / fps), duration: Math.round(1e6 / fps) });
                     enc.encode(frame, { keyFrame: k % (fps * 4) === 0 });
                     frame.close();
@@ -3089,10 +3237,157 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             } finally {
                 if (enc.state !== "closed") enc.close();
                 if (capture) window.__nswsAudioTap = null;
+                fx?.dispose();
             }
             const vp9 = cfg.codec.startsWith("vp09");
             if (!chunks.length || !vp9 && !desc) throw new Error("The encoder produced no video");
             return { vp9, desc, width: W, height: H, fps, chunks };
+        }
+
+        // Plays the video as it will be saved (edit, overlays, music and sound effects) in a window
+        // over the replay, drawn live at a smaller size. Save from there saves with the menu's choices.
+        async previewVideo(size, fileName) {
+            if (this.exp || this.rec) return;
+            const o = this.o, VA = window.__nswsVideoAudio, E = window.__nswsEdit;
+            const exp = this.exp = { cancel: false, preview: true };
+            this.saveBtn.classList.add("on");
+            const ui = this.previewUI(exp);
+            const prevTime = o.getTime(), prevPaused = o.isPaused();
+            const sfx = o.audio?.destinationSfx ?? null, prevGain = sfx?.gain.value;
+            let fx = null, action = null;
+            try {
+                const end = await this.prepareFrames(exp, ui);
+                if (null == end) return;
+                const sound = VA ? this.soundOptions() : null;
+                let song = null;
+                if (sound?.song) {
+                    ui.set("Loading the song", null);
+                    try {
+                        song = await VA.library.load(sound.song);
+                    } catch (e) {}
+                }
+                if (exp.cancel) return;
+                let edit = null;
+                if (this.editOn && E) {
+                    ui.set(song ? "Finding the beat" : "Planning the edit", null);
+                    await yieldTask();
+                    edit = this.buildEdit(end, song);
+                    fx = new E.FX();
+                }
+                const D = edit ? edit.duration : end;
+                const songStart = edit?.songStart ?? song?.start ?? 0;
+                const mix = VA && (song || edit) ? VA.mix(D + 0.1, null, 0, song?.buffer ?? null, sound.volume, songStart, edit ? E.sfx(edit, D + 0.1, VA.SR) : null) : null;
+                if (exp.cancel) return;
+                const clock = (t) => Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0");
+                const info = [edit ? "Edit" : null, edit?.song ? Math.round(edit.song.bpm) + " BPM" : null, song ? song.name + (songStart > 0 ? " from " + clock(songStart) : "") : null, Math.round(D) + " s"];
+                ui.ready(info.filter(Boolean).join(" \u00b7 "));
+                this.exporting = true;
+                if (sfx) {
+                    sfx.gain.cancelScheduledValues(0);
+                    sfx.gain.value = sound && !sound.cars ? 0 : prevGain * (sound?.carVolume ?? 1);
+                }
+                const { W, H, g } = ui.surface();
+                o.render.sizeOverride = { width: W, height: H };
+                for (;;) {
+                    action = null;
+                    if (this.enabled) this.viewer.reset();
+                    const player = mix ? await VA.playMix(mix) : null;
+                    const t0 = performance.now();
+                    let tPrev = 0;
+                    while (!exp.cancel && !this.disposed && !ui.action) {
+                        await new Promise((r) => requestAnimationFrame(r));
+                        const te = Math.min(D, player ? player.pos() : (performance.now() - t0) / 1000);
+                        const t = edit ? edit.replayAt(te) : te;
+                        this.stepTo(tPrev, t);
+                        tPrev = t;
+                        this.composeFrame(g, W, H, t, edit, fx, te);
+                        ui.progress(te / D);
+                        if (te >= D) break;
+                    }
+                    VA?.stopPreview();
+                    if (exp.cancel || this.disposed) break;
+                    action = ui.action ?? await ui.next();
+                    ui.action = null;
+                    if (action !== "replay") break;
+                }
+            } catch (e) {
+                console.error(e);
+                ui.fail(String(e.message ?? e));
+                if (!exp.cancel) await ui.next();
+            } finally {
+                VA?.stopPreview();
+                fx?.dispose();
+                this.exporting = false;
+                o.render.sizeOverride = null;
+                if (sfx) sfx.gain.value = prevGain;
+                if (!this.disposed) {
+                    o.setTime(prevTime);
+                    o.setPaused(prevPaused);
+                }
+                this.exp = null;
+                this.saveBtn.classList.remove("on");
+                this.lastPassed = -1;
+                ui.remove();
+            }
+            if (action === "save" && !this.disposed) this.exportVideo(size, fileName);
+        }
+
+        previewUI(exp) {
+            this.notice?.remove();
+            const box = this.notice = el("div", "nsws-export nsws-preview", document.body);
+            const inner = el("div", "", box);
+            const head = el("div", "head", inner);
+            el("p", "", head).textContent = "Preview";
+            const info = el("p", "note", head);
+            const screen = el("div", "screen", inner);
+            const canvas = el("canvas", "", screen);
+            const status = el("span", "", screen);
+            const track = el("div", "track", inner);
+            const fill = el("i", "", track);
+            const btns = el("div", "btns", inner);
+            let wake = null;
+            const ui = {
+                action: null,
+                set: (text, frac) => {
+                    status.textContent = text + (null != frac ? " " + Math.floor(clamp(frac, 0, 1) * 100) + "%" : "");
+                    fill.style.width = (clamp(frac ?? 0, 0, 1) * 100).toFixed(1) + "%";
+                },
+                ready: (text) => {
+                    info.textContent = text;
+                    status.textContent = "";
+                },
+                fail: (text) => {
+                    status.textContent = "Couldn't play the preview: " + text;
+                },
+                progress: (frac) => fill.style.width = (clamp(frac, 0, 1) * 100).toFixed(2) + "%",
+                surface: () => {
+                    const dpr = window.devicePixelRatio || 1;
+                    const W = Math.max(320, Math.min(1280, Math.round(screen.clientWidth * dpr / 2) * 2));
+                    const H = Math.round(W * 9 / 32) * 2;
+                    canvas.width = W;
+                    canvas.height = H;
+                    return { W, H, g: canvas.getContext("2d", { alpha: false }) };
+                },
+                next: () => new Promise((r) => wake = r),
+                remove: () => box.remove()
+            };
+            const act = (a) => {
+                ui.action = a;
+                const w = wake;
+                wake = null;
+                w?.(a);
+            };
+            exp.onCancel = () => act("close");
+            for (const [label, a, cls] of [["Replay", "replay", ""], ["Save video", "save", " go"], ["Close", "close", ""]]) {
+                const b = el("button", "button" + cls, btns);
+                b.textContent = label;
+                b.addEventListener("click", () => {
+                    this.o.playClick?.();
+                    if (a !== "replay") exp.cancel = a === "close";
+                    act(a);
+                });
+            }
+            return ui;
         }
 
         readPalette() {

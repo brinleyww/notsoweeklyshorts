@@ -5,8 +5,12 @@
 // with other settings. When it keeps failing it lives with it: it respawns at its last checkpoint,
 // or restarts, like a player would.
 //
+// After every run a bot goes over it (rethink): from the exact state where a section of its run began, it
+// tries other ways through that section and drives on to the finish; a way that finishes sooner becomes its
+// run. Experts then drive their best run as it is, the others their notes from it, with their own slips.
+//
 // Time is bot time: ms since GO. The physics step taken at time t gives the car's state at t + 1.
-import { EXPERT_SKILL, type Persona } from '../wire.ts';
+import { EXPERT_SKILL, type BotPlan, type Persona } from '../wire.ts';
 import { Brain } from './brain.ts';
 import { copyDriverState, DEFAULT_PARAMS, Driver, newDriverState, type DriverParams, type DriverState } from './driver.ts';
 import { clearanceOf, marginOffsets, type Clearance } from './clearance.ts';
@@ -31,6 +35,19 @@ const DRILL_SLOT = 63;
 const DRILL_TRIES = 4;
 // A practice try's cost: ms to the end of the next section, less this much per km/h it leaves with.
 const EXIT_MS_PER_KMH = 10;
+// Going over a run: ways tried from each section's start, and how far behind the run a try may fall at a
+// later section before it is given up.
+const THINK_TRIES = 3;
+const THINK_BEHIND = 150;
+const PONDER_MS = 20_000;
+// Practice makes a bot better on a track: after r runs there (rounds before this one, then every attempt in
+// time attack) it has closed WARM_GAIN * (1 - e^(-r / WARM_RUNS)) of its gap to an expert's pace, and slips
+// that much less. The first run is as it always was.
+const WARM_GAIN = 0.4;
+const WARM_RUNS = 5;
+// Time attack: a run this far behind the bot's best at the same section is restarted, like a player would.
+const FAR_MS = 1500;
+const FAR_SHARE = 0.08;
 
 export interface Out {
   f: number;
@@ -51,7 +68,15 @@ export interface JobSpec {
   practice?: boolean;
   // The top expert in a race: it searches its own run as it goes, like practice (see Planner.practise).
   drill?: boolean;
+  // The bot's own best runs, by hint run (the one for its hint is used).
+  plans?: BotPlan[] | null;
+  // Follows this reference (index, fastest first) instead of the one its persona gets.
+  refIdx?: number;
+  // Runs the bot has already had on this track (rounds before this one).
+  warm?: number;
 }
+
+type Copy = { keys: Uint8Array; n: number; own?: boolean };
 
 // Now and then (about every 12 s of driving) a small input the driver didn't choose, for 40-150 ms: it
 // may turn up a better line, or cost a little.
@@ -119,11 +144,13 @@ interface Saved {
 }
 
 // A bot's lane off the start: bots dealt neighbouring runs (Persona.copy) get lanes about a car apart,
-// left and right of the line in turn, and a little of their own on top.
+// left and right of the line in turn, and a little of their own on top (by name, so a run it goes over and
+// the next one leave the same way).
 function laneOf(b: Persona) {
   const k = b.copy ?? b.seed % 7;
   const side = k % 2 ? -1 : 1;
-  return side * (0.6 + 0.9 * Math.ceil((k % 7) / 2)) * (k % 7 === 0 ? 0.4 : 1) + ((b.seed >>> 8) % 100) / 250 - 0.2;
+  const own = (Math.imul((b.name ?? b.u) + 0x9e37, 0x85ebca6b) >>> 8) % 100;
+  return side * (0.6 + 0.9 * Math.ceil((k % 7) / 2)) * (k % 7 === 0 ? 0.4 : 1) + own / 250 - 0.2;
 }
 
 // Small seeded generator (mulberry32).
@@ -190,8 +217,22 @@ export class Job {
   respawnCp = -1;
   cpRespawns = 0;
   // This run drives a recorded run's own keys from the start (a sure finish: the physics is exact),
-  // because the bot's own driving got nowhere.
-  copy: { keys: Uint8Array; n: number } | null = null;
+  // because the bot's own driving got nowhere, or (own) an expert's own best run.
+  copy: Copy | null = null;
+  // The bot's own best run on its hint run, and the frame (from the run's start) this run entered each section.
+  plan: BotPlan | null = null;
+  sin = new Int32Array(0);
+  // Time attack: the best run's time and section entries; a run far behind them starts over.
+  pbTime = Infinity;
+  pbSin: Int32Array | null = null;
+  restartNow = false;
+  readonly thinkRand: () => number;
+  // Wall ms spent going over this bot's runs between rounds.
+  pondered = 0;
+  // Runs before this job (JobSpec.warm), the pace it started with and this run's share of its slips.
+  readonly warm: number;
+  readonly basePace: number;
+  slips = 1;
   tries = new Map<number, number>();
   dnfAt: number | null = null;
   forceReset = false;
@@ -225,25 +266,38 @@ export class Job {
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
     // Each bot its own top run as a hint (Persona.copy); experts one of the three fastest.
     if (b.copy != null && sorted.length) this.refIdx = b.copy % (b.skill >= EXPERT_SKILL ? Math.min(3, sorted.length) : sorted.length);
+    if (spec.refIdx != null && spec.refIdx < sorted.length) this.refIdx = spec.refIdx;
     this.ref = sorted[this.refIdx];
     this.name = b.name ?? b.u;
     this.practice = !!spec.practice;
     this.drill = !!spec.drill;
-    if (b.skill >= EXPERT_SKILL && this.ref.kind !== 'explore') {
-      const notes = new Notes(this.ref, this.name, spec.notes?.[refKey(this.ref)]);
+    this.thinkRand = rng(b.seed ^ 0x5bd1e995);
+    if (this.ref.kind !== 'explore') {
+      const key = refKey(this.ref);
+      const plan = spec.plans?.find((p) => p.ref === key && p.n > 0 && p.keys.length >= p.n) ?? null;
+      const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key]);
+      if (plan && plan.notes.length === notes.v.length && plan.sin.length === notes.n) this.plan = plan;
       this.notes = notes;
       this.hint = this.refIdx;
       this.sections = new Float32Array(notes.n * FIELDS);
       this.tout = new Float64Array(notes.n);
       this.vout = new Float64Array(notes.n);
+      this.sin = new Int32Array(notes.n).fill(-1);
     }
     const jitter = (this.rand() - 0.5) * 0.03 * (1 - b.skill);
     // An explored route's speeds are already careful, and nothing on it is worth copying exactly.
     this.p = this.ref.kind === 'explore'
       ? { ...DEFAULT_PARAMS, pace: Math.min(1, 0.9 + 0.1 * b.skill + jitter), imitate: 0, drift: false }
       : { ...DEFAULT_PARAMS, pace: Math.min(1, 0.78 + 0.22 * b.skill + jitter), imitate: b.skill >= 0.85 ? 0.05 : 0, drift: b.skill >= 0.5 };
+    this.warm = spec.warm ?? 0;
+    this.basePace = this.p.pace;
+    this.brainW = spec.brain ?? null;
     this.#brain = spec.brain ? new Brain(spec.brain) : null;
     this.driver = this.#driverFor(this.refIdx);
+  }
+
+  get expert() {
+    return this.bot.skill >= EXPERT_SKILL;
   }
 
   #driverFor(i: number) {
@@ -266,9 +320,11 @@ export class Job {
   }
 
   #brain: Brain | null = null;
+  brainW: Float32Array | null = null;
   // Network weights learned meanwhile, taken up at the next run's start (time attack).
   nextBrain: Float32Array | null | undefined = undefined;
   setBrain(w: Float32Array | null) {
+    this.brainW = w;
     this.#brain = w ? new Brain(w) : null;
     for (const d of this.#drivers.values()) d.brain = this.#brain;
   }
@@ -319,6 +375,7 @@ export class Job {
     this.prev.set(s.prev);
     this.hasPrev = s.hasPrev;
     this.sec = s.sec;
+    for (let q = 0; q < this.sin.length; q++) if (this.sin[q] > s.t - this.runStart) this.sin[q] = -1;
     this.failAt = -1;
     this.failWhy = null;
     this.forceReset = false;
@@ -373,6 +430,13 @@ export class Planner {
   onCommit: (job: Job, outs: Out[]) => void = () => {};
   onDone: (job: Job) => void = () => {};
   onFail: (job: Job, why: Why, r: Raw) => void = () => {};
+  // A bot found a faster run of its own (#think).
+  onPlan: (job: Job, plan: BotPlan) => void = () => {};
+  // Set by the worker: how long a bot may go over its run between runs, ms.
+  thinkMs: () => number = () => 400;
+  // Going over a run or drilling a section: the heap is borrowed, nothing else may start.
+  #busy = false;
+  #ponderAt = 0;
   // Set by the worker: planning has fallen close behind the race clock.
   hurry: () => boolean = () => false;
   // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
@@ -427,10 +491,12 @@ export class Planner {
   }
 
   #drill(job: Job, s: number, rand: () => number, tries: number) {
+    if (this.#busy) return;
     const p = job.sections!, o = s * FIELDS, sim = this.sim;
     const was = p.slice(o, o + FIELDS);
     const saved = job.save();
     sim.save(DRILL_SLOT);
+    this.#busy = true;
     let best = was, least = Infinity;
     try {
       for (let i = 0; i <= tries; i++) {
@@ -454,6 +520,7 @@ export class Planner {
       sim.dropSlot(DRILL_SLOT);
       job.load(saved);
       p.set(best, o);
+      this.#busy = false;
     }
   }
 
@@ -499,10 +566,19 @@ export class Planner {
     return true;
   }
 
-  #startRun(job: Job, at: number, copy: { keys: Uint8Array; n: number } | null = null) {
+  #startRun(job: Job, at: number, copy: Copy | null = null) {
     if (job.car) this.sim.deleteCar(job.car);
+    // An expert drives its own best run as it is (it goes over it between runs; see #think).
+    if (!copy && job.plan && job.expert && !job.practice && job.refIdx === job.hint) copy = { keys: job.plan.keys, n: job.plan.n, own: true };
     job.copy = copy;
-    job.car = this.sim.newCar(copy ? this.full : this.track);
+    if (!job.practice) {
+      const g = WARM_GAIN * (1 - Math.exp(-(job.warm + job.runs.length) / WARM_RUNS));
+      job.p.pace = Math.min(1, job.basePace + (1 - job.basePace) * g);
+      job.slips = 1 - g;
+    }
+    job.car = this.sim.newCar(copy && !copy.own ? this.full : this.track);
+    job.sin.fill(-1);
+    job.restartNow = false;
     this.#carChanged = true;
     job.runStart = at;
     job.t = at;
@@ -536,14 +612,19 @@ export class Planner {
     job.status = 'run';
   }
 
-  // Practice: the time an expert's car leaves each section of its hint run, and its speed then.
+  // When the car enters each section of its hint run; for practice also when it leaves one, and how fast.
+  // In time attack a run that has fallen far behind the bot's best is started over.
   #section(job: Job, r: Raw, now: number) {
     const s = Math.min(job.notes!.n - 1, Math.floor(job.st.k / SECTION));
-    if (s > job.sec && job.sec >= 0) {
+    if (s <= job.sec) return;
+    if (job.sec >= 0) {
       job.tout[job.sec] = now;
       job.vout[job.sec] = r.speed;
     }
+    for (let q = Math.max(0, job.sec + 1); q <= s; q++) if (job.sin[q] < 0) job.sin[q] = now - job.runStart;
     job.sec = s;
+    const pb = job.pbSin?.[s] ?? -1;
+    if (job.mode === 'ta' && !job.practice && pb > 0 && now - job.runStart > pb + Math.max(FAR_MS, FAR_SHARE * pb)) job.restartNow = true;
   }
 
   #keep(job: Job, f: number, raw: Uint8Array) {
@@ -556,9 +637,10 @@ export class Planner {
   // Steps a bot until time `to`, a failure, or the end of its run.
   #run(job: Job, to: number) {
     const sim = this.sim, r = this.#raw, k = this.#k;
-    const ref = job.ref, drv = job.driver, st = job.st;
     to = Math.min(to, job.end);
     while (job.t < to && job.live) {
+      // A restart or another reference changes these along the way.
+      const ref = job.ref, drv = job.driver, st = job.st;
       const t = job.t;
       const s = sim.steerInput(job.car);
       if (job.status === 'after') {
@@ -592,8 +674,12 @@ export class Planner {
         if (left <= 0) {
           if (job.mode === 'ta' && now + 2000 < job.end) {
             this.#keep(job, now, buf);
+            this.#think(job, performance.now() + this.thinkMs());
             this.#startRun(job, now);
-          } else this.#finishJob(job, 'done');
+          } else {
+            if (this.jobs.includes(job)) this.#think(job, performance.now() + this.thinkMs());
+            this.#finishJob(job, 'done');
+          }
         }
         continue;
       }
@@ -605,6 +691,14 @@ export class Planner {
         job.finishedAt = now;
         job.runs[job.runs.length - 1][1] = job.runStart + r.finishFrames;
         job.status = 'after';
+        this.#ran(job, r.finishFrames);
+        continue;
+      }
+      // An own run that no longer goes where it went (the track it was driven on changed): drive instead.
+      if (job.copy?.own && now - job.runStart > job.copy.n + 50) {
+        job.plan = null;
+        this.#keep(job, now, buf);
+        this.#startRun(job, now);
         continue;
       }
       if (jumped) {
@@ -618,7 +712,13 @@ export class Planner {
       if ((now & 3) === 0 && !job.copy) {
         axes(r, this.#fw, this.#up);
         drv.track(r, st);
-        if ((job.practice || job.drill) && job.refIdx === job.hint) this.#section(job, r, now);
+        if (job.notes && job.refIdx === job.hint) this.#section(job, r, now);
+        if (job.restartNow && !this.#busy) {
+          this.stats.restarts++;
+          this.#keep(job, now, buf);
+          this.#startRun(job, now);
+          continue;
+        }
         const why = this.#check(job, r, now);
         if (why) {
           job.failAt = now;
@@ -642,7 +742,160 @@ export class Planner {
     job.status = how;
     // The car stays (never stepped again) until dispose: deleting it now would make every snapshot
     // older than this unusable for the bots still driving.
-    this.onDone(job);
+    if (this.jobs.includes(job)) this.onDone(job);
+  }
+
+  // A run reached the finish in `time` ms: the time attack's best so far, and the bot's own best run.
+  #ran(job: Job, time: number) {
+    if (job.practice || !this.jobs.includes(job)) return;
+    const own = !job.copy || job.copy.own;
+    if (own && time < job.pbTime) {
+      job.pbTime = time;
+      job.pbSin = job.copy?.own && job.plan ? job.plan.sin.slice() : job.sin.slice();
+    }
+    if (!job.notes || job.copy || job.refIdx !== job.hint || (job.plan && job.plan.n <= time)) return;
+    job.plan = { ref: refKey(job.notes.ref), notes: job.sections!.slice(), keys: job.keys.slice(job.runStart, job.runStart + time), n: time, sin: job.sin.slice() };
+    job.notes.v.set(job.plan.notes);
+    this.onPlan(job, job.plan);
+  }
+
+  // Goes over a bot's run until the deadline (performance.now()), like a player thinking back on it: from the
+  // exact state where a section began, a few other ways through it (notes.nudge, or the hint run's own
+  // inputs there), each driven on to the finish with no slips or random inputs. One that finishes sooner becomes the bot's run (Job.plan). Uses a
+  // car of its own, deleted again, and heap slot DRILL_SLOT; the bots' own cars and the planner's snapshots
+  // are left as they were.
+  #think(job: Job, deadline: number) {
+    const notes = job.notes;
+    let plan = notes && job.plan?.ref === refKey(notes.ref) ? job.plan : null;
+    if (!notes || !plan || this.#busy || performance.now() >= deadline) return;
+    this.#busy = true;
+    const changed = this.#carChanged;
+    const bot: Persona = { ...job.bot, mistakes: 0 };
+    const tj = new Job({ id: 'think', bot, mode: 'run', end: notes.ref.n * 3 + 20000, brain: job.brainW, notes: { [plan.ref]: plan.notes.slice() }, practice: true, refIdx: job.hint }, this.refs, this.clear);
+    tj.p.pace = job.p.pace;
+    let better = false;
+    try {
+      const sections = notes.n;
+      while (performance.now() < deadline) {
+        const s = this.#pickSection(plan, job.thinkRand, sections);
+        if (s < 0) break;
+        // The run up to section s, once; every way tried starts from there.
+        this.#startRun(tj, 0);
+        const from = plan.sin[s];
+        const k = this.#k;
+        let buf: Uint8Array | null = null;
+        let resetAt = -1;
+        for (let t = 0; t < from; t++) {
+          const b = plan.keys[t];
+          if (b & 16) resetAt = t;
+          tj.log(t, keysOf(b, k));
+          buf = this.sim.step(tj.car, k);
+        }
+        if (!buf) continue;
+        this.#resume(tj, buf, from, resetAt);
+        tj.sin.set(plan.sin);
+        tj.sin.fill(-1, s);
+        tj.sec = s - 1;
+        this.sim.save(DRILL_SLOT);
+        const saved = tj.save();
+        const sin = tj.sin.slice();
+        for (let i = 0; i < THINK_TRIES && performance.now() < deadline; i++) {
+          if (i > 0) {
+            this.sim.restore(DRILL_SLOT);
+            tj.load(saved);
+            tj.sin.set(sin);
+          }
+          tj.sections!.set(plan.notes);
+          // Now and then the hint run's own inputs through this section (and maybe the next), as they were.
+          if (i === 1 && job.thinkRand() < 0.5) {
+            tj.st.openFrom = tj.st.k;
+            tj.st.openAt = tj.t;
+            tj.st.openUntil = tj.t + SECTION * (job.thinkRand() < 0.5 ? 1 : 2);
+          } else tj.sections!.set(notes.nudge(plan.notes, s, job.thinkRand), s * FIELDS);
+          const p = this.#tryRest(tj, plan, s);
+          if (p) {
+            plan = p;
+            better = true;
+            break;
+          }
+        }
+        this.sim.dropSlot(DRILL_SLOT);
+      }
+    } finally {
+      if (tj.car) this.sim.deleteCar(tj.car);
+      tj.car = 0;
+      this.#carChanged = changed;
+      this.#busy = false;
+    }
+    if (better && plan) {
+      job.plan = plan;
+      notes.v.set(plan.notes);
+      this.onPlan(job, plan);
+    }
+  }
+
+  // The section to go over next: where the run loses most against its hint run (each section is a second of
+  // it), now and then any.
+  #pickSection(plan: BotPlan, rand: () => number, n: number) {
+    const w: number[] = [];
+    let sum = 0;
+    for (let s = 0; s < n - 1; s++) {
+      const a = plan.sin[s], b = plan.sin[s + 1];
+      const v = a > 0 && b > a ? Math.max(0, b - a - SECTION) + 40 : 0;
+      w.push(v);
+      sum += v;
+    }
+    if (!sum) return -1;
+    let x = rand() * sum;
+    for (let s = 0; s < w.length; s++) if ((x -= w[s]) < 0 && w[s] > 0) return s;
+    return w.findLastIndex((v) => v > 0);
+  }
+
+  // A thinking run's car was driven by keys to frame `at` (buf: its state then): carry on driving from there.
+  #resume(job: Job, buf: Uint8Array, at: number, resetAt: number) {
+    job.t = at;
+    job.prev.set(buf.subarray(0, Math.min(buf.length, 256)));
+    job.hasPrev = true;
+    readRaw(buf, this.#raw);
+    job.lastCp = this.#raw.cp;
+    job.prevSpeed = this.#raw.speed;
+    job.driver.anchor(this.#raw, job.st);
+    job.bestArc = job.ref.arc[job.st.k];
+    job.bestArcAt = at;
+    job.farFrames = job.offFrames = 0;
+    job.speedHist = [];
+    job.resetAt = resetAt;
+    job.airSince = this.#raw.wheels > 0 ? -1 : at;
+    job.out.length = 0;
+  }
+
+  // Drives a thinking run on to the finish; its whole run if it finishes sooner than `plan` (or with no plan),
+  // else null. From section `s` on it gives up once it is THINK_BEHIND behind the plan at a section.
+  #tryRest(tj: Job, plan: BotPlan | null, s: number): BotPlan | null {
+    const limit = plan ? plan.n : tj.end;
+    while (tj.status === 'run' && tj.failAt < 0 && tj.t < limit) {
+      this.#run(tj, tj.t + TICK);
+      if (plan)
+        for (let q = s + 1; q <= tj.sec && q < plan.sin.length; q++) if (plan.sin[q] >= 0 && tj.sin[q] > plan.sin[q] + THINK_BEHIND) return null;
+    }
+    const run = tj.runs[tj.runs.length - 1];
+    if (tj.failAt >= 0 || run?.[1] == null) return null;
+    const time = run[1] - run[0];
+    if (plan && time >= plan.n) return null;
+    return { ref: refKey(tj.notes!.ref), notes: tj.sections!.slice(), keys: tj.keys.slice(0, time), n: time, sin: tj.sin.slice() };
+  }
+
+  // Thinks over done bots' runs while the planner has nothing else to do (between rounds), each for up to
+  // PONDER_MS; true if it did.
+  ponder(deadline: number) {
+    if (this.busy) return false;
+    const done = this.jobs.filter((j) => j.status === 'done' && j.plan && j.pondered < PONDER_MS);
+    if (!done.length) return false;
+    const job = done[this.#ponderAt++ % done.length];
+    const t0 = performance.now();
+    this.#think(job, deadline);
+    job.pondered += Math.max(1, performance.now() - t0);
+    return true;
   }
 
   #jumped(prev: Uint8Array, r: Raw) {
@@ -687,7 +940,7 @@ export class Planner {
     }
     job.driver.decide(t, r, this.#vel, s, this.#fw, st, k);
     // Mistakes: a twitch of the wheel or a lift, now and then.
-    if (!job.practice && !job.drill && st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * 0.00006) {
+    if (!job.practice && !job.drill && st.biasUntil < t && st.paceUntil < t && t - job.runStart > 3000 && job.rand() < job.bot.mistakes * job.slips * 0.00006) {
       if (job.rand() < 0.5) {
         st.bias = (job.rand() < 0.5 ? -1 : 1) * (0.15 + 0.35 * job.rand());
         st.biasUntil = t + 120 + Math.floor(job.rand() * 250);
@@ -707,14 +960,16 @@ export class Planner {
   // A new way of driving for this run, or for the rest of it after a respawn (see DriverState.style).
   #roll(job: Job) {
     const r = job.rand, s = job.st.style, loose = 1 - job.bot.skill;
-    const amp = job.bot.skill >= EXPERT_SKILL ? 0.05 : 0.1 + 0.5 * loose;
+    // Practice and going over a run drive the notes exactly: no weaves, no pace swings.
+    const amp = job.practice ? 0 : job.bot.skill >= EXPERT_SKILL ? 0.05 : 0.1 + 0.5 * loose;
     s[0] = amp * (0.4 + 0.6 * r());
     s[1] = 60 + 140 * r();
     s[2] = TAU * r();
     s[3] = amp * 0.5 * r();
     s[4] = 25 + 50 * r();
     s[5] = TAU * r();
-    s[6] = 0.005 + 0.03 * loose * r();
+    const swing = 0.005 + 0.03 * loose * r();
+    s[6] = job.practice ? 0 : swing;
     s[7] = 80 + 200 * r();
     s[8] = TAU * r();
   }
@@ -796,7 +1051,7 @@ export class Planner {
       const limit = this.hurry() ? 0 : this.#raw.respawnable ? 6 + Math.round(4 * job.bot.skill) : 12;
       // A mistake the bot made itself, and a careless bot keeps it, a couple of times a run at most,
       // and only where a respawn (not a restart) gets it going again.
-      const keep = job.mistakeUntil >= job.failAt && this.#raw.respawnable && job.kept < Math.round(2.5 * job.bot.mistakes) && job.rand() < job.bot.mistakes;
+      const keep = job.mistakeUntil >= job.failAt && this.#raw.respawnable && job.kept < Math.round(2.5 * job.bot.mistakes * job.slips) && job.rand() < job.bot.mistakes * job.slips;
       if (keep) job.kept++;
       let snap: Snap | null = null;
       let rebuildTo = -1;
@@ -845,7 +1100,7 @@ export class Planner {
   #rebuild(job: Job, to: number) {
     this.stats.rebuilds++;
     if (job.car) this.sim.deleteCar(job.car);
-    job.car = this.sim.newCar(job.copy ? this.full : this.track);
+    job.car = this.sim.newCar(job.copy && !job.copy.own ? this.full : this.track);
     this.#carChanged = true;
     const k = this.#k;
     let buf: Uint8Array | null = null;
@@ -861,6 +1116,7 @@ export class Planner {
       job.driver.anchor(this.#raw, job.st);
     }
     job.sec = -1;
+    for (let q = 0; q < job.sin.length; q++) if (job.sin[q] > to - job.runStart) job.sin[q] = -1;
     while (job.out.length && job.out[job.out.length - 1].f > to) job.out.pop();
     job.bestArc = job.ref.arc[job.st.k];
     job.bestArcAt = to;
@@ -924,18 +1180,27 @@ export class Planner {
     st.imitating = false;
   }
 
-  // Keeps going from a failure: respawn at the last checkpoint, or restart the run.
+  // Keeps going from a failure: respawn at the last checkpoint, or restart the run. In time attack, once it
+  // has a time, a run that went wrong is started over (a respawn's time can't beat it).
   #accept(job: Job) {
     this.stats.accepted++;
     const why = job.failWhy;
     job.failAt = -1;
     job.failWhy = null;
-    if (why === 'crash') {
+    readRaw(job.prev, this.#raw);
+    if (job.mode === 'ta' && job.pbTime < Infinity) {
+      job.tries.clear();
+      this.#keep(job, job.t, job.prev);
+      this.#startRun(job, job.t);
+      this.stats.restarts++;
+      return;
+    }
+    // A wreck that left the car crawling: back to the checkpoint rather than limp on.
+    if (why === 'crash' && !(this.#raw.respawnable && this.#raw.speed < 0.5 * Math.abs(job.ref.speed[job.st.k]))) {
       job.speedHist = [];
       return;
     }
     job.respawns++;
-    readRaw(job.prev, this.#raw);
     const again = this.#raw.cp === job.respawnCp;
     job.cpRespawns = again ? job.cpRespawns + 1 : 1;
     job.respawnCp = this.#raw.cp;
@@ -962,12 +1227,14 @@ export class Planner {
   }
 
   // Nothing the bot does itself gets it through: it starts over on a recorded run's own keys (in time attack
-  // only until it has a time), or with no recorded run (an explored route) on its own driving again.
+  // only when the round is running out and it has no time yet), or with no recorded run (an explored route)
+  // on its own driving again.
   #startOver(job: Job) {
     // The slowest recording that still finishes before the round ends (else the fastest).
     const recorded = job.refs.filter((r) => r.kind !== 'explore');
     const copy = [...recorded].reverse().find((r) => job.t + r.n + 500 <= job.end) ?? recorded[0] ?? null;
-    const useCopy = copy && (job.mode === 'run' || !job.runs.some((r) => r[1] != null)) ? copy : null;
+    const late = job.mode === 'run' || (!job.runs.some((r) => r[1] != null) && job.t + 3 * (copy?.n ?? 0) > job.end);
+    const useCopy = copy && late ? copy : null;
     job.tries.clear();
     this.#keep(job, job.t, job.prev);
     this.#startRun(job, job.t, useCopy);

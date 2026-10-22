@@ -22,6 +22,17 @@ export interface Persona {
   seed: number;
 }
 
+// A bot's best run of its own on a track, as it last went over it (worker/planner.ts, rethink): the notes it
+// drove, its keys from the start (bits as in Job.log), its time and the frame it entered each section of its
+// hint run (-1 where it didn't). ref: the hint run's refKey.
+export interface BotPlan {
+  ref: string;
+  notes: Float32Array;
+  keys: Uint8Array;
+  n: number;
+  sin: Int32Array;
+}
+
 export interface RefInput {
   id: string;
   kind: 'wr' | 'board' | 'cup' | 'pb';
@@ -43,7 +54,8 @@ export type ToWorker =
   // brain: the bot's network weights (worker/brain.ts), none for driving without it.
   // notes: an expert's notes (worker/notes.ts) by hint run.
   // drill: the top expert, which searches its own run as it goes.
-  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null; notes: Record<string, Float32Array> | null; drill?: boolean }
+  // plans: the bot's own best runs by hint run. warm: rounds it has raced on the track before.
+  | { b: 'job'; id: string; key: string; bot: Persona; mode: 'run' | 'ta'; end: number; brain: Float32Array | null; notes: Record<string, Float32Array> | null; drill?: boolean; plans?: BotPlan[]; warm?: number }
   // Weights a running bot takes up from its next run.
   | { b: 'brain'; id: string; w: Float32Array | null }
   // To the learning worker: keep improving these weights on the track (worker/learn.ts).
@@ -69,4 +81,6 @@ export type FromWorker =
   // The learning worker found better weights for a task: cost (lower is better) now and before.
   | { b: 'learned'; key: string; task: string; w: Float32Array; cost: number; was: number }
   // An expert's notes on its hint run (ref) got better in practice: a run costs `cost` now, `was` before.
-  | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array; cost: number; was: number };
+  | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array; cost: number; was: number }
+  // A bot (by name) found a faster run of its own.
+  | { b: 'plan'; key: string; name: number; plan: BotPlan };

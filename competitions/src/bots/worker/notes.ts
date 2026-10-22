@@ -1,9 +1,9 @@
-// What an expert bot has learned about driving a track, its own and nobody else's. The bot's hint run (a
-// top run: its line and speeds) is cut into one-second sections, and for each one the notes hold how the bot
-// drives it: speed against the hint's, how far beside its line, and how early it turns in. A new bot starts
-// from rules of its own, hashed from its name. Every race run drives each section a little differently
-// (from that run's seed), so no two rounds are alike; the notes themselves only change in practice
-// (learn.ts), where a change is kept only if a whole run with it beats one without.
+// What a bot has learned about driving a track, its own and nobody else's. The bot's hint run (a top run:
+// its line and speeds) is cut into one-second sections, and for each one the notes hold how the bot drives
+// it: speed against the hint's, how far beside its line, and how early it turns in. A new bot starts from
+// rules of its own, hashed from its name. Every race run drives each section a little differently (from
+// that run's seed); the notes themselves only change when the bot goes over its run (planner.ts, rethink),
+// where a change is kept only if the whole run with it finishes sooner.
 import type { Reference } from './reference.ts';
 
 export const SECTION = 1000;
@@ -74,6 +74,13 @@ export class Notes {
   vary(p: Float32Array, s: number, rand: () => number) {
     const out = new Float32Array(FIELDS);
     for (let f = 0; f < FIELDS; f++) out[f] = clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f]);
+    return out;
+  }
+
+  // Another way through section s of p when going over a run (planner.ts, rethink): mostly a little faster.
+  nudge(p: Float32Array, s: number, rand: () => number) {
+    const out = this.vary(p, s, rand);
+    out[0] = clamp(0, p[s * FIELDS] + (rand() * 1.5 - 0.5) * TRY[0]);
     return out;
   }
 }

@@ -67,6 +67,8 @@ export const newDriverState = (): DriverState => ({
 
 export const copyDriverState = (st: DriverState): DriverState => ({ ...st, style: st.style.slice() });
 
+// Room outside (units) below which a car running wide at full lock slows down.
+const WIDE_ROOM = 2.5;
 // Room kept from a wall or edge when the weave moves the line toward it, units.
 const STYLE_ROOM = 0.35;
 // Distance along the line (units) where a bot's start lane has faded out, and over how much it fades.
@@ -206,7 +208,8 @@ export class Driver {
     const vref = Math.abs(ref.speed[k]) || 1;
     const drift = p.drift && st.gripUntil < f ? Math.max(0, Math.min(1, (Math.abs(kmh) / vref - 0.95) / 0.03)) : 0;
 
-    const lead = Math.min(ref.n - 1, k + 12 + (sec && free ? Math.round(sec[si + 2]) : 0));
+    const tp = ref.teleportAfter(k);
+    const lead = Math.max(k, Math.min(ref.n - 1, tp > 0 ? tp - 1 : Infinity, k + 12 + (sec && free ? Math.round(sec[si + 2]) : 0)));
     const amax = maxAngle(Math.abs(kmh));
     const closeDist = Math.max(3, p.latTime * Math.max(vms, 6));
     const wantHead = -Math.atan(lat / closeDist);
@@ -264,9 +267,14 @@ export class Driver {
     let up = (rk & 1) !== 0, down = (rk & 4) !== 0;
     const pace = p.pace * (st.paceUntil >= f ? st.paceMul : 1);
     let allow = this.#allowed(k, vms, pace, grip === 1, st) * Math.exp(paceAdj + (sec && st.paceUntil < f ? sec[si] : 0));
-    // Steering already at full lock and still drifting wide: the corner is too fast for this line.
+    // Steering already at full lock and still drifting wide: the corner is too fast for this line. With room
+    // to spare outside that is fine; short of it, lift, and brake only when the room runs out.
     const wide = target * lat > 0 ? 0 : Math.abs(lat);
-    if (Math.abs(target) > 0.97 && wide > 0.3) allow = Math.min(allow, vms - 1 - 4 * wide);
+    if (Math.abs(target) > 0.97 && wide > 0.3) {
+      const kk = Math.min(ref.n - 1, k + 20), at = lat + offset;
+      const room = this.clear ? (lat > 0 ? this.clear.left[kk] - at : this.clear.right[kk] + at) : 0;
+      if (room < WIDE_ROOM) allow = Math.min(allow, room < 0.8 ? vms - 5 : vms - 0.6 - 2 * wide);
+    }
     if (vms > allow + 4) {
       up = false;
       down = true;
@@ -308,9 +316,11 @@ export class Driver {
     const ref = this.ref;
     const horizon = Math.max(30, (vms * vms) / (2 * this.p.brake) + 25);
     const a = ref.arc[k];
+    // A respawn ends what lies ahead: past it the reference stands at the gate, which is no speed to slow for.
+    const tp = ref.teleportAfter(k);
     let allow = Infinity;
     let i = k;
-    for (let n = 0; n < 48 && i < ref.n; n++) {
+    for (let n = 0; n < 48 && i < ref.n && (tp < 0 || i < tp); n++) {
       const d = ref.arc[i] - a;
       if (d > horizon) break;
       const vr = Math.abs(ref.speed[i]) / 3.6;

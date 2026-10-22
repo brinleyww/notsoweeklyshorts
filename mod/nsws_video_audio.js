@@ -297,7 +297,8 @@
 
     // Cars and music levelled against each other, then a soft limiter so nothing clips.
     // The song plays from `musicStart` seconds in, fading in briefly and out at the end.
-    function mix(duration, cars, carLevel, music, musicLevel, musicStart = 0) {
+    // `extra` (two channels, already levelled) goes in as it is, e.g. an edit's sound effects.
+    function mix(duration, cars, carLevel, music, musicLevel, musicStart = 0, extra = null) {
         const n = Math.ceil(duration * SR);
         const L = new Float32Array(n), Rr = new Float32Array(n);
         const add = (buf, gain, offset, fade) => {
@@ -317,6 +318,11 @@
             const offset = clamp(Math.round(musicStart * SR), 0, Math.max(0, music.length - 1));
             add(music, musicLevel * 0.26 / Math.max(rms(music), 1e-4), offset, true);
         }
+        if (extra)
+            for (let c = 0; c < 2; c++) {
+                const src = extra[c], dst = c ? Rr : L, m = Math.min(n, src.length);
+                for (let i = 0; i < m; i++) dst[i] += src[i];
+            }
         for (const ch of [L, Rr])
             for (let i = 0; i < n; i++) {
                 const x = ch[i], ax = Math.abs(x);
@@ -412,6 +418,30 @@
         preview = null;
     }
 
+    // A finished mix (from `mix`), played as it is, for the video preview.
+    async function playMix(channels) {
+        stopPreview();
+        previewCtx ??= new AudioContext();
+        await previewCtx.resume();
+        const buf = previewCtx.createBuffer(2, Math.max(1, channels[0].length), SR);
+        buf.copyToChannel(channels[0], 0);
+        buf.copyToChannel(channels[1], 1);
+        const src = previewCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(previewCtx.destination);
+        const at = previewCtx.currentTime + 0.05;
+        src.start(at);
+        const handle = preview = {
+            pos: () => Math.max(0, previewCtx.currentTime - at),
+            stop: () => {
+                try {
+                    src.stop();
+                } catch (e) {}
+            }
+        };
+        return handle;
+    }
+
     // The loudest sample in each of n slices of the song, for drawing its waveform.
     const peakCache = new WeakMap();
     function peaks(buf, n) {
@@ -429,5 +459,5 @@
         return p;
     }
 
-    window.__nswsVideoAudio = { SR, renderCars, library, mix, encode, play, stopPreview, peaks };
+    window.__nswsVideoAudio = { SR, renderCars, library, mix, encode, play, playMix, stopPreview, peaks };
 })();

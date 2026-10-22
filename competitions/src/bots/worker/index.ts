@@ -29,6 +29,10 @@ const HURRY_MS = 2500;
 // The top expert searches its run (Planner.roomy) only before GO or this far ahead of the race clock: it
 // costs several times the planning, which the other bots on a weak device can't spare.
 const DRILL_AHEAD_MS = 8000;
+// A bot goes over its run between runs for up to THINK_MAX_MS, less as planning gets closer to the race clock
+// (none within DRILL_AHEAD_MS), and for up to THINK_IDLE_MS while it has nothing else to plan.
+const THINK_MAX_MS = 3000;
+const THINK_IDLE_MS = 600;
 
 interface TrackState {
   key: string;
@@ -114,7 +118,7 @@ function handle(m: ToWorker) {
         return;
       }
       if (streams.has(m.id)) return;
-      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null, drill: !!m.drill });
+      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null, drill: !!m.drill, plans: m.plans ?? null, warm: m.warm ?? 0 });
       streams.set(m.id, { job, enc: new KeyframeEncoder(), seq: 0, pending: 0, from: -1, last: 0, chain: Promise.resolve(), at: performance.now(), was: 0, rate: 0, results: 0, sent: 0 });
       kick();
       return;
@@ -215,6 +219,12 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
     const planner = track.planner;
     planner.hurry = () => startAt != null && planner.frontier - raceNow() < HURRY_MS;
     planner.roomy = () => startAt == null || planner.frontier - raceNow() > DRILL_AHEAD_MS;
+    planner.thinkMs = () => {
+      if (startAt == null) return THINK_IDLE_MS;
+      const ahead = planner.frontier === Infinity ? Infinity : planner.frontier - raceNow();
+      return Math.max(0, Math.min(THINK_MAX_MS, (ahead - DRILL_AHEAD_MS) / 8));
+    };
+    planner.onPlan = (job, plan) => post({ b: 'plan', key, name: job.name, plan: { ...plan, notes: plan.notes.slice(), keys: plan.keys.slice(), sin: plan.sin.slice() } });
     track.planner.onCommit = commit;
     track.planner.onDone = done;
   }
@@ -299,6 +309,11 @@ function pump() {
   const planner = track?.planner;
   if (!planner || !planner.busy) {
     if (planner) progress(performance.now());
+    // Nothing to plan: the bots go over their runs, at most half of this worker's time.
+    if (planner?.ponder(performance.now() + THINK_IDLE_MS)) {
+      setTimeout(pump, THINK_IDLE_MS);
+      return;
+    }
     if (learner) {
       // Learning gets at most half of this worker's time.
       learner.work(performance.now() + SLICE_MS * 2);

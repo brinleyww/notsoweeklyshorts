@@ -45483,10 +45483,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     for (const cars of [C.get(g, Ra, "f"), cupBotCars.get(g) ?? []])
                         for (const [id, r] of cars) {
                             const show = null === ids || ids.includes(id);
-                            r.car.setVisible(show);
+                            // A car the race session found well off screen stays hidden (it isn't updated); its sound is
+                            // the session's call (the nearest shown cars), so the audio graph isn't rewired every frame.
+                            r.car.setVisible(show && !r.car.__offscreen);
                             r.car.effectsHidden = !show;
                             r.car.__cupHidden = !show;
-                            r.car.audioCulled = !show;
+                            show || (r.car.audioCulled = !0);
                         }
                 },
                 drivingView: g => !C.get(g, Ba, "f").isEnabled && C.get(g, zr, "f").camera === C.get(g, wa, "f").cameraCockpit ? 1 : 0,
@@ -46270,9 +46272,29 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         }
                     cupCarsHook?.(this, n);
                     const remoteDelay = C.get(this, Sa, "f")?.multiplayerConnection.remoteDelay ?? .15;
+                    // Not So Weekly Shorts: of the other racers and bots, only the two nearest the camera and within 60 m
+                    // (5/60 of full volume there) make engine sounds (each car's audio is an engine and five 3D panners,
+                    // updated every frame), picked twice a second so two cars about as near don't swap every frame.
+                    const bots = cupBotCars.get(this), eye = C.get(this, zr, "f").camera?.position, now = performance.now();
+                    if (!(now - (this.__carsLoudAt ?? -1 / 0) < 500))
+                        this.__carsLoudAt = now,
+                        this.__carsLoud = eye ? new Set([...C.get(this, Ra, "f").values(), ...bots?.values() ?? []].filter(e => !e.car.__cupHidden).map(e => [e, e.car.getPosition().distanceToSquared(eye)]).filter(([, d]) => d < 3600).sort((x, y) => x[1] - y[1]).slice(0, 2).map(([e]) => e)) : null;
+                    const loud = this.__carsLoud;
+                    // Not So Weekly Shorts: a silent car well off screen (30 m+, outside the view by its size) isn't updated
+                    // or shown (its wheels, smoke and name tag are work for nothing), and on Low performance mode other
+                    // cars leave no skid marks.
+                    const cam = C.get(this, zr, "f").camera, view = this.__carView ??= { frustum: new THREE.Frustum, matrix: new THREE.Matrix4, sphere: new THREE.Sphere(new THREE.Vector3, 8) };
+                    cam && view.frustum.setFromProjectionMatrix(view.matrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+                    const lowSkid = C.get(this, Gr, "f").getSettingBoolean(R.A.LowPerformanceMode)
+                      , quiet = car => {
+                            car.__lowSkid !== lowSkid && (car.skidmarksSuppressed = car.__lowSkid = lowSkid);
+                            const p = car.getPosition();
+                            return car.__offscreen = !!cam && !!car.__audioCulled && p.distanceToSquared(cam.position) > 900 && !view.frustum.intersectsSphere((view.sphere.center.copy(p), view.sphere))
+                        };
                     for (const e of C.get(this, Ra, "f").values()) {
                         if (e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
+                        e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
                         e.bufferedCarStates.length > 0) {
                             const t = e.bufferedCarStates[e.bufferedCarStates.length - 1].frames / 1e3 - e.time
@@ -46304,22 +46326,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         } else {
                             e.time = e.car.getCarState().frames / 1e3 - remoteDelay
                         }
-                        e.car.update(n)
+                        quiet(e.car) ? e.car.setVisible(!1) : e.car.update(n)
                     }
-                    // Not So Weekly Shorts: only the two bots nearest the camera, and within 60 m (5/60 of full volume
-                    // there), make engine sounds (each car's audio is an engine and five 3D panners, updated every
-                    // frame), picked twice a second so two bots about as near don't swap every frame.
-                    const bots = cupBotCars.get(this), eye = C.get(this, zr, "f").camera?.position, now = performance.now();
-                    if (!(now - (this.__botsLoudAt ?? -1 / 0) < 500))
-                        this.__botsLoudAt = now,
-                        this.__botsLoud = bots && eye ? new Set([...bots.values()].map(e => [e, e.car.getPosition().distanceToSquared(eye)]).filter(([, d]) => d < 3600).sort((x, y) => x[1] - y[1]).slice(0, 2).map(([e]) => e)) : null;
-                    const loud = this.__botsLoud;
                     for (const e of bots?.values() ?? [])
                         e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
-                        e.car.update(n);
+                        quiet(e.car) ? e.car.setVisible(!1) : e.car.update(n);
                     // Not So Weekly Shorts: other racers and bots are culled off screen and drawn simpler when small,
                     // like replay ghosts (a car is ~20 draw calls); whether they show and sound stays the cup's call.
                     const lodCars = this.__cupLodCars ??= [];
@@ -46346,9 +46360,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             const t = e.car.getCarState();
                             if (!t.hasStarted || null != t.finishFrames)
                                 continue;
-                            const i = [pose(t, Math.floor(1e3 * e.time))];
-                            for (const n of e.bufferedCarStates.slice(0, 3))
-                                i.push(pose(n, n.frames));
+                            // Cuppa may draw the car itself, with where it goes next (competitions/src/smooth.ts).
+                            const i = e.car.__cupKeys?.length ? e.car.__cupKeys : [pose(t, Math.floor(1e3 * e.time))];
+                            if (i !== e.car.__cupKeys)
+                                for (const n of e.bufferedCarStates.slice(0, 3))
+                                    i.push(pose(n, n.frames));
                             cars.push({
                                 id,
                                 reset: e.resetCounter,

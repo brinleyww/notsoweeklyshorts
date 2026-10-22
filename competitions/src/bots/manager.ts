@@ -6,7 +6,7 @@ import type { Msg } from '../protocol.ts';
 import { MAX_BOTS } from '../rules.ts';
 import type { TrackRef } from '../state.ts';
 import { toB64 } from './codec.ts';
-import { EXPERT_SKILL, WORKER_NAME, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
+import { EXPERT_SKILL, WORKER_NAME, type BotPlan, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
 import { BASE_BRAIN, brainFromB64, brainGroup, brainToB64, freshBrain } from './worker/brain.ts';
 import { FIELDS, notesFromB64, notesToB64 } from './worker/notes.ts';
 
@@ -48,6 +48,9 @@ const BRAIN_KEEP = 40;
 const NOTES_KEY = 'nsws-cuppa-notes:';
 const NOTES_KEEP = 24;
 const NOTES_PER_TRACK = 32;
+// Each bot's own best run per track (worker/planner.ts, rethink), for this page's session only: keys are
+// ~1 byte a frame, too big to keep for every track.
+const PLAN_TRACKS = 8;
 // Workers go when the organizer stops ticking (the cup is gone) or nothing was planned for a while.
 const ORPHAN_MS = 15_000;
 const IDLE_MS = 120_000;
@@ -95,6 +98,8 @@ interface Plan {
   endFrame: number;
   bots: Map<number, Bot>;
   first: boolean;
+  // Its bots' rounds on the track are counted (once, even if the round restarts).
+  counted: boolean;
 }
 
 // Learning takes a core of its own, so only where there are cores to spare.
@@ -132,6 +137,9 @@ export class BotManager {
   #learnSig = '';
   #brains = new Map<string, Map<string, { w: Float32Array; cost: number }>>();
   #notes = new Map<string, Map<string, Float32Array>>();
+  #plans = new Map<string, Map<string, BotPlan>>();
+  // Rounds each bot (by name) has raced per track in this page's session: practice makes it better there.
+  #raced = new Map<string, Map<number, number>>();
 
   constructor(private host: BotHost) {}
 
@@ -169,7 +177,7 @@ export class BotManager {
       return;
     }
     this.#close();
-    const plan: Plan = { n, g: ++this.#g, trackId: track.id, key: null, bad: false, mode: job.mode, end: job.end, startAt: null, endFrame: job.end, bots: new Map(), first: false };
+    const plan: Plan = { n, g: ++this.#g, trackId: track.id, key: null, bad: false, mode: job.mode, end: job.end, startAt: null, endFrame: job.end, bots: new Map(), first: false, counted: false };
     this.#plan = plan;
     this.#post({ b: 'clock', startAt: null, offset: 0 });
     this.#reconcile(plan, job.bots);
@@ -196,6 +204,12 @@ export class BotManager {
     plan.startAt = startAt;
     plan.endFrame = endFrame;
     plan.mode = ta ? 'ta' : 'run';
+    if (!plan.counted) {
+      plan.counted = true;
+      let raced = this.#raced.get(plan.trackId);
+      if (!raced) this.#raced.set(plan.trackId, (raced = new Map()));
+      for (const b of plan.bots.values()) raced.set(b.persona.name ?? b.u, (raced.get(b.persona.name ?? b.u) ?? 0) + 1);
+    }
     for (const b of plan.bots.values()) {
       b.checked = false;
       b.closed = false;
@@ -370,9 +384,11 @@ export class BotManager {
     }
     b.slot = slot;
     slot.jobs++;
-    const notes = b.persona.skill >= EXPERT_SKILL ? this.#notesFor(plan.trackId, b.persona) : null;
+    const notes = this.#notesFor(plan.trackId, b.persona);
     const drill = b.persona.skill >= EXPERT_SKILL && b.persona.copy === 0;
-    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill });
+    const plans = [...(this.#plans.get(plan.trackId)?.entries() ?? [])].filter(([k]) => k.startsWith(`${b.persona.name ?? b.persona.u}|`)).map(([, v]) => v);
+    const warm = this.#raced.get(plan.trackId)?.get(b.persona.name ?? b.u) ?? 0;
+    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill, plans, warm });
   }
 
   #cancel(b: Bot) {
@@ -559,20 +575,38 @@ export class BotManager {
     for (const s of this.#slots) if (!s.dead && s.key === t.key) this.#send(s, { b: 'notes', key: m.key, name: m.name, ref: m.ref, v: m.v });
   }
 
-  // Keeps the learning worker improving the weights of every skill group racing on this track, and
-  // driving practice runs for its experts.
+  // A bot went over its run and found a faster one: its next run on the track starts from it, and its notes
+  // are kept for later cups.
+  #planned(m: Extract<FromWorker, { b: 'plan' }>) {
+    const t = this.#track, p = m.plan;
+    if (!t || t.key !== m.key || !(p?.notes instanceof Float32Array) || !(p.keys instanceof Uint8Array) || !(p.sin instanceof Int32Array) || !(p.n > 0)) return;
+    let store = this.#plans.get(t.trackId);
+    if (!store) {
+      this.#plans.set(t.trackId, (store = new Map()));
+      for (const k of [...this.#plans.keys()].slice(0, Math.max(0, this.#plans.size - PLAN_TRACKS))) this.#plans.delete(k);
+    }
+    const key = `${m.name}|${p.ref}`;
+    const was = store.get(key);
+    if (was && was.n <= p.n) return;
+    store.set(key, p);
+    const notes = this.#notesOf(t.trackId);
+    notes.delete(key);
+    notes.set(key, p.notes.slice());
+    this.#saveNotes(t.trackId);
+  }
+
+  // Keeps the learning worker improving the weights of every skill group racing on this track (each bot
+  // goes over its own runs in its planner).
   #learn(plan: Plan) {
     const t = this.#track;
     if (this.#failed || !canLearn() || !t || t.bad || plan.key !== t.key) return;
     const groups = new Map<string, number>();
-    const experts: Persona[] = [];
     for (const b of plan.bots.values()) {
       const g = brainGroup(b.persona.skill);
       if (g) groups.set(g.key, g.skill);
-      if (b.persona.skill >= EXPERT_SKILL) experts.push(b.persona);
     }
-    const sig = t.key + ':' + [...groups.keys()].sort().join('') + ':' + experts.map((p) => `${p.name ?? p.u}/${p.copy}`).sort().join(',');
-    if ((!groups.size && !experts.length) || sig === this.#learnSig) return;
+    const sig = t.key + ':' + [...groups.keys()].sort().join('');
+    if (!groups.size || sig === this.#learnSig) return;
     this.#learnSig = sig;
     if (!this.#learner || this.#learner.dead) this.#learner = this.#spawn(false);
     const slot = this.#learner;
@@ -583,8 +617,7 @@ export class BotManager {
     }
     const saved = this.#brainsOf(plan.trackId);
     const tasks = [...groups].map(([key, skill], i) => ({ key, skill, w: (saved.get(key)?.w ?? base ?? freshBrain(i + 1)).slice() }));
-    const practice = experts.map((bot) => ({ bot, notes: this.#notesFor(plan.trackId, bot) }));
-    this.#send(slot, { b: 'learn', key: t.key, tasks, practice });
+    this.#send(slot, { b: 'learn', key: t.key, tasks, practice: [] });
   }
 
   #learned(m: Extract<FromWorker, { b: 'learned' }>) {
@@ -694,6 +727,7 @@ export class BotManager {
     if (m.b === 'ready') return this.#init(slot);
     if (m.b === 'learned') return this.#learned(m);
     if (m.b === 'notes') return this.#noted(m);
+    if (m.b === 'plan') return this.#planned(m);
     if (m.b === 'track') {
       if (m.ok) return;
       if (this.#track?.key === m.key) this.#track.bad = true;
