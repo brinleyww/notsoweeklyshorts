@@ -3084,13 +3084,20 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 map,
                 song: beats,
                 cuts,
-                checkpoints: run.checkpointTimes.map((c) => c.numberOfFrames / 1000),
+                checkpoints: run.checkpointTimes.map((c, k) => {
+                    let best = null;
+                    for (const r of runs) {
+                        const o = r === run ? null : r.checkpointTimes[k];
+                        if (o && (null == best || o.numberOfFrames < best)) best = o.numberOfFrames;
+                    }
+                    return { t: c.numberOfFrames / 1000, diff: null == best ? null : (c.numberOfFrames - best) / 1000 };
+                }),
                 landings: path.events.filter((e) => e.type === "jump").map((e) => e.t1),
                 finish: path.finish,
                 seed: E.hash(o.trackId ?? o.trackName ?? "", run.settings.nickname ?? "", run.settings.time?.numberOfFrames ?? 0),
                 accent: colorOf(run),
-                name: run.settings.nickname ?? "",
-                mask: !!o.render.renderer && E.FX.supported()
+                mask: !!o.render.renderer && E.FX.supported(),
+                drive: this.driveOf(path)
             });
             edit.songStart = start;
             edit.autoStart = auto;
@@ -3110,16 +3117,34 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             }
         }
 
-        // Where the followed car is on the frame (0..1 from the bottom left) and roughly how big.
-        carOnScreen() {
-            const car = this.o.getRuns()[this.o.getFocus()].car, cam = this.o.render.camera;
-            const T = this.T, p = this.scrPos ??= new T.Vector3(), q = this.scrUp ??= new T.Vector3();
+        // The followed run as the edit reads it: speed, signed slip angle (nose against the
+        // direction of travel) and airtime every DT, plus its jumps.
+        driveOf(path) {
+            if (path.editDrive?.n === path.n) return path.editDrive;
+            const slip = new Float32Array(path.n);
+            for (let i = 0; i < path.n; i++) {
+                const a = path.slip(i);
+                if (a > 0) slip[i] = path.nose[2 * i] * path.tz - path.nose[2 * i + 1] * path.tx < 0 ? -a : a;
+            }
+            return path.editDrive = { n: path.n, dt: DT, spd: path.spd, slip, air: path.air, events: path.events };
+        }
+
+        // Where the followed car is on the frame (0..1 from the bottom left), roughly how big, and
+        // where it was 30 ms of replay earlier (tx, ty), for the way it moves across the frame.
+        carOnScreen(t) {
+            const run = this.o.getRuns()[this.o.getFocus()], car = run.car, cam = this.o.render.camera;
+            const T = this.T, p = this.scrPos ??= new T.Vector3(), q = this.scrUp ??= new T.Vector3(), b = this.scrBack ??= new T.Vector3();
             p.copy(car.getPosition());
             q.setFromMatrixColumn(cam.matrixWorld, 1).multiplyScalar(1.2).add(p);
+            const path = this.pathOf(run), i = clamp(Math.round((t - 0.03) / DT), 0, Math.max(0, path.n - 1));
+            if (path.n) b.set(path.p[3 * i], path.p[3 * i + 1], path.p[3 * i + 2]);
+            else b.copy(p);
             p.project(cam);
             q.project(cam);
+            b.project(cam);
             const on = p.z < 1 && Math.abs(p.x) < 1.3 && Math.abs(p.y) < 1.3;
-            return { x: p.x * 0.5 + 0.5, y: p.y * 0.5 + 0.5, r: Math.hypot(q.x - p.x, q.y - p.y) * 0.5, on };
+            const back = b.z < 1 ? { tx: b.x * 0.5 + 0.5, ty: b.y * 0.5 + 0.5 } : {};
+            return { x: p.x * 0.5 + 0.5, y: p.y * 0.5 + 0.5, r: Math.hypot(q.x - p.x, q.y - p.y) * 0.5, on, ...back };
         }
 
         // The followed car alone, white on black, at half size: the edit's cutouts and outlines.
@@ -3202,9 +3227,12 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 return;
             }
             const E = window.__nswsEdit, car = this.o.getRuns()[this.o.getFocus()].car;
-            const p = E.paramsAt(edit, te, Math.abs(car.getSpeedKmh()), this.carOnScreen());
+            const p = E.paramsAt(edit, te, Math.abs(car.getSpeedKmh()), this.carOnScreen(t));
             g.drawImage(fx.render(this.o.render.canvas, W, H, p, edit.grabs, () => this.carMask(W, H)), 0, 0, W, H);
+            // Nametags mark where the cars are now, which a flashback to an earlier view doesn't show.
+            this.flashback = p.bg > 0 && p.bgGrab >= 0;
             this.paintOverlay(g, W, H, t);
+            this.flashback = false;
             const pal = this.palette ??= this.readPalette();
             E.paintTop(g, W, H, p, this.enabled ? Math.round(H * 0.065) : 0, pal.font);
             this.paintCredit(g, W, H, credit);
@@ -3538,7 +3566,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             g.save();
             g.textBaseline = "middle";
             if (this.enabled) {
-                const tags = this.layoutTags(runs, focus, o.render.camera, W, H, u).filter((x) => x.show).sort((a, b) => b.d - a.d);
+                const tags = this.flashback ? [] : this.layoutTags(runs, focus, o.render.camera, W, H, u).filter((x) => x.show).sort((a, b) => b.d - a.d);
                 for (const tag of tags) {
                     const s = tag.s * u, name = tag.run.settings.nickname ?? "";
                     g.font = pal.style + " " + (15 * s).toFixed(1) + "px " + pal.font;
