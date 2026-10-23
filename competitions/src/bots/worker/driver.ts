@@ -109,6 +109,8 @@ export class Driver {
   head = 0;
   headPath = 0;
   dist = 0;
+  // Why the last decision braked (for the lab): copying the reference, its speed cap ahead, running wide.
+  why: '' | 'imitate' | 'ref' | 'allow' | 'wide' = '';
 
   constructor(ref: Reference, p: DriverParams) {
     this.ref = ref;
@@ -200,6 +202,7 @@ export class Driver {
         out.down = (kk & 4) !== 0;
         out.left = (kk & 8) !== 0;
         out.reset = false;
+        this.why = out.down ? 'imitate' : '';
         return;
       }
     } else st.imitating = false;
@@ -270,14 +273,19 @@ export class Driver {
     // Steering already at full lock and still drifting wide: the corner is too fast for this line. With room
     // to spare outside that is fine; short of it, lift, and brake only when the room runs out.
     const wide = target * lat > 0 ? 0 : Math.abs(lat);
+    let wideCap = Infinity;
     if (Math.abs(target) > 0.97 && wide > 0.3) {
       const kk = Math.min(ref.n - 1, k + 20), at = lat + offset;
       const room = this.clear ? (lat > 0 ? this.clear.left[kk] - at : this.clear.right[kk] + at) : 0;
-      if (room < WIDE_ROOM) allow = Math.min(allow, room < 0.8 ? vms - 5 : vms - 0.6 - 2 * wide);
+      if (room < WIDE_ROOM) wideCap = room < 0.8 ? vms - 5 : vms - 0.6 - 2 * wide;
     }
+    const why = wideCap < allow ? 'wide' : 'allow';
+    allow = Math.min(allow, wideCap);
+    this.why = '';
     if (vms > allow + 4) {
       up = false;
       down = true;
+      this.why = why;
     } else if (vms > allow + 0.5) up = false;
     else if (down && drift < BRAKE_DRIFT) {
       // The reference brakes into a drift from a higher speed; this car is already slow enough.
@@ -293,6 +301,7 @@ export class Driver {
       down = (rk & 4) !== 0;
     }
     if (st.noiseUntil >= f && st.noiseLift) up = false;
+    if (down && !this.why) this.why = 'ref';
     out.up = up;
     out.down = down;
     out.reset = false;
@@ -317,10 +326,13 @@ export class Driver {
     const horizon = Math.max(30, (vms * vms) / (2 * this.p.brake) + 25);
     const a = ref.arc[k];
     // A respawn ends what lies ahead: past it the reference stands at the gate, which is no speed to slow for.
-    const tp = ref.teleportAfter(k);
+    // So does a wall the reference hits (a cut along a barrier): the wall takes the speed off, not brakes, and
+    // slowing for the speed it leaves would only arrive at the wall slower than the reference.
+    const tp = ref.teleportAfter(k), hit = ref.hitAfter(k);
+    const end = Math.min(tp < 0 ? Infinity : tp, hit < 0 ? Infinity : hit);
     let allow = Infinity;
     let i = k;
-    for (let n = 0; n < 48 && i < ref.n && (tp < 0 || i < tp); n++) {
+    for (let n = 0; n < 48 && i < ref.n && i < end; n++) {
       const d = ref.arc[i] - a;
       if (d > horizon) break;
       const vr = Math.abs(ref.speed[i]) / 3.6;

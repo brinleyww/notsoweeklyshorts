@@ -6,6 +6,10 @@ const CELL = 12;
 // Air time that makes a jump: the run-up has to be at the reference's speed to make it.
 const JUMP_MS = 100;
 const LONG_FLIGHT_MS = 700;
+// A loss of more than HIT_DROP km/h within HIT_MS is a wall hit the run means (a cut along a barrier, a stop
+// at a gate); brakes do about 2 km/h in that time, and brushing a wall costs 15-30, which bots still slow for.
+const HIT_MS = 20;
+const HIT_DROP = 40;
 const RUN_UP_MS = 15000;
 
 export class Reference {
@@ -374,6 +378,30 @@ export class Reference {
   // The next respawn of the reference at or after frame i, or -1.
   teleportAfter(i: number) {
     for (const t of this.teleports) if (t > i) return t;
+    return -1;
+  }
+
+  // Where the reference, on the ground, loses far more speed in HIT_MS than brakes can: it hits a wall on
+  // purpose. The first frame of each loss.
+  #hits: number[] | null = null;
+  hits() {
+    if (!this.#hits) {
+      const out: number[] = [];
+      let last = -Infinity;
+      for (let i = 0; i + HIT_MS < this.n; i++) {
+        if (this.wheels[i] === 0 || Math.abs(this.speed[i]) - Math.abs(this.speed[i + HIT_MS]) <= HIT_DROP) continue;
+        if (this.teleports.some((t) => t > i && t <= i + HIT_MS)) continue;
+        if (i - last > HIT_MS) out.push(i);
+        last = i;
+      }
+      this.#hits = out;
+    }
+    return this.#hits;
+  }
+
+  // The next wall hit after frame i, or -1.
+  hitAfter(i: number) {
+    for (const h of this.hits()) if (h > i) return h;
     return -1;
   }
 }
