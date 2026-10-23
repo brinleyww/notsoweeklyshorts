@@ -393,7 +393,7 @@ export class BotManager {
     b.slot = slot;
     slot.jobs++;
     const notes = this.#notesFor(plan.trackId, b.persona);
-    const drill = b.persona.skill >= EXPERT_SKILL && b.persona.copy === 0;
+    const drill = b.persona.skill >= EXPERT_SKILL;
     const plans = [...(this.#plans.get(plan.trackId)?.entries() ?? [])].filter(([k]) => k.startsWith(`${b.persona.name ?? b.persona.u}|`)).map(([, v]) => v);
     const warm = this.#raced.get(plan.trackId)?.get(b.persona.name ?? b.u) ?? 0;
     this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill, plans, warm });

@@ -261,7 +261,15 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   28.588, skill 0.8 32.43 -> 29.73, 0.55 30.80 -> 30.25, 0.2 32.67 -> 30.91; experts on Solaris (27.22)
   28.79 -> 28.02 and Natsu (26.04) 27.77 -> 26.35. Rounds (`t29_rounds.mjs`): Anubis expert 28.86, 28.69,
   28.68, 28.62 over four rounds.
-- The top expert (the one hinted by the fastest run) also searches its first run as the planner goes: before
+- Every expert is skill 1 and as able as the others; what sets them apart is the record each one trains on
+  (its own, fastest first): its line and way of driving. An expert on a slower record may drive up to 8%
+  faster than that record (it starts halfway there and goes over its runs for the rest).
+- When a retry gets a bot through a place it failed (a wreck, a fall, a spin, or a wall it bled 55 km/h
+  against over 0.3 s where the record kept its speed), what the retry changed (slower, another line) goes
+  into the bot's notes for those sections, so its next runs drive them that way (down to -15% pace; going
+  over its runs speeds them up again where that was too careful). A failure its own slip caused teaches it
+  nothing. Arx Lucida, 4 minutes of time attack, four bots: visible crashes 15 -> 3, none twice in one place.
+- Every expert also searches its first run as the planner goes: before
   each section it tries four other ways through it from the same exact physics state and drives on with
   the fastest (time, less 10 ms per km/h it leaves with). It costs 4-5 times that bot's planning, so it
   only runs before GO or while planning is more than 8 s ahead of the race clock (`Planner.roomy`).

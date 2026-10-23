@@ -40,6 +40,11 @@ const EXIT_MS_PER_KMH = 10;
 const THINK_TRIES = 3;
 const THINK_BEHIND = 150;
 const PONDER_MS = 20_000;
+// An expert on a hint run this much slower than the fastest (log of their times) or more drives it at most this
+// much faster than its own speeds.
+const MAX_LIFT = 0.08;
+// A retry counts as having got through this far (units) past where it failed.
+const FIX_PAST = 25;
 // Practice makes a bot better on a track: after r runs there (rounds before this one, then every attempt in
 // time attack) it has closed WARM_GAIN * (1 - e^(-r / WARM_RUNS)) of its gap to an expert's pace, and slips
 // that much less. The first run is as it always was.
@@ -211,6 +216,9 @@ export class Job {
   failJump = false;
   // Much slower than the reference where it failed: it needs more speed there, not less.
   failSlow = false;
+  failK = 0;
+  // A retry under way: the hint sections it changes, how (pace multiplier, offset or null), and where it failed.
+  fix: { from: number; to: number; pace: number; off: number | null; arc: number } | null = null;
   // Restarts from the start line this round (before any checkpoint, a respawn can't help).
   restarts = 0;
   // Respawns in a row that failed again before the next checkpoint.
@@ -264,8 +272,8 @@ export class Job {
     this.refs = sorted;
     this.#clear = clear;
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
-    // Each bot its own top run as a hint (Persona.copy); experts one of the three fastest.
-    if (b.copy != null && sorted.length) this.refIdx = b.copy % (b.skill >= EXPERT_SKILL ? Math.min(3, sorted.length) : sorted.length);
+    // Each bot its own top run as a hint (Persona.copy), experts the fastest ones.
+    if (b.copy != null && sorted.length) this.refIdx = b.copy % sorted.length;
     if (spec.refIdx != null && spec.refIdx < sorted.length) this.refIdx = spec.refIdx;
     this.ref = sorted[this.refIdx];
     this.name = b.name ?? b.u;
@@ -275,7 +283,9 @@ export class Job {
     if (this.ref.kind !== 'explore') {
       const key = refKey(this.ref);
       const plan = spec.plans?.find((p) => p.ref === key && p.n > 0 && p.keys.length >= p.n) ?? null;
-      const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key]);
+      // Every expert is as good as the best: its hint run only gives it its line and way of driving.
+      const lift = b.skill >= EXPERT_SKILL ? Math.min(MAX_LIFT, Math.log(this.ref.n / sorted[0].n)) : 0;
+      const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key], lift);
       if (plan && plan.notes.length === notes.v.length && plan.sin.length === notes.n) this.plan = plan;
       this.notes = notes;
       this.hint = this.refIdx;
@@ -579,6 +589,7 @@ export class Planner {
     job.car = this.sim.newCar(copy && !copy.own ? this.full : this.track);
     job.sin.fill(-1);
     job.restartNow = false;
+    job.fix = null;
     this.#carChanged = true;
     job.runStart = at;
     job.t = at;
@@ -727,7 +738,8 @@ export class Planner {
           // Went wrong where the reference was in the air or had just taken off: a jump it reached too
           // slowly or badly. (Airborne where the reference wasn't means too fast or off its line.)
           job.failJump = ref.wheels[st.k] === 0 || ref.jumpIn(Math.max(0, st.k - 1500), 1500) !== Infinity;
-          job.failSlow = (job.speedHist[0] ?? r.speed) < 0.85 * Math.abs(ref.speed[st.k]);
+          job.failK = st.k;
+          job.failSlow = (job.speedHist[Math.max(0, job.speedHist.length - 50)] ?? r.speed) < 0.85 * Math.abs(ref.speed[st.k]);
           this.stats.fails[why] = (this.stats.fails[why] ?? 0) + 1;
           this.onFail(job, why, r);
           return;
@@ -995,10 +1007,24 @@ export class Planner {
     } else if (now - job.bestArcAt > 1600 && job.resetAt < now - 1600) return 'stuck';
     const need = ref.cp[k];
     if (need > r.cp && arc - ref.arc[ref.cpAt[need] ?? k] > 12) return 'missed';
-    const h = job.speedHist;
-    h.push(r.speed);
-    if (h.length > 25) h.shift();
-    if (h.length === 25 && h[0] - r.speed > 45 && ref.speed[k] > r.speed + 40) return 'crash';
+    // Speed and the reference's speed, every 4 frames for the last 300 ms. A wreck loses 45 km/h in 100 ms; a
+    // wall the car scrapes along bleeds 55 over 300 ms where the reference kept its speed.
+    const h = job.speedHist, vr = Math.abs(ref.speed[k]);
+    h.push(r.speed, vr);
+    if (h.length > 150) h.splice(0, 2);
+    const n = h.length;
+    if (n >= 50 && h[n - 50] - r.speed > 45 && vr > r.speed + 40) return 'crash';
+    if (n === 150 && vr > r.speed + 35 && h[1] - vr < 25) {
+      let top = 0;
+      for (let i = 0; i < n; i += 2) top = Math.max(top, h[i]);
+      if (top - r.speed > 55) return 'crash';
+    }
+    // A retry got through where it failed: what it changed is how the bot drives there from now on.
+    const fix = job.fix;
+    if (fix && arc > fix.arc + FIX_PAST) {
+      job.fix = null;
+      if (job.notes && job.refIdx === job.hint && !job.practice) for (let s = fix.from; s <= fix.to; s++) job.notes.learn(s, fix.pace, fix.off);
+    }
     const upDot = this.#up[0] * ref.ux[k] + this.#up[1] * ref.uy[k] + this.#up[2] * ref.uz[k];
     if (upDot < -0.3 && r.wheels === 0 && now - job.bestArcAt > 600) return 'flipped';
     return null;
@@ -1178,12 +1204,18 @@ export class Planner {
       }
     }
     st.imitating = false;
+    // A failure the bot's own slip caused teaches it nothing about the place.
+    if (job.notes && job.refIdx === job.hint && !job.practice && job.mistakeUntil < job.failAt) {
+      const at = (i: number) => Math.min(job.notes!.n - 1, Math.floor(i / SECTION));
+      job.fix = { from: at(st.k), to: at(Math.max(st.k, job.failK)), pace: st.paceMul, off: st.offUntil >= job.t ? st.off : null, arc };
+    } else job.fix = null;
   }
 
   // Keeps going from a failure: respawn at the last checkpoint, or restart the run. In time attack, once it
   // has a time, a run that went wrong is started over (a respawn's time can't beat it).
   #accept(job: Job) {
     this.stats.accepted++;
+    job.fix = null;
     const why = job.failWhy;
     job.failAt = -1;
     job.failWhy = null;

@@ -9,8 +9,9 @@ import type { Reference } from './reference.ts';
 export const SECTION = 1000;
 // Per section: pace (log factor on the speed limit), offset (units, + = left), turn-in (frames early).
 export const FIELDS = 3;
+// Pace goes down to -15% where a bot learned to slow down to get through (Notes.learn).
 const LIMITS = [
-  [-0.04, 0.06],
+  [-0.15, 0.06],
   [-1.5, 1.5],
   [-10, 40],
 ] as const;
@@ -55,32 +56,50 @@ export class Notes {
   readonly n: number;
   readonly v: Float32Array;
 
-  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined) {
+  // Highest pace (log factor): an expert on a slower hint run may go faster than it by `lift` more.
+  readonly top: number;
+
+  // `lift`: how much slower the hint run is than the fastest (log of their times), for an expert, which drives
+  // its hint's line at the pace of the best; it starts halfway there and goes over its runs for the rest.
+  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined, lift = 0) {
     this.ref = ref;
     this.n = Math.ceil(ref.n / SECTION);
+    this.top = LIMITS[0][1] + lift;
     if (saved && saved.length === this.n * FIELDS && saved.every(Number.isFinite)) this.v = saved.slice();
     else {
       this.v = new Float32Array(this.n * FIELDS);
-      for (let s = 0; s < this.n; s++) for (let f = 0; f < FIELDS; f++) this.v[s * FIELDS + f] = (hash(name * 7919 + f, s) * 2 - 1) * OWN[f];
+      for (let s = 0; s < this.n; s++) for (let f = 0; f < FIELDS; f++) this.v[s * FIELDS + f] = (hash(name * 7919 + f, s) * 2 - 1) * OWN[f] + (f === 0 ? lift / 2 : 0);
     }
+  }
+
+  #clamp(f: number, x: number) {
+    return f === 0 ? Math.max(LIMITS[0][0], Math.min(this.top, x)) : clamp(f, x);
   }
 
   // A run's way of driving, into p: the notes, every section a little different (from `rand`) unless `same`.
   plan(rand: () => number, p: Float32Array, same: boolean) {
-    for (let i = 0; i < this.v.length; i++) p[i] = same ? this.v[i] : clamp(i % FIELDS, this.v[i] + (rand() * 2 - 1) * VARIETY[i % FIELDS]);
+    for (let i = 0; i < this.v.length; i++) p[i] = same ? this.v[i] : this.#clamp(i % FIELDS, this.v[i] + (rand() * 2 - 1) * VARIETY[i % FIELDS]);
+  }
+
+  // A retry got through section s at `pace` times the speed limit and (if not null) `off` beside the line:
+  // drive it that way from now on (most of the way: the next failure there moves it further).
+  learn(s: number, pace: number, off: number | null) {
+    const o = s * FIELDS;
+    this.v[o] = this.#clamp(0, this.v[o] + 0.7 * Math.log(pace));
+    if (off != null) this.v[o + 1] = this.#clamp(1, 0.5 * this.v[o + 1] + 0.5 * off);
   }
 
   // Another way through section s of p, to try in practice.
   vary(p: Float32Array, s: number, rand: () => number) {
     const out = new Float32Array(FIELDS);
-    for (let f = 0; f < FIELDS; f++) out[f] = clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f]);
+    for (let f = 0; f < FIELDS; f++) out[f] = this.#clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f]);
     return out;
   }
 
   // Another way through section s of p when going over a run (planner.ts, rethink): mostly a little faster.
   nudge(p: Float32Array, s: number, rand: () => number) {
     const out = this.vary(p, s, rand);
-    out[0] = clamp(0, p[s * FIELDS] + (rand() * 1.5 - 0.5) * TRY[0]);
+    out[0] = this.#clamp(0, p[s * FIELDS] + (rand() * 1.5 - 0.5) * TRY[0]);
     return out;
   }
 }
