@@ -51,6 +51,8 @@ const NOTES_PER_TRACK = 32;
 // Each bot's own best run per track (worker/planner.ts, rethink), for this page's session only: keys are
 // ~1 byte a frame, too big to keep for every track.
 const PLAN_TRACKS = 8;
+// Bots' counting runs' keys (owner's input export), by round and bot, for the last INPUTS_KEEP of them.
+const INPUTS_KEEP = 64;
 // Workers go when the organizer stops ticking (the cup is gone) or nothing was planned for a while.
 const ORPHAN_MS = 15_000;
 const IDLE_MS = 120_000;
@@ -140,6 +142,7 @@ export class BotManager {
   #plans = new Map<string, Map<string, BotPlan>>();
   // Rounds each bot (by name) has raced per track in this page's session: practice makes it better there.
   #raced = new Map<string, Map<number, number>>();
+  #inputs = new Map<string, Uint8Array>();
 
   constructor(private host: BotHost) {}
 
@@ -322,6 +325,11 @@ export class BotManager {
     const c: [number, number, string][] = [];
     for (const b of plan.bots.values()) for (let seq = 0; seq < b.handed; seq++) c.push([b.u, seq, b.chunks[seq]]);
     return c.length ? this.#pack(plan, c) : [];
+  }
+
+  // Bot u's counting run in round n, its keys from the run's start (null if it didn't finish or is gone).
+  inputs(n: number, u: number) {
+    return this.#inputs.get(`${n}:${u}`) ?? null;
   }
 
   // Forgets every plan (the cup ended or starts over). The workers stay for a while.
@@ -757,6 +765,12 @@ export class BotManager {
       b.rate = m.rate;
     } else if (m.b === 'result') {
       b.result = m;
+      if (m.inputs instanceof Uint8Array && m.finish != null && this.#plan) {
+        const key = `${this.#plan.n}:${b.u}`;
+        this.#inputs.delete(key);
+        this.#inputs.set(key, m.inputs);
+        for (const k of [...this.#inputs.keys()].slice(0, Math.max(0, this.#inputs.size - INPUTS_KEEP))) this.#inputs.delete(k);
+      }
       b.frontier = Math.max(b.frontier, m.frontier);
       const plan = this.#plan;
       // A time attack reports its runs as it goes; it is over once it gives up or reaches the end.

@@ -1,6 +1,7 @@
 // The organizer's side of a cup: the authoritative state, the round clock, track loading and
 // the replay checks. Everyone else only sees the state it broadcasts.
 import type { App } from './app.ts';
+import { inputsText } from './bots/inputs.ts';
 import { BotManager } from './bots/manager.ts';
 import { BOT_NAMES, botStyle, matchStep, mix, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
 import type { RefInput } from './bots/wire.ts';
@@ -340,6 +341,12 @@ export class Organizer {
     else if (p.role === 'racer') E.setRole(s, u, 'spectator');
     this.#syncBots();
     this.touch(true);
+  }
+
+  // Bot u's counting run in round n as the TAS tool's text, or null (not finished, or no longer kept).
+  botInputs(n: number, u: number) {
+    const keys = this.#bots?.inputs(n, u);
+    return keys ? inputsText(keys) : null;
   }
 
   // Bots never hold up the end of a warm-up.

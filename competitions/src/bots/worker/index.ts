@@ -267,7 +267,8 @@ function report(s: Stream) {
   const run = done.find((r) => r[1] - r[0] === best);
   const finish = job.mode === 'ta' ? best : run ? run[1] : null;
   const frontier = job.live ? job.committed : Math.max(job.committed, job.t);
-  s.chain = s.chain.then(() => post({ b: 'result', id: job.id, finish, runs: job.runs.map((r) => [r[0], r[1]]), dnf: job.dnfAt, frontier }));
+  const inputs = run ? job.keys.slice(run[0], run[1]) : null;
+  s.chain = s.chain.then(() => post({ b: 'result', id: job.id, finish, runs: job.runs.map((r) => [r[0], r[1]]), dnf: job.dnfAt, frontier, inputs }));
 }
 
 function done(job: Job) {

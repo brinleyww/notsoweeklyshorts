@@ -59,6 +59,10 @@ export class Panel {
     return input;
   })();
 
+  // Only the site's owner may save a bot's inputs (checked once, on the organizer's page).
+  #owner = false;
+  #ownerAsked = false;
+
   constructor(private app: App) {}
 
   get open() {
@@ -415,6 +419,17 @@ export class Panel {
 
   #roundsTab(s: CupState) {
     const hist = [...this.app.history].reverse();
+    if (this.app.isHost && !this.#ownerAsked) {
+      this.#ownerAsked = true;
+      site.__nswsOwner
+        ?.check()
+        .then((ok) => {
+          this.#owner = ok;
+          this.#key = '';
+          this.render();
+        })
+        .catch(() => {});
+    }
     if (!hist.length) return h('div', { class: 'empty' }, 'Rounds show up here as they finish.');
     return h(
       'div',
@@ -431,7 +446,7 @@ export class Panel {
                 { class: 'rows' },
                 r.rows.map((row) => [
                   h('span', { class: 'mono ' + (row[2] === 1 ? 'amber' : 'dim') }, row[2] ? String(row[2]) : '–'),
-                  h('span', { class: 'ell' }, player(s, row[0])?.name ?? 'Left', botTag(player(s, row[0])), row[4] ? h('span', { class: 'bad', style: 'font-size:12px' }, '  OUT') : null),
+                  h('span', { class: 'ell' }, player(s, row[0])?.name ?? 'Left', botTag(player(s, row[0])), row[4] ? h('span', { class: 'bad', style: 'font-size:12px' }, '  OUT') : null, this.#inputsBtn(r.n, r.track, row[0], row[1])),
                   h('span', { class: 'mono' + (row[1] == null ? ' bad' : '') }, row[1] != null ? fmtTime(row[1]) : 'DNF'),
                   h('span', { class: 'mono amber' }, row[3] ? `+${row[3]}` : ''),
                 ]),
@@ -439,6 +454,26 @@ export class Panel {
         ),
       ),
     );
+  }
+
+  // The owner's button to save a finished bot's run as TAS inputs (a .txt file).
+  #inputsBtn(n: number, track: string, u: number, time: number | null) {
+    const p = player(this.app.state!, u);
+    const text = this.#owner && p?.bot && time != null ? this.app.org?.botInputs(n, u) : null;
+    if (!text) return null;
+    const save = () => {
+      const name = `${track} - ${p!.name} - ${fmtTime(time!).replace(/:/g, '.')}.txt`.replace(/[\\/:*?"<>|]+/g, '_');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    };
+    const b = btn('Inputs', save, 'small ghost', "Save this bot's inputs (TAS text)");
+    b.style.marginLeft = '8px';
+    return b;
   }
 
   // ---- Players ----

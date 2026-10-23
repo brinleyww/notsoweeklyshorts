@@ -73,8 +73,9 @@ export type FromWorker =
   | { b: 'track'; key: string; ok: boolean; refs: { id: string; valid: boolean; frames: number }[]; parts: number; ms: number }
   // data: a deflated keyframe chunk; to: its last bot frame.
   | { b: 'chunk'; id: string; seq: number; data: Uint8Array; to: number }
-  // finish: the counting finish (best run in time attack); runs: [start, finish] per run; dnf: where it gave up.
-  | { b: 'result'; id: string; finish: number | null; runs: [number, number | null][]; dnf: number | null; frontier: number }
+  // finish: the counting finish (best run in time attack); runs: [start, finish] per run; dnf: where it gave up;
+  // inputs: the counting run's keys from its start (bits as in Job.log).
+  | { b: 'result'; id: string; finish: number | null; runs: [number, number | null][]; dnf: number | null; frontier: number; inputs?: Uint8Array | null }
   // frontier: committed bot frame; rate: bot frames planned per wall ms lately.
   | { b: 'progress'; id: string; frontier: number; rate: number }
   | { b: 'error'; id?: string; message: string }
