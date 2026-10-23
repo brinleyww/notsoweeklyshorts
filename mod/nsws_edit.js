@@ -338,8 +338,8 @@
     // Looks that last a whole bar (or its last two beats). LOOKS keep the run in plain view;
     // BURSTS are the loud-part show-offs and only ever take half a bar. "trail" streaks the car
     // along its own motion; "echo" throws copies of its outline outward on each beat.
-    const LOOKS = ["velocity", "pop", "hue", "trail", "duo", "velocity", "zoom"];
-    const BURSTS = ["cutout", "echo", "split", "cutout", "echo"];
+    const LOOKS = ["velocity", "trail", "zoom", "velocity", "trail", "zoom", "pop", "hue"];
+    const BURSTS = ["echo", "split", "echo", "cutout"];
 
     // The run's own moments, in replay seconds: drifts (the nose well off the direction of
     // travel), jumps, the top speed and hard surges of speed. `drive` holds the followed run
@@ -435,7 +435,7 @@
                 const bi = bars.findIndex((b) => d >= b.i0 && d < b.i1);
                 for (let k = Math.max(0, bi - 2); k < bi; k++) if (bars[k].kind !== "drop") bars[k].build = beats[d].t;
             }
-            let look = null, lastBurst = -9, lastKind = null;
+            let look = null, lastBurst = -9, lastKind = null, lastCut = -99;
             bars.forEach((b, bi) => {
                 const startsDrop = drops.some((d) => d >= b.i0 && d < b.i1);
                 if (b.build != null) {
@@ -450,11 +450,13 @@
                 const options = LOOKS.filter((l) => l !== look && (mask || l !== "pop"));
                 b.look = look = startsDrop ? "velocity" : b.kind === "mid" && R() < 0.3 ? null : pick(options);
                 // A loud-enough bar ends in a burst when its last two beats run at normal speed;
-                // never two bars running, never on the drop itself or by the finish.
+                // at most every third bar, never on the drop itself or by the finish, and a
+                // flashback at most every eight bars.
                 const half = Math.max(b.i0 + 1, b.i1 - 2);
                 const calm = beats.slice(half, b.i1).every((x) => slowAt(x.t) < 0.1) && slowAt(b.t1 - 0.05) < 0.1;
-                if (!startsDrop && bi - lastBurst >= 2 && !b.finish && b.i1 - b.i0 >= 3 && calm && b.e > 0.45) {
-                    const kind = pick(BURSTS.filter((k) => (mask || k !== "cutout") && k !== lastKind));
+                if (!startsDrop && bi - lastBurst >= 3 && !b.finish && b.i1 - b.i0 >= 3 && calm && b.e > 0.45) {
+                    const kind = pick(BURSTS.filter((k) => k !== lastKind && (k !== "cutout" || mask && bi - lastCut >= 8)));
+                    if (kind === "cutout") lastCut = bi;
                     b.burst = { kind, t0: beats[half].t, t1: b.t1, beats: beats.slice(half, b.i1).map((x) => x.t) };
                     lastBurst = bi;
                     lastKind = kind;
@@ -576,7 +578,7 @@
                         flash(bt.t, "rim", 1);
                         add(bt.t, "shake", 0.3);
                     } else {
-                        const style = bt.down ? pick(["expo", "wash", "sweep"]) : bt.n > 0.4 || pos % 2 === 1 ? pick(["edge", "chroma", "leak", mask ? "rim" : "wash"]) : pick(["wash", "leak", "expo"]);
+                        const style = bt.down ? pick(["expo", "sweep", "expo", "wash"]) : bt.n > 0.4 || pos % 2 === 1 ? pick(["chroma", "edge", mask ? "rim" : "chroma"]) : pick(["expo", "chroma"]);
                         flash(bt.t, style, 0.55 + 0.35 * bt.s);
                         add(bt.t, "shake", 0.35 * (0.5 + bt.s));
                     }
@@ -584,7 +586,7 @@
                     if (bt.off > 0.45) add(bt.t + song.period / 2, "tick", 0.35 + 0.4 * bt.off);
                     if (bt.down && n++ % 4 === 0 && slow < 0.3) add(bt.t, "glitch", 0.6, { dur: 0.12 });
                 } else if (bar.kind === "mid") {
-                    if (bt.down) flash(bt.t, pick(["leak", "expo", "edge", "wash"]), (0.25 + 0.4 * e) * (1 - 0.6 * slow));
+                    if (bt.down) flash(bt.t, pick(["expo", "leak", "expo"]), (0.25 + 0.4 * e) * (1 - 0.6 * slow));
                     else if (bt.n > 0.5 && slow < 0.3) add(bt.t, "twist", 0.35 * bt.n, { dir: twist = -twist });
                 } else if (bt.down && e > 0.12) {
                     flash(bt.t, "leak", (0.2 + 0.4 * e) * (1 - 0.6 * slow), { tau: 0.5 });
@@ -809,7 +811,7 @@
         }
         const bar = edit.bars.length ? barAt(edit.bars, te) : null;
         const loud = bar?.kind === "drop";
-        let pop = 0, duo = [0, 0, 0, 0], hue = 0, bg = 0, bgColor = [0, 0, 0, 1], bgGrab = -1, outline = [1, 1, 1, 0], split = 0, extraZoom = 0, sat = 0;
+        let pop = 0, hue = 0, bg = 0, bgColor = [0, 0, 0, 1], bgGrab = -1, outline = [1, 1, 1, 0], split = 0, extraZoom = 0, sat = 0;
         let trail = Math.max(0.85 * drift, 0.75 * airK), echo = 0, echoPhase = 0, echoColor = edit.palette[0];
         let pivotCar = 0.35;
         if (bar) {
@@ -818,15 +820,10 @@
                 case "pop":
                     pop = 0.88 * inK;
                     break;
-                case "duo":
-                    duo = [...edit.palette[(bar.i0 >> 2) % edit.palette.length], 0.75 * inK];
+                case "hue":
+                    hue = (bar.i0 % 2 ? 1 : -1) * 0.4 * inK;
+                    sat += 0.25;
                     break;
-                case "hue": {
-                    const k = Math.floor(into / (edit.song?.period || 0.5));
-                    hue = (k % 2 ? 1 : -1) * (0.35 + 0.25 * (k % 3));
-                    sat += 0.35;
-                    break;
-                }
                 case "trail":
                     trail = Math.max(trail, (0.35 + 0.6 * speed) * inK);
                     pivotCar = 0.6;
@@ -860,7 +857,7 @@
                     pivotCar = p && !p.solid ? 0 : 0.9;
                     if (p) {
                         bgGrab = p.solid ? -1 : p.grab;
-                        bgColor = [...p.tint, p.solid ? 1 : 0.55];
+                        bgColor = [...p.tint, p.solid ? 1 : 0.3];
                     }
                 } else if (b.kind === "echo" && seen) {
                     echo = 1;
@@ -875,7 +872,7 @@
                 }
             }
         }
-        if (edit.mask && slow > 0.35) pop = Math.max(pop, 0.75 * smooth01((slow - 0.35) / 0.3));
+        if (edit.mask && slow > 0.35) pop = Math.max(pop, 0.5 * smooth01((slow - 0.35) / 0.3));
         if (tension > 0) {
             sat -= 1;
             extraZoom += 0.08 * tension;
@@ -931,7 +928,6 @@
             leakPos,
             sweep,
             pop,
-            duo,
             hue,
             bg,
             bgColor,
@@ -946,7 +942,7 @@
             carAt: seen ? [car.x, car.y] : [0.5, 0.5],
             wave,
             waveAmp,
-            mask: edit.mask && seen && (pop > 0 || bg > 0 || outline[3] > 0 || duo[3] > 0 || trail > 0.01 || echo > 0),
+            mask: edit.mask && seen && (pop > 0 || bg > 0 || outline[3] > 0 || trail > 0.01 || echo > 0),
             callout: callout && seen ? { ...callout, x: car.x, y: car.y, r: car.r } : callout,
             fade: fadeOut
         };
@@ -963,7 +959,7 @@ uniform vec2 R, SH, WD, ZC, LP, CC, TRD;
 uniform vec3 WV;
 uniform float Z, ROT, BL, CH, GL, GS, LN, TM, SAT, CON, VIG, GR, INV, WH;
 uniform float EX, POP, HUE, SHP, BGK, BGH, BMH, SPL, MK, SWP, TRK, ECH, ECP, WVA;
-uniform vec4 WA, ED, LK, DU, BGC, OL, ECC;
+uniform vec4 WA, ED, LK, BGC, OL, ECC;
 in vec2 v;
 out vec4 o;
 float h(vec2 q) { return fract(sin(dot(q, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -1096,11 +1092,6 @@ void main() {
         float l = lum(col);
         col = mix(col, vec3(clamp(0.06 + 1.15 * l, 0.0, 1.0)), POP * world);
     }
-    if (DU.a > 0.0) {
-        float l = smoothstep(0.0, 0.75, lum(col));
-        vec3 duo = mix(DU.rgb * 0.22 + vec3(0.03, 0.02, 0.06), DU.rgb, l) + vec3(0.3) * l * l;
-        col = mix(col, duo, DU.a * (MK > 0.5 ? world : 1.0));
-    }
     if (OL.a > 0.0) col = mix(col, OL.rgb, OL.a * edge);
     if (HUE != 0.0) col = hue(col, HUE);
     col = screen(col, vec3(0.9) * ring * WVA * 18.0);
@@ -1205,7 +1196,7 @@ void main() {
             this.readFb = gl.createFramebuffer();
             this.maskW = this.maskH = 1;
             this.u = {};
-            for (const name of ["T", "M", "B", "BM", "R", "SH", "WD", "ZC", "LP", "Z", "ROT", "BL", "CH", "GL", "GS", "LN", "TM", "SAT", "CON", "VIG", "GR", "INV", "WH", "EX", "POP", "HUE", "SHP", "BGK", "BGH", "BMH", "SPL", "MK", "SWP", "WA", "ED", "LK", "DU", "BGC", "OL", "CC", "TRD", "WV", "TRK", "ECH", "ECP", "WVA", "ECC"]) this.u[name] = gl.getUniformLocation(prog, name);
+            for (const name of ["T", "M", "B", "BM", "R", "SH", "WD", "ZC", "LP", "Z", "ROT", "BL", "CH", "GL", "GS", "LN", "TM", "SAT", "CON", "VIG", "GR", "INV", "WH", "EX", "POP", "HUE", "SHP", "BGK", "BGH", "BMH", "SPL", "MK", "SWP", "WA", "ED", "LK", "BGC", "OL", "CC", "TRD", "WV", "TRK", "ECH", "ECP", "WVA", "ECC"]) this.u[name] = gl.getUniformLocation(prog, name);
         }
 
         // Copies the current frame into the next bank slot, with the car's mask from
@@ -1342,7 +1333,6 @@ void main() {
             gl.uniform4fv(u.WA, p.wash);
             gl.uniform4fv(u.ED, p.edge);
             gl.uniform4fv(u.LK, p.leak);
-            gl.uniform4fv(u.DU, p.duo);
             gl.uniform4fv(u.BGC, p.bgColor);
             gl.uniform4fv(u.OL, useMask || bankSlot ? p.outline : [0, 0, 0, 0]);
             gl.uniform2f(u.CC, p.carAt[0], p.carAt[1]);
