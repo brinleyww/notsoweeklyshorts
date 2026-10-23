@@ -610,7 +610,8 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
 - **WebRTC car states** (`competitions/src/rtc.js`): pages also send car states straight to each
   other over WebRTC data channels, through TURN relays only, so other cars can be drawn where they are
   now. The room carries only the handshake on the mux socket: `{t:"rtcIce"}` gets
-  `{t:"rtcIce", iceServers}` (null when the Worker has no TURN), and `{t:"rtc", to, d:{type, sdp, n}}`
+  `{t:"rtcIce", iceServers}` (null when the Worker has no TURN), only from a socket with a live link
+  in the cup (pages ask after their first `up`; v10.53 pages asked before it and stay on the mux), and `{t:"rtc", to, d:{type, sdp, n}}`
   goes to page `to` as `{t:"rtc", from, d}`, where `from`/`to` are a page's own link to the organizer
   (0 = the organizer's page) and `from` is filled in by the room, so a page can't pose as another.
   Every `a=candidate` line that isn't `typ relay` is removed and every `c=` line's address is zeroed;

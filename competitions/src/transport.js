@@ -204,7 +204,6 @@ class Mux {
         this.own = null;
         this.mesh = new Mesh(this);
         this.connect(false);
-        this.mesh.askIce();
     }
 
     connect(resume) {
@@ -450,6 +449,8 @@ class Mux {
                 this.links.set(m.link, pc);
                 if (pc._linked) this.relinked(pc, m.link, m.recv);
                 else pc._up(m.link);
+                // The room hands out the TURN login only once this page is linked into the cup.
+                if (pc._fan) this.mesh.askIce();
             } else if (m.t === "relink") {
                 this.unlink(pc);
                 this.control({ t: "open", pair: pc.pair, side: pc.side, recv: pc._recv });

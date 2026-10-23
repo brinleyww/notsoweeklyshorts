@@ -24,6 +24,7 @@ const CONNECT_MS = 15000;
 const GATHER_MS = 4000;
 const RETRY_MS = [3000, 10000, 30000, 60000];
 const MAX_BUFFERED = 64 * 1024;
+const ASK_AGAIN_MS = 10000;
 
 function randomHex(bytes) {
     return Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -108,9 +109,11 @@ export class Mesh {
         this.ice = Array.isArray(list) && list.length ? list : null;
     }
 
+    // Asked again on a later link if no answer came (a dropped socket, a room that wasn't ready).
     askIce() {
-        if (this.ice !== undefined || this.asked) return;
-        this.asked = true;
+        const now = performance.now();
+        if (this.ice !== undefined || now - (this.askedAt ?? -Infinity) < ASK_AGAIN_MS) return;
+        this.askedAt = now;
         this.mux.control({ t: "rtcIce" });
     }
 

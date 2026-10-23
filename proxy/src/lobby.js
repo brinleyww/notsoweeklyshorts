@@ -629,8 +629,10 @@ export class LobbyRoom extends DurableObject {
         text(to, { t: "rtc", from, d: { type: d.type, sdp: relayOnly(d.sdp), n: d.n } });
     }
 
+    // Only a page that is in this cup (linked to its organizer, or the organizer's own) gets the TURN
+    // login; anything else gets no answer.
     async rtcIce(ws, a) {
-        if (a.fan !== true || !this.allowRtc(ws)) return;
+        if (a.fan !== true || !Object.values(a.pairs || {}).some((p) => p.link) || !this.allowRtc(ws)) return;
         let iceServers = null;
         try {
             iceServers = await this.turnServers();
