@@ -4,6 +4,7 @@
 //   how it gets through drifts and risky lines, corrected for lateral and heading error.
 // - Slower than the reference it drives on grip: steering from the line's curvature, and a speed cap
 //   low enough for the steering to hold the line (the reference may drift where a slower car can't).
+import { EXPERT_SKILL } from '../wire.ts';
 import { BRAIN_IN, BRAIN_OUT, type Brain } from './brain.ts';
 import type { Clearance } from './clearance.ts';
 import { SECTION } from './notes.ts';
@@ -90,6 +91,8 @@ export function gripSpeed(curv: number) {
 const tmp = new Float64Array(1);
 // More than this far below the reference (drift weight), its brake is not copied: about 4.4% slower.
 const BRAKE_DRIFT = 0.2;
+// An expert keeps to the reference's speed within this long (ms of the reference) before a jump.
+const FREE_JUMP_MS = 3000;
 
 export class Driver {
   readonly ref: Reference;
@@ -109,6 +112,8 @@ export class Driver {
   head = 0;
   headPath = 0;
   dist = 0;
+  // Experts free of the reference's speed where it drove on (off only for lab comparisons).
+  static freeFast = true;
   // Why the last decision braked (for the lab): copying the reference, its speed cap ahead, running wide.
   why: '' | 'imitate' | 'ref' | 'allow' | 'wide' = '';
 
@@ -342,7 +347,10 @@ export class Driver {
       // Before a long flight only a retry's own slowdown counts, not the bot's usual pace.
       const q = slow && ref.runUp(i) ? pace / this.p.pace : pace;
       const swing = slow && !ref.runUp(i) ? 1 + sty[6] * Math.sin((TAU * ref.arc[i]) / (sty[7] || 1) + sty[8]) : 1;
-      let cap = slow ? q * vr * swing : vr + 1;
+      // An expert isn't held to the reference's speed where it was simply driving on: up to what the curve
+      // holds on grip (unlimited on a straight), away from jumps, whose run-up needs the reference's own speed.
+      const free = Driver.freeFast && this.skill >= EXPERT_SKILL && !slow && (ref.keys[i] & 1) !== 0 && ref.jumpIn(i, FREE_JUMP_MS) === Infinity && !ref.runUp(i);
+      let cap = slow ? q * vr * swing : free ? Math.max(vr + 1, gripSpeed(c)) : vr + 1;
       if (grip) cap = Math.min(cap, gripSpeed(c));
       const reach = (cap * cap + 2 * this.p.brake * d) ** 0.5;
       if (reach < allow) allow = reach;

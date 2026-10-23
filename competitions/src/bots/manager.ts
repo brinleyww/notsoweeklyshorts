@@ -394,7 +394,7 @@ export class BotManager {
     slot.jobs++;
     const notes = this.#notesFor(plan.trackId, b.persona);
     const drill = b.persona.skill >= EXPERT_SKILL;
-    const plans = [...(this.#plans.get(plan.trackId)?.entries() ?? [])].filter(([k]) => k.startsWith(`${b.persona.name ?? b.persona.u}|`)).map(([, v]) => v);
+    const plans = this.#plansFor(plan.trackId, b.persona);
     const warm = this.#raced.get(plan.trackId)?.get(b.persona.name ?? b.u) ?? 0;
     this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill, plans, warm });
   }
@@ -601,20 +601,29 @@ export class BotManager {
     notes.delete(key);
     notes.set(key, p.notes.slice());
     this.#saveNotes(t.trackId);
+    // Every worker on the track takes it up: the bot's planner for its next run, the learning worker to go on from.
+    for (const s of [...this.#slots, this.#learner]) if (s && !s.dead && s.key === t.key) this.#send(s, { b: 'plan', key: t.key, name: m.name, plan: p });
   }
 
-  // Keeps the learning worker improving the weights of every skill group racing on this track (each bot
-  // goes over its own runs in its planner).
+  #plansFor(trackId: string, p: Persona) {
+    const prefix = `${p.name ?? p.u}|`;
+    return [...(this.#plans.get(trackId)?.entries() ?? [])].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v);
+  }
+
+  // Keeps the learning worker improving the weights of every skill group racing on this track, and going over
+  // the experts' own runs (each bot also goes over its runs in its planner, between runs).
   #learn(plan: Plan) {
     const t = this.#track;
     if (this.#failed || !canLearn() || !t || t.bad || plan.key !== t.key) return;
     const groups = new Map<string, number>();
+    const experts: Persona[] = [];
     for (const b of plan.bots.values()) {
       const g = brainGroup(b.persona.skill);
       if (g) groups.set(g.key, g.skill);
+      if (b.persona.skill >= EXPERT_SKILL) experts.push(b.persona);
     }
-    const sig = t.key + ':' + [...groups.keys()].sort().join('');
-    if (!groups.size || sig === this.#learnSig) return;
+    const sig = t.key + ':' + [...groups.keys()].sort().join('') + ':' + experts.map((p) => `${p.name ?? p.u}/${p.copy}`).sort().join(',');
+    if ((!groups.size && !experts.length) || sig === this.#learnSig) return;
     this.#learnSig = sig;
     if (!this.#learner || this.#learner.dead) this.#learner = this.#spawn(false);
     const slot = this.#learner;
@@ -625,7 +634,8 @@ export class BotManager {
     }
     const saved = this.#brainsOf(plan.trackId);
     const tasks = [...groups].map(([key, skill], i) => ({ key, skill, w: (saved.get(key)?.w ?? base ?? freshBrain(i + 1)).slice() }));
-    this.#send(slot, { b: 'learn', key: t.key, tasks, practice: [] });
+    const polish = experts.map((bot) => ({ bot, plans: this.#plansFor(plan.trackId, bot) }));
+    this.#send(slot, { b: 'learn', key: t.key, tasks, practice: [], polish });
   }
 
   #learned(m: Extract<FromWorker, { b: 'learned' }>) {

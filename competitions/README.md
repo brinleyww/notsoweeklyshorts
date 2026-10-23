@@ -243,17 +243,36 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   bot starts from rules hashed from its name; every race run drives each section a little differently.
 - After every run a bot goes over it (`Planner.#think`), like a player thinking back on a run: where the
   run lost most against its hint, it goes back to the exact physics state where that section began and
-  tries three other ways through it (a little faster, another line, another turn-in, or now and then the
-  hint run's own inputs there), each driven on to the finish with no slips. One that finishes sooner
-  becomes the bot's run (`BotPlan`: its keys, notes and section times). In time attack this happens
+  tries other ways through it, each first driven only to where the section three on begins and scored
+  there against its run (time, less 10 ms per km/h it carries); the best is driven on to the finish with
+  no slips, and only if it finishes sooner does it become the bot's run (`BotPlan`: its keys, notes and
+  section times). The ways: a little faster, another line, another turn-in, now and then the hint run's own
+  inputs there, and edits of its own keys as a TAS runner makes them (one brake or lift there shortened at
+  either end or left out). Experts may go up to 12% faster than their hint and 3 units beside its line
+  (kept off walls): their record is a safety net (its line, where it braked, its jump run-ups), not a
+  ceiling, and nothing they try is kept unless a whole run on the game's physics proved it faster, so they
+  never crash on what they learned. In time attack this happens
   before every next run (up to 3 s, less as planning gets within 8 s of the race clock); in rounds when
-  the bot's run is planned, and again (up to 20 s a bot) while the planner has nothing else to do. Experts
+  the bot's run is planned, and again (up to 20 s a bot) while the planner has nothing else to do. Where the
+  organizer's page has a learning worker (6+ cores, 8 GB), it also goes over every expert's best run all
+  cup long, 1.5 s at a time at up to half a core (`Learner` polish), and each faster run it proves reaches
+  that bot's planner for its next run (`{b:'plan'}`). Lab (`botlab/t37_polish.mjs`): a Solaris expert's run
+  28.62 -> 27.73 s in a minute of that (record 27.22). Experts
   then drive their best run exactly as it is, so an expert never drives slower than its best; the others
   drive the notes from it with their own slips. Runs stay on the organizer's page for the session; notes
   are kept per track, bot name and hint run in localStorage (`nsws-cuppa-notes:<id>`, 24 tracks).
 - Practice makes a bot better on a track: after r runs there (rounds before, then every attempt in time
   attack) it has closed 40% x (1 - e^(-r/5)) of its gap to an expert's pace and slips that much less. The
   first run is as before.
+- Retries after a failure (`Planner.#recover`): a retry that fails exactly as the one before (same kind,
+  within 8 ms) started past the point where the run was lost, so it doesn't count as a try and the next one
+  starts further back (0.2 s more each time, replaying the bot's own keys when no snapshot is that old), or,
+  when it can't go further back, tries another setting from there. Before, 68% of all failures were such
+  repeats, bots retried the same place up to 26 times and gave up. 8 community tracks, 12 bots each (expert
+  and 0.7, 6 seeds, `botlab/t36_retries.mjs`): runs that only finished by replaying a recording 29 -> 3 of 96,
+  respawns 43 -> 3, own driving +11.7% -> +7.6% against the record; planning costs ~1.7 times as much.
+- Every run of a time attack starts on the bot's own hint again (a retry may have put it on another player's
+  line), and the fastest run becomes its best run whichever line it ended on.
 - In time attack, once a bot has a time, a run that goes wrong (a wreck, a fall it can't save) or falls
   far behind its best at the same point (1.5 s or 8%) is started over, like a player would. In a one-run
   round a wreck that leaves the car crawling (under half the hint's speed there) respawns at the checkpoint.

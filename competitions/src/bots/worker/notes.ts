@@ -56,15 +56,22 @@ export class Notes {
   readonly n: number;
   readonly v: Float32Array;
 
-  // Highest pace (log factor): an expert on a slower hint run may go faster than it by `lift` more.
+  // Highest pace (log factor): an expert on a slower hint run may go faster than it by `lift` more. How far
+  // beside the hint's line it may go (units), and how big a change going over a run tries.
   readonly top: number;
+  readonly room: number;
+  readonly step: number;
 
   // `lift`: how much slower the hint run is than the fastest (log of their times), for an expert, which drives
   // its hint's line at the pace of the best; it starts halfway there and goes over its runs for the rest.
-  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined, lift = 0) {
+  // `explore`: an expert finds its own way, faster than its hint where it can: twice the speed and room to
+  // try, and bigger changes (it only keeps one that a whole run proved faster).
+  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined, lift = 0, explore = false) {
     this.ref = ref;
     this.n = Math.ceil(ref.n / SECTION);
-    this.top = LIMITS[0][1] + lift;
+    this.top = LIMITS[0][1] * (explore ? 2 : 1) + lift;
+    this.room = LIMITS[1][1] * (explore ? 2 : 1);
+    this.step = explore ? 1.5 : 1;
     if (saved && saved.length === this.n * FIELDS && saved.every(Number.isFinite)) this.v = saved.slice();
     else {
       this.v = new Float32Array(this.n * FIELDS);
@@ -73,7 +80,7 @@ export class Notes {
   }
 
   #clamp(f: number, x: number) {
-    return f === 0 ? Math.max(LIMITS[0][0], Math.min(this.top, x)) : clamp(f, x);
+    return f === 0 ? Math.max(LIMITS[0][0], Math.min(this.top, x)) : f === 1 ? Math.max(-this.room, Math.min(this.room, x)) : clamp(f, x);
   }
 
   // A run's way of driving, into p: the notes, every section a little different (from `rand`) unless `same`.
@@ -92,14 +99,14 @@ export class Notes {
   // Another way through section s of p, to try in practice.
   vary(p: Float32Array, s: number, rand: () => number) {
     const out = new Float32Array(FIELDS);
-    for (let f = 0; f < FIELDS; f++) out[f] = this.#clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f]);
+    for (let f = 0; f < FIELDS; f++) out[f] = this.#clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f] * this.step);
     return out;
   }
 
   // Another way through section s of p when going over a run (planner.ts, rethink): mostly a little faster.
   nudge(p: Float32Array, s: number, rand: () => number) {
     const out = this.vary(p, s, rand);
-    out[0] = this.#clamp(0, p[s * FIELDS] + (rand() * 1.5 - 0.5) * TRY[0]);
+    out[0] = this.#clamp(0, p[s * FIELDS] + (rand() * 1.5 - 0.5) * TRY[0] * this.step);
     return out;
   }
 }

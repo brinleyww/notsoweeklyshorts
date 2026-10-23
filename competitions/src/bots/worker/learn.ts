@@ -7,11 +7,11 @@
 // (notes.ts) the bot tries a few other ways through it from the same exact state and drives on with the
 // fastest; the notes that run ends with are kept only if, like the weights, they do no worse than the old
 // ones on every one of fresh race runs and better overall.
-import type { Persona } from '../wire.ts';
+import type { BotPlan, Persona } from '../wire.ts';
 import { BRAIN_SIZE } from './brain.ts';
 import type { Clearance } from './clearance.ts';
 import { refKey } from './notes.ts';
-import { Planner, type Job } from './planner.ts';
+import { adoptPlan, Planner, type Job } from './planner.ts';
 import type { Reference } from './reference.ts';
 import type { Sim, TrackLoad } from './sim.ts';
 
@@ -34,6 +34,8 @@ const SEEDS = 2;
 const DRILL_TRIES = 4;
 const PRACTICE_SEEDS = 3;
 const PRACTICE_GAIN = 30;
+// Least time given to going over an expert's run in one turn, ms.
+const POLISH_MS = 1500;
 
 export const testPersona = (skill: number, seed: number): Persona => ({ u: 0, skill, risk: skill ** 1.5, mistakes: (1 - skill) * 0.8, seed });
 
@@ -94,6 +96,12 @@ export interface Practice {
   notes: Record<string, Float32Array>;
 }
 
+// An expert whose own runs the learning worker goes over, and the runs it has so far.
+export interface Polish {
+  bot: Persona;
+  plans: BotPlan[];
+}
+
 export interface Task {
   // A skill level's weights for this course and their cost on the last test.
   key: string;
@@ -123,12 +131,41 @@ export class Learner {
   onBetter: (task: Task, cost: number, was: number) => void = () => {};
   // An expert's notes on its hint run (key) got better in practice: a run costs `cost` now, `was` before.
   onNotes: (bot: Persona, key: string, v: Float32Array, cost: number, was: number) => void = () => {};
+  // An expert's run got faster here (planner.ts, #think): its next run drives it.
+  onPlan: (name: number, plan: BotPlan) => void = () => {};
+  // Experts' runs gone over in turn, on a planner of their own whose jobs are never driven (no cars).
+  #polisher: Planner | null = null;
+  #polish: Job[] = [];
+  #polishAt = 0;
 
-  constructor(c: Course, tasks: Task[], seed: number, practice: Practice[] = []) {
+  constructor(c: Course, tasks: Task[], seed: number, practice: Practice[] = [], polish: Polish[] = []) {
     this.#c = c;
     this.#tasks = tasks;
     this.#practice = practice;
     this.#rand = rng(seed);
+    if (polish.length) {
+      const pl = (this.#polisher = new Planner(c.sim, c.route, c.refs, 2, c.clear, c.full));
+      pl.onPlan = (job, plan) => this.onPlan(job.name, plan);
+      polish.forEach((p, i) => {
+        const job = pl.add({ id: `polish${i}`, bot: { ...p.bot, mistakes: 0 }, mode: 'run', end: c.refs[0].n * 3 + 20000, plans: p.plans });
+        pl.cancel(job.id);
+        this.#polish.push(job);
+      });
+    }
+  }
+
+  // A faster run of an expert's own found elsewhere.
+  adopt(name: number, plan: BotPlan) {
+    for (const job of this.#polish) adoptPlan(job, name, plan);
+  }
+
+  // Goes over the next expert's run that has one; false when none has.
+  #polishNext(deadline: number) {
+    const ready = this.#polish.filter((j) => j.plan);
+    if (!ready.length || !this.#polisher) return false;
+    // Going over a run needs time to replay it to a section and try a few ways there, whatever the slice.
+    this.#polisher.improve(ready[this.#polishAt++ % ready.length], Math.max(deadline, performance.now() + POLISH_MS));
+    return true;
   }
 
   // An expert's notes learned elsewhere.
@@ -190,7 +227,13 @@ export class Learner {
 
   // Works until the deadline (performance.now()).
   work(deadline: number) {
-    while ((this.#tasks.length || this.#practice.length) && performance.now() < deadline) {
+    while ((this.#tasks.length || this.#practice.length || this.#polish.length) && performance.now() < deadline) {
+      // Experts' runs and network tests take turns.
+      if (this.#polish.length && (!this.#tasks.length || (this.#turn & 1) === 1) && !this.#trial) {
+        this.#turn++;
+        if (this.#polishNext(deadline) || this.#tasks.length) continue;
+        return;
+      }
       // Practice and network tests take turns.
       if (this.#practice.length && (this.#drill || !this.#tasks.length || (this.#turn & 1) === 1) && !this.#trial) {
         if (!this.#practise(deadline)) return;

@@ -145,18 +145,25 @@ function handle(m: ToWorker) {
       track.planner?.notes(m.name, m.ref, m.v);
       learner?.merge(m.name, m.ref, m.v);
       return;
+    case 'plan':
+      if (track?.key !== m.key) return;
+      track.planner?.adopt(m.name, m.plan);
+      learner?.adopt(m.name, m.plan);
+      return;
     case 'learn': {
       learner?.dispose();
       learner = null;
       const t = track;
-      const practice = m.practice ?? [];
-      if (!sim || !t || t.key !== m.key || !t.planner || !(m.tasks.length || practice.length)) return;
+      const practice = m.practice ?? [], polish = m.polish ?? [];
+      if (!sim || !t || t.key !== m.key || !t.planner || !(m.tasks.length || practice.length || polish.length)) return;
       learner = new Learner(
         { sim, route: t.route, full: t.load, refs: t.refs, clear: t.planner.clear },
         m.tasks.map((x) => ({ key: x.key, skill: x.skill, w: x.w })),
         m.tasks.length * 7919 + practice.length * 104729 + t.refs[0].n,
         practice.map((p) => ({ bot: p.bot, notes: { ...p.notes } })),
+        polish,
       );
+      learner.onPlan = (name, plan) => post({ b: 'plan', key: t.key, name, plan: { ...plan, notes: plan.notes.slice(), keys: plan.keys.slice(), sin: plan.sin.slice() } });
       learner.onBetter = (task, cost, was) => post({ b: 'learned', key: t.key, task: task.key, w: task.w.slice(), cost, was }, []);
       learner.onNotes = (bot, ref, v, cost, was) => post({ b: 'notes', key: t.key, name: bot.name ?? bot.u, ref, v, cost, was });
       kick();
@@ -316,9 +323,10 @@ function pump() {
       return;
     }
     if (learner) {
-      // Learning gets at most half of this worker's time.
-      learner.work(performance.now() + SLICE_MS * 2);
-      setTimeout(pump, SLICE_MS * 2);
+      // Learning gets at most half of this worker's time (a turn can run long: it rests as long).
+      const t0 = performance.now();
+      learner.work(t0 + SLICE_MS * 2);
+      setTimeout(pump, Math.max(SLICE_MS * 2, performance.now() - t0));
       return;
     }
     running = false;

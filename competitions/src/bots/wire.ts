@@ -60,7 +60,10 @@ export type ToWorker =
   | { b: 'brain'; id: string; w: Float32Array | null }
   // To the learning worker: keep improving these weights on the track (worker/learn.ts).
   // practice: experts to drive practice runs with, and their notes by hint run.
-  | { b: 'learn'; key: string; tasks: { key: string; skill: number; w: Float32Array }[]; practice: { bot: Persona; notes: Record<string, Float32Array> }[] }
+  // polish: experts whose own runs it goes over, with the runs they have.
+  | { b: 'learn'; key: string; tasks: { key: string; skill: number; w: Float32Array }[]; practice: { bot: Persona; notes: Record<string, Float32Array> }[]; polish?: { bot: Persona; plans: BotPlan[] }[] }
+  // A bot's faster run of its own (by name), found in another worker.
+  | { b: 'plan'; key: string; name: number; plan: BotPlan }
   // An expert's notes on its hint run (ref) learned in practice, from its next run.
   | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array }
   // GO on the cup clock (null until set); cup clock = Date.now() + offset.

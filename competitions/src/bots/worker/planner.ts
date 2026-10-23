@@ -38,6 +38,11 @@ const EXIT_MS_PER_KMH = 10;
 // Going over a run: ways tried from each section's start, and how far behind the run a try may fall at a
 // later section before it is given up.
 const THINK_TRIES = 3;
+// Screening ways locally: how many, scored where the section this many after theirs begins, and the least
+// gain (ms) over the run there that is worth driving on to the finish.
+const LOCAL_TRIES = 6;
+const LOCAL_SECTIONS = 3;
+const LOCAL_GAIN = 5;
 const THINK_BEHIND = 150;
 const PONDER_MS = 20_000;
 // An expert on a hint run this much slower than the fastest (log of their times) or more drives it at most this
@@ -45,6 +50,8 @@ const PONDER_MS = 20_000;
 const MAX_LIFT = 0.08;
 // A retry counts as having got through this far (units) past where it failed.
 const FIX_PAST = 25;
+// Identical failures in a row a bot goes further back for before it lives with the failure.
+const MAX_REPEATS = 8;
 // Practice makes a bot better on a track: after r runs there (rounds before this one, then every attempt in
 // time attack) it has closed WARM_GAIN * (1 - e^(-r / WARM_RUNS)) of its gap to an expert's pace, and slips
 // that much less. The first run is as it always was.
@@ -82,6 +89,46 @@ export interface JobSpec {
 }
 
 type Copy = { keys: Uint8Array; n: number; own?: boolean };
+export function adoptPlan(job: Job, name: number, plan: BotPlan) {
+  const notes = job.notes;
+  if (job.name !== name || !notes || plan.ref !== refKey(notes.ref) || plan.notes.length !== notes.v.length || plan.sin.length !== notes.n) return;
+  if (job.plan && job.plan.n <= plan.n) return;
+  job.plan = plan;
+  notes.v.set(plan.notes);
+}
+
+// Keys driven as they are from frame `at` to `until` (going over a run: an edit of the bot's own keys).
+type Force = { keys: Uint8Array; at: number; until: number };
+
+// The bot's own keys from `at` to `until` with one stretch of braking or of no throttle (on its own, not a
+// respawn) shortened at either end or left out: braking becomes throttle, a lift holds throttle. Null when
+// there is none.
+function editKeys(plan: BotPlan, at: number, until: number, rand: () => number): Force | null {
+  if (until - at < 20) return null;
+  const keys = plan.keys.slice(at, until);
+  const runs: [number, number, boolean][] = [];
+  let a = -1, brake = false;
+  for (let i = 0; i <= keys.length; i++) {
+    const b = i < keys.length ? keys[i] : 1;
+    const kind = b & 16 ? 0 : b & 4 ? 2 : b & 1 ? 0 : 1;
+    if (a >= 0 && (kind === 0 || (kind === 2) !== brake)) {
+      runs.push([a, i, brake]);
+      a = -1;
+    }
+    if (a < 0 && kind) {
+      a = i;
+      brake = kind === 2;
+    }
+  }
+  if (!runs.length) return null;
+  const [from, to] = runs[Math.floor(rand() * runs.length)];
+  const len = to - from, how = rand();
+  // Left out, or its first or last part (a quarter to three quarters of it).
+  const cut = how < 0.34 ? len : Math.max(1, Math.round(len * (0.25 + 0.5 * rand())));
+  const lo = how < 0.67 ? from : to - cut;
+  for (let i = lo; i < lo + cut; i++) keys[i] = (keys[i] & ~4) | 1;
+  return { keys, at, until };
+}
 
 // Now and then (about every 12 s of driving) a small input the driver didn't choose, for 40-150 ms: it
 // may turn up a better line, or cost a little.
@@ -214,6 +261,11 @@ export class Job {
   failWhy: Why | null = null;
   failArc = 0;
   failJump = false;
+  // Going over a run: keys driven as they are for a while (Force).
+  force: Force | null = null;
+  // The last failure and the time its retry started from, and how many identical failures in a row.
+  lastFail: { at: number; why: Why | null; from: number; n: number } = { at: -1, why: null, from: -1, n: 0 };
+  repeats = 0;
   // Much slower than the reference where it failed: it needs more speed there, not less.
   failSlow = false;
   failK = 0;
@@ -285,7 +337,7 @@ export class Job {
       const plan = spec.plans?.find((p) => p.ref === key && p.n > 0 && p.keys.length >= p.n) ?? null;
       // Every expert is as good as the best: its hint run only gives it its line and way of driving.
       const lift = b.skill >= EXPERT_SKILL ? Math.min(MAX_LIFT, Math.log(this.ref.n / sorted[0].n)) : 0;
-      const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key], lift);
+      const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key], lift, b.skill >= EXPERT_SKILL && Planner.explore);
       if (plan && plan.notes.length === notes.v.length && plan.sin.length === notes.n) this.plan = plan;
       this.notes = notes;
       this.hint = this.refIdx;
@@ -421,6 +473,12 @@ interface Snap {
 }
 
 export class Planner {
+  // Retries that fail exactly as the last one go further back (off only for lab comparisons).
+  static retryMode = 1;
+  // Experts explore beyond their hint (on; off only for lab comparisons).
+  static explore = true;
+  // Ways screened locally before one is driven to the finish (on; off only for lab comparisons).
+  static screen = true;
   readonly sim: Sim;
   readonly track: TrackLoad;
   // The whole track, for runs that copy a recording (it was made there; routeTrack may leave parts out).
@@ -451,7 +509,7 @@ export class Planner {
   hurry: () => boolean = () => false;
   // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
   roomy: () => boolean = () => true;
-  stats = { ticks: 0, rebuilds: 0, restores: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, fails: {} as Record<string, number> };
+  stats = { ticks: 0, rebuilds: 0, restores: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
 
   readonly clear = new Map<Reference, Clearance>();
 
@@ -578,6 +636,8 @@ export class Planner {
 
   #startRun(job: Job, at: number, copy: Copy | null = null) {
     if (job.car) this.sim.deleteCar(job.car);
+    // A run that went onto another player's line to get through somewhere starts again on its own hint.
+    if (job.hint >= 0) job.useRef(job.hint);
     // An expert drives its own best run as it is (it goes over it between runs; see #think).
     if (!copy && job.plan && job.expert && !job.practice && job.refIdx === job.hint) copy = { keys: job.plan.keys, n: job.plan.n, own: true };
     job.copy = copy;
@@ -590,6 +650,8 @@ export class Planner {
     job.sin.fill(-1);
     job.restartNow = false;
     job.fix = null;
+    job.lastFail = { at: -1, why: null, from: -1, n: 0 };
+    job.repeats = 0;
     this.#carChanged = true;
     job.runStart = at;
     job.t = at;
@@ -765,7 +827,7 @@ export class Planner {
       job.pbTime = time;
       job.pbSin = job.copy?.own && job.plan ? job.plan.sin.slice() : job.sin.slice();
     }
-    if (!job.notes || job.copy || job.refIdx !== job.hint || (job.plan && job.plan.n <= time)) return;
+    if (!job.notes || job.copy || (job.plan && job.plan.n <= time)) return;
     job.plan = { ref: refKey(job.notes.ref), notes: job.sections!.slice(), keys: job.keys.slice(job.runStart, job.runStart + time), n: time, sin: job.sin.slice() };
     job.notes.v.set(job.plan.notes);
     this.onPlan(job, job.plan);
@@ -781,6 +843,8 @@ export class Planner {
     let plan = notes && job.plan?.ref === refKey(notes.ref) ? job.plan : null;
     if (!notes || !plan || this.#busy || performance.now() >= deadline) return;
     this.#busy = true;
+    const t0 = performance.now();
+    this.stats.thinks++;
     const changed = this.#carChanged;
     const bot: Persona = { ...job.bot, mistakes: 0 };
     const tj = new Job({ id: 'think', bot, mode: 'run', end: notes.ref.n * 3 + 20000, brain: job.brainW, notes: { [plan.ref]: plan.notes.slice() }, practice: true, refIdx: job.hint }, this.refs, this.clear);
@@ -811,20 +875,68 @@ export class Planner {
         this.sim.save(DRILL_SLOT);
         const saved = tj.save();
         const sin = tj.sin.slice();
-        for (let i = 0; i < THINK_TRIES && performance.now() < deadline; i++) {
-          if (i > 0) {
-            this.sim.restore(DRILL_SLOT);
-            tj.load(saved);
-            tj.sin.set(sin);
-          }
-          tj.sections!.set(plan.notes);
-          // Now and then the hint run's own inputs through this section (and maybe the next), as they were.
-          if (i === 1 && job.thinkRand() < 0.5) {
+        const reset = () => {
+          this.sim.restore(DRILL_SLOT);
+          tj.load(saved);
+          tj.sin.set(sin);
+          tj.sections!.set(plan!.notes);
+          tj.force = null;
+        };
+        // A way through: other notes for section s, (open > 0) the hint run's own inputs for that long, or
+        // (edit) the bot's own keys there with one brake or lift shortened or left out, as a TAS runner would.
+        type Way = { notes: Float32Array | null; open: number; edit: Force | null };
+        const apply = (way: Way) => {
+          if (way.notes) tj.sections!.set(way.notes, s * FIELDS);
+          if (way.open > 0) {
             tj.st.openFrom = tj.st.k;
             tj.st.openAt = tj.t;
-            tj.st.openUntil = tj.t + SECTION * (job.thinkRand() < 0.5 ? 1 : 2);
-          } else tj.sections!.set(notes.nudge(plan.notes, s, job.thinkRand), s * FIELDS);
+            tj.st.openUntil = tj.t + way.open;
+          }
+          tj.force = way.edit;
+        };
+        const make = (i: number): Way => {
+          const r = job.thinkRand();
+          if (i % 3 === 0) {
+            const edit = editKeys(plan!, from, Math.min(plan!.n, plan!.sin[s + 2] > 0 ? plan!.sin[s + 2] : from + 2 * SECTION), job.thinkRand);
+            if (edit) return { notes: null, open: 0, edit };
+          }
+          if (i % 3 === 1 && r < 0.5) return { notes: null, open: SECTION * (job.thinkRand() < 0.5 ? 1 : 2), edit: null };
+          return { notes: notes.nudge(plan!.notes, s, job.thinkRand), open: 0, edit: null };
+        };
+        const e = s + LOCAL_SECTIONS;
+        let pick: Way | null = null;
+        if (Planner.screen && e < sections && plan.sin[e] > 0) {
+          // Each way is first driven only to where section e begins and scored there (time, less the speed it
+          // carries), against the run's own score; only the best one is driven on to the finish.
+          const k2 = this.#k;
+          let pbuf: Uint8Array | null = null;
+          for (let t = from; t < plan.sin[e]; t++) pbuf = this.sim.step(tj.car, keysOf(plan.keys[t], k2));
+          if (!pbuf) continue;
+          readRaw(pbuf, this.#raw);
+          let least = plan.sin[e] - EXIT_MS_PER_KMH * this.#raw.speed - LOCAL_GAIN;
+          for (let i = 0; i < LOCAL_TRIES && performance.now() < deadline; i++) {
+            reset();
+            const way = make(i);
+            apply(way);
+            const until = plan.sin[e] + THINK_BEHIND;
+            while (tj.status === 'run' && tj.failAt < 0 && tj.sin[e] < 0 && tj.t < until) this.#run(tj, tj.t + TICK);
+            if (tj.failAt >= 0 || tj.sin[e] < 0) continue;
+            const cost = tj.sin[e] - EXIT_MS_PER_KMH * tj.vout[e - 1];
+            if (cost < least) {
+              least = cost;
+              pick = way;
+            }
+          }
+          if (!pick) {
+            this.sim.dropSlot(DRILL_SLOT);
+            continue;
+          }
+        }
+        for (let i = 0; i < (pick ? 1 : THINK_TRIES) && performance.now() < deadline; i++) {
+          reset();
+          apply(pick ?? make(i));
           const p = this.#tryRest(tj, plan, s);
+          this.stats.tried++;
           if (p) {
             plan = p;
             better = true;
@@ -838,6 +950,7 @@ export class Planner {
       tj.car = 0;
       this.#carChanged = changed;
       this.#busy = false;
+      this.stats.thinkMs += performance.now() - t0;
     }
     if (better && plan) {
       job.plan = plan;
@@ -897,6 +1010,16 @@ export class Planner {
     return { ref: refKey(tj.notes!.ref), notes: tj.sections!.slice(), keys: tj.keys.slice(0, time), n: time, sin: tj.sin.slice() };
   }
 
+  // Goes over a bot's run until the deadline (the learning worker's own planner, for experts' runs).
+  improve(job: Job, deadline: number) {
+    this.#think(job, deadline);
+  }
+
+  // A faster run of a bot's own found elsewhere (the learning worker, or another round): its next run drives it.
+  adopt(name: number, plan: BotPlan) {
+    for (const job of this.jobs) adoptPlan(job, name, plan);
+  }
+
   // Thinks over done bots' runs while the planner has nothing else to do (between rounds), each for up to
   // PONDER_MS; true if it did.
   ponder(deadline: number) {
@@ -921,6 +1044,11 @@ export class Planner {
     const st = job.st, ref = job.ref, r = this.#raw;
     if (job.copy) {
       keysOf(job.copy.keys[Math.min(t - job.runStart, job.copy.n - 1)], k);
+      return;
+    }
+    const force = job.force;
+    if (force && t >= force.at && t < force.until) {
+      keysOf(force.keys[t - force.at], k);
       return;
     }
     k.reset = false;
@@ -1068,9 +1196,16 @@ export class Planner {
     const usable = this.#carChanged ? [] : this.#ring.filter((s) => live.every((j) => s.jobs.get(j.id)?.car === j.car));
     const plans: { job: Job; snap: Snap | null; rebuildTo: number }[] = [];
     for (const job of failed) {
+      // The same failure as the last try's (same kind, within 8 ms): that try started past the point where the
+      // run was lost, so it taught nothing. It doesn't count as a try; the next one starts further back.
+      // (When it can't go further back, another way through is tried from there instead.)
+      const last = job.lastFail;
+      const back1 = last.from - TICK * (job.repeats + 1);
+      const repeat = Planner.retryMode > 0 && last.why === job.failWhy && Math.abs(last.at - job.failAt) <= 8 && job.repeats < MAX_REPEATS && back1 > Math.max(job.committed, job.runStart);
       const bucket = Math.floor(job.failArc / 20);
-      const n = (job.tries.get(bucket) ?? 0) + 1;
-      job.tries.set(bucket, n);
+      const n = repeat ? last.n : (job.tries.get(bucket) ?? 0) + 1;
+      if (!repeat) job.tries.set(bucket, n);
+      job.repeats = repeat ? job.repeats + 1 : 0;
       readRaw(job.prev, this.#raw);
       // Before the first checkpoint giving up means a restart, so keep trying much longer there.
       // Close behind the race clock there is no time to try again: take the failure and go on.
@@ -1081,20 +1216,24 @@ export class Planner {
       if (keep) job.kept++;
       let snap: Snap | null = null;
       let rebuildTo = -1;
+      const before = repeat ? back1 : Infinity;
       if (n <= limit && !keep) {
         const back = (job.failJump || job.failSlow ? [5, 8, 12, 8, 13, 10, 13, 13] : [2, 3, 5, 4, 8, 5, 10, 13])[Math.min(7, (n - 1) % 8)];
         const want = this.#tick - back;
         for (let i = usable.length - 1; i >= 0; i--) {
           const saved = usable[i].jobs.get(job.id)!;
           if (saved.t < job.committed) break;
+          if (saved.t > before) continue;
           snap = usable[i];
           // Far enough back, and on the line there (going further back while still off it), and on the
           // ground before a flight that went wrong (nothing done in the air changes where it lands).
           if (usable[i].tick <= want && saved.lat < 0.6 && (job.airSince < 0 || saved.t < job.airSince - 300)) break;
         }
-        // No snapshot holds this car any more (another bot changed cars): replay its own keys instead.
-        if (!snap) rebuildTo = Math.max(job.committed, job.runStart, job.failAt - back * TICK);
-      }
+        // No snapshot holds this car any more (another bot changed cars), or none is far enough back: replay its
+        // own keys instead.
+        if (!snap) rebuildTo = Math.max(job.committed, job.runStart, Math.min(job.failAt - back * TICK, before));
+        job.lastFail = { at: job.failAt, why: job.failWhy, from: snap ? snap.jobs.get(job.id)!.t : rebuildTo, n };
+      } else job.lastFail = { at: -1, why: null, from: -1, n: 0 };
       plans.push({ job, snap, rebuildTo });
     }
     const restoring = plans.filter((p) => p.snap);
