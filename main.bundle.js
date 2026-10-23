@@ -6227,6 +6227,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                 get scene() {
                     return i.get(this, T, "f")
                 }
+                get renderer() {
+                    return i.get(this, k, "f")
+                }
             }
             b = RenderManager,
             w = new WeakMap,

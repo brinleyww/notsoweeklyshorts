@@ -19914,7 +19914,8 @@ uniform float polyfxGlowIntensity;`
       }
       this.frameT = now;
       this.lastPerfT = now;
-      if (this.perfGuard.enabled) this.perfGuard.update(this.frameMs, now);
+      // A saved video renders frames as fast as it can encode them, not at the frame rate.
+      if (this.perfGuard.enabled && !window.__nswsExporting) this.perfGuard.update(this.frameMs, now);
     }
     fps() {
       return this.frameMs > 0 ? Math.round(1e3 / this.frameMs) : 0;
