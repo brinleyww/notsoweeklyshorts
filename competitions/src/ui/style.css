@@ -214,6 +214,7 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .spec .who .name { font-size: 26px; max-width: 420px; }
 .spec .who .stats { display: flex; align-items: center; gap: 16px; font-size: 15px; color: var(--dim); }
 .spec .who .stats b { font-weight: 400; color: var(--text); }
+.spec .who .stats .lag:empty { display: none; }
 .spec .modes { pointer-events: auto; display: flex; gap: 4px; }
 .keys4 { display: grid; grid-template-columns: repeat(3, 14px); grid-template-rows: repeat(2, 14px); gap: 2px; }
 .keys4 i { background: rgba(255, 255, 255, .14); }

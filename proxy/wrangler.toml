@@ -23,6 +23,10 @@ ALLOWED_ORIGINS = ["https://brinleyww.github.io", "https://notweeklyshorts.githu
 # `window.__nswsShareBase` in index.html, the copy every shared link opens.
 SHARE_SITE = "https://notweeklyshorts.github.io/"
 
+# Cup car states over WebRTC go through this TURN server (ExpressTURN free plan); its login is the
+# secrets TURN_STATIC_USER and TURN_STATIC_PASS. PROXY.md, "Competitions".
+TURN_STATIC_URLS = ["turn:free.expressturn.com:3478?transport=udp", "turn:free.expressturn.com:3478?transport=tcp"]
+
 # Not case-sensitive. Ranks and player counts are recounted without them.
 BANNED_NICKNAMES = ["WebMaster", "PWABHRRSTAL", "Awrah", "CookedByaTAS"]
 

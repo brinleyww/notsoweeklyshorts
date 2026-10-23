@@ -9,7 +9,7 @@ import { background, site } from './game.ts';
 import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
-import { drawCars, installSmoothing } from './smooth.ts';
+import { drawCars, ghostBehind, installSmoothing, nudgeCar } from './smooth.ts';
 import { VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
@@ -342,9 +342,13 @@ export class App {
     const s = this.state,
       info = this.info;
     if (!s || !info || this.game !== g || info.disposed) return;
-    drawCars(info.connection, info.sessionId, (id) => this.native.remoteCar(g, id), performance.now(), dt * 1000, s.rules.collisions);
+    const now = performance.now();
+    const clocks = site.__nswsCarClocks;
+    const clock = { offset: this.now() - now, startOf: (id: number) => clocks?.get(id) ?? this.playerByPid(id)?.clk ?? undefined };
+    drawCars(info.connection, info.sessionId, (id) => this.native.remoteCar(g, id), now, dt * 1000, s.rules.collisions, clock);
     this.bots.sync(s);
     this.bots.frame(g, this.#botRound(s, info), this.now(), !COVERED.includes(s.phase));
+    this.#bumps();
   }
 
   // The round whose bots this page draws: only on that round's own race session.
@@ -488,7 +492,11 @@ export class App {
     const s = this.state,
       g = this.game;
     if (!s || !g || !s.rules.collisions || s.phase !== 'racing') return;
-    for (const hit of this.native.bumps(g)) this.report({ k: 'bump', n: s.round!.n, to: hit.id, i: hit.impulse }, false);
+    for (const hit of this.native.bumps(g)) {
+      this.report({ k: 'bump', n: s.round!.n, to: hit.id, i: hit.impulse }, false);
+      // The other car is pushed here at once; its own states show the push only after a round trip.
+      if (hit.impulse.length === 3 && hit.impulse.every(Number.isFinite)) nudgeCar(this.info?.connection, hit.id, hit.impulse as [number, number, number]);
+    }
   }
 
   // Each incoming WebSocket message costs Cloudflare, so a page that isn't driving sends in bigger batches.
@@ -588,6 +596,11 @@ export class App {
 
   playerByPid(pid: number | null) {
     return this.state ? byPid(this.state, pid) : undefined;
+  }
+
+  // How far behind where that racer really is now their car is drawn here (ms), or null.
+  ghostBehind(pid: number) {
+    return ghostBehind(this.info?.connection, pid, performance.now());
   }
 
   act(m: Msg) {

@@ -41,28 +41,50 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
     organizer with their replay. Single-run rounds: restart (and respawning with no checkpoint) puts the car
     back at the start with the clock still running; restart pressed twice within 2 s retires. Time attack: restarts are free.
   - `spectate.ts`: watching. The camera rides another racer's car using that car's own chase or
-    cockpit camera, so nothing is streamed. Director (auto), Follow (◀ ▶) or Free camera.
-  - `smooth.ts`: draws every other car a little in the past, always between two real states this page
-    already has, so nothing is guessed and no car is ever drawn past the newest state its page sent.
-    Each car has its own delay: the 98th percentile over the last 10 s of how long after a newest state
-    the next states landed, plus about a frame. Its playback runs at most 5% fast or slow to follow that
-    delay; when states are late it eases to a stop at the newest one and goes on when they land (after a
-    stall of over 0.5 s it jumps on instead), and the delay goes up at once and back down at 100 ms a
-    second. Positions follow a curve through the real states (cubic Hermite), rotations slerp, and the
-    rest (wheels, suspension, steering, speed) is the game's own interpolation (`lerpCarState`), with
-    checkpoints, the finish and crash sounds when the drawn car gets there. A respawn, a lost stretch of
-    states, a reset press or the start is never drawn as motion: the car holds, then shows the new place;
-    a restart (the game's car reset) ends the old run at once. Timing is this page's own
-    `performance.now()`, so clock syncs never move a drawn car (the start stamps `transport.js` adds
-    aren't used for drawing). It runs just before the game moves the other cars (`cupCarsHook`), so a
+    cockpit camera, so nothing is streamed. Director (auto), Follow (◀ ▶) or Free camera. The
+    spectator bar shows how far behind where that racer really is their car is drawn ("95 ms
+    behind", `ghostBehind` in smooth.ts, smoothed and rounded to 5 ms; nothing for bots, before the
+    start or past the finish).
+  - `smooth.ts`: draws every other car where it is now (its own clock: the cup clock less the car's
+    start, stamped on its states), or as close to now as its states allow. A car may be carried on at
+    most 120 ms past its newest state, by that state's velocity, acceleration and turn; past that it
+    eases to a stop and waits. Each car has its own delay behind now: the 98th percentile over the last
+    10 s of how old its newest state was when the next states landed, plus about a frame, less the
+    120 ms; with WebRTC (`rtc.js`) that is about 0. Playback runs at most 5% fast or slow to follow the
+    delay, and the delay goes up at once when states run out and back down at 100 ms a second. When new
+    states move where the car should have been, the difference (position and velocity) fades out
+    through a critically damped spring over ~100 ms, so a correction never changes a car's speed at
+    once; a difference over 5 m is a jump. Positions follow a curve through the real states (cubic
+    Hermite), rotations slerp, and the rest (wheels, suspension, steering, speed) is the game's own
+    interpolation (`lerpCarState`), with checkpoints, the finish and crash sounds when the drawn car
+    gets there. A respawn, a lost stretch of states, a reset press or the start is never drawn as
+    motion, nothing is carried past a finish or a respawn, and a restart (the game's car reset) ends
+    the old run at once. It runs just before the game moves the other cars (`cupCarsHook`), so a
     followed car and its camera use the same state. The game's own remote playback gets no states.
-    Node harness at the 200 ms pace (batches of 4-5 states, 1% network stalls): about 0.33 s behind the
-    real car on a near connection, 0.46 s on a typical one and 0.9 s on bad Wi-Fi (13, 18 and 34 m at
-    150 km/h), drawn within 2 cm (p95) of the real path; not yet measured in browsers. Other cars are
-    hidden while results, votes or loading cover the race. Live timing still reads states as they
-    arrive. Bumper cars keep the game's own playback: their pages send every 100 ms while driving and
-    it draws other cars 0.25 s behind its newest state (about 0.3-0.37 s behind the real car), which
-    costs about twice the messages while racing, in bumper cups only.
+    Bumper cups draw the same way; there each drawn car also gets `__cupKeys` (its drawn pose and
+    where it heads 40/80/120 ms on, for the sim worker's collisions), and a hit felt on this page
+    pushes the other car at once (`nudgeCar`, until its own states show the push or 400 ms).
+    The acceleration is only carried on when the reading a step earlier agrees, so a hit or a landing
+    isn't extrapolated into an overshoot.
+    Node harness on 16 real CT runs (WR and #3 of 8 CTs, every ms of the game's physics), 60 fps:
+    over the mux alone (200 ms pace, 70 ms latency) 0.28 s behind the real car (was 0.38 s); with
+    WebRTC (45 ms latency, 8 ms jitter, 1% loss, a pose every 25 ms) 1 ms behind and 16 cm from the
+    real car (p50; 0.9 m p95, mostly hard landings and wall hits), with step-to-step hitches of 15 cm
+    p99 (11 cm before, drawing only real states). At 90 ms latency it holds about 60 ms behind.
+    Browsers (`cup-test-tools/cdp/sc_rtc_rig.mjs` + `sc_rtc_ghostlat.mjs`, three racers, the local TURN
+    at 45 ms + 1% loss, the mux at 70 ms): 0-24 ms behind and 0.14-0.77 m off (p50), no freezes or
+    snaps; the same rig on the code before this was 347-421 ms and 8-14 m with freezes. With WebRTC
+    unreachable: 240-314 ms. A bumper cup: 0-12 ms, 0.2-0.4 m.
+  - `rtc.js`: car states also go straight between pages over WebRTC data channels (unordered, never
+    resent), one per pair of pages, through TURN relays only (`iceTransportPolicy: "relay"`), so no page
+    learns another's address: the room strips every non-relay candidate and every address from the
+    connection lines, and gives out the TURN credentials (PROXY.md, "Competitions"). A page sends its
+    car's own updates (every 50 ms) the moment the game makes them, and a 48-byte pose (position,
+    rotation, speed, steering, keys) 25 ms after each (`main.bundle.js` VisualCar,
+    `window.__nswsCarSample`); the receiver rebuilds a full state from that car's last one
+    (`withPose`). The organizer's own car goes the same way (`window.__nswsRtcHostCar`). The mux still
+    carries every state, and whichever copy lands first reaches the game (the second is dropped), so
+    a page whose WebRTC fails only loses time. Without TURN on the Worker nothing changes.
   - Car states go straight between pages: the room passes a racer's stamped states (`kind 2` records)
     to every other page as well as the organizer (PROXY.md, "Competitions"), so they skip the organizer's
     page and its batching. The room stamps each copy with the link it came in on, and pages trust only
@@ -352,10 +374,13 @@ Measured with two pages (frames a second, before -> after): driving 4.0 -> 3.9 (
 the organizer in a countdown 3.6 -> 1.4, results 1.3-1.5 -> 0.3-0.4, votes and lobby 0.9-1.05 ->
 0.1-0.27, a hidden page between rounds ~1 -> 0, a player who left 0. A 16-racer cup works out at
 about 135 requests a minute before and 114 after while racing; driving is the floor at this pace.
-Nothing is guessed (`smooth.ts`), so the driving pace shows as delay: a car is drawn about one batch
-interval plus the network's latency and jitter behind the real one (0.33-0.46 s at this pace on near
-and typical connections, Node harness). Only a faster driving pace (more messages) or a lower latency
-path draws them closer.
+Over the mux alone the driving pace still shows as delay (about 0.28 s behind the real car on a
+typical connection, Node harness). WebRTC car states (`rtc.js`) cost no requests: the room only sees
+the handshake (two messages a pair of pages, ~13 requests for a 16-page cup) and one credentials
+call per page. They are paid in TURN traffic instead: about 6 KB/s per pair of pages each way while
+both drive (20 full states and 20 poses a second), so roughly 1.4 MB/s for 16 racers (~5 GB an
+hour) and 0.3 MB/s for 8. Cloudflare bills TURN at $0.05/GB after a free allowance (1,000 GB a
+month, shared with its SFU, when this was written).
 
 A player who closes the tab by accident is offered the cup again from the menu
 (`mod/nsws_cup_rejoin.js`, the game's own confirm box): while they are in a cup (not organizing it),

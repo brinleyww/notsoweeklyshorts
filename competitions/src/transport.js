@@ -17,6 +17,12 @@
 // socket re-links its pairs (`rejoin`), the proxy gives each end the other's count with the new
 // link (`up`), and each end resends from there. A restarted proxy knows nothing, so both ends
 // re-link from their own pages.
+//
+// Car states also go straight between pages over WebRTC (rtc.js) the moment they are made, with a
+// pose in between (main.bundle.js); whichever copy of a state comes first reaches the game, the other
+// is dropped (Mux.#firstSeen). The mux copies still go, so nothing depends on WebRTC working.
+
+import { Mesh, carKey, poseKey, withPose } from "./rtc.js";
 
 const FLUSH_MS = 200;
 // Bumper cars send every 100 ms while driving (app.ts).
@@ -62,6 +68,8 @@ const slow = () => pace() >= 1000;
 // again by the game to pages whose sockets take them (pc._peerFan; app.ts, __nswsCupDirect).
 const FAN_KIND = 2;
 const FAN_HEADER = 12;
+// Copies of a car's states remembered per sender, to drop the second of each.
+const SEEN_KEYS = 256;
 
 function stamped(bytes) {
     const car = window.__nswsMuxCar;
@@ -189,7 +197,14 @@ class Mux {
         this.idle = false;
         this.resumeUntil = 0;
         this.retries = 0;
+        // Per sender link: its last full car update, and the states already passed to the game.
+        this.lastFull = new Map();
+        this.seen = new Map();
+        // This page's own car: session and resets of its last full update, its frames, its player id.
+        this.own = null;
+        this.mesh = new Mesh(this);
         this.connect(false);
+        this.mesh.askIce();
     }
 
     connect(resume) {
@@ -309,6 +324,7 @@ class Mux {
         const sort = sortRecord(pc, channel, kind, bytes);
         if (sort === "drop") return;
         const car = channel === UNRELIABLE && pc._lastCar === bytes;
+        if (car && sort === "send" && pc.side === "client" && bytes[0] === CLIENT_CAR) this.ownCar(bytes, 0);
         if (car) {
             pc._held = null;
             const fan = pc._fan && pc.side === "client" ? stamped(bytes) : null;
@@ -422,6 +438,8 @@ class Mux {
                 return;
             }
             if (m?.t === "resumed") return this.resumed(m);
+            if (m?.t === "rtcIce") return this.mesh.setIce(m.iceServers);
+            if (m?.t === "rtc") return void this.mesh.signalled(m.from, m.d);
             const pc = this.pcs.get(m?.pair);
             if (!pc) return;
             if (m.t === "up") {
@@ -454,7 +472,7 @@ class Mux {
             const end = at + 11 + length;
             if (end > frame.length) break;
             const pc = this.links.get(link);
-            if (pc && kind === FAN_KIND) batch = this.fanned(pc, channel, frame.subarray(at + 11, end), batch);
+            if (pc && kind === FAN_KIND) batch = this.fanned(pc, channel, frame.subarray(at + 11, end), batch, link);
             else if (pc) {
                 batch = passCars(batch);
                 if (pc.side === "host" && channel === UNRELIABLE && kind === 1 && frame[at + 11] === CLIENT_CAR) pc._carDirect = false;
@@ -468,12 +486,16 @@ class Mux {
 
     // One racer's states in a row (same link, session and start) reach the game as one message;
     // the start changes when the car resets, and each state must still see its own in __nswsCarClocks.
-    fanned(pc, channel, bytes, batch) {
+    fanned(pc, channel, bytes, batch, link) {
         if (bytes.length <= FAN_HEADER + 9) return batch;
         const view = new DataView(bytes.buffer, bytes.byteOffset, FAN_HEADER);
-        const id = window.__nswsFanIds?.get(view.getUint32(0, true));
+        const from = pc.side === "host" ? link : view.getUint32(0, true);
+        const id = window.__nswsFanIds?.get(from);
         const start = view.getFloat64(4, true);
         const game = bytes.subarray(FAN_HEADER);
+        const full = game[0] === CLIENT_CAR && game.length >= 12;
+        if (full) this.#noteFull(from, game);
+        const fresh = !full || this.#firstSeen(from, carKey(game));
         const joins = !!batch && pc.side !== "host" && batch.pc === pc && batch.channel === channel && batch.id === id &&
             Object.is(batch.start, start) && sameBytes(batch.states[0].subarray(1, 5), game.subarray(1, 5));
         if (!joins) batch = passCars(batch);
@@ -481,17 +503,88 @@ class Mux {
         if (pc.side === "host") {
             pc._carDirect = true;
             pc._recv++;
-            pc._deliver(channel, 1, game);
-        } else if (id != null && game[0] === CLIENT_CAR) {
+            if (fresh) pc._deliver(channel, 1, game);
+        } else if (id != null && game[0] === CLIENT_CAR && fresh) {
             if (joins) batch.states.push(game);
             else batch = { pc, channel, id, start, states: [game] };
         }
         return batch;
     }
 
+    // ---- Car states over WebRTC (rtc.js) ----
+
+    // Who this page is to the others: 0 on the organizer's page, else its own link to the organizer.
+    rtcSelf() {
+        let self = null;
+        for (const pc of this.pcs.values()) {
+            if (pc.side === "host") return 0;
+            if (pc.link && pc._fan) self = pc.link;
+        }
+        return self;
+    }
+
+    #firstSeen(from, key) {
+        let seen = this.seen.get(from);
+        if (!seen) this.seen.set(from, seen = new Set());
+        if (seen.has(key)) return false;
+        seen.add(key);
+        if (seen.size > SEEN_KEYS) seen.delete(seen.values().next().value);
+        return true;
+    }
+
+    #noteFull(from, game) {
+        const last = this.lastFull.get(from);
+        const frames = game[9] | game[10] << 8 | game[11] << 16;
+        if (last && sameBytes(last.head, game.subarray(1, 9)) && last.frames >= frames) return;
+        this.lastFull.set(from, { game: game.slice(), head: game.slice(1, 9), frames });
+    }
+
+    // This page's car update (the game's bytes), or the organizer's own (main.bundle.js's Host).
+    ownCar(game, pid) {
+        if (game.length < 12 || window.__nswsMuxCarsUnseen) return;
+        this.own = { head: game.slice(1, 9), frames: game[9] | game[10] << 8 | game[11] << 16, pid };
+        this.mesh.sendFull(window.__nswsMuxCar?.start, pid, game);
+    }
+
+    ownPose(state) {
+        const own = this.own;
+        if (!own || state.frames <= own.frames || !this.mesh.openCount || window.__nswsMuxCarsUnseen) return;
+        this.mesh.sendPose(window.__nswsMuxCar?.start, own.pid, own.head, state);
+    }
+
+    // A car state from page `from` over WebRTC. A pose becomes a full update from that car's last one.
+    rtcCar(from, pose, start, pid, body) {
+        const id = from === 0 ? pid : window.__nswsFanIds?.get(from);
+        if (id == null || body.length < 12) return;
+        let game = body;
+        if (pose) {
+            const full = this.lastFull.get(from);
+            if (!full || !sameBytes(full.head, body.subarray(0, 8))) return;
+            if ((body[8] | body[9] << 8 | body[10] << 16) <= full.frames) return;
+            if (!this.#firstSeen(from, poseKey(body))) return;
+            game = withPose(full.game, body);
+            if (!game) return;
+        } else {
+            if (game[0] !== CLIENT_CAR) return;
+            this.#noteFull(from, game);
+            if (!this.#firstSeen(from, carKey(game))) return;
+        }
+        if (Number.isFinite(start)) (window.__nswsCarClocks ??= new Map()).set(id, start);
+        if (this.rtcSelf() === 0) {
+            this.links.get(from)?._deliver(UNRELIABLE, 1, game);
+            return;
+        }
+        for (const pc of this.pcs.values()) {
+            if (pc.side !== "client" || !pc.link) continue;
+            passCars({ pc, channel: UNRELIABLE, id, start, states: [game] });
+            return;
+        }
+    }
+
     closed() {
         if (this.dead) return;
         this.dead = true;
+        this.mesh.reset();
         if (window.__nswsMuxOutage?.until === 0) window.__nswsMuxOutage.until = Date.now();
         clearTimeout(this.timer);
         clearTimeout(this.relinkTimer);
@@ -753,5 +846,20 @@ export function installTransport() {
                 else if (mux.heldAt && !window.__nswsMuxQuiet && now - mux.heldAt >= HOLD_MS) mux.flush(true);
             }
         });
+        // Every page of a cup: the organizer (0) and the links the cup lists for its players.
+        window.__nswsTicker.every(500, () => {
+            for (const mux of muxes.values()) mux.mesh.tick(new Set([0, ...(window.__nswsFanIds?.keys() ?? [])]));
+        });
     }
+    // main.bundle.js: the organizer's own car update, and a pose of this page's car between updates.
+    window.__nswsRtcHostCar = (game, pid) => {
+        for (const mux of muxes.values()) if (mux.rtcSelf() === 0) mux.ownCar(game, pid);
+    };
+    window.__nswsCarSample = (state) => {
+        for (const mux of muxes.values()) mux.ownPose(state);
+    };
+    window.__nswsRtcStats = () => [...muxes.values()].map((m) => ({
+        code: m.code, self: m.rtcSelf(), ice: m.mesh.ice === undefined ? "asking" : !!m.mesh.ice, sent: m.mesh.sent, got: m.mesh.got,
+        peers: [...m.mesh.peers.values()].map((p) => ({ link: p.link, state: p.pc.connectionState, open: p.open })),
+    }));
 }

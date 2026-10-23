@@ -35,6 +35,18 @@ const FRAMES_PER_SEC = 60;
 // another racer's; pages learn whose link is whose from the organizer (transport.js).
 const FAN_KIND = 2;
 const FAN_HEADER = 12;
+// Pages also pass car states straight to each other over WebRTC data channels (competitions/src/rtc.js),
+// relayed by TURN only, so no page ever learns another's address. The room carries the handshake:
+// it says who sent each offer or answer (the sender's link to the organizer, 0 for the organizer),
+// strips every candidate that isn't a relay, and hands out the TURN credentials: from Cloudflare
+// (TURN_KEY_ID + TURN_KEY_API_TOKEN, secrets), a fixed login (TURN_STATIC_URLS var + TURN_STATIC_USER
+// and TURN_STATIC_PASS secrets) or TURN_DEV_ICE (a JSON list, local testing). With none, pages stay
+// on the relay above.
+const MAX_RTC_SDP = 12 * 1024;
+const RTC_PER_10S = 80;
+const TURN_TTL_S = 86400;
+// A cup can run for hours; credentials are renewed well before they run out.
+const TURN_REUSE_MS = 6 * 3600_000;
 // How often a live public room refreshes its row in the directory.
 const LISTING_MS = 60_000;
 
@@ -66,6 +78,24 @@ function cleanPool(value) {
         main: list(o.main, (e) => ["Summer", "Winter", "Desert"].includes(e)),
         community: list(o.community, (v) => typeof v === "string" && /^\d{1,2}\.\d{1,2}\.\d{1,2}$/.test(v)),
     };
+}
+
+// Only relay candidates, and no address in the connection lines.
+function relayOnly(sdp) {
+    return sdp.split(/\r?\n/).filter((line) => !/^a=candidate:/.test(line) || / typ relay( |$)/.test(line))
+        .map((line) => line.replace(/^c=IN IP(4|6) \S+/, (_, v) => v === "6" ? "c=IN IP6 ::" : "c=IN IP4 0.0.0.0"))
+        .join("\r\n");
+}
+
+// Port 53 is blocked in browsers and only makes candidate gathering wait.
+function browserIce(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    for (const s of list) {
+        const urls = (Array.isArray(s?.urls) ? s.urls : [s?.urls]).filter((u) => typeof u === "string" && /^turns?:/.test(u) && !/:53(\?|$)/.test(u));
+        if (urls.length) out.push({ urls, username: s.username, credential: s.credential });
+    }
+    return out.length ? out : null;
 }
 
 function text(ws, data) {
@@ -139,6 +169,8 @@ export class LobbyRoom extends DurableObject {
         this.parked = new Map();
         this.expired = new Set();
         this.fans = new WeakMap();
+        this.rtcRate = new Map();
+        this.ice = null;
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -385,6 +417,8 @@ export class LobbyRoom extends DurableObject {
     }
 
     muxControl(ws, a, m) {
+        if (m.t === "rtc") return this.rtcSignal(ws, a, m);
+        if (m.t === "rtcIce") return void this.rtcIce(ws, a);
         if (m.t === "rejoin") {
             // A page back on a new socket lists the pairs it still has; the rest are gone.
             const listed = new Set();
@@ -557,6 +591,78 @@ export class LobbyRoom extends DurableObject {
         if (Date.now() - this.listedAt > LISTING_MS) this.listing(true);
     }
 
+    // ---- WebRTC handshake between pages (rtc.js). ----
+
+    // Who a page is to the others: 0 for the organizer's page, else its own link to the organizer.
+    rtcSelf(a) {
+        let self = null;
+        for (const p of Object.values(a.pairs || {})) {
+            if (p.side === "host") return 0;
+            if (p.link && (self == null || p.link > self)) self = p.link;
+        }
+        return self;
+    }
+
+    rtcPeer(to) {
+        if (to === 0) return this.sockets("mux").find((ws) => Object.values(ws.deserializeAttachment().pairs || {}).some((p) => p.side === "host")) ?? null;
+        if (!this.links) this.rebuildLinks();
+        const client = this.links.get(to)?.[1];
+        return typeof client?.deserializeAttachment === "function" ? client : null;
+    }
+
+    allowRtc(ws) {
+        const now = Date.now();
+        let r = this.rtcRate.get(ws);
+        if (!r || now - r.at >= 10_000) this.rtcRate.set(ws, r = { at: now, n: 0 });
+        return ++r.n <= RTC_PER_10S;
+    }
+
+    rtcSignal(ws, a, m) {
+        if (a.fan !== true || !Number.isSafeInteger(m.to) || m.to < 0 || !this.allowRtc(ws)) return;
+        const d = m.d;
+        if (!d || typeof d !== "object" || !["offer", "answer"].includes(d.type) || typeof d.sdp !== "string" || d.sdp.length > MAX_RTC_SDP) return;
+        if (typeof d.n !== "string" || !/^[0-9a-f]{8,32}$/.test(d.n)) return;
+        const from = this.rtcSelf(a);
+        if (from == null || from === m.to) return;
+        const to = this.rtcPeer(m.to);
+        if (!to || to === ws || !this.fanned(to)) return;
+        text(to, { t: "rtc", from, d: { type: d.type, sdp: relayOnly(d.sdp), n: d.n } });
+    }
+
+    async rtcIce(ws, a) {
+        if (a.fan !== true || !this.allowRtc(ws)) return;
+        let iceServers = null;
+        try {
+            iceServers = await this.turnServers();
+        } catch (error) {
+            console.error("TURN credentials", error);
+        }
+        text(ws, { t: "rtcIce", iceServers });
+    }
+
+    async turnServers() {
+        const env = this.env;
+        if (this.ice && Date.now() - this.ice.at < TURN_REUSE_MS) return this.ice.list;
+        let list = null;
+        if (env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) {
+            const res = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
+                method: "POST",
+                headers: { Authorization: "Bearer " + env.TURN_KEY_API_TOKEN, "Content-Type": "application/json" },
+                body: JSON.stringify({ ttl: TURN_TTL_S }),
+            });
+            if (!res.ok) throw new Error("TURN " + res.status);
+            list = browserIce((await res.json()).iceServers);
+        } else if (env.TURN_STATIC_URLS && env.TURN_STATIC_USER && env.TURN_STATIC_PASS) {
+            // A TURN service with one fixed login (ExpressTURN's free plan): every page in a cup gets it.
+            const urls = Array.isArray(env.TURN_STATIC_URLS) ? env.TURN_STATIC_URLS : String(env.TURN_STATIC_URLS).split(",").map((u) => u.trim());
+            list = browserIce([{ urls, username: env.TURN_STATIC_USER, credential: env.TURN_STATIC_PASS }]);
+        } else if (env.TURN_DEV_ICE) {
+            list = browserIce(typeof env.TURN_DEV_ICE === "string" ? JSON.parse(env.TURN_DEV_ICE) : env.TURN_DEV_ICE);
+        }
+        this.ice = { at: Date.now(), list };
+        return list;
+    }
+
     fanned(ws) {
         if (typeof ws?.deserializeAttachment !== "function") return false;
         let on = this.fans.get(ws);
@@ -619,6 +725,7 @@ export class LobbyRoom extends DurableObject {
             ws.close();
         } catch {}
         this.rate.delete(ws);
+        this.rtcRate.delete(ws);
         if (a.role === "mux") {
             if (dropped && a.token && Object.keys(a.pairs || {}).length) this.park(ws, a);
             else for (const id of Object.keys(a.pairs || {})) this.dropPair(ws, a, id);

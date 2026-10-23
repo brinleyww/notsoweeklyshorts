@@ -639,7 +639,9 @@ export class Hud {
 
   // ---- Spectating ----
 
-  #specRefs: { name: HTMLElement; speed: HTMLElement; cp: HTMLElement; time: HTMLElement; keys: HTMLElement[] } | null = null;
+  #specRefs: { name: HTMLElement; speed: HTMLElement; cp: HTMLElement; time: HTMLElement; lag: HTMLElement; keys: HTMLElement[] } | null = null;
+  // How far behind the real car the watched one is drawn, smoothed so the number is readable.
+  #lag: { pid: number; ms: number; shownAt: number } | null = null;
 
   #renderSpec(s: CupState) {
     const app = this.app,
@@ -665,8 +667,9 @@ export class Hud {
     const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? [`${flag(target.cc)} ${target.name}`, botTag(target, s)] : '—');
     const speed = h('b', { class: 'mono' }),
       cp = h('b', { class: 'mono' }),
-      time = h('b', { class: 'mono' });
-    this.#specRefs = { name, speed, cp, time, keys };
+      time = h('b', { class: 'mono' }),
+      lag = h('span', { class: 'lag', title: 'How far behind where this racer really is their car is drawn' });
+    this.#specRefs = { name, speed, cp, time, lag, keys };
     const mode = (m: 'director' | 'follow' | 'free', label: string, ic: string) =>
       btn([icon(ic), label], () => w.setMode(m), 'small ' + (w.mode === m ? 'on' : 'ghost'));
     const kb = app.keyNames();
@@ -680,7 +683,7 @@ export class Hud {
           { class: 'main' },
           h('div', { class: 'label' }, w.mode === 'director' ? 'Director cam' : w.mode === 'free' ? 'Spectating' : 'Watching'),
           name,
-          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, document.body.classList.contains('nsws-touch') ? 'Drag to look, use the pad to fly' : 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), h('div', { class: 'keys4' }, keys)),
+          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, document.body.classList.contains('nsws-touch') ? 'Drag to look, use the pad to fly' : 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), lag, h('div', { class: 'keys4' }, keys)),
         ),
         w.mode === 'free' ? null : h('button', { class: 'arrow', title: `Next racer (${kb.next})`, onclick: () => w.cycle(1) }, icon('right')),
       ),
@@ -709,6 +712,23 @@ export class Hud {
     const c = st?.controls;
     const on = [c?.up, c?.left, c?.down, c?.right];
     refs.keys.forEach((k, i) => toggle(k, 'on', !!on[i]));
+    this.#tickLag(refs.lag, w.target, st?.hasStarted === true && st.finishFrames == null);
+  }
+
+  // Bots and cars standing at the start or past the finish show nothing.
+  #tickLag(el: HTMLElement, pid: number, driving: boolean) {
+    const ms = driving ? this.app.ghostBehind(pid) : null;
+    const now = performance.now();
+    if (ms == null) {
+      this.#lag = null;
+      return setText(el, '');
+    }
+    const lag = this.#lag;
+    if (!lag || lag.pid !== pid) this.#lag = { pid, ms, shownAt: -Infinity };
+    else lag.ms += (ms - lag.ms) * 0.1;
+    if (now - this.#lag!.shownAt < 250) return;
+    this.#lag!.shownAt = now;
+    setText(el, `${Math.round(this.#lag!.ms / 5) * 5} ms behind`);
   }
 
   // ---- Podium ----

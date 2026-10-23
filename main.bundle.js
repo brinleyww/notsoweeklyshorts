@@ -10414,7 +10414,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         for (const e of l.get(this, pe, "f"))
                             e(this)
                     }
-                    (t || l.get(this, ie, "f").frames % 50 == 0) && l.get(this, $, "f")?.call(this, l.get(this, ie, "f"))
+                    (t || l.get(this, ie, "f").frames % 50 == 0) ? l.get(this, $, "f")?.call(this, l.get(this, ie, "f")) : l.get(this, ie, "f").frames % 25 == 0 && l.get(this, $, "f") && window.__nswsCarSample?.(l.get(this, ie, "f"))
                 }
                 update(e) {
                     if (this.__audioCulled || l.get(this, G, "m", Xe).call(this),
@@ -43489,7 +43489,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             sendCarUpdate(e, t, n) {
                 e == C.get(this, hn, "f") && (t > C.get(this, fn, "f").resetCounter ? (C.get(this, fn, "f").unsentCarStates.length = 0,
-                C.get(this, fn, "f").resetCounter = t) : t == C.get(this, fn, "f").resetCounter && C.get(this, fn, "f").unsentCarStates.push(n))
+                C.get(this, fn, "f").resetCounter = t) : t == C.get(this, fn, "f").resetCounter && C.get(this, fn, "f").unsentCarStates.push(n));
+                // Not So Weekly Shorts: the organizer's own car also goes straight to every page (competitions rtc.js).
+                if (window.__nswsRtcHostCar && e == C.get(this, hn, "f") && t == C.get(this, fn, "f").resetCounter) {
+                    const s = Kt._c(n)
+                      , b = new Uint8Array(9 + s.length)
+                      , v = new DataView(b.buffer);
+                    b[0] = 1,
+                    v.setUint32(1, e, !0),
+                    v.setUint32(5, t, !0),
+                    b.set(s, 9),
+                    window.__nswsRtcHostCar(b, C.get(this, fn, "f").id)
+                }
             }
             sendRecord(e, t) {
                 if (e == C.get(this, hn, "f")) {

@@ -607,6 +607,28 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   these copies among their link's records (`transport.js`). It never reads the game data and stores nothing
   but the reclaim record above; socket attachments hold its state. Bindings `LOBBY`/`LOBBY_DIR`, migration `v5` (the class names
   are kept from the earlier lobbies, so no migration was needed).
+- **WebRTC car states** (`competitions/src/rtc.js`): pages also send car states straight to each
+  other over WebRTC data channels, through TURN relays only, so other cars can be drawn where they are
+  now. The room carries only the handshake on the mux socket: `{t:"rtcIce"}` gets
+  `{t:"rtcIce", iceServers}` (null when the Worker has no TURN), and `{t:"rtc", to, d:{type, sdp, n}}`
+  goes to page `to` as `{t:"rtc", from, d}`, where `from`/`to` are a page's own link to the organizer
+  (0 = the organizer's page) and `from` is filled in by the room, so a page can't pose as another.
+  Every `a=candidate` line that isn't `typ relay` is removed and every `c=` line's address is zeroed;
+  pages gather relay candidates only anyway (`iceTransportPolicy: "relay"`), so no player's address
+  reaches another player, only Cloudflare's TURN. At most 80 handshake messages per socket per 10 s.
+  Credentials: with the secrets `TURN_KEY_ID` and `TURN_KEY_API_TOKEN` (a TURN key from Cloudflare
+  Realtime: dashboard -> Realtime -> TURN Server -> Create), the room asks
+  `rtc.live.cloudflare.com/v1/turn/keys/<id>/credentials/generate-ice-servers` for 24 h credentials,
+  reuses them for 6 h, and drops port-53 and STUN URLs. Without those, a fixed login: `TURN_STATIC_URLS`
+  in wrangler.toml (now ExpressTURN's free plan, `free.expressturn.com:3478`, 1,000 GB a month, one
+  server in Amsterdam: ~0 ms ghosts in Europe, ~110 ms for US players, Node harness) with the secrets
+  `TURN_STATIC_USER` and `TURN_STATIC_PASS`. Every page in a cup gets that login, so a leaked one is
+  fixed by "Refresh Username, Password" in the ExpressTURN dashboard and setting both secrets again.
+  `TURN_DEV_ICE` (a JSON iceServers list) is for
+  local testing (`cup-test-tools/rtc/turn.mjs`, `cdp/sc_rtc_rig.mjs`). Neither set: pages stay on the
+  mux exactly as before. The mux still carries every state, so a page whose WebRTC fails only loses
+  time. TURN traffic is billed by Cloudflare per GB, not per request (`competitions/README.md`, "Cost
+  on Cloudflare").
 - **Cost on the free plan:** incoming WebSocket messages bill 20 to a request. A page bundles everything
   it sends into one frame: every 200 ms while its car is moving (the organizer: while anyone's is) and
   every second otherwise; clicks, finishes and phase changes go at once. Pages drop what carries
