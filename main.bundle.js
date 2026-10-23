@@ -41413,7 +41413,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (null != e && null != this.context && null != this.destinationMaster) {
                         const t = this.context.createBufferSource();
                         t.buffer = e,
-                        t.loop = !0;
+                        t.loop = !0,
+                        // audio/music ends on the bars just before 48.94 s, so the intro plays once
+                        t.loopStart = 48.94;
                         const n = this.context.createGain();
                         n.gain.value = 0,
                         t.connect(n),
@@ -57043,12 +57045,6 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
             }
             updateCommitMessage();
-
-            const n = document.createElement("a");
-            n.href = "https://tobyfox.bandcamp.com/track/my-castle-town",
-            n.target = "_blank",
-            n.textContent = '"My Castle Town" (DELTARUNE Ch. 2 OST) by Toby Fox',
-            C.get(this, Mc, "f").appendChild(n)
         }
         ,
         qc = function() {
