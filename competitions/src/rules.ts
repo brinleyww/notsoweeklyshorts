@@ -41,6 +41,9 @@ export interface Rules {
   draftSeconds: number;
   // Racers can vote to skip the track being raced; more than half skips it.
   skipVotes: boolean;
+  // Anyone in the cup can add a track by its import code; the uploads join the maps.
+  customTracks: boolean;
+  customOnly: boolean;
   collisions: boolean;
   lateJoin: boolean;
   freecam: boolean;
@@ -112,6 +115,8 @@ const base: Rules = {
   voteSeconds: 15,
   draftSeconds: 30,
   skipVotes: true,
+  customTracks: false,
+  customOnly: false,
   collisions: false,
   lateJoin: true,
   freecam: true,
@@ -226,6 +231,8 @@ export function cleanRules(value: unknown): Rules {
     voteSeconds: int(o.voteSeconds, 5, 60, base.voteSeconds),
     draftSeconds: int(o.draftSeconds, 10, 120, base.draftSeconds),
     skipVotes: bool(o.skipVotes, base.skipVotes),
+    customTracks: bool(o.customTracks, base.customTracks),
+    customOnly: bool(o.customOnly, base.customOnly),
     collisions: bool(o.collisions, base.collisions),
     lateJoin: bool(o.lateJoin, base.lateJoin),
     freecam: bool(o.freecam, base.freecam),
@@ -236,6 +243,7 @@ export function cleanRules(value: unknown): Rules {
   if (r.collisions) r.uploads = false;
   if (r.mode === 'knockout') r.lateJoin = false;
   if (r.mode !== 'points') r.finalist = false;
+  if (!r.customTracks) r.customOnly = false;
   return r;
 }
 

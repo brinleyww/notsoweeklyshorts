@@ -10,7 +10,7 @@ import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
 import { drawCars, ghostBehind, installSmoothing, nudgeCar } from './smooth.ts';
-import { VERSION, type Msg } from './protocol.ts';
+import { UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
 import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult } from './state.ts';
@@ -333,7 +333,7 @@ export class App {
             .filter((id): id is number => id != null)
         : null,
     );
-    this.native.leaderboardUploads(g, s.rules.uploads && !s.rules.collisions);
+    this.native.leaderboardUploads(g, s.rules.uploads && !s.rules.collisions && s.round?.track.cat !== 'custom');
   }
 
   // Just before the game moves and draws the other cars, so the spectator camera and the car it
@@ -606,6 +606,26 @@ export class App {
   act(m: Msg) {
     if (this.org) return this.report(m);
     if (!this.net.send(0, m, true)) this.notify('Not connected to the organizer right now', 'bad');
+  }
+
+  // Sends a track's import code to the organizer; returns why it can't go, or null.
+  uploadTrack(raw: string): string | null {
+    const code = raw.trim();
+    if (!code) return 'Paste a track code first.';
+    let track: ReturnType<Native['parse']> = null;
+    try {
+      track = this.native.parse(code);
+    } catch {}
+    if (!track?.trackData) return "That isn't a PolyTrack track code.";
+    if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
+    if (this.org) return this.org.addTrack(this.org.me, code);
+    const n = Math.ceil(code.length / UPLOAD_CHUNK);
+    if (n > UPLOAD_PARTS) return 'That track is too big to upload here.';
+    const id = Math.random().toString(36).slice(2, 10);
+    for (let i = 0; i < n; i++) {
+      if (!this.net.send(0, { k: 'trk', id, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK) }, i === n - 1)) return 'Not connected to the organizer right now.';
+    }
+    return null;
   }
 
 

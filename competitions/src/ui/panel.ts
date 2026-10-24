@@ -8,6 +8,7 @@ import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, t
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { site } from '../game.ts';
+import { CUSTOM_EACH } from '../protocol.ts';
 
 type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
 
@@ -529,22 +530,30 @@ export class Panel {
   #tracksTab(s: CupState) {
     const app = this.app;
     const org = app.org;
-    const pool = org ? org.pool() : cupTracks(app);
+    const uploads = new Map(s.rules.customTracks ? (s.custom ?? []).map((t) => [t.id, t]) : []);
+    let pool: TrackRef[] = org ? org.pool() : s.rules.customOnly ? [] : cupTracks(app);
+    if (!org) {
+      const have = new Set(pool.map((t) => t.id));
+      pool = [...pool, ...[...uploads.values()].filter((t) => !have.has(t.id))];
+    }
+    // Uploads first, newest on top.
+    pool = [...[...uploads.keys()].reverse().map((id) => pool.find((t) => t.id === id)).filter((t): t is TrackRef => !!t), ...pool.filter((t) => !uploads.has(t.id))];
     const q = this.#search.trim().toLowerCase();
     const list = pool.filter((t) => !q || t.name.toLowerCase().includes(q) || (t.author ?? '').toLowerCase().includes(q)).slice(0, 120);
-    const input = h('input', { class: 'text', placeholder: `Search ${pool.length} tracks…`, value: this.#search, style: 'width:100%' }) as HTMLInputElement;
+    const input = h('input', { class: 'text search', placeholder: `Search ${pool.length} tracks…`, value: this.#search, style: 'width:100%' }) as HTMLInputElement;
     input.addEventListener('input', () => {
       this.#search = input.value;
       const pos = input.selectionStart;
       this.render(true);
-      const again = this.el.querySelector<HTMLInputElement>('.content input.text');
+      const again = this.el.querySelector<HTMLInputElement>('.content input.search');
       again?.focus();
       if (pos != null) again?.setSelectionRange(pos, pos);
     });
     input.addEventListener('keydown', (e) => e.stopPropagation());
     const voting = !!org && s.phase === 'vote' && s.vote?.kind === 'host';
     const queued = org?.queued;
-    const maps = site.__nswsCupPool ? poolLabel(site.__nswsCupPool as MapPool) : '';
+    const picked = site.__nswsCupPool ? poolLabel(site.__nswsCupPool as MapPool) : '';
+    const maps = s.rules.customOnly ? 'Uploaded tracks' : s.rules.customTracks ? `${picked || 'This cup’s maps'} + uploads` : picked;
     return [
       h(
         'div',
@@ -555,21 +564,52 @@ export class Panel {
         queued ? h('div', { class: 'tile', style: 'display:flex;align-items:center;gap:10px;margin-bottom:10px' }, h('span', { class: 'grow' }, 'Up next: ', h('span', { class: 'amber' }, queued.name)), btn('Clear', () => org!.queue(null), 'small ghost')) : null,
         input,
       ),
+      s.rules.customTracks ? this.#uploadSection(s) : null,
       h(
         'div',
         { class: 'list' },
-        list.map((t) =>
-          h(
+        list.map((t) => {
+          const up = uploads.get(t.id);
+          const mine = !!up && (!!org || up.by === app.me);
+          return h(
             'div',
             { class: 'prow' },
-            h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', t.cat].filter(Boolean).join(' · '))),
+            h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', up ? `added by ${player(s, up.by)?.name ?? 'a racer who left'}` : t.cat].filter(Boolean).join(' · '))),
+            mine ? btn('Remove', () => (org ? org.removeTrack(org.me, t.id) : app.act({ k: 'act', a: 'untrack', v: t.id })), 'small ghost') : null,
             org ? btn(voting ? 'Pick' : queued?.id === t.id ? 'Queued' : 'Play next', () => org.hostPick({ id: t.id, name: t.name, author: t.author, cat: t.cat }), 'small ' + (voting ? 'primary' : 'ghost')) : null,
-          ),
-        ),
-        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : 'The track list is still loading.'),
+          );
+        }),
+        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : s.rules.customOnly ? 'No tracks yet. Upload one above.' : 'The track list is still loading.'),
         pool.length > list.length ? h('div', { class: 'empty' }, `Showing ${list.length} of ${pool.length}. Search for the rest.`) : null,
       ),
     ];
+  }
+
+  #trackCode = '';
+  #uploadSection(s: CupState) {
+    const app = this.app;
+    const code = h('input', { class: 'text', placeholder: 'Paste a track code', value: this.#trackCode, spellcheck: 'false', autocomplete: 'off' }) as HTMLInputElement;
+    const send = () => {
+      const error = app.uploadTrack(code.value);
+      if (error) return app.notify(error, 'bad');
+      this.#trackCode = '';
+      code.value = '';
+      code.blur();
+      if (!app.org) app.notify('Uploading the track…', 'info');
+    };
+    code.addEventListener('input', () => (this.#trackCode = code.value));
+    code.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') send();
+    });
+    const mine = (s.custom ?? []).filter((t) => t.by === app.me).length;
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, 'Add a track'),
+      h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, 'Paste a track’s import code (Export in the track editor). It joins this cup’s maps for everyone.', app.org ? '' : ` You have added ${mine} of ${CUSTOM_EACH}.`),
+      h('div', { class: 'frow' }, code, btn('Upload', send, 'small')),
+    );
   }
 
   // ---- Rules ----
@@ -584,7 +624,7 @@ export class Panel {
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill'];
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill', 'customTracks', 'customOnly'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
     const toggle = (field: keyof Rules, label: string, hint: string) => {
@@ -665,6 +705,8 @@ export class Panel {
       r.next !== 'random' || r.draft ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'For votes and picks (you get 3x)' : 'For votes and picks', 5, 60, 1, (n) => `${n} s`) : null,
       r.draft ? slider('draftSeconds', 'Pick and ban time', 'For each step', 10, 120, 5, (n) => `${n} s`) : null,
       toggle('skipVotes', 'Skip votes', 'Racers can vote a track away'),
+      toggle('customTracks', 'Custom tracks', 'Anyone in the cup can add tracks by import code (Tracks tab)'),
+      r.customTracks ? toggle('customOnly', 'Only custom tracks', 'The cup plays only the uploaded tracks') : null,
     );
     const rounds = sect(
       'Rounds',

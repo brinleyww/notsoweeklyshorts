@@ -8,7 +8,7 @@ import type { RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
 import { site } from './game.ts';
-import type { Msg } from './protocol.ts';
+import { CUSTOM_EACH, UPLOAD_CHUNK, UPLOAD_PARTS, type Msg } from './protocol.ts';
 import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
 import { botPid, byPid, isBot, isFinalist, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category } from './state.ts';
 
@@ -33,6 +33,8 @@ const SECRET_CHANCE = 0.2;
 const SECRET_ROUNDS = 2;
 // The cup's own fastest checked runs per track, which bots may follow.
 const CUP_REFS = 3;
+const MAX_CUSTOM = 30;
+const UPLOAD_STALE_MS = 60_000;
 
 export interface PoolTrack extends TrackRef {
   load: () => Promise<LoadedTrack>;
@@ -97,6 +99,9 @@ export class Organizer {
   #cupRuns = new Map<string, RefInput[]>();
   // Bots secretly driving as experts, to the last round they do.
   #secret = new Map<number, number>();
+  // Uploaded tracks' import codes by track id, and uploads still arriving by "uid:upload id".
+  #codes = new Map<string, string>();
+  #parts = new Map<string, { at: number; parts: (string | null)[]; got: number }>();
 
   constructor(
     private app: App,
@@ -544,12 +549,15 @@ export class Organizer {
         } else if (m.a === 'vote') this.#ballot(p.u, m.v);
         else if (m.a === 'skip') this.voteSkip(p.u);
         else if (m.a === 'watch') this.#watching(p.u, m.v);
+        else if (m.a === 'untrack' && typeof m.v === 'string') this.removeTrack(p.u, m.v);
         else if ((m.a === 'ban' || m.a === 'pick') && typeof m.v === 'string') {
           if (E.draftChoose(s, p.u, m.a, m.v)) this.touch();
         }
         return;
       case 'bump':
         return this.#bump(pid, m);
+      case 'trk':
+        return this.#uploadPart(p, m);
     }
   }
 
@@ -728,6 +736,22 @@ export class Organizer {
 
   pool(): PoolTrack[] {
     if (this.#pool.length && Date.now() - this.#poolAt < 30_000) return this.#pool;
+    const r = this.state.rules;
+    const list = r.customOnly ? [] : this.#library();
+    if (r.customTracks) {
+      const have = new Set(list.map((t) => t.id));
+      for (const t of this.state.custom ?? []) {
+        const code = this.#codes.get(t.id);
+        if (!code || have.has(t.id)) continue;
+        list.push({ id: t.id, name: t.name, author: t.author, cat: 'custom', load: async () => this.#parse(code)!, thumb: '' });
+      }
+    }
+    this.#pool = list;
+    this.#poolAt = Date.now();
+    return list;
+  }
+
+  #library() {
     const list: PoolTrack[] = [];
     // Saved custom tracks only join a cup for local testing (a pool marked custom by hand).
     const custom = (site.__nswsCupPool as { custom?: boolean } | undefined)?.custom === true;
@@ -735,9 +759,84 @@ export class Organizer {
       if (category === 'custom' && !custom) return;
       list.push({ id, name: meta?.name ?? 'Track', author: meta?.author, cat: (['official', 'community', 'custom'].includes(category) ? category : 'custom') as Category, load, thumb });
     });
-    this.#pool = list;
-    this.#poolAt = Date.now();
     return list;
+  }
+
+  #parse(code: string) {
+    try {
+      return this.app.native.parse(code);
+    } catch {
+      return null;
+    }
+  }
+
+  #tell(p: Player, text: string, tone: 'good' | 'bad' | 'info') {
+    if (p.u === this.me) this.app.notify(text, tone);
+    else if (p.pid != null) this.app.net.send(p.pid, { k: 'note', text, tone });
+  }
+
+  #uploadPart(p: Player, m: Extract<Msg, { k: 'trk' }>) {
+    const valid =
+      typeof m.id === 'string' && m.id.length <= 16 && Number.isInteger(m.n) && m.n >= 1 && m.n <= UPLOAD_PARTS && Number.isInteger(m.i) && m.i >= 0 && m.i < m.n && typeof m.c === 'string' && m.c.length <= UPLOAD_CHUNK;
+    if (!valid || p.bot) return;
+    const now = Date.now();
+    for (const [key, up] of this.#parts) if (now - up.at > UPLOAD_STALE_MS) this.#parts.delete(key);
+    const key = `${p.u}:${m.id}`;
+    let up = this.#parts.get(key);
+    if (!up) {
+      if (!this.state.rules.customTracks) return this.#tell(p, 'Custom tracks are off in this cup', 'bad');
+      if ([...this.#parts.keys()].some((k) => k.startsWith(`${p.u}:`))) return this.#tell(p, 'Wait for your last track to finish uploading', 'bad');
+      up = { at: now, parts: Array(m.n).fill(null), got: 0 };
+      this.#parts.set(key, up);
+    }
+    if (up.parts.length !== m.n || up.parts[m.i] != null) return;
+    up.parts[m.i] = m.c;
+    up.got++;
+    up.at = now;
+    if (up.got < m.n) return;
+    this.#parts.delete(key);
+    const error = this.addTrack(p.u, up.parts.join(''));
+    if (error) this.#tell(p, error, 'bad');
+  }
+
+  // Adds a track from its import code; returns why it can't, or null.
+  addTrack(u: number, code: string): string | null {
+    const s = this.state,
+      p = player(s, u);
+    if (!p) return null;
+    if (!s.rules.customTracks) return 'Custom tracks are off in this cup.';
+    const track = this.#parse(code);
+    if (!track?.trackData) return "That isn't a PolyTrack track code.";
+    if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
+    const id = track.trackData.getId();
+    const custom = (s.custom ??= []);
+    const same = custom.find((t) => t.id === id);
+    if (same) return `${same.name} is already in this cup.`;
+    if (!s.rules.customOnly && this.#library().some((t) => t.id === id)) return "That track is already in this cup's maps.";
+    if (custom.length >= MAX_CUSTOM) return `This cup already has ${MAX_CUSTOM} uploaded tracks.`;
+    if (u !== this.me && custom.filter((t) => t.by === u).length >= CUSTOM_EACH) return `You can upload up to ${CUSTOM_EACH} tracks.`;
+    const name = (track.trackMetadata?.name ?? '').trim().slice(0, 40) || 'Untitled track';
+    const author = (track.trackMetadata?.author ?? '').trim().slice(0, 30);
+    custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', by: u });
+    this.#codes.set(id, code);
+    this.#poolAt = 0;
+    this.notifyAll(`${p.name} added ${name} to the maps`, 'good');
+    this.touch(true);
+    return null;
+  }
+
+  // The organizer removes any uploaded track, everyone else only their own.
+  removeTrack(u: number, id: string) {
+    const s = this.state;
+    const t = s.custom?.find((x) => x.id === id);
+    if (!t || (u !== this.me && t.by !== u)) return;
+    s.custom = s.custom!.filter((x) => x !== t);
+    this.#codes.delete(id);
+    s.playlist = s.playlist.filter((x) => x.id !== id);
+    if (s.draft) s.draft.opts = s.draft.opts.filter((x) => x.id !== id);
+    if (this.#queued?.id === id) this.#queued = null;
+    this.#poolAt = 0;
+    this.touch(true);
   }
 
   #randomTracks(count: number) {
@@ -781,7 +880,8 @@ export class Organizer {
   #startSession() {
     const l = this.#loading!;
     const bridge = site.__nswsCup!;
-    const mode = this.state.rules.uploads && !this.state.rules.collisions ? bridge.GameMode.Casual : bridge.GameMode.Competitive;
+    // Uploaded tracks never send PBs to the leaderboards.
+    const mode = this.state.rules.uploads && !this.state.rules.collisions && l.ref.cat !== 'custom' ? bridge.GameMode.Casual : bridge.GameMode.Competitive;
     l.at = Date.now();
     l.from = this.app.info?.sessionId;
     this.app.connection?.startNewSession?.(mode, l.track.trackMetadata, l.track.trackData);
@@ -1079,6 +1179,7 @@ export class Organizer {
     const s = this.state;
     if (s.phase !== 'lobby') return;
     if (E.humanRacers(s).filter((p) => !p.away).length < 1) throw new Error('Nobody is on the grid yet.');
+    if (s.rules.customOnly && !this.pool().length) throw new Error('Add a track in the Tracks tab first.');
     this.#syncBots();
     if (s.rules.draft) {
       const n = Math.min(24, Math.max(8, E.racers(s).length * (s.rules.bans + s.rules.picks) + 3));
@@ -1104,12 +1205,13 @@ export class Organizer {
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill' | 'customTracks' | 'customOnly'>>) {
     const s = this.state;
     const next = { ...change };
     // The points cap can still move during a cup, but never onto a total someone already has.
     if (next.target != null && s.phase !== 'lobby') next.target = Math.max(next.target, E.leaderPoints(s) + 1);
     s.rules = cleanRules({ ...s.rules, ...next });
+    this.#poolAt = 0;
     this.#syncBots();
     this.touch(true);
   }

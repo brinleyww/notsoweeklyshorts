@@ -148,7 +148,12 @@ hold it at `leaderPoints(s) + 1`.
   organizer (any track; the Tracks tab can also queue one); **pick and ban** (before the first round
   every racer bans, then picks, from one list; the picks become the playlist, repeated; bans always
   leave something to pick); skip votes (over half of the racers skips the track, or changes it after
-  the round when someone already finished);.
+  the round when someone already finished).
+- **Custom tracks:** with the switch on, anyone in the cup can paste a track's import code in the Tracks
+  tab and it joins the maps (`App.uploadTrack` -> `trk` parts of 100k characters -> `Organizer.addTrack`).
+  Only the organizer's page keeps the codes; the game sends the track to everyone when its round loads.
+  Up to 5 per player and 30 in all; the organizer removes any, a player their own. **Only custom tracks**
+  plays nothing else. Rounds on uploaded tracks never upload PBs and have no world record.
 - **Rounds:** one run (time limit auto/fixed/off, auto = 3x the best known time from the world record
   or the cup; finish window after the first finish) or time attack (its length); countdown; break.
 - **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times

@@ -24,6 +24,7 @@ export function createCup(o: { id: string; name: string; format: string; rules: 
     draft: null,
     playlist: [],
     playIndex: 0,
+    custom: [],
     winner: null,
     shout: null,
     rounds: 0,

@@ -2,13 +2,20 @@ import type { CupState, RoundResult } from './state.ts';
 
 export const VERSION = 1;
 
+// An uploaded track's code goes in parts that fit the cup channel's 120k message limit (net.ts).
+export const UPLOAD_CHUNK = 100_000;
+export const UPLOAD_PARTS = 15;
+// Uploaded tracks per player; the organizer has no limit of their own.
+export const CUSTOM_EACH = 5;
+
 export type Action =
   | { a: 'role'; v: 'racer' | 'spectator' }
   | { a: 'ready' }
   | { a: 'vote'; v: number }
   | { a: 'ban' | 'pick'; v: string }
   | { a: 'skip' }
-  | { a: 'watch'; v: number | null };
+  | { a: 'watch'; v: number | null }
+  | { a: 'untrack'; v: string };
 
 export type Msg =
   // Racer or spectator page to the organizer.
@@ -19,6 +26,8 @@ export type Msg =
   | { k: 'dnf'; n: number; t: number }
   | ({ k: 'act' } & Action)
   | { k: 'bump'; n: number; to?: number; from?: number; i: number[] }
+  // A track's import code in parts: upload id, part index, part count, text.
+  | { k: 'trk'; id: string; i: number; n: number; c: string }
   // Organizer to everyone.
   | { k: 'st'; s: CupState }
   | { k: 'hist'; from: number; rows: RoundResult[] }

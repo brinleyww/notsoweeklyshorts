@@ -21,6 +21,11 @@ export interface TrackRef {
   cat: Category;
 }
 
+// A track someone in the cup added by its import code. Only the organizer's page has the code.
+export interface CustomTrack extends TrackRef {
+  by: number;
+}
+
 export interface Player {
   u: number;
   pid: number | null;
@@ -130,6 +135,8 @@ export interface CupState {
   // Drafted tracks, played in order and then again from the top.
   playlist: TrackRef[];
   playIndex: number;
+  // Missing in the state of an organizer page from before uploads.
+  custom?: CustomTrack[];
   winner: number | null;
   shout: { text: string; at: number } | null;
   rounds: number;
