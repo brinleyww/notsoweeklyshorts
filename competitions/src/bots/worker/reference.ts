@@ -375,6 +375,13 @@ export class Reference {
     return Infinity;
   }
 
+  // How far (rad) the reference car's body points from where it travels at frame i, on the ground.
+  slipAt(i: number) {
+    const vn = Math.hypot(this.vx[i], this.vy[i], this.vz[i]);
+    if (vn < 3 || !this.wheels[i]) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, (this.fx[i] * this.vx[i] + this.fy[i] * this.vy[i] + this.fz[i] * this.vz[i]) / vn)));
+  }
+
   // The next respawn of the reference at or after frame i, or -1.
   teleportAfter(i: number) {
     for (const t of this.teleports) if (t > i) return t;

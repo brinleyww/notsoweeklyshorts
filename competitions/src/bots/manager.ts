@@ -6,7 +6,7 @@ import type { Msg } from '../protocol.ts';
 import { MAX_BOTS } from '../rules.ts';
 import type { TrackRef } from '../state.ts';
 import { toB64 } from './codec.ts';
-import { EXPERT_SKILL, WORKER_NAME, type BotPlan, type FromWorker, type Persona, type RefInput, type ToWorker } from './wire.ts';
+import { EXPERT_SKILL, WORKER_NAME, type BotPlan, type FromWorker, type Persona, type RefInput, type Tip, type ToWorker } from './wire.ts';
 import { BASE_BRAIN, brainFromB64, brainGroup, brainToB64, freshBrain } from './worker/brain.ts';
 import { FIELDS, notesFromB64, notesToB64 } from './worker/notes.ts';
 
@@ -54,6 +54,8 @@ const NOTES_PER_TRACK = 32;
 // Each bot's own best run per track (worker/planner.ts, rethink), for this page's session only: keys are
 // ~1 byte a frame, too big to keep for every track.
 const PLAN_TRACKS = 8;
+// Tips kept per track (worker/shared.ts holds as many per worker).
+const MAX_TIPS = 400;
 // Bots' counting runs' keys (owner's input export), by round and bot, for the last INPUTS_KEEP of them.
 const INPUTS_KEEP = 64;
 // Workers go when the organizer stops ticking (the cup is gone) or nothing was planned for a while.
@@ -144,6 +146,9 @@ export class BotManager {
   #brains = new Map<string, Map<string, { w: Float32Array; cost: number }>>();
   #notes = new Map<string, Map<string, Float32Array>>();
   #plans = new Map<string, Map<string, BotPlan>>();
+  // What bots learned from each other per track (worker/shared.ts), for this page's session: every worker on
+  // the track gets each one.
+  #tips = new Map<string, Tip[]>();
   // Rounds each bot (by name) has raced per track in this page's session: practice makes it better there.
   #raced = new Map<string, Map<number, number>>();
   #inputs = new Map<string, Uint8Array>();
@@ -401,6 +406,8 @@ export class BotManager {
       if (this.#track?.key !== plan.key) return;
       slot.key = plan.key;
       this.#send(slot, this.#track.msg);
+      const tips = this.#tips.get(plan.trackId);
+      if (tips?.length) this.#send(slot, { b: 'tips', key: plan.key, tips });
     }
     b.slot = slot;
     slot.jobs++;
@@ -617,6 +624,19 @@ export class BotManager {
     for (const s of [...this.#slots, this.#learner]) if (s && !s.dead && s.key === t.key) this.#send(s, { b: 'plan', key: t.key, name: m.name, plan: p });
   }
 
+  #tipped(from: Slot, m: Extract<FromWorker, { b: 'tip' }>) {
+    const t = this.#track;
+    if (!t || t.key !== m.key || !m.tip) return;
+    let list = this.#tips.get(t.trackId);
+    if (!list) {
+      this.#tips.set(t.trackId, (list = []));
+      for (const k of [...this.#tips.keys()].slice(0, Math.max(0, this.#tips.size - PLAN_TRACKS))) this.#tips.delete(k);
+    }
+    list.push(m.tip);
+    if (list.length > MAX_TIPS) list.splice(0, list.length - MAX_TIPS);
+    for (const s of [...this.#slots, this.#learner]) if (s && s !== from && !s.dead && s.key === t.key) this.#send(s, { b: 'tips', key: t.key, tips: [m.tip] });
+  }
+
   #plansFor(trackId: string, p: Persona) {
     const prefix = `${p.name ?? p.u}|`;
     return [...(this.#plans.get(trackId)?.entries() ?? [])].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v);
@@ -643,6 +663,8 @@ export class BotManager {
     if (slot.key !== t.key) {
       slot.key = t.key;
       this.#send(slot, t.msg);
+      const tips = this.#tips.get(t.trackId);
+      if (tips?.length) this.#send(slot, { b: 'tips', key: t.key, tips });
     }
     const saved = this.#brainsOf(plan.trackId);
     const tasks = [...groups].map(([key, skill], i) => ({ key, skill, w: (saved.get(key)?.w ?? base ?? freshBrain(i + 1)).slice() }));
@@ -758,6 +780,7 @@ export class BotManager {
     if (m.b === 'learned') return this.#learned(m);
     if (m.b === 'notes') return this.#noted(m);
     if (m.b === 'plan') return this.#planned(m);
+    if (m.b === 'tip') return this.#tipped(slot, m);
     if (m.b === 'track') {
       if (m.ok) return;
       const why = !m.refs.length

@@ -95,8 +95,8 @@ function mixedSkills(count: number) {
 
 // Driving personalities for `count` bot slots (u is the slot; callers put the bot's own id in).
 // adapt[i], when given, is that slot's skill instead of the tier's (Match the field keeps its own);
-// names[i] is that slot's bot name.
-export function personas(skill: BotSkill, count: number, seedBase: number, adapt?: number[], names?: number[]): Persona[] {
+// names[i] is that slot's bot name; slot `chaser` (an expert) is the record chaser (Persona.wr).
+export function personas(skill: BotSkill, count: number, seedBase: number, adapt?: number[], names?: number[], chaser = -1): Persona[] {
   const list: Persona[] = tierSkills(skill, count).map((tier, i) => {
     // Every bot its own seed each round, from the cup, the round and its name.
     const seed = mix(mix(seedBase, i), 0x51ed + (names?.[i] ?? i));
@@ -109,11 +109,12 @@ export function personas(skill: BotSkill, count: number, seedBase: number, adapt
       // Experts never slip up; easy bots often do.
       mistakes: s >= EXPERT_SKILL ? 0 : clamp01((1 - s) * 0.8 + (s < 0.3 ? 0.15 : 0) + (unit(mix(seed, 2)) - 0.5) * 0.1),
       seed,
+      ...(i === chaser && s >= EXPERT_SKILL ? { wr: true } : {}),
     };
   });
   // Every bot takes a top run of its own as a hint while there are enough: experts the fastest ones, by name
   // so the same one every round (they keep learning on it), then the others by skill.
-  const experts = list.filter((p) => p.skill >= EXPERT_SKILL).sort((a, b) => (a.name ?? a.u) - (b.name ?? b.u));
+  const experts = list.filter((p) => p.skill >= EXPERT_SKILL).sort((a, b) => +!!b.wr - +!!a.wr || (a.name ?? a.u) - (b.name ?? b.u));
   const rest = list.filter((p) => p.skill < EXPERT_SKILL).sort((a, b) => b.skill - a.skill || (a.name ?? a.u) - (b.name ?? b.u));
   [...experts, ...rest].forEach((p, k) => (p.copy = k));
   return list;

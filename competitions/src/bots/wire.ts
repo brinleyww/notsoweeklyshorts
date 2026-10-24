@@ -20,6 +20,9 @@ export interface Persona {
   // 0..1: how often it makes a mistake and lives with it.
   mistakes: number;
   seed: number;
+  // The cup's record chaser (an expert): the fastest run is its only hint, it never drives that run's own keys,
+  // and it gets the most time going over its runs, to drive faster than the record its own way.
+  wr?: boolean;
 }
 
 // A bot's best run of its own on a track, as it last went over it (worker/planner.ts, rethink): the notes it
@@ -31,6 +34,23 @@ export interface BotPlan {
   keys: Uint8Array;
   n: number;
   sin: Int32Array;
+}
+
+// Something one bot learned on a track that the others may try (worker/shared.ts): a faster way through a
+// section of its hint run (win: v = that section's notes, gain = ms the whole run gained) or how a retry got
+// past a failure (fix: v = [pace multiplier, offset or NaN]). by: the bot's name; x, y, z: where (the start of
+// the section, or where it failed) and cp the next checkpoint there; ref, s: its hint run's refKey and section.
+export interface Tip {
+  kind: 'win' | 'fix';
+  by: number;
+  x: number;
+  y: number;
+  z: number;
+  cp: number;
+  ref: string;
+  s: number;
+  v: number[];
+  gain: number;
 }
 
 export interface RefInput {
@@ -71,7 +91,9 @@ export type ToWorker =
   // GO on the cup clock (null until set); cup clock = Date.now() + offset.
   | { b: 'clock'; startAt: number | null; offset: number }
   | { b: 'cancel'; id: string }
-  | { b: 'drop'; key: string };
+  | { b: 'drop'; key: string }
+  // What other bots learned on the track (from any worker).
+  | { b: 'tips'; key: string; tips: Tip[] };
 
 export type FromWorker =
   | { b: 'ready' }
@@ -89,4 +111,6 @@ export type FromWorker =
   // An expert's notes on its hint run (ref) got better in practice: a run costs `cost` now, `was` before.
   | { b: 'notes'; key: string; name: number; ref: string; v: Float32Array; cost: number; was: number }
   // A bot (by name) found a faster run of its own.
-  | { b: 'plan'; key: string; name: number; plan: BotPlan };
+  | { b: 'plan'; key: string; name: number; plan: BotPlan }
+  // A bot learned something the others may try.
+  | { b: 'tip'; key: string; tip: Tip };

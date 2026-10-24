@@ -114,8 +114,15 @@ export class Driver {
   dist = 0;
   // Experts free of the reference's speed where it drove on (off only for lab comparisons).
   static freeFast = true;
+  // Rotating on the brake where the car points outside the reference car at full lock (rad out to keep the
+  // reference's brake, and to tap it), and lifting rather than braking when running wide at full lock (both
+  // on; off only for lab comparisons).
+  static needDrift = 1;
+  static underCopy = 0.05;
+  static underTap = 0.15;
+  static liftWide = 1;
   // Why the last decision braked (for the lab): copying the reference, its speed cap ahead, running wide.
-  why: '' | 'imitate' | 'ref' | 'allow' | 'wide' = '';
+  why: '' | 'imitate' | 'ref' | 'allow' | 'wide' | 'rotate' = '';
 
   constructor(ref: Reference, p: DriverParams) {
     this.ref = ref;
@@ -282,17 +289,25 @@ export class Driver {
     if (Math.abs(target) > 0.97 && wide > 0.3) {
       const kk = Math.min(ref.n - 1, k + 20), at = lat + offset;
       const room = this.clear ? (lat > 0 ? this.clear.left[kk] - at : this.clear.right[kk] + at) : 0;
-      if (room < WIDE_ROOM) wideCap = room < 0.8 ? vms - 5 : vms - 0.6 - 2 * wide;
+      if (room < WIDE_ROOM) wideCap = room < 0.8 && !Driver.liftWide ? vms - 5 : Math.max(vms - 3.5, vms - 0.6 - 2 * wide);
     }
     const why = wideCap < allow ? 'wide' : 'allow';
     allow = Math.min(allow, wideCap);
+    // Pointing outside the reference car in its turn at full lock: the car needs to rotate, which the
+    // reference's brake does at any speed (and a tap of it where the reference only steers, when far out).
+    const turn = Math.sign(ref.steer[lead]);
+    const under = Driver.needDrift && drift < 1 && turn !== 0 && turn * s > 0.85 && r.wheels >= 2 && grip === 0 ? -turn * headCar : 0;
     this.why = '';
     if (vms > allow + 4) {
       up = false;
       down = true;
       this.why = why;
     } else if (vms > allow + 0.5) up = false;
-    else if (down && drift < BRAKE_DRIFT) {
+    else if (down && under > Driver.underCopy) this.why = 'rotate';
+    else if (!down && under > Driver.underTap && ref.slipAt(lead) > 0.06) {
+      down = true;
+      this.why = 'rotate';
+    } else if (down && drift < BRAKE_DRIFT) {
       // The reference brakes into a drift from a higher speed; this car is already slow enough.
       down = false;
       up = vms < allow;

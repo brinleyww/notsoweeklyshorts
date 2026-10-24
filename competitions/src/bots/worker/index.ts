@@ -160,6 +160,11 @@ function handle(m: ToWorker) {
       track.planner?.adopt(m.name, m.plan);
       learner?.adopt(m.name, m.plan);
       return;
+    case 'tips':
+      if (track?.key !== m.key) return;
+      for (const tip of m.tips) track.planner?.shared.add(tip);
+      learner?.share(m.tips);
+      return;
     case 'learn': {
       learner?.dispose();
       learner = null;
@@ -176,6 +181,8 @@ function handle(m: ToWorker) {
       learner.onPlan = (name, plan) => post({ b: 'plan', key: t.key, name, plan: { ...plan, notes: plan.notes.slice(), keys: plan.keys.slice(), sin: plan.sin.slice() } });
       learner.onBetter = (task, cost, was) => post({ b: 'learned', key: t.key, task: task.key, w: task.w.slice(), cost, was }, []);
       learner.onNotes = (bot, ref, v, cost, was) => post({ b: 'notes', key: t.key, name: bot.name ?? bot.u, ref, v, cost, was });
+      learner.onTip = (tip) => post({ b: 'tip', key: t.key, tip });
+      learner.share(t.planner.shared.tips);
       kick();
       return;
     }
@@ -243,6 +250,7 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
       return Math.max(0, Math.min(THINK_MAX_MS, (ahead - DRILL_AHEAD_MS) / 8));
     };
     planner.onPlan = (job, plan) => post({ b: 'plan', key, name: job.name, plan: { ...plan, notes: plan.notes.slice(), keys: plan.keys.slice(), sin: plan.sin.slice() } });
+    planner.onTip = (tip) => post({ b: 'tip', key, tip });
     track.planner.onCommit = commit;
     track.planner.onDone = done;
   }

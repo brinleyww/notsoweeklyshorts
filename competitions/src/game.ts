@@ -132,7 +132,8 @@ export interface Native {
   showRoundTime(g: Game, frames: number): void;
   showRoundCheckpoint(g: Game, frames: number): void;
   showRoundFinish(g: Game, frames: number): void;
-  visibility(g: Game, ids: number[] | null, self: number | null): void;
+  // marks: cars hidden now whose skid marks stay on the road (bots that finished and left).
+  visibility(g: Game, ids: number[] | null, self: number | null, marks?: number[]): void;
   drivingView(g: Game): 0 | 1;
   release(g: Game, view?: 0 | 1): void;
   peers(c: Connection): { id: number; pc: RTCPeerConnection }[];

@@ -300,6 +300,30 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   28.588, skill 0.8 32.43 -> 29.73, 0.55 30.80 -> 30.25, 0.2 32.67 -> 30.91; experts on Solaris (27.22)
   28.79 -> 28.02 and Natsu (26.04) 27.77 -> 26.35. Rounds (`t29_rounds.mjs`): Anubis expert 28.86, 28.69,
   28.68, 28.62 over four rounds.
+- The record chaser (`Persona.wr`): in a cup with expert bots, the real expert first by name (never a
+  secret expert) learns from the fastest run alone and drives it its own way: that run is its only line (no
+  other player's line on a retry), it never drives that run's own keys (no copying where it is on the
+  record's exact state, and going over its runs never tries a stretch of the record's inputs, only its own
+  notes and edits of its own keys), it may go about 20% faster than the record and 4.5 units beside its line, and
+  it gets the most time going over its runs (half the learning worker's turns, three times the idle
+  pondering). Where other bots fall back on a recording's keys, it drives its own best run, or starts over
+  on its own driving. Lab cups (`botlab/t46_chaser.mjs`, four experts, 45 s of the learning worker
+  between rounds, five rounds): Anubis (record 28.592) 28.774 -> 28.395, faster than the record from round
+  four; Winterfell (44.158) 44.418 -> 44.199; Natsu (26.042) 26.359 -> 26.331; Solaris (27.220) 28.390 ->
+  28.358 (a wall it clips at 13 s that going over its run hasn't found a way around yet). A browser cup on
+  Anubis had it under the record in its first round (28.556), the other experts 0.2-0.9 s behind.
+  Without the record's keys its first round is its weakest: on Natsu in a browser cup it was 2.1 s off.
+- Bots learn from each other (`worker/shared.ts`, `Tip`): when a bot gets past a failure, how its retry did
+  it (slower, another line) goes out with where it failed, and when going over its run finds a faster way
+  through a section, that way goes out with where the section starts. Every worker on the track gets every
+  tip (`{b:'tip'}` to the manager, `{b:'tips'}` to the others, kept for the session). Another bot only ever
+  tries one: a fix is its first retry when it fails within 20 units of where the other bot did (before the
+  same checkpoint), and a win is one of the ways it tries when going over the section of its own run where
+  the win starts: that bot's pace and turn-in there, with the taker's own line and half a practice try's
+  variety of its own, kept only if its whole run finishes sooner (such sections are gone over more often).
+  Everything else each bot tries is still its own, so they don't end up on the same run (Winterfell lab
+  cup: any two experts' best runs held the same keys on 36-59% of frames). The record chaser shares its
+  wins but takes only others' fixes.
 - Every expert is skill 1 and as able as the others; what sets them apart is the record each one trains on
   (its own, fastest first): its line and way of driving. An expert on a slower record may drive up to 8%
   faster than that record (it starts halfway there and goes over its runs for the rest).
@@ -317,6 +341,19 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   A car at full lock running wide only slows down when it is running out of room outside (under 2.5
   units): it used to brake hard at 0.75 units off the line, for seconds (Solaris 30.92 -> 28.83 s, Natsu
   28.84 -> 27.82 s, Winterfell 45.34 -> 44.53 s on an expert's first run; `botlab/t28_brakes.mjs`).
+- Drifts: a bot more than ~4% slower than its record there used to drop the record's brake into a slide
+  (a slower car needs no slide, it was assumed), so where the record rotates the car on the brake it stayed
+  on grip at full lock and ran wide. Now, at full lock in the record's turn with the car pointing outside
+  where the record's car points, it keeps the record's brake (0.05 rad out) or taps the brake itself where
+  the record is sliding (0.15 rad out). 8 drift-heavy community tracks, 8 bots each (`t36_retries.mjs`):
+  failures 1866 -> 1584, crashes left in the run 52 -> 43, respawns 28 -> 20, own pace +9.9% -> +9.0%
+  behind the record, though 4 more runs (of 64) ended on a recording's keys, most on Re Akina. Most drift
+  failures are not the slide itself (`t45_driftdrill.mjs`: the record's keys up to just before each slide,
+  then the driver, from four entry speeds, all 71 tracks): handed over 0.8 s before, it got through 168 of
+  188 tries; 3 s before, 154 of 180, and most of the rest clipped a wall the record passes within a few
+  tenths of a unit. A car running wide at full lock now only lifts, never brakes: braking there threw it
+  sideways into the outside wall (Solaris, 13 s, 246 -> 204 km/h). Same 8 tracks: failures 1853 -> 1817,
+  runs ending on a recording 13 -> 11, crashes left in the run 52 -> 47, pace the same, planning 14% less.
 - Bots have a neural network (`brain.ts`, 24 inputs, two hidden layers of 16, 706 weights) on top of the
   driver: each frame it reads the car (speed, steering, slip, how far off the line and how it points), the
   reference ahead (speed, steering input and curve 0.1-1 s on, a jump coming) and the room to the walls,
@@ -350,7 +387,10 @@ planned), and a frame becomes final 3 s after it is planned, so every page has a
 before it needs them and draws it at exactly `cupNow - startAt` (`bots/view.ts`, `timeline.ts`:
 Hermite positions, slerped rotation, the game's `lerpCarState` for the rest). Live timing, splits and
 results come from the same states: the organizer records a bot's finish when the race clock reaches it.
-Pages that join late get every chunk of the round so far.
+Pages that join late get every chunk of the round so far. Bots and other racers leave skid marks like the
+player's car, also while the race skips drawing them (30 m+ away and off screen: `VisualCar.leaveMarks`),
+and a bot's marks stay on the road after it finishes and leaves the track (`visibility`'s `marks`). Low
+performance mode still leaves other cars' marks out.
 
 Cost: about 330-400 bytes a second per bot per page after deflate, riding the organizer's normal
 batches, and no Worker change. Measured in a browser cup (organizer and one racer, Sky Bound, 5 bots

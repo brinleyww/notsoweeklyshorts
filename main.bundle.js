@@ -10477,6 +10477,22 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                     l.get(this, G, "m", it).call(this, l.get(this, ie, "f").brakeLightEnabled)
                 }
+                // Not So Weekly Shorts: a car the race skips updating (well off screen) still leaves its marks on the road.
+                leaveMarks(e) {
+                    if (!(e > 0) || !l.get(this, Ie, "f")?.getSettingBoolean(st.A.SkidmarksEnabled))
+                        return;
+                    const t = this.getMatrix4()
+                      , n = this.getQuaternion()
+                      , c = l.get(this, ie, "f")
+                      , marks = l.get(this, Le, "f");
+                    for (let i = 0; i < 4 && i < marks.length; i++) {
+                        const w = c.wheelContact[i];
+                        if (null == w || 0 != l.get(this, ze, "f")[i] || !(c.wheelSkidInfo[i] < Math.pow(Math.min(1, Math.abs(c.wheelDeltaRotation[i]) / l.get(F, F, "f", le)), l.get(F, F, "f", ce)) * l.get(F, F, "f", he)))
+                            continue;
+                        const s = l.get(F, F, "f", oe)[i].clone().add(new THREE.Vector3(0,-c.wheelSuspensionLength[i],0)).applyMatrix4(t);
+                        marks[i].spawn(s, n, new THREE.Vector3(w.position.x,w.position.y,w.position.z), new THREE.Vector3(w.normal.x,w.normal.y,w.normal.z))
+                    }
+                }
                 updateCameras(e) {
                     if (null == l.get(this, ie, "f").finishFrames) {
                         const t = this.getPosition()
@@ -45500,7 +45516,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     banner?.querySelectorAll(".record,.difference").forEach(node => node.classList.add("hidden"));
                     banner?.querySelector(".current")?.classList.remove("show-position");
                 },
-                visibility: (g, ids, self) => {
+                visibility: (g, ids, self, marks) => {
                     C.get(g, wa, "f").setVisible(null === ids || ids.includes(self));
                     for (const cars of [C.get(g, Ra, "f"), cupBotCars.get(g) ?? []])
                         for (const [id, r] of cars) {
@@ -45508,7 +45524,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             // A car the race session found well off screen stays hidden (it isn't updated); its sound is
                             // the session's call (the nearest shown cars), so the audio graph isn't rewired every frame.
                             r.car.setVisible(show && !r.car.__offscreen);
-                            r.car.effectsHidden = !show;
+                            r.car.effectsHidden = !show && !marks?.includes(id);
                             r.car.__cupHidden = !show;
                             show || (r.car.audioCulled = !0);
                         }
@@ -46303,8 +46319,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         this.__carsLoud = eye ? new Set([...C.get(this, Ra, "f").values(), ...bots?.values() ?? []].filter(e => !e.car.__cupHidden).map(e => [e, e.car.getPosition().distanceToSquared(eye)]).filter(([, d]) => d < 3600).sort((x, y) => x[1] - y[1]).slice(0, 2).map(([e]) => e)) : null;
                     const loud = this.__carsLoud;
                     // Not So Weekly Shorts: a silent car well off screen (30 m+, outside the view by its size) isn't updated
-                    // or shown (its wheels, smoke and name tag are work for nothing), and on Low performance mode other
-                    // cars leave no skid marks.
+                    // or shown (its wheels, smoke and name tag are work for nothing), but still leaves its skid marks; on Low
+                    // performance mode other cars leave none.
                     const cam = C.get(this, zr, "f").camera, view = this.__carView ??= { frustum: new THREE.Frustum, matrix: new THREE.Matrix4, sphere: new THREE.Sphere(new THREE.Vector3, 8) };
                     cam && view.frustum.setFromProjectionMatrix(view.matrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
                     const lowSkid = C.get(this, Gr, "f").getSettingBoolean(R.A.LowPerformanceMode)
@@ -46348,14 +46364,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         } else {
                             e.time = e.car.getCarState().frames / 1e3 - remoteDelay
                         }
-                        quiet(e.car) ? e.car.setVisible(!1) : e.car.update(n)
+                        quiet(e.car) ? (e.car.setVisible(!1), e.car.leaveMarks(n)) : e.car.update(n)
                     }
                     for (const e of bots?.values() ?? [])
                         e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
-                        quiet(e.car) ? e.car.setVisible(!1) : e.car.update(n);
+                        quiet(e.car) ? (e.car.setVisible(!1), e.car.leaveMarks(n)) : e.car.update(n);
                     // Not So Weekly Shorts: other racers and bots are culled off screen and drawn simpler when small,
                     // like replay ghosts (a car is ~20 draw calls); whether they show and sound stays the cup's call.
                     const lodCars = this.__cupLodCars ??= [];

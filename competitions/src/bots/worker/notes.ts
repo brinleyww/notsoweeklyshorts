@@ -64,14 +64,14 @@ export class Notes {
 
   // `lift`: how much slower the hint run is than the fastest (log of their times), for an expert, which drives
   // its hint's line at the pace of the best; it starts halfway there and goes over its runs for the rest.
-  // `explore`: an expert finds its own way, faster than its hint where it can: twice the speed and room to
-  // try, and bigger changes (it only keeps one that a whole run proved faster).
-  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined, lift = 0, explore = false) {
+  // `explore`: an expert finds its own way, faster than its hint where it can: this many times the speed and
+  // room to try, and bigger changes (it only keeps one that a whole run proved faster). 1 = none.
+  constructor(ref: Reference, name: number, saved: Float32Array | null | undefined, lift = 0, explore = 1) {
     this.ref = ref;
     this.n = Math.ceil(ref.n / SECTION);
-    this.top = LIMITS[0][1] * (explore ? 2 : 1) + lift;
-    this.room = LIMITS[1][1] * (explore ? 2 : 1);
-    this.step = explore ? 1.5 : 1;
+    this.top = LIMITS[0][1] * explore + lift;
+    this.room = LIMITS[1][1] * explore;
+    this.step = explore > 1 ? 1 + 0.5 * (explore - 1) ** 0.5 : 1;
     if (saved && saved.length === this.n * FIELDS && saved.every(Number.isFinite)) this.v = saved.slice();
     else {
       this.v = new Float32Array(this.n * FIELDS);
@@ -100,6 +100,17 @@ export class Notes {
   vary(p: Float32Array, s: number, rand: () => number) {
     const out = new Float32Array(FIELDS);
     for (let f = 0; f < FIELDS; f++) out[f] = this.#clamp(f, p[s * FIELDS + f] + (rand() * 2 - 1) * TRY[f] * this.step);
+    return out;
+  }
+
+  // Section s of p with the pace and turn-in of another bot's tip there (v: its notes), this bot's own line
+  // beside the hint, and half a practice try's variety of its own, so a tip is a lead, never a copy.
+  fromTip(p: Float32Array, s: number, v: number[], rand: () => number) {
+    const out = new Float32Array(FIELDS);
+    for (let f = 0; f < FIELDS; f++) {
+      const x = f === 1 ? NaN : v[f];
+      out[f] = this.#clamp(f, (Number.isFinite(x) ? x : p[s * FIELDS + f]) + (rand() * 2 - 1) * TRY[f] * 0.5);
+    }
     return out;
   }
 

@@ -4,7 +4,7 @@ import type { App } from './app.ts';
 import { inputsText } from './bots/inputs.ts';
 import { BotManager } from './bots/manager.ts';
 import { BOT_NAMES, botStyle, matchStep, mix, nameOrder, personas, seedOf, tierSkills } from './bots/roster.ts';
-import type { RefInput } from './bots/wire.ts';
+import { EXPERT_SKILL, type RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
 import { site } from './game.ts';
@@ -402,7 +402,11 @@ export class Organizer {
     const mgr = bots.length ? this.#manager() : this.#bots;
     if (n == null || !t || !mgr) return;
     const skills = bots.map((p) => ((this.#secret.get(p.u) ?? 0) >= n ? 1 : p.bot!.s / 100));
-    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, bots.map((p) => BOT_NAMES.indexOf(p.name)));
+    const names = bots.map((p) => BOT_NAMES.indexOf(p.name));
+    // The record chaser: the real expert first by name (never a secret one, whose skill is only borrowed).
+    let chaser = -1;
+    bots.forEach((p, i) => p.bot!.s / 100 >= EXPERT_SKILL && (chaser < 0 || names[i] < names[chaser]) && (chaser = i));
+    const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, names, chaser);
     list.forEach((persona, i) => (persona.u = bots[i].u));
     mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS, bumper: s.rules.collisions });
     const r = s.round;

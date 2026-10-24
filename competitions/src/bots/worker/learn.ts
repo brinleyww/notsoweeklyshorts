@@ -7,7 +7,7 @@
 // (notes.ts) the bot tries a few other ways through it from the same exact state and drives on with the
 // fastest; the notes that run ends with are kept only if, like the weights, they do no worse than the old
 // ones on every one of fresh race runs and better overall.
-import type { BotPlan, Persona } from '../wire.ts';
+import type { BotPlan, Persona, Tip } from '../wire.ts';
 import { BRAIN_SIZE } from './brain.ts';
 import type { Clearance } from './clearance.ts';
 import { refKey } from './notes.ts';
@@ -133,6 +133,8 @@ export class Learner {
   onNotes: (bot: Persona, key: string, v: Float32Array, cost: number, was: number) => void = () => {};
   // An expert's run got faster here (planner.ts, #think): its next run drives it.
   onPlan: (name: number, plan: BotPlan) => void = () => {};
+  // Something an expert learned here that other bots may try (shared.ts).
+  onTip: (tip: Tip) => void = () => {};
   // Experts' runs gone over in turn, on a planner of their own whose jobs are never driven (no cars).
   #polisher: Planner | null = null;
   #polish: Job[] = [];
@@ -146,12 +148,23 @@ export class Learner {
     if (polish.length) {
       const pl = (this.#polisher = new Planner(c.sim, c.route, c.refs, 2, c.clear, c.full));
       pl.onPlan = (job, plan) => this.onPlan(job.name, plan);
+      pl.onTip = (tip) => this.onTip(tip);
       polish.forEach((p, i) => {
         const job = pl.add({ id: `polish${i}`, bot: { ...p.bot, mistakes: 0 }, mode: 'run', end: c.refs[0].n * 3 + 20000, plans: p.plans });
         pl.cancel(job.id);
         this.#polish.push(job);
       });
     }
+  }
+
+  // The planner going over experts' runs: what it tried and found (lab).
+  get polishStats() {
+    return this.#polisher?.stats ?? null;
+  }
+
+  // What bots learned elsewhere.
+  share(tips: Tip[]) {
+    for (const t of tips) this.#polisher?.shared.add(t);
   }
 
   // A faster run of an expert's own found elsewhere.
@@ -161,7 +174,9 @@ export class Learner {
 
   // Goes over the next expert's run that has one; false when none has.
   #polishNext(deadline: number) {
-    const ready = this.#polish.filter((j) => j.plan);
+    // The record chaser gets as many turns as the other experts together.
+    const others = this.#polish.filter((j) => j.plan && !j.bot.wr);
+    const ready = this.#polish.filter((j) => j.plan).flatMap((j) => (j.bot.wr ? Array<Job>(Math.max(1, others.length)).fill(j) : [j]));
     if (!ready.length || !this.#polisher) return false;
     // Going over a run needs time to replay it to a section and try a few ways there, whatever the slice.
     this.#polisher.improve(ready[this.#polishAt++ % ready.length], Math.max(deadline, performance.now() + POLISH_MS));

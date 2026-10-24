@@ -313,14 +313,16 @@ export class App {
     const covered = COVERED.includes(s.phase);
     if (covered) this.native.visibility(g, this.selfPid == null ? [] : [this.selfPid], this.selfPid);
     else if (onRound) {
-      const pids: number[] = [];
+      const pids: number[] = [], gone: number[] = [];
       for (const u of r!.racers) {
         const p = player(s, u);
-        if (p?.pid != null && (!p.bot || this.bots.shows(p.pid))) pids.push(p.pid);
+        if (p?.pid == null) continue;
+        if (!p.bot || this.bots.shows(p.pid)) pids.push(p.pid);
+        else gone.push(p.pid);
       }
       let shown = pids;
       if (this.watch.ghostsHidden && !s.rules.collisions) shown = pids.filter((id) => id === this.selfPid || (this.watch.active && id === this.watch.target));
-      this.native.visibility(g, shown, this.selfPid);
+      this.native.visibility(g, shown, this.selfPid, this.watch.ghostsHidden ? [] : gone);
     } else this.native.visibility(g, null, this.selfPid);
     this.native.presentation(g, true, this.watch.active || covered);
     const crashing = s.rules.collisions && s.phase === 'racing' && this.driver.racing && !this.driver.done;
