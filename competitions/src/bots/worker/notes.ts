@@ -83,6 +83,18 @@ export class Notes {
     return f === 0 ? Math.max(LIMITS[0][0], Math.min(this.top, x)) : f === 1 ? Math.max(-this.room, Math.min(this.room, x)) : clamp(f, x);
   }
 
+  // Whether the hint slides in section s (or the next): its body turned 0.06+ rad from where it travels, on the
+  // ground, for 50 ms or more.
+  slides(s: number) {
+    const ref = this.ref;
+    let run = 0;
+    for (let i = s * SECTION; i < Math.min(ref.n, (s + 2) * SECTION); i += 5) {
+      run = ref.slipAt(i) > 0.06 ? run + 5 : 0;
+      if (run >= 50) return true;
+    }
+    return false;
+  }
+
   // A run's way of driving, into p: the notes, every section a little different (from `rand`) unless `same`.
   plan(rand: () => number, p: Float32Array, same: boolean) {
     for (let i = 0; i < this.v.length; i++) p[i] = same ? this.v[i] : this.#clamp(i % FIELDS, this.v[i] + (rand() * 2 - 1) * VARIETY[i % FIELDS]);

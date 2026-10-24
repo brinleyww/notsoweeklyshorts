@@ -267,8 +267,15 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   there against its run (time, less 10 ms per km/h it carries); the best is driven on to the finish with
   no slips, and only if it finishes sooner does it become the bot's run (`BotPlan`: its keys, notes and
   section times). The ways: a little faster, another line, another turn-in, now and then the hint run's own
-  inputs there, and edits of its own keys as a TAS runner makes them (one brake or lift there shortened at
-  either end or left out). Experts may go up to 12% faster than their hint and 3 units beside its line
+  inputs there, edits of its own keys as a TAS runner makes them (one brake or lift there shortened at
+  either end or left out, or a lift traded for a short brake and throttle for the rest), and, where the hint
+  slides, the stretch on grip. The last two come from Arx Lucida's board: its TAS (23.388) and its next-best
+  run (23.429) beat the record (23.690) by coasting about half as long, braking briefly instead, and taking
+  the record's slides at 5.5 s and 12 s on grip (`botlab/t49_compare.mjs` puts two runs side by side). A run
+  that drove most of the way on another player's line never becomes a bot's run: it has no sections of the
+  hint to go over, so it was replayed unchanged every round. (Going back to its own line after the place it
+  failed was tried: on Arx Lucida's test build the chaser then kept a 31.3 s run, so it isn't done; there, following
+  the TAS, it needs another line at the 17 s hop on every run and so keeps no run of its own.) Experts may go up to 12% faster than their hint and 3 units beside its line
   (kept off walls): their record is a safety net (its line, where it braked, its jump run-ups), not a
   ceiling, and nothing they try is kept unless a whole run on the game's physics proved it faster, so they
   never crash on what they learned. In time attack this happens
@@ -301,8 +308,9 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   28.79 -> 28.02 and Natsu (26.04) 27.77 -> 26.35. Rounds (`t29_rounds.mjs`): Anubis expert 28.86, 28.69,
   28.68, 28.62 over four rounds.
 - The record chaser (`Persona.wr`): in a cup with expert bots, the real expert first by name (never a
-  secret expert) learns from the fastest run alone and drives it its own way: that run is its only line (no
-  other player's line on a retry), it never drives that run's own keys (no copying where it is on the
+  secret expert) learns from the fastest run alone and drives it its own way: that run is its line (another
+  player's line only gets it through a place a retry keeps failing, like any bot), it never drives that run's
+  own keys (no copying where it is on the
   record's exact state, and going over its runs never tries a stretch of the record's inputs, only its own
   notes and edits of its own keys), it may go about 20% faster than the record and 4.5 units beside its line, and
   it gets the most time going over its runs (half the learning worker's turns, three times the idle
@@ -320,7 +328,9 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   tries one: a fix is its first retry when it fails within 20 units of where the other bot did (before the
   same checkpoint), and a win is one of the ways it tries when going over the section of its own run where
   the win starts: that bot's pace and turn-in there, with the taker's own line and half a practice try's
-  variety of its own, kept only if its whole run finishes sooner (such sections are gone over more often).
+  variety of its own, kept only if its whole run finishes sooner (such sections are gone over more often;
+  each bot tries each win once, and only wins of 20 ms or more: most don't carry over to another bot's
+  run, and trying them all took most of its tries on Arx Lucida).
   Everything else each bot tries is still its own, so they don't end up on the same run (Winterfell lab
   cup: any two experts' best runs held the same keys on 36-59% of frames). The record chaser shares its
   wins but takes only others' fixes.

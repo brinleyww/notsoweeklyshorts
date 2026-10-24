@@ -54,6 +54,8 @@ const WR_EXPLORE = 3;
 const WR_THINK = 3;
 // Going over a run picks a section other bots found a faster way through as if it lost this much more (ms).
 const TIP_PICK = 300;
+// Least gain (ms) of another bot's win worth trying.
+const TIP_GAIN = 20;
 // An expert on a hint run this much slower than the fastest (log of their times) or more drives it at most this
 // much faster than its own speeds.
 const MAX_LIFT = 0.08;
@@ -108,12 +110,19 @@ export function adoptPlan(job: Job, name: number, plan: BotPlan) {
   notes.v.set(plan.notes);
 }
 
+// Share of its hint's sections a run must have driven to become the bot's run (Job.plan).
+const PLAN_SECTIONS = 0.8;
+// Shortest lift (frames) worth trading for a brake in editKeys.
+const LIFT_TRADE = 40;
+
 // Keys driven as they are from frame `at` to `until` (going over a run: an edit of the bot's own keys).
-type Force = { keys: Uint8Array; at: number; until: number };
+type Force = { keys: Uint8Array; at: number; until: number; trade?: boolean };
 
 // The bot's own keys from `at` to `until` with one stretch of braking or of no throttle (on its own, not a
-// respawn) shortened at either end or left out: braking becomes throttle, a lift holds throttle. Null when
-// there is none.
+// respawn) shortened at either end or left out: braking becomes throttle, a lift holds throttle. Or (now
+// and then) a lift traded for a short brake at its end or start and throttle for the rest, as TAS runs
+// slow down: Arx Lucida's TAS coasts about half as long as its record and gains most of its 0.3 s in those
+// corners. Null when there is none.
 function editKeys(plan: BotPlan, at: number, until: number, rand: () => number): Force | null {
   if (until - at < 20) return null;
   const keys = plan.keys.slice(at, until);
@@ -132,8 +141,17 @@ function editKeys(plan: BotPlan, at: number, until: number, rand: () => number):
     }
   }
   if (!runs.length) return null;
-  const [from, to] = runs[Math.floor(rand() * runs.length)];
+  const [from, to, braking] = runs[Math.floor(rand() * runs.length)];
   const len = to - from, how = rand();
+  if (!braking && len >= LIFT_TRADE && rand() < 0.4) {
+    const brake = Math.max(8, Math.round(len * (0.15 + 0.4 * rand())));
+    const late = rand() < 0.7;
+    for (let i = from; i < to; i++) {
+      const inBrake = late ? i >= to - brake : i < from + brake;
+      keys[i] = inBrake ? (keys[i] & ~1) | 4 : (keys[i] & ~4) | 1;
+    }
+    return { keys, at, until, trade: true };
+  }
   // Left out, or its first or last part (a quarter to three quarters of it).
   const cut = how < 0.34 ? len : Math.max(1, Math.round(len * (0.25 + 0.5 * rand())));
   const lo = how < 0.67 ? from : to - cut;
@@ -282,6 +300,8 @@ export class Job {
   failK = 0;
   // A retry under way: the hint sections it changes, how (pace multiplier, offset or null), and where it failed.
   fix: { from: number; to: number; pace: number; off: number | null; arc: number; k: number } | null = null;
+  // Other bots' wins this bot has tried already (each once: most don't carry over).
+  tipsTried = new WeakSet<Tip>();
   // Restarts from the start line this round (before any checkpoint, a respawn can't help).
   restarts = 0;
   // Respawns in a row that failed again before the next checkpoint.
@@ -336,8 +356,7 @@ export class Job {
     this.rand = rng(spec.bot.seed);
     const b = spec.bot;
     // Riskier bots follow the fastest reference; careful ones a slower run when there is one.
-    // The record chaser has the fastest run and no other.
-    const sorted = [...refs].sort((a, c) => a.n - c.n).slice(0, spec.bot.wr ? 1 : Infinity);
+    const sorted = [...refs].sort((a, c) => a.n - c.n);
     this.refs = sorted;
     this.#clear = clear;
     this.refIdx = sorted.length > 1 && this.rand() > b.risk ? 1 + Math.floor(this.rand() * (sorted.length - 1)) : 0;
@@ -534,7 +553,7 @@ export class Planner {
   showBy: () => number = () => Infinity;
   // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
   roomy: () => boolean = () => true;
-  stats = { ticks: 0, rebuilds: 0, restores: 0, bumps: 0, shared: 0, tipsTried: 0, tipWays: 0, tipWins: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
+  stats = { ticks: 0, rebuilds: 0, restores: 0, bumps: 0, shared: 0, tipsTried: 0, tipWays: 0, tipWins: 0, editWins: 0, tradeWins: 0, gripWins: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
 
   readonly clear = new Map<Reference, Clearance>();
 
@@ -855,8 +874,13 @@ export class Planner {
       job.pbTime = time;
       job.pbSin = job.copy?.own && job.plan ? job.plan.sin.slice() : job.sin.slice();
     }
-    // A run another car pushed about can't be driven again from its keys.
+    // A run another car pushed about can't be driven again from its keys, and one that drove most of the way on
+    // another player's line (a retry switched to it) has no sections of its hint to go over: it would be
+    // replayed as it is every round, never better.
     if (!job.notes || job.copy || job.bumper || (job.plan && job.plan.n <= time)) return;
+    let mapped = 0;
+    for (let q = 0; q < job.sin.length; q++) if (job.sin[q] >= 0) mapped++;
+    if (mapped < PLAN_SECTIONS * job.sin.length) return;
     job.plan = { ref: refKey(job.notes.ref), notes: job.sections!.slice(), keys: job.keys.slice(job.runStart, job.runStart + time), n: time, sin: job.sin.slice() };
     job.notes.v.set(job.plan.notes);
     this.onPlan(job, job.plan);
@@ -882,7 +906,7 @@ export class Planner {
     try {
       const sections = notes.n;
       while (performance.now() < deadline) {
-        const s = this.#pickSection(plan, job.thinkRand, sections, job.bot.wr ? null : (q) => (this.shared.wins(notes.ref, q, job.name).length ? TIP_PICK : 0));
+        const s = this.#pickSection(plan, job.thinkRand, sections, job.bot.wr ? null : (q) => (this.shared.wins(notes.ref, q, job.name).some((t) => t.gain >= TIP_GAIN && !job.tipsTried.has(t)) ? TIP_PICK : 0));
         if (s < 0) break;
         // The run up to section s, once; every way tried starts from there.
         this.#startRun(tj, 0);
@@ -913,9 +937,9 @@ export class Planner {
         };
         // A way through: other notes for section s, (open > 0) the hint run's own inputs for that long, or
         // (edit) the bot's own keys there with one brake or lift shortened or left out, as a TAS runner would.
-        type Way = { notes: Float32Array | null; open: number; edit: Force | null; tip?: Tip };
+        type Way = { notes: Float32Array | null; open: number; edit: Force | null; tip?: Tip; grip?: number };
         // Other bots' faster ways through this place (not for the record chaser, whose way is its own).
-        const tips = job.bot.wr ? [] : this.shared.wins(notes.ref, s, job.name).filter((t) => t.v.length === FIELDS);
+        const tips = job.bot.wr ? [] : this.shared.wins(notes.ref, s, job.name).filter((t) => t.v.length === FIELDS && t.gain >= TIP_GAIN && !job.tipsTried.has(t));
         const apply = (way: Way) => {
           if (way.notes) tj.sections!.set(way.notes, s * FIELDS);
           if (way.open > 0) {
@@ -924,11 +948,13 @@ export class Planner {
             tj.st.openUntil = tj.t + way.open;
           }
           tj.force = way.edit;
+          if (way.grip) tj.st.gripUntil = tj.t + way.grip;
         };
         const make = (i: number): Way => {
           const r = job.thinkRand();
           if (i % 3 === 2 && tips.length) {
-            const tip = tips[Math.floor(i / 3) % tips.length];
+            const tip = tips.shift()!;
+            job.tipsTried.add(tip);
             this.stats.tipWays++;
             return { notes: notes.fromTip(plan!.notes, s, tip.v, job.thinkRand), open: 0, edit: null, tip };
           }
@@ -938,6 +964,9 @@ export class Planner {
             if (edit) return { notes: null, open: 0, edit };
           }
           if (i % 3 === 1 && r < 0.5 && !job.bot.wr) return { notes: null, open: SECTION * (job.thinkRand() < 0.5 ? 1 : 2), edit: null };
+          // On grip instead of the hint's slide: Arx Lucida's TAS and its next-best run both take the record's
+          // slides at 5.5 s and 12 s on grip and come out faster.
+          if (i % 3 === 1 && r >= 0.5 && notes.slides(s)) return { notes: null, open: 0, edit: null, grip: SECTION * (job.thinkRand() < 0.5 ? 1 : 2) };
           return { notes: notes.nudge(plan!.notes, s, job.thinkRand), open: 0, edit: null };
         };
         const e = s + LOCAL_SECTIONS;
@@ -977,6 +1006,8 @@ export class Planner {
           this.stats.tried++;
           if (p) {
             if (way.tip) this.stats.tipWins++;
+            if (way.edit) this.stats[way.edit.trade ? 'tradeWins' : 'editWins']++;
+            if (way.grip) this.stats.gripWins++;
             else if (way.notes) this.#share(job, notes.ref, 'win', s * SECTION, [...way.notes], plan.n - p.n);
             plan = p;
             better = true;
