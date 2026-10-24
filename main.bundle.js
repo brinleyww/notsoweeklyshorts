@@ -45463,6 +45463,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                 },
                 botState: (g, id, state, reset) => cupBotCars.get(g)?.get(id)?.car.setCarState(state, reset),
+                // A bot this page's car can hit (bumper cups): the id hits on it are reported under, and its pose now
+                // and next on the bot's own clock; null keys leave it out.
+                botKeys: (g, id, hitId, keys, reset) => {
+                    const bot = cupBotCars.get(g)?.get(id);
+                    bot && (bot.car.__cupHitId = keys ? hitId : null, bot.car.__cupKeys = keys, bot.car.__cupReset = reset);
+                },
                 autoSpectate: () => getCupAutoSpectate(),
                 restartPressed: (g, e) => {
                     const car = C.get(g, wa, "f"), settings = settingsOf(g);
@@ -46387,6 +46393,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 keys: i
                             })
                         }
+                        // Cuppa's bots in a bumper cup: as Cuppa draws them now, and where their plan takes them next.
+                        if (collide)
+                            for (const b of cupBotCars.get(this)?.values() ?? [])
+                                null != b.car.__cupHitId && b.car.__cupKeys?.length && cars.push({
+                                    id: b.car.__cupHitId,
+                                    reset: b.car.__cupReset ?? 0,
+                                    keys: b.car.__cupKeys
+                                });
                         local.setCollisionCars({
                             frame: local.getTime().numberOfFrames,
                             cars

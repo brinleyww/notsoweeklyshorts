@@ -25,7 +25,7 @@ export type Msg =
   | { k: 'fin'; n: number; t: number; f: number; rec?: string; af?: number; pb?: 1 }
   | { k: 'dnf'; n: number; t: number }
   | ({ k: 'act' } & Action)
-  | { k: 'bump'; n: number; to?: number; from?: number; i: number[] }
+  | { k: 'bump'; n: number; to?: number; from?: number; i: number[]; f?: number }
   // A track's import code in parts: upload id, part index, part count, text.
   | { k: 'trk'; id: string; i: number; n: number; c: string }
   // Organizer to everyone.

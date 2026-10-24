@@ -13413,7 +13413,7 @@
               , __CENTER = [0, .6162, -.1532];
             function __collideSet(m) {
                 let c = __collide.get(m.carId);
-                c || __collide.set(m.carId, c = { ghosts: new Map, lastHit: new Map, owed: new Map, impulses: [], origin: null });
+                c || __collide.set(m.carId, c = { ghosts: new Map, lastHit: new Map, owed: new Map, owedAt: new Map, impulses: [], origin: null });
                 c.frame = Number.isFinite(m.frame) ? m.frame : 0;
                 c.cars = Array.isArray(m.cars) ? m.cars : [];
             }
@@ -13530,7 +13530,8 @@
                         g.reset = other.reset;
                     for (let i = 1; i < keys.length; i++)
                         __len(__sub(keys[i].p, keys[i - 1].p)) > 5 && (g.ghost = !0);
-                    const pose = __remotePose(keys, keys[0].f + (frame - c.frame))
+                    const at = keys[0].f + (frame - c.frame)
+                      , pose = __remotePose(keys, at)
                       , B = __box(pose.p, __axes(pose.q))
                       , hit = __obb(A, B);
                     if (!hit) {
@@ -13568,6 +13569,8 @@
                     for (let j = 0; j < 3; j++)
                         F[(R + 328 >> 2) + j] += .5 * dw[j];
                     c.owed.set(other.id, __add(c.owed.get(other.id) ?? [0, 0, 0], __mul(J, -invM)));
+                    // When the hit was on the other car's own clock (a Cuppa bot is pushed back from that frame).
+                    c.owedAt.has(other.id) || c.owedAt.set(other.id, Math.round(at));
                     // The other car is drawn where it was a moment ago; it has really been pushed away
                     // already, so the pair passes through until it separates instead of hitting again.
                     g.ghost = !0
@@ -13579,7 +13582,9 @@
                         continue;
                     c.owed.delete(id);
                     c.lastHit.set(id, frame);
-                    __len(impulse) > .05 && hits.push({ id, impulse });
+                    const at = c.owedAt.get(id);
+                    c.owedAt.delete(id);
+                    __len(impulse) > .05 && hits.push({ id, impulse, at });
                 }
                 hits.length && postMessage({ messageType: 12, carId: car.id, hits })
             }

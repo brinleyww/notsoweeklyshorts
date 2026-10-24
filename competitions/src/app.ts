@@ -324,6 +324,7 @@ export class App {
     } else this.native.visibility(g, null, this.selfPid);
     this.native.presentation(g, true, this.watch.active || covered);
     const crashing = s.rules.collisions && s.phase === 'racing' && this.driver.racing && !this.driver.done;
+    this.bots.bumper = crashing;
     this.native.collisions(
       g,
       crashing
@@ -493,7 +494,7 @@ export class App {
       g = this.game;
     if (!s || !g || !s.rules.collisions || s.phase !== 'racing') return;
     for (const hit of this.native.bumps(g)) {
-      this.report({ k: 'bump', n: s.round!.n, to: hit.id, i: hit.impulse }, false);
+      this.report({ k: 'bump', n: s.round!.n, to: hit.id, i: hit.impulse, ...(Number.isFinite(hit.at) ? { f: hit.at } : {}) }, false);
       // The other car is pushed here at once; its own states show the push only after a round trip.
       if (hit.impulse.length === 3 && hit.impulse.every(Number.isFinite)) nudgeCar(this.info?.connection, hit.id, hit.impulse as [number, number, number]);
     }

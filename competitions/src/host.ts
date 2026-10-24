@@ -272,13 +272,12 @@ export class Organizer {
   }
 
   // Keeps rules.bots computer racers on the grid. Once the cup has started a bot taken off stays as a
-  // benched spectator, so its results keep a name. A human can always take a bot's slot, and bumper
-  // cars have no bots (a planned run can't take a shove).
+  // benched spectator, so its results keep a name. A human can always take a bot's slot.
   #syncBots() {
     const s = this.state;
     const lobby = s.phase === 'lobby';
     const seated = this.#seatedBots();
-    let target = s.rules.collisions ? 0 : Math.max(0, Math.min(s.rules.bots, MAX_RACERS - E.humanRacers(s).length));
+    let target = Math.max(0, Math.min(s.rules.bots, MAX_RACERS - E.humanRacers(s).length));
     // A knockout's grid is locked once it starts.
     if (!lobby && s.rules.mode === 'knockout') target = Math.min(target, seated.length);
     let changed = false;
@@ -405,7 +404,7 @@ export class Organizer {
     const skills = bots.map((p) => ((this.#secret.get(p.u) ?? 0) >= n ? 1 : p.bot!.s / 100));
     const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, bots.map((p) => BOT_NAMES.indexOf(p.name)));
     list.forEach((persona, i) => (persona.u = bots[i].u));
-    mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS });
+    mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS, bumper: s.rules.collisions });
     const r = s.round;
     if (mgr.failed && r && r.startAt == null) r.racers = r.racers.filter((u) => !isBot(player(s, u)));
   }
@@ -636,6 +635,12 @@ export class Organizer {
     if (!s.rules.collisions || s.phase !== 'racing' || !Array.isArray(m.i) || m.i.length !== 3 || !m.i.every(Number.isFinite)) return;
     if (m.n !== s.round?.n || typeof m.to !== 'number') return;
     const impulse = m.i.map((v) => Math.max(-50, Math.min(50, v)));
+    // A bot: its planner pushes it back from the frame it was hit on.
+    const bot = player(s, -10 - m.to);
+    if (m.to < 0 && bot?.bot) {
+      if (Number.isFinite(m.f)) this.#bots?.bump(bot.u, m.f!, impulse);
+      return;
+    }
     if (m.to === this.app.selfPid) {
       if (this.app.game) this.app.native.bump(this.app.game, impulse);
     } else this.app.net.send(m.to, { k: 'bump', n: m.n, from: pid, i: impulse });

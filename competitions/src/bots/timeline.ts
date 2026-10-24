@@ -135,6 +135,15 @@ export class BotTimeline {
   #eventsUsed = false;
 
   push(frames: Keyframe[]) {
+    // A chunk that starts at or before the end replaces everything from its first frame (a bot in a bumper cup
+    // driven again from where another car hit it).
+    const first = frames[0], e = this.#e;
+    if (first && e.length > this.#start && first.f <= e[e.length - 1].k.f) {
+      let i = e.length;
+      while (i > this.#start && e[i - 1].k.f >= first.f) i--;
+      e.length = i;
+      this.#eventAt = Math.min(this.#eventAt, i);
+    }
     for (const k of frames) {
       const last = this.#e[this.#e.length - 1]?.k;
       if (last && k.f < last.f) continue;
@@ -197,6 +206,17 @@ export class BotTimeline {
     while (this.#eventAt < e.length && e[this.#eventAt].k.f <= t) {
       const entry = e[this.#eventAt++];
       if (entry.event) out.push(this.#full(entry));
+    }
+    return out;
+  }
+
+  // Poses after t on the bot's clock (up to n, never past a cut), for another car's collision step.
+  next(t: number, n: number, out: { f: number; p: number[]; q: number[] }[]) {
+    const e = this.#e;
+    for (let j = this.#find(t) + 1; j < e.length && out.length <= n; j++) {
+      const k = e[j].k;
+      if (k.cut) break;
+      out.push({ f: k.f, p: [k.pos[0], k.pos[1], k.pos[2]], q: [k.quat[0], k.quat[1], k.quat[2], k.quat[3]] });
     }
     return out;
   }

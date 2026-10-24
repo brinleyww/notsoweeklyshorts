@@ -110,6 +110,15 @@ export class Sim {
     return out;
   }
 
+  // Adds a velocity change (units/s) to the car body; it shows from the next frame.
+  kick(id: number, v: ArrayLike<number>) {
+    const p = this.I.carPointer(id);
+    if (!p) return;
+    const body = new Uint32Array(this.heap.buffer, p + 36, 1)[0];
+    const vel = new Float32Array(this.heap.buffer, body + 312, 3);
+    for (let j = 0; j < 3; j++) vel[j] += v[j];
+  }
+
   save(slot: number) {
     const h = this.heap;
     let buf = this.#slots[slot];

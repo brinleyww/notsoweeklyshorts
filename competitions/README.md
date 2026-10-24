@@ -193,8 +193,23 @@ skill 1. Bots are ordinary
 players with `Player.bot` (skill and car style) and negative car ids (`botPid`), so the board, results,
 standings, knockouts, the director camera and Follow all treat them like racers, with a BOT tag. They
 never vote, ban, pick, ready up or keep a round waiting, their finishes don't start the finish window,
-a joining human takes a bot's place on a full grid, and bumper-car cups have no bots (they can't react
-to a hit).
+and a joining human takes a bot's place on a full grid.
+
+Bots in bumper cups (`bumper` jobs): a bot is still planned on the organizer's page, but only up to 2 s ahead of
+the race clock, with retries until 0.7 s ahead, and pages get its frames only 0.4 s past the race clock
+(`Planner.showBy`, `commitAll`, short chunks). Every racing page puts the bots into its own car's collision
+step (`native.botKeys`: the pose drawn now and the next keyframes), so a page sees both sides of a hit
+between its car and a bot: its own half as with any car, and the bot's half sent as a `bump` with the frame
+it happened on (the sim worker reports `at` on the hit car's clock). The organizer passes it to the bot's
+worker (`{b:'bump'}`); `Planner.bump` restores a snapshot from before that frame, drives the bot's own keys
+up to it, adds the velocity change there (`Job.kicks`, applied again on every replay) and plans on, never
+going back before a hit. Its frames from there go out again in a chunk of their own, which pages take as
+replacing everything from its first frame (`BotTimeline.push`). Bots don't collide with each other, and a
+pushed run never becomes a bot's best run. Lab: `botlab/t43_bump.mjs`; browser: `cdp/sc_botbump.mjs`.
+
+Custom tracks get the top runs of their own board like any other track (Kodub keeps a board for every
+track id), as well as the organizer's PB and runs finished in the cup. When bots still sit a track out,
+the note says why (no run to follow and no route found, or none of the runs replay).
 
 How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/cuppa_bots.js`):
 - Workers: 1-3 copies of the game's own `simulation_worker.bundle.js`, named `nsws-cuppa-bots`, which

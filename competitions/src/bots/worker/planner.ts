@@ -23,6 +23,8 @@ export const TICK = 200;
 // Frames each bot may still change; older keyframes are final and can be sent.
 export const HOLD = 3000;
 export const KEY_EVERY = 50;
+// A hit's most velocity change, units/s (bumper cups).
+const MAX_KICK = 30;
 // Heap copies kept for going back, in bytes at most (fewer of them on a big track).
 const SNAP_BUDGET = 320 * 1024 * 1024;
 // Past the line a bot brakes and, like a ghost, leaves the track soon after (scenery past a finish
@@ -86,6 +88,8 @@ export interface JobSpec {
   refIdx?: number;
   // Runs the bot has already had on this track (rounds before this one).
   warm?: number;
+  // A bumper cup: planned only a moment ahead of the race clock and pushed back from where another car hit it.
+  bumper?: boolean;
 }
 
 type Copy = { keys: Uint8Array; n: number; own?: boolean };
@@ -304,6 +308,11 @@ export class Job {
   hint = -1;
   sections: Float32Array | null = null;
   readonly practice: boolean;
+  readonly bumper: boolean;
+  // Hits from other cars this run: the velocity change after the step that reached each frame. Nothing before
+  // the latest one may be driven again (it happened where it happened).
+  kicks = new Map<number, number[]>();
+  kickFloor = -Infinity;
   readonly drill: boolean;
   // Practice and drilling: the hint run's section the car is in, when it left each one and how fast, and the
   // last section practised.
@@ -330,6 +339,7 @@ export class Job {
     this.ref = sorted[this.refIdx];
     this.name = b.name ?? b.u;
     this.practice = !!spec.practice;
+    this.bumper = !!spec.bumper;
     this.drill = !!spec.drill;
     this.thinkRand = rng(b.seed ^ 0x5bd1e995);
     if (this.ref.kind !== 'explore') {
@@ -507,9 +517,12 @@ export class Planner {
   #ponderAt = 0;
   // Set by the worker: planning has fallen close behind the race clock.
   hurry: () => boolean = () => false;
+  // Bumper cups: the last bot frame pages may have yet (just past the race clock). Planned frames past it are
+  // only a guess another car's hit can still change.
+  showBy: () => number = () => Infinity;
   // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
   roomy: () => boolean = () => true;
-  stats = { ticks: 0, rebuilds: 0, restores: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
+  stats = { ticks: 0, rebuilds: 0, restores: 0, bumps: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
 
   readonly clear = new Map<Reference, Clearance>();
 
@@ -636,6 +649,8 @@ export class Planner {
 
   #startRun(job: Job, at: number, copy: Copy | null = null) {
     if (job.car) this.sim.deleteCar(job.car);
+    job.kicks.clear();
+    job.kickFloor = -Infinity;
     // A run that went onto another player's line to get through somewhere starts again on its own hint.
     if (job.hint >= 0) job.useRef(job.hint);
     // An expert drives its own best run as it is (it goes over it between runs; see #think).
@@ -727,6 +742,7 @@ export class Planner {
       this.stats.frames++;
       const now = t + 1;
       job.t = now;
+      this.#kick(job, now);
       const jumped = k.reset && job.hasPrev && this.#jumped(job.prev, r);
       if (jumped) {
         this.#keep(job, t, job.prev);
@@ -827,7 +843,8 @@ export class Planner {
       job.pbTime = time;
       job.pbSin = job.copy?.own && job.plan ? job.plan.sin.slice() : job.sin.slice();
     }
-    if (!job.notes || job.copy || (job.plan && job.plan.n <= time)) return;
+    // A run another car pushed about can't be driven again from its keys.
+    if (!job.notes || job.copy || job.bumper || (job.plan && job.plan.n <= time)) return;
     job.plan = { ref: refKey(job.notes.ref), notes: job.sections!.slice(), keys: job.keys.slice(job.runStart, job.runStart + time), n: time, sin: job.sin.slice() };
     job.notes.v.set(job.plan.notes);
     this.onPlan(job, job.plan);
@@ -841,7 +858,7 @@ export class Planner {
   #think(job: Job, deadline: number) {
     const notes = job.notes;
     let plan = notes && job.plan?.ref === refKey(notes.ref) ? job.plan : null;
-    if (!notes || !plan || this.#busy || performance.now() >= deadline) return;
+    if (!notes || !plan || job.bumper || this.#busy || performance.now() >= deadline) return;
     this.#busy = true;
     const t0 = performance.now();
     this.stats.thinks++;
@@ -1222,7 +1239,7 @@ export class Planner {
         const want = this.#tick - back;
         for (let i = usable.length - 1; i >= 0; i--) {
           const saved = usable[i].jobs.get(job.id)!;
-          if (saved.t < job.committed) break;
+          if (saved.t < Math.max(job.committed, job.kickFloor)) break;
           if (saved.t > before) continue;
           snap = usable[i];
           // Far enough back, and on the line there (going further back while still off it), and on the
@@ -1231,7 +1248,7 @@ export class Planner {
         }
         // No snapshot holds this car any more (another bot changed cars), or none is far enough back: replay its
         // own keys instead.
-        if (!snap) rebuildTo = Math.max(job.committed, job.runStart, Math.min(job.failAt - back * TICK, before));
+        if (!snap) rebuildTo = Math.max(job.committed, job.runStart, job.kickFloor, Math.min(job.failAt - back * TICK, before));
         job.lastFail = { at: job.failAt, why: job.failWhy, from: snap ? snap.jobs.get(job.id)!.t : rebuildTo, n };
       } else job.lastFail = { at: -1, why: null, from: -1, n: 0 };
       plans.push({ job, snap, rebuildTo });
@@ -1262,14 +1279,17 @@ export class Planner {
 
   // A new car for this bot, driven through its own logged keys from the start of its run to time `to`.
   // Slower than a snapshot (it replays the whole run so far), so only for when no snapshot will do.
-  #rebuild(job: Job, to: number) {
+  #rebuild(job: Job, to: number, vary = true) {
     this.stats.rebuilds++;
     if (job.car) this.sim.deleteCar(job.car);
     job.car = this.sim.newCar(job.copy && !job.copy.own ? this.full : this.track);
     this.#carChanged = true;
     const k = this.#k;
     let buf: Uint8Array | null = null;
-    for (let t = job.runStart; t < to; t++) buf = this.sim.step(job.car, keysOf(job.keys[t], k));
+    for (let t = job.runStart; t < to; t++) {
+      buf = this.sim.step(job.car, keysOf(job.keys[t], k));
+      this.#kick(job, t + 1);
+    }
     this.stats.replay += to - job.runStart;
     job.t = to;
     if (buf) {
@@ -1290,15 +1310,69 @@ export class Planner {
     job.failAt = -1;
     job.resetAt = -1;
     job.airSince = -1;
-    this.#vary(job, job.failArc);
+    if (vary) this.#vary(job, job.failArc);
     job.failWhy = null;
   }
 
   // Steps a bot's car through its logged keys (physics only).
   #replay(job: Job, from: number, to: number) {
     const k = this.#k;
-    for (let t = from; t < to; t++) this.sim.step(job.car, keysOf(job.keys[t], k));
+    for (let t = from; t < to; t++) {
+      this.sim.step(job.car, keysOf(job.keys[t], k));
+      this.#kick(job, t + 1);
+    }
     this.stats.replay += Math.max(0, to - from);
+  }
+
+  #kick(job: Job, f: number) {
+    if (!job.kicks.size) return;
+    const v = job.kicks.get(f);
+    if (v) this.sim.kick(job.car, v);
+  }
+
+  // Another car hit bot `id` at its frame `at` (bumper cups): the velocity change v there, and the bot driven on
+  // from it. A hit in the past sends every bot back to a snapshot from before it (the others drive their own
+  // keys again to where they were); this one drives its own keys up to the hit, then on from there. Its frames
+  // from there go to pages again. False when it isn't one of this planner's running bumper bots.
+  bump(id: string, at: number, v: number[]) {
+    const job = this.jobs.find((j) => j.id === id);
+    if (!job || !job.bumper || job.status !== 'run' || v.length !== 3 || !v.every(Number.isFinite) || !Number.isFinite(at)) return false;
+    at = Math.round(at);
+    if (at <= job.runStart || at < job.kickFloor) return false;
+    const len = Math.hypot(v[0], v[1], v[2]), scale = len > MAX_KICK ? MAX_KICK / len : 1;
+    const dv = v.map((x) => x * scale);
+    const was = job.kicks.get(at);
+    job.kicks.set(at, was ? was.map((x, j) => x + dv[j]) : dv);
+    job.kickFloor = at;
+    this.stats.bumps++;
+    if (at > job.t) return true;
+    const live = this.jobs.filter((j) => j.live);
+    const usable = this.#carChanged ? [] : this.#ring.filter((s) => live.every((j) => s.jobs.get(j.id)?.car === j.car));
+    let snap: Snap | null = null;
+    for (let i = usable.length - 1; i >= 0 && !snap; i--) {
+      const saved = usable[i].jobs.get(job.id)!;
+      if (saved.t <= at && saved.t >= job.runStart) snap = usable[i];
+    }
+    job.copy = null;
+    if (!snap) {
+      this.#rebuild(job, at, false);
+      job.committed = Math.min(job.committed, at);
+      return true;
+    }
+    this.sim.restore(snap.slot);
+    this.stats.restores++;
+    for (const j of live) {
+      const from = snap.jobs.get(j.id)!;
+      if (j !== job) {
+        this.#replay(j, from.t, j.t);
+        continue;
+      }
+      j.load(from);
+      j.force = at > from.t ? { keys: j.keys.slice(from.t, at), at: from.t, until: at } : null;
+      j.committed = Math.min(j.committed, from.t);
+    }
+    this.#ring = this.#ring.filter((s) => s.tick <= snap!.tick);
+    return true;
   }
 
   // Settings for the next try at the place that failed: slower first, faster for missed jumps,
@@ -1413,8 +1487,13 @@ export class Planner {
     if (useCopy) this.stats.copies++;
   }
 
+  // Hands over what is due (bumper cups hand frames over as the race clock goes, not as planning goes).
+  commitAll() {
+    for (const job of this.jobs) this.#commit(job);
+  }
+
   #commit(job: Job) {
-    const limit = job.live ? job.t - HOLD : Infinity;
+    const limit = job.live ? (job.bumper ? Math.min(job.t, this.showBy()) : job.t - HOLD) : Infinity;
     if (limit <= job.committed) return;
     let n = 0;
     while (n < job.out.length && job.out[n].f < limit) n++;

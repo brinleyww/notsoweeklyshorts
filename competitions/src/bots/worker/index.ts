@@ -20,8 +20,15 @@ type Scope = {
 const scope = self as unknown as Scope;
 const post = (m: FromWorker, transfer?: Transferable[]) => scope.postMessage(m, transfer);
 
-// Bot time per chunk: shorter chunks deflate worse, longer ones reach pages later.
+// Bot time per chunk: shorter chunks deflate worse, longer ones reach pages later. Bumper cups' bots are planned
+// at most BUMPER_AHEAD ahead of the race clock (snapshots must still reach back to a hit's frame), handed over
+// only BUMPER_SHOW past it (what pages have can't take a hit any more), in short chunks, and retry until
+// BUMPER_HURRY ahead.
 const CHUNK_FRAMES = 2000;
+const BUMPER_CHUNK = 100;
+const BUMPER_AHEAD = 2000;
+const BUMPER_SHOW = 400;
+const BUMPER_HURRY = 700;
 const SLICE_MS = 25;
 const PROGRESS_MS = 250;
 // Planned less than this far ahead of the race clock, bots stop retrying failures until they're ahead again.
@@ -118,7 +125,7 @@ function handle(m: ToWorker) {
         return;
       }
       if (streams.has(m.id)) return;
-      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null, drill: !!m.drill, plans: m.plans ?? null, warm: m.warm ?? 0 });
+      const job = track.planner.add({ id: m.id, bot: m.bot, mode: m.mode, end: m.end, brain: m.brain ?? null, notes: m.notes ?? null, drill: !!m.drill, plans: m.plans ?? null, warm: m.warm ?? 0, bumper: !!m.bumper });
       streams.set(m.id, { job, enc: new KeyframeEncoder(), seq: 0, pending: 0, from: -1, last: 0, chain: Promise.resolve(), at: performance.now(), was: 0, rate: 0, results: 0, sent: 0 });
       kick();
       return;
@@ -136,6 +143,9 @@ function handle(m: ToWorker) {
     }
     case 'drop':
       if (track?.key === m.key) dropTrack();
+      return;
+    case 'bump':
+      if (track?.planner?.bump(m.id, m.at, m.v)) kick();
       return;
     case 'brain':
       track?.planner?.brain(m.id, m.w);
@@ -224,7 +234,8 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
   track = { key, load, route, refs, planner: ok ? new Planner(sim, route, refs, ringSize(), rays, load) : null };
   if (track.planner) {
     const planner = track.planner;
-    planner.hurry = () => startAt != null && planner.frontier - raceNow() < HURRY_MS;
+    planner.hurry = () => startAt != null && planner.frontier - raceNow() < (planner.jobs.some((j) => j.bumper) ? BUMPER_HURRY : HURRY_MS);
+    planner.showBy = () => raceNow() + BUMPER_SHOW;
     planner.roomy = () => startAt == null || planner.frontier - raceNow() > DRILL_AHEAD_MS;
     planner.thinkMs = () => {
       if (startAt == null) return THINK_IDLE_MS;
@@ -241,13 +252,19 @@ function loadTrack(key: string, payload: { trackData: string; mountainVertices: 
 function commit(job: Job, outs: Out[]) {
   const s = streams.get(job.id);
   if (!s) return;
+  // Frames again from a moment already handed over (a bot pushed by another car): they start a chunk of their
+  // own, which pages take as replacing everything from its first frame on.
+  if (outs.length && (s.seq > 0 || s.pending > 0) && outs[0].f <= s.last) {
+    flush(s);
+    s.from = -1;
+  }
   for (const o of outs) {
     if (s.from < 0) s.from = o.f;
     s.enc.add(o.f, o.raw, o.cut);
     s.last = o.f;
     s.pending++;
   }
-  if (s.last - s.from >= CHUNK_FRAMES) flush(s);
+  if (s.last - s.from >= (job.bumper ? BUMPER_CHUNK : CHUNK_FRAMES)) flush(s);
 }
 
 function flush(s: Stream) {
@@ -334,7 +351,9 @@ function pump() {
   }
   const t0 = performance.now();
   const first = progressAt === 0;
-  while (performance.now() - t0 < SLICE_MS && planner.tick()) {}
+  const bumper = planner.jobs.some((j) => j.bumper && j.live);
+  while (performance.now() - t0 < SLICE_MS && !(bumper && planner.frontier > raceNow() + BUMPER_AHEAD) && planner.tick()) {}
+  if (bumper) planner.commitAll();
   const now = performance.now();
   if (first || now - progressAt >= PROGRESS_MS) {
     progressAt = now;
@@ -343,7 +362,7 @@ function pump() {
   // Well ahead of the race (GO waits for a lead, and pages need a few seconds of it): leave most of the
   // CPU to the game, which on a weak device shares its cores with this.
   const ahead = planner.frontier - raceNow();
-  const rest = ahead > 35_000 ? SLICE_MS * 8 : ahead > 20_000 ? SLICE_MS * 3 : ahead > 12_000 ? SLICE_MS : 0;
+  const rest = bumper ? 4 : ahead > 35_000 ? SLICE_MS * 8 : ahead > 20_000 ? SLICE_MS * 3 : ahead > 12_000 ? SLICE_MS : 0;
   setTimeout(pump, rest);
 }
 

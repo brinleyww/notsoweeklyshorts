@@ -22,6 +22,8 @@ export interface BotJob {
   mode: 'run' | 'ta';
   // Bot frame where the round stops.
   end: number;
+  // A bumper cup: bots are planned only a moment ahead and other cars' hits push them.
+  bumper?: boolean;
 }
 export interface BotHost {
   native: Native;
@@ -31,8 +33,9 @@ export interface BotHost {
   note(text: string): void;
 }
 
-// Committed frames every bot should have ahead of the race clock at GO.
+// Committed frames every bot should have ahead of the race clock at GO (bumper cups' bots plan only a moment ahead).
 export const LEAD = 6000;
+const BUMPER_LEAD = 300;
 const READY_TIMEOUT_MS = 10_000;
 const HAND_MS = 500;
 const REFS_KEY = 'nsws-cuppa-refs:';
@@ -96,6 +99,7 @@ interface Plan {
   bad: boolean;
   mode: 'run' | 'ta';
   end: number;
+  bumper: boolean;
   startAt: number | null;
   endFrame: number;
   bots: Map<number, Bot>;
@@ -130,7 +134,7 @@ export class BotManager {
   #tickAt = Date.now();
   #usedAt = Date.now();
   #watch: ReturnType<typeof setInterval> | null = null;
-  #track: { trackId: string; key: string; best: number; bad: boolean; msg: ToWorker } | null = null;
+  #track: { trackId: string; key: string; best: number; bad: boolean; why?: string; msg: ToWorker } | null = null;
   #keys = 0;
   #jobs = 0;
   #refs = new Map<string, Promise<RefInput[]>>();
@@ -157,8 +161,8 @@ export class BotManager {
   }
 
   // Starts fetching a track's reference runs before it is needed.
-  prefetch(trackId: string, custom: boolean) {
-    void this.#boardRefs(trackId, custom);
+  prefetch(trackId: string, _custom: boolean) {
+    void this.#boardRefs(trackId);
   }
 
   // Plans round n. Called again for the same round and track it only starts jobs for bots added
@@ -175,17 +179,17 @@ export class BotManager {
     if (cur && cur.n === n && cur.trackId === track.id) {
       cur.mode = job.mode;
       cur.end = job.end;
+      cur.bumper = !!job.bumper;
       this.#reconcile(cur, job.bots);
       this.#learn(cur);
       return;
     }
     this.#close();
-    const plan: Plan = { n, g: ++this.#g, trackId: track.id, key: null, bad: false, mode: job.mode, end: job.end, startAt: null, endFrame: job.end, bots: new Map(), first: false, counted: false };
+    const plan: Plan = { n, g: ++this.#g, trackId: track.id, key: null, bad: false, mode: job.mode, end: job.end, bumper: !!job.bumper, startAt: null, endFrame: job.end, bots: new Map(), first: false, counted: false };
     this.#plan = plan;
     this.#post({ b: 'clock', startAt: null, offset: 0 });
     this.#reconcile(plan, job.bots);
-    const custom = track.cat === 'custom';
-    const board = this.#boardRefs(track.id, custom);
+    const board = this.#boardRefs(track.id);
     const wait = new Promise<RefInput[]>((resolve) => setTimeout(() => resolve([]), REFS_WAIT_MS));
     Promise.race([board, wait])
       .then((refs) => {
@@ -232,12 +236,20 @@ export class BotManager {
     const plan = this.#plan;
     if (!plan || this.broken) return 0;
     let worst = 0;
+    const lead = plan.bumper ? BUMPER_LEAD : LEAD;
     for (const b of plan.bots.values()) {
-      if (b.over || b.frontier >= LEAD) continue;
+      if (b.over || b.frontier >= lead) continue;
       if (!(b.rate > 0)) return Infinity;
-      worst = Math.max(worst, (LEAD - b.frontier) / b.rate);
+      worst = Math.max(worst, (lead - b.frontier) / b.rate);
     }
     return Math.ceil(worst);
+  }
+
+  // Another car hit bot u at its frame `at` (bumper cups).
+  bump(u: number, at: number, v: number[]) {
+    const b = this.#plan?.bots.get(u);
+    if (!b || b.over || !b.slot || !this.#plan!.bumper) return;
+    this.#send(b.slot, { b: 'bump', id: b.id, at, v });
   }
 
   // Results whose moment has come on the cup clock (never early).
@@ -396,7 +408,7 @@ export class BotManager {
     const drill = b.persona.skill >= EXPERT_SKILL;
     const plans = this.#plansFor(plan.trackId, b.persona);
     const warm = this.#raced.get(plan.trackId)?.get(b.persona.name ?? b.u) ?? 0;
-    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill, plans, warm });
+    this.#send(slot, { b: 'job', id: b.id, key: plan.key!, bot: b.persona, mode: plan.mode, end: plan.end, brain: this.#brainFor(plan.trackId, b.persona.skill), notes, drill, plans, warm, bumper: plan.bumper });
   }
 
   #cancel(b: Bot) {
@@ -440,7 +452,7 @@ export class BotManager {
     // Same track: the workers keep it, unless the cup has since made a faster run to follow.
     if (t && t.trackId === plan.trackId && !(best < t.best)) {
       plan.key = t.key;
-      if (t.bad) this.#fail(plan, "Bots can't drive this track");
+      if (t.bad) this.#fail(plan, t.why ?? "Bots can't drive this track");
       return;
     }
     const payload = this.host.native.trackPayload?.(trackData);
@@ -458,10 +470,10 @@ export class BotManager {
     }
   }
 
-  #boardRefs(trackId: string, custom: boolean) {
+  #boardRefs(trackId: string) {
     let p = this.#refs.get(trackId);
     if (!p) {
-      p = this.#fetchRefs(trackId, custom).catch(() => []);
+      p = this.#fetchRefs(trackId).catch(() => []);
       this.#refs.set(trackId, p);
     }
     return p.then((board) => {
@@ -470,7 +482,7 @@ export class BotManager {
     });
   }
 
-  async #fetchRefs(trackId: string, custom: boolean): Promise<RefInput[]> {
+  async #fetchRefs(trackId: string): Promise<RefInput[]> {
     // The top runs: each expert bot replays its own one (up to MAX_BOTS of them).
     const toRefs = (runs: BoardRun[]) => {
       return [...runs]
@@ -479,7 +491,7 @@ export class BotManager {
         .filter((r): r is BoardRun => !!r && typeof r.recording === 'string' && r.frames > 0)
         .map((r): RefInput => ({ id: `board:${r.rank}`, kind: r.rank === 1 ? 'wr' : 'board', rank: r.rank, recording: r.recording, frames: r.frames }));
     };
-    if (custom || !this.host.native.boardRuns) return [];
+    if (!this.host.native.boardRuns) return [];
     const now = Date.now();
     try {
       const cached = JSON.parse(localStorage.getItem(REFS_KEY + trackId) ?? 'null') as { at: number; runs: BoardRun[] } | null;
@@ -748,9 +760,17 @@ export class BotManager {
     if (m.b === 'plan') return this.#planned(m);
     if (m.b === 'track') {
       if (m.ok) return;
-      if (this.#track?.key === m.key) this.#track.bad = true;
+      const why = !m.refs.length
+        ? "Bots have no run to follow on this track (nobody's time on its board, the organizer's or in this cup) and couldn't find a route on their own"
+        : !m.refs.some((r) => r.valid)
+          ? `None of the ${m.refs.length} run${m.refs.length > 1 ? 's' : ''} bots could follow replay to the finish on this track`
+          : "Bots can't drive this track";
+      if (this.#track?.key === m.key) {
+        this.#track.bad = true;
+        this.#track.why = why;
+      }
       const plan = this.#plan;
-      if (plan?.key === m.key) this.#fail(plan, "Bots can't drive this track");
+      if (plan?.key === m.key) this.#fail(plan, why);
       return;
     }
     if (m.b === 'error') {

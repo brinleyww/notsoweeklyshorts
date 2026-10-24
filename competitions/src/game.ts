@@ -145,7 +145,8 @@ export interface Native {
   inviteError(c: Connection): string | null;
   verifyRun(g: Game, recording: string, frames: number): Promise<boolean | null>;
   collisions(g: Game, ids: number[] | null): void;
-  bumps(g: Game): { id: number; impulse: number[] }[];
+  // A hit's frame `at` is on the other car's own clock.
+  bumps(g: Game): { id: number; impulse: number[]; at?: number }[];
   bump(g: Game, impulse: number[]): void;
   sound(name: 'tick' | 'go' | 'record' | 'checkpoint' | 'finish'): void;
   saveClip(run: { recording: string; frames: number; trackId: string; carStyle: string; nickname: string; name: string }): Promise<boolean | 'duplicate'>;
@@ -160,6 +161,8 @@ export interface Native {
   // The game's cars for these bots in session g (created, restyled, or disposed to match), drawn like remote cars.
   bots?(g: Game, list: { id: number; style: string; nickname: string }[]): void;
   botState?(g: Game, id: number, state: CarState, reset: boolean): void;
+  // A bot this page's car can hit, as {f, p, q} poses on the bot's clock (now, then next); null leaves it out.
+  botKeys?(g: Game, id: number, hitId: number, keys: { f: number; p: number[]; q: number[] }[] | null, reset: number): void;
 }
 export interface TrackPayload {
   trackData: string;

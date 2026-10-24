@@ -42,6 +42,8 @@ interface Track {
   runs: Run[];
   cutNext: boolean;
   sampled: boolean;
+  // Respawns, restarts and jumps drawn so far (another car's collision step passes through across one).
+  cuts: number;
 }
 interface Plan {
   g: number;
@@ -50,9 +52,13 @@ interface Plan {
 
 const NONE: Bot[] = [];
 
-const newTrack = (): Track => ({ data: [], decoded: 0, epoch: 0, busy: false, tl: new BotTimeline(), runs: [], cutNext: false, sampled: false });
+const newTrack = (): Track => ({ data: [], decoded: 0, epoch: 0, busy: false, tl: new BotTimeline(), runs: [], cutNext: false, sampled: false, cuts: 0 });
+// Keyframes after now a bumper cup's hit list gets for each bot.
+const HIT_KEYS = 3;
 
 export class BotView {
+  // This page's car can hit bots (a bumper cup round it is racing in).
+  bumper = false;
   #plans = new Map<number, Plan>();
   #floor = -Infinity;
   #cup = '';
@@ -280,6 +286,7 @@ export class BotView {
       for (const ev of tl.events(t)) this.live.bot(b.pid, this.#raceTime(track, ev, t));
       const at = tl.sample(t, lerp);
       if (!at) continue;
+      if (at.reset) track.cuts++;
       this.live.bot(b.pid, this.#raceTime(track, at.state, t));
       if (!g) continue;
       const was = this.#drawn.get(b.pid);
@@ -288,10 +295,15 @@ export class BotView {
         const last = this.#last.get(b.pid);
         if (was === this.#frameNo - 1 && last)
           this.native.botState?.(g, b.pid, { ...last, speedKmh: 0, wheelDeltaRotation: [0, 0, 0, 0], wheelSkidInfo: [0, 0, 0, 0], collisionImpulses: [], brakeLightEnabled: false, controls: { up: false, right: false, down: false, left: false, reset: false } }, false);
+        this.native.botKeys?.(g, b.pid, b.pid, null, 0);
         continue;
       }
       if (!this.native.botState || !this.#cars.has(b.pid)) continue;
       this.native.botState(g, b.pid, at.state, at.reset || jump || was !== this.#frameNo - 1);
+      if (this.bumper && at.state.hasStarted && at.state.finishFrames == null) {
+        const p = at.state.position, q = at.state.quaternion;
+        this.native.botKeys?.(g, b.pid, b.pid, tl.next(t, HIT_KEYS, [{ f: Math.round(t), p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w] }]), track.cuts);
+      } else this.native.botKeys?.(g, b.pid, b.pid, null, 0);
       this.#drawn.set(b.pid, this.#frameNo);
       this.#last.set(b.pid, at.state);
     }
