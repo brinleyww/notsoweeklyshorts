@@ -127,7 +127,7 @@ export class Panel {
           'div',
           { class: 'meta' },
           h('span', { class: 'chip ' + (['racing', 'countdown'].includes(s.phase) ? 'live' : 'amber') }, PHASE_TEXT[s.phase]),
-          h('span', { class: 'ell' }, `${formatById(s.format)?.name ?? s.format} · ${rulesSummary(s.rules)}${s.rules.bots && !s.rules.collisions ? ` · ${plural(s.rules.bots, 'bot')}` : ''}`),
+          h('span', { class: 'ell' }, `${formatById(s.format)?.name ?? s.format} · ${rulesSummary(s.rules)}${s.rules.bots ? ` · ${plural(s.rules.bots, 'bot')}` : ''}`),
         ),
       ),
       app.code
@@ -750,10 +750,10 @@ export class Panel {
       r.warmupMode !== 'off' ? toggle('readyEnds', 'Ready ends it', 'Starts once every racer is ready') : null,
     );
     // A knockout's grid is locked once it starts (bots can still be taken off in Players).
-    const botsLocked = r.collisions || (!lobby && r.mode === 'knockout');
+    const botsLocked = !lobby && r.mode === 'knockout';
     const botCount = row(
       'Bots',
-      r.collisions ? 'Computer racers. Off in bumper cars' : botsLocked ? 'Computer racers. Fixed once a knockout starts' : 'Computer racers',
+      botsLocked ? 'Computer racers. Fixed once a knockout starts' : 'Computer racers',
       h(
         'div',
         { class: 'seg' },
@@ -776,7 +776,7 @@ export class Panel {
     const bots = sect(
       'Bots',
       botCount,
-      r.bots && !r.collisions
+      r.bots
         ? seg('botSkill', 'Bot skill', skillHint, [
             ['easy', 'Easy'],
             ['medium', 'Medium'],
