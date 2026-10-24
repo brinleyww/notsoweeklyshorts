@@ -269,7 +269,9 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   section times). The ways: a little faster, another line, another turn-in, now and then the hint run's own
   inputs there, edits of its own keys as a TAS runner makes them (one brake or lift there shortened at
   either end or left out, or a lift traded for a short brake and throttle for the rest), and, where the hint
-  slides, the stretch on grip. The last two come from Arx Lucida's board: its TAS (23.388) and its next-best
+  slides, the stretch on grip. Sections where nothing tried has helped are picked less often until one does,
+  and the learning worker keeps snapshots at section starts within a go (each try starts from one instead of
+  replaying the run from the start; about a fifth more tries a second, the same runs). The last two come from Arx Lucida's board: its TAS (23.388) and its next-best
   run (23.429) beat the record (23.690) by coasting about half as long, braking briefly instead, and taking
   the record's slides at 5.5 s and 12 s on grip (`botlab/t49_compare.mjs` puts two runs side by side). A run
   that drove most of the way on another player's line never becomes a bot's run: it has no sections of the
@@ -308,19 +310,24 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   28.79 -> 28.02 and Natsu (26.04) 27.77 -> 26.35. Rounds (`t29_rounds.mjs`): Anubis expert 28.86, 28.69,
   28.68, 28.62 over four rounds.
 - The record chaser (`Persona.wr`): in a cup with expert bots, the real expert first by name (never a
-  secret expert) learns from the fastest run alone and drives it its own way: that run is its line (another
-  player's line only gets it through a place a retry keeps failing, like any bot), it never drives that run's
-  own keys (no copying where it is on the
-  record's exact state, and going over its runs never tries a stretch of the record's inputs, only its own
-  notes and edits of its own keys), it may go about 20% faster than the record and 4.5 units beside its line, and
-  it gets the most time going over its runs (half the learning worker's turns, three times the idle
-  pondering). Where other bots fall back on a recording's keys, it drives its own best run, or starts over
-  on its own driving. Lab cups (`botlab/t46_chaser.mjs`, four experts, 45 s of the learning worker
-  between rounds, five rounds): Anubis (record 28.592) 28.774 -> 28.395, faster than the record from round
-  four; Winterfell (44.158) 44.418 -> 44.199; Natsu (26.042) 26.359 -> 26.331; Solaris (27.220) 28.390 ->
-  28.358 (a wall it clips at 13 s that going over its run hasn't found a way around yet). A browser cup on
-  Anubis had it under the record in its first round (28.556), the other experts 0.2-0.9 s behind.
-  Without the record's keys its first round is its weakest: on Natsu in a browser cup it was 2.1 s off.
+  secret expert) goes after the fastest run. It starts as that run's own inputs (so its first round is the
+  record's time) and goes over them as a TAS runner would (`Planner.#brute`): one edit in a window of 0.06-0.6 s
+  (a press or release of one key moved up to 20 frames, a tap added or taken away, a stretch of a key held or
+  let go made longer or shorter by up to a third, or taken out), the rest of its inputs as they were, the
+  game's physics to the finish. It keeps an edit that finishes sooner, and one that finishes as soon but
+  leaves its inputs further from the record's, so its run drifts away from the record without getting
+  slower. A try is given up once it is 30 frames behind its run or off it by 30 units, and most tries that
+  come back onto its run exactly are too (they can only finish when it does). It gets half the learning
+  worker's turns and three times the idle pondering; the learning worker keeps up to six snapshots along the
+  run for it (race workers only the start line's). Its search is plain physics, so a try costs a fraction
+  of driving one (3-8 a second on a desktop). A quarter of its goes over its run are its own way instead
+  (`Planner.ownShare`), which finds more where the record left time (Anubis; and Arx Lucida's TAS below).
+  Lab (`botlab/t50_wrbench.mjs`, 13 tracks, 320 tries each): 13 of 13 under the record (mean -0.04%),
+  every run replaying exactly from its keys; against Arx Lucida's TAS (test build "JMAI - Arx Lucida",
+  23.388) 23.382, its inputs 7.9% different. Its line stays close to the record's (0.02-0.34 units on average), since it is the record's run
+  improved, not a run of its own; driving its own way on the same tracks and tries it was 3.65% slower
+  on average (median 0.77%; `Planner.seedRecord` off). Where the record doesn't replay on the track a cup plans on, it drives its own
+  way as before.
 - Bots learn from each other (`worker/shared.ts`, `Tip`): when a bot gets past a failure, how its retry did
   it (slower, another line) goes out with where it failed, and when going over its run finds a faster way
   through a section, that way goes out with where the section starts. Every worker on the track gets every
@@ -332,8 +339,8 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   each bot tries each win once, and only wins of 20 ms or more: most don't carry over to another bot's
   run, and trying them all took most of its tries on Arx Lucida).
   Everything else each bot tries is still its own, so they don't end up on the same run (Winterfell lab
-  cup: any two experts' best runs held the same keys on 36-59% of frames). The record chaser shares its
-  wins but takes only others' fixes.
+  cup: any two experts' best runs held the same keys on 36-59% of frames). The record chaser takes
+  others' fixes when a retry needs one; its own search is on its inputs and shares nothing.
 - Every expert is skill 1 and as able as the others; what sets them apart is the record each one trains on
   (its own, fastest first): its line and way of driving. An expert on a slower record may drive up to 8%
   faster than that record (it starts halfway there and goes over its runs for the rest).

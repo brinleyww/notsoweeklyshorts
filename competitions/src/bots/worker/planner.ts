@@ -114,6 +114,85 @@ export function adoptPlan(job: Job, name: number, plan: BotPlan) {
 const PLAN_SECTIONS = 0.8;
 // Shortest lift (frames) worth trading for a brake in editKeys.
 const LIFT_TRADE = 40;
+// Heap slots for sector snapshots (counting down from here) and the most memory they may take.
+const START_SLOT = 62;
+const SECTOR_SLOT = 61;
+const SECTOR_BYTES = 160 * 1024 * 1024;
+
+// The record chaser's TAS-style search (Planner.#brute): window lengths (frames) an edit goes in, how far
+// (units) off its run's place a try may get before it is given up, how often that place is sampled, the
+// buckets snapshots are taken at and failures counted in, and how many snapshots.
+const BRUTE_WINDOW = [60, 600];
+const BRUTE_OFF = 30;
+const TRACE_EVERY = 10;
+const BRUTE_BUCKET = 500;
+const BRUTE_SNAPS = 6;
+// Share of tries driven on anyway when back on their run (for drift).
+const BRUTE_DRIFT = 0.25;
+const EMPTY = new Float32Array(0);
+
+// Frames whose keys differ between a run and a recorded one (and the frames one has past the other).
+function keysApart(plan: BotPlan, rec: Reference) {
+  let d = Math.abs(plan.n - rec.n);
+  for (let t = Math.min(plan.n, rec.n) - 1; t >= 0; t--) if ((plan.keys[t] & 15) !== (rec.keys[t] & 15)) d++;
+  return d;
+}
+
+// One TAS-style edit of keys[a, b): a press or release of one key moved up to 20 frames, a tap of it added or
+// taken away (1-40 frames), or a stretch of it up to 80 frames taken out. Never across a respawn press.
+function mutateKeys(keys: Uint8Array, a: number, b: number, rand: () => number) {
+  if (b - a < 2) return false;
+  for (let i = a; i < b; i++) if (keys[i] & 16) return false;
+  const x = rand(), bit = x < 0.2 ? 1 : x < 0.4 ? 4 : x < 0.7 ? 2 : 8;
+  const set = (i: number, on: boolean) => {
+    if (i < 0 || i >= keys.length) return;
+    keys[i] = on ? keys[i] | bit : keys[i] & ~bit;
+    // Left and right at once steer nowhere: pressing one lets go of the other.
+    if (on && bit === 2) keys[i] &= ~8;
+    if (on && bit === 8) keys[i] &= ~2;
+  };
+  const how = rand();
+  if (how < 0.45) {
+    const edges: number[] = [];
+    for (let i = Math.max(1, a); i < b; i++) if ((keys[i] & bit) !== (keys[i - 1] & bit)) edges.push(i);
+    if (edges.length) {
+      const e = edges[Math.floor(rand() * edges.length)], d = (1 + Math.floor(rand() * 20)) * (rand() < 0.5 ? -1 : 1);
+      const after = (keys[e] & bit) !== 0;
+      if (d < 0) for (let i = e + d; i < e; i++) set(i, after);
+      else for (let i = e; i < e + d; i++) set(i, !after);
+      return true;
+    }
+  }
+  if (how < 0.8) {
+    const s0 = a + Math.floor(rand() * (b - a)), len = 1 + Math.floor(rand() * 40);
+    for (let i = s0; i < Math.min(keys.length, s0 + len); i++) set(i, (keys[i] & bit) === 0);
+    return true;
+  }
+  // A whole stretch of the key held (or let go, as a lift is) made longer or shorter by up to a third, from
+  // either end, or taken out when short.
+  const held = rand() < 0.5;
+  const runs: [number, number][] = [];
+  let st = -1;
+  for (let i = a; i <= b; i++) {
+    const on = i < b && ((keys[i] & bit) !== 0) === held;
+    if (on && st < 0) st = i;
+    if (!on && st >= 0) {
+      if (i - st <= 600) runs.push([st, i]);
+      st = -1;
+    }
+  }
+  if (!runs.length) return false;
+  const [r0, r1] = runs[Math.floor(rand() * runs.length)];
+  const len = r1 - r0;
+  if (len <= 80 && rand() < 0.4) {
+    for (let i = r0; i < r1; i++) set(i, !held);
+    return true;
+  }
+  const d = Math.max(1, Math.round(len * rand() * 0.33)), grow = rand() < 0.5, atEnd = rand() < 0.5;
+  if (grow) for (let i = 0; i < d; i++) set(atEnd ? r1 + i : r0 - 1 - i, held);
+  else for (let i = 0; i < d; i++) set(atEnd ? r1 - 1 - i : r0 + i, !held);
+  return true;
+}
 
 // Keys driven as they are from frame `at` to `until` (going over a run: an edit of the bot's own keys).
 type Force = { keys: Uint8Array; at: number; until: number; trade?: boolean };
@@ -300,6 +379,8 @@ export class Job {
   failK = 0;
   // A retry under way: the hint sections it changes, how (pace multiplier, offset or null), and where it failed.
   fix: { from: number; to: number; pace: number; off: number | null; arc: number; k: number } | null = null;
+  // Goes over its run that found nothing better, per hint section, since the last that did.
+  thinkFails = new Float32Array(0);
   // Other bots' wins this bot has tried already (each once: most don't carry over).
   tipsTried = new WeakSet<Tip>();
   // Restarts from the start line this round (before any checkpoint, a respawn can't help).
@@ -377,6 +458,12 @@ export class Job {
       const explore = b.skill >= EXPERT_SKILL && Planner.explore ? (b.wr ? WR_EXPLORE : 2) : 1;
       const notes = new Notes(this.ref, this.name, plan?.notes ?? spec.notes?.[key], lift, explore);
       if (plan && plan.notes.length === notes.v.length && plan.sin.length === notes.n) this.plan = plan;
+      // The record chaser starts as the record's own inputs and goes over them (Planner.#brute).
+      else if (b.wr && Planner.seedRecord) {
+        const sin = new Int32Array(notes.n);
+        for (let q = 0; q < notes.n; q++) sin[q] = Math.min(this.ref.n - 1, q * SECTION);
+        this.plan = { ref: key, notes: notes.v.slice(), keys: this.ref.keys.slice(0, this.ref.n), n: this.ref.n, sin };
+      }
       this.notes = notes;
       this.hint = this.refIdx;
       this.sections = new Float32Array(notes.n * FIELDS);
@@ -481,6 +568,16 @@ export class Job {
     this.forceReset = false;
   }
 
+  // keys[0..n) = src's (a run gone over from a snapshot: what came before it must be that run's own keys).
+  keysUpTo(src: Uint8Array, n: number) {
+    if (this.keys.length < n + 1024) {
+      const g = new Uint8Array(Math.max(this.keys.length * 2, n + 1024));
+      g.set(this.keys);
+      this.keys = g;
+    }
+    this.keys.set(src.subarray(0, n));
+  }
+
   log(t: number, k: Keys) {
     if (t >= this.keys.length) {
       const n = new Uint8Array(Math.max(this.keys.length * 2, t + 1024));
@@ -515,6 +612,14 @@ export class Planner {
   static retryMode = 1;
   // Experts explore beyond their hint (on; off only for lab comparisons).
   static explore = true;
+  // The record chaser starts from the record's own inputs (off only for lab comparisons).
+  static seedRecord = true;
+  // Share of the record chaser's goes over its run made its own way rather than by editing its inputs.
+  static ownShare = 0.25;
+  // Frames behind its run's place at which a try is given up.
+  static bruteBehind = 30;
+  // How much each fruitless go over a section lowers its chance of being picked again.
+  static failWeight = 1;
   // Ways screened locally before one is driven to the finish (on; off only for lab comparisons).
   static screen = true;
   readonly sim: Sim;
@@ -553,7 +658,11 @@ export class Planner {
   showBy: () => number = () => Infinity;
   // Set by the worker: planning is far enough ahead for the top expert to search its run (drill).
   roomy: () => boolean = () => true;
-  stats = { ticks: 0, rebuilds: 0, restores: 0, bumps: 0, shared: 0, tipsTried: 0, tipWays: 0, tipWins: 0, editWins: 0, tradeWins: 0, gripWins: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
+  // Tries left for going over runs (lab benchmarks set it; a cup runs on time alone).
+  budget = Infinity;
+  // Sector snapshots going over a run may keep (heap copies; the learning worker's planner uses them).
+  sectorSnaps = 0;
+  stats = { ticks: 0, rebuilds: 0, restores: 0, bumps: 0, shared: 0, tipsTried: 0, tipWays: 0, tipWins: 0, editWins: 0, tradeWins: 0, gripWins: 0, sectorHits: 0, bruteWins: 0, bruteDrift: 0, bruteGain: 0, bruteRestoreMs: 0, bruteFrames: 0, replay: 0, accepted: 0, respawns: 0, restarts: 0, copies: 0, frames: 0, thinks: 0, thinkMs: 0, tried: 0, fails: {} as Record<string, number> };
 
   readonly clear = new Map<Reference, Clearance>();
 
@@ -892,6 +1001,13 @@ export class Planner {
   // car of its own, deleted again, and heap slot DRILL_SLOT; the bots' own cars and the planner's snapshots
   // are left as they were.
   #think(job: Job, deadline: number) {
+    // The record chaser mostly edits its inputs; now and then it goes over its run its own way, which finds more
+    // where the record left time on the table (Anubis).
+    if (job.bot.wr && job.notes && job.plan?.ref === refKey(job.notes.ref) && job.thinkRand() >= Planner.ownShare) this.#brute(job, deadline);
+    else this.#thinkOwn(job, deadline);
+  }
+
+  #thinkOwn(job: Job, deadline: number) {
     const notes = job.notes;
     let plan = notes && job.plan?.ref === refKey(notes.ref) ? job.plan : null;
     if (!notes || !plan || job.bumper || this.#busy || performance.now() >= deadline) return;
@@ -903,28 +1019,80 @@ export class Planner {
     const tj = new Job({ id: 'think', bot, mode: 'run', end: notes.ref.n * 3 + 20000, brain: job.brainW, notes: { [plan.ref]: plan.notes.slice() }, practice: true, refIdx: job.hint }, this.refs, this.clear);
     tj.p.pace = job.p.pace;
     let better = false;
+    // Heap snapshots by frame at section starts of the run being gone over, for this call only (nothing else
+    // moves meanwhile): later tries there start from one instead of replaying the run from the start.
+    const snaps = new Map<number, { slot: number; saved: Saved; resetAt: number }>();
+    // With snapshots one car serves the whole call, kept from its start line (a snapshot from before another
+    // car was made or deleted would break the physics).
+    let startSnap: { slot: number; saved: Saved } | null = null;
     try {
       const sections = notes.n;
-      while (performance.now() < deadline) {
-        const s = this.#pickSection(plan, job.thinkRand, sections, job.bot.wr ? null : (q) => (this.shared.wins(notes.ref, q, job.name).some((t) => t.gain >= TIP_GAIN && !job.tipsTried.has(t)) ? TIP_PICK : 0));
-        if (s < 0) break;
-        // The run up to section s, once; every way tried starts from there.
+      if (this.sectorSnaps > 0) {
         this.#startRun(tj, 0);
+        this.sim.save(START_SLOT);
+        startSnap = { slot: START_SLOT, saved: tj.save() };
+      }
+      while (this.#more(deadline)) {
+        if (job.thinkFails.length !== sections) job.thinkFails = new Float32Array(sections);
+        const s = this.#pickSection(plan, job.thinkRand, sections, job.bot.wr ? null : (q) => (this.shared.wins(notes.ref, q, job.name).some((t) => t.gain >= TIP_GAIN && !job.tipsTried.has(t)) ? TIP_PICK : 0), job.thinkFails);
+        if (s < 0) break;
+        const planBefore: BotPlan = plan;
+        // The run up to section s, once; every way tried starts from there. From the latest snapshot at or
+        // before that frame when there is one (the run's keys before a snapshot are the ones it was taken
+        // with), else from the start.
         const from = plan.sin[s];
         const k = this.#k;
-        let buf: Uint8Array | null = null;
-        let resetAt = -1;
-        for (let t = 0; t < from; t++) {
-          const b = plan.keys[t];
-          if (b & 16) resetAt = t;
-          tj.log(t, keysOf(b, k));
-          buf = this.sim.step(tj.car, k);
+        let base = -1;
+        for (const q of snaps.keys()) if (q <= from && q > base) base = q;
+        tj.keysUpTo(plan.keys, from);
+        if (base === from) {
+          const at = snaps.get(from)!;
+          this.sim.restore(at.slot);
+          tj.load(at.saved);
+          tj.resetAt = at.resetAt;
+          this.stats.sectorHits++;
+        } else {
+          let start = 0, resetAt = -1;
+          if (base >= 0) {
+            const at = snaps.get(base)!;
+            this.sim.restore(at.slot);
+            tj.load(at.saved);
+            start = base;
+            resetAt = at.resetAt;
+            this.stats.sectorHits++;
+          } else if (startSnap) {
+            this.sim.restore(startSnap.slot);
+            tj.load(startSnap.saved);
+          } else this.#startRun(tj, 0);
+          let buf: Uint8Array | null = start > 0 ? tj.prev : null;
+          for (let t = start; t < from; t++) {
+            const b = plan.keys[t];
+            if (b & 16) resetAt = t;
+            buf = this.sim.step(tj.car, keysOf(b, k));
+          }
+          if (!buf) continue;
+          this.#resume(tj, buf, from, resetAt);
         }
-        if (!buf) continue;
-        this.#resume(tj, buf, from, resetAt);
         tj.sin.set(plan.sin);
         tj.sin.fill(-1, s);
         tj.sec = s - 1;
+        const most = Math.min(this.sectorSnaps, Math.floor(SECTOR_BYTES / this.sim.heap.length));
+        if (!snaps.has(from) && most > 0) {
+          // A free slot, or the oldest one's.
+          let slot = -1;
+          if (snaps.size >= most) {
+            const [q, old] = snaps.entries().next().value!;
+            snaps.delete(q);
+            slot = old.slot;
+          } else {
+            const used = new Set([...snaps.values()].map((x) => x.slot));
+            for (let c = SECTOR_SLOT; c > SECTOR_SLOT - this.sectorSnaps && slot < 0; c--) if (!used.has(c)) slot = c;
+          }
+          if (slot >= 0) {
+            this.sim.save(slot);
+            snaps.set(from, { slot, saved: tj.save(), resetAt: tj.resetAt });
+          }
+        }
         this.sim.save(DRILL_SLOT);
         const saved = tj.save();
         const sin = tj.sin.slice();
@@ -980,7 +1148,8 @@ export class Planner {
           if (!pbuf) continue;
           readRaw(pbuf, this.#raw);
           let least = plan.sin[e] - EXIT_MS_PER_KMH * this.#raw.speed - LOCAL_GAIN;
-          for (let i = 0; i < LOCAL_TRIES && performance.now() < deadline; i++) {
+          for (let i = 0; i < LOCAL_TRIES && this.#more(deadline); i++) {
+            this.budget--;
             reset();
             const way = make(i);
             apply(way);
@@ -998,7 +1167,8 @@ export class Planner {
             continue;
           }
         }
-        for (let i = 0; i < (pick ? 1 : THINK_TRIES) && performance.now() < deadline; i++) {
+        for (let i = 0; i < (pick ? 1 : THINK_TRIES) && this.#more(deadline); i++) {
+          this.budget--;
           reset();
           const way = pick ?? make(i);
           apply(way);
@@ -1011,12 +1181,22 @@ export class Planner {
             else if (way.notes) this.#share(job, notes.ref, 'win', s * SECTION, [...way.notes], plan.n - p.n);
             plan = p;
             better = true;
+            // The new run has other keys from frame `from` on: snapshots after it no longer hold.
+            for (const [q, at] of [...snaps]) if (q > from) {
+              this.sim.dropSlot(at.slot);
+              snaps.delete(q);
+            }
             break;
           }
         }
         this.sim.dropSlot(DRILL_SLOT);
+        // Nothing tried there helped: the section is picked less often, until something does.
+        if (plan === planBefore) job.thinkFails[s]++;
+        else job.thinkFails[s] = 0;
       }
     } finally {
+      for (const at of snaps.values()) this.sim.dropSlot(at.slot);
+      if (startSnap) this.sim.dropSlot(startSnap.slot);
       if (tj.car) this.sim.deleteCar(tj.car);
       tj.car = 0;
       this.#carChanged = changed;
@@ -1030,6 +1210,173 @@ export class Planner {
     }
   }
 
+  // The record chaser goes over its run as a TAS runner would (it starts as the record's own inputs): one
+  // edit of its keys in a short window (a press or release moved, a tap added or taken out), the rest of its
+  // keys as they were, the game's physics to the finish. Sooner: its run. As soon and further from the
+  // record's inputs: its run too, so it becomes a run of its own without getting slower. Like #think it uses a
+  // car of its own and heap slots, and leaves the bots' cars and the planner's snapshots as they were.
+  #brute(job: Job, deadline: number) {
+    const notes = job.notes!, rec = notes.ref;
+    let plan = job.plan!;
+    if (this.#busy || plan.n < 2 || !this.#more(deadline)) return;
+    this.#busy = true;
+    const t0 = performance.now();
+    this.stats.thinks++;
+    const changed = this.#carChanged;
+    const k = this.#k, r = this.#raw;
+    const car = this.sim.newCar(this.track);
+    // Heap snapshots by frame (this call only), and the run's place every TRACE_EVERY frames.
+    const snaps = new Map<number, number>();
+    let better = false;
+    // A try is given up once it is behind its run's place (it can't finish sooner), and, most times, once it is
+    // back on the run's exact place (it can only finish when the run does; now and then it is driven on, for a
+    // run as fast and further from the record).
+    const drive = (keys: Uint8Array, a: number, end: number, trace: Float32Array | null, out: Float32Array | null, drift = false, changed = 0) => {
+      let same = 0, best = Math.floor(a / TRACE_EVERY);
+      const d2at = (j: number) => {
+        const ex = r.x - trace![j * 3], ey = r.y - trace![j * 3 + 1], ez = r.z - trace![j * 3 + 2];
+        return ex * ex + ey * ey + ez * ez;
+      };
+      for (let t = a; t < end; t++) {
+        readRaw(this.sim.step(car, keysOf(keys[Math.min(t, keys.length - 1)], k)), r);
+        const i = (t + 1) / TRACE_EVERY;
+        const sample = Number.isInteger(i) && i * 3 + 2 < (out ?? trace ?? EMPTY).length;
+        if (out && sample) {
+          out[i * 3] = r.x;
+          out[i * 3 + 1] = r.y;
+          out[i * 3 + 2] = r.z;
+        }
+        if (r.finished) return r.finishFrames;
+        if (!trace || !sample) continue;
+        const d2 = d2at(i);
+        if (d2 > BRUTE_OFF * BRUTE_OFF) return -1;
+        same = d2 === 0 && t > changed ? same + 1 : 0;
+        if (same >= 3 && !drift) return -2;
+        if (d2 === 0) {
+          best = i;
+          continue;
+        }
+        // Where along the run the car is: its nearest place, followed from the last one.
+        const last = trace.length / 3 - 1;
+        let bd = d2at(Math.min(best, last));
+        best = Math.min(best, last);
+        while (best < last && d2at(best + 1) < bd) bd = d2at(++best);
+        while (best > 0 && d2at(best - 1) < bd) bd = d2at(--best);
+        const nb = best < last ? best + 1 : best - 1;
+        let at = best;
+        if (nb >= 0 && nb !== best) {
+          const sx = trace[nb * 3] - trace[best * 3], sy = trace[nb * 3 + 1] - trace[best * 3 + 1], sz = trace[nb * 3 + 2] - trace[best * 3 + 2];
+          const s2 = sx * sx + sy * sy + sz * sz;
+          if (s2 > 0) at = best + (nb - best) * Math.max(-1, Math.min(1, ((r.x - trace[best * 3]) * sx + (r.y - trace[best * 3 + 1]) * sy + (r.z - trace[best * 3 + 2]) * sz) / s2));
+        }
+        const lead = (at - i) * TRACE_EVERY;
+        if (lead < -Planner.bruteBehind) return -1;
+      }
+      return -1;
+    };
+    try {
+      this.sim.save(START_SLOT);
+      // The run as it is, once: it must finish where it says (a record that doesn't on this track's parts is no
+      // start), and its place along the way is what tries are checked against.
+      let trace = new Float32Array(3 * (Math.floor(plan.n / TRACE_EVERY) + 2));
+      if (drive(plan.keys, 0, plan.n + 1, null, trace) !== plan.n) {
+        job.plan = null;
+        return;
+      }
+      let diff = keysApart(plan, rec);
+      const n0 = plan.n;
+      const fails = new Float32Array(Math.ceil(plan.n / BRUTE_BUCKET) + 1);
+      while (this.#more(deadline)) {
+        this.budget--;
+        this.stats.tried++;
+        // Where: a window anywhere, less often where edits have failed lately.
+        let a = 0;
+        for (let pick = 0; pick < 4; pick++) {
+          a = Math.floor(job.thinkRand() * Math.max(1, plan.n - 50));
+          if (job.thinkRand() * (1 + Planner.failWeight * fails[Math.floor(a / BRUTE_BUCKET)]) < 1) break;
+        }
+        const w = BRUTE_WINDOW[0] + Math.floor(job.thinkRand() * (BRUTE_WINDOW[1] - BRUTE_WINDOW[0]));
+        const keys = plan.keys.slice(0, plan.n);
+        if (!mutateKeys(keys, a, Math.min(plan.n, a + w), job.thinkRand)) continue;
+        // The frames the edit changed: the try is driven from the first, and is "back on the run" only after the last.
+        let lo = -1, hi = -1;
+        for (let t = 0; t < plan.n; t++)
+          if (keys[t] !== plan.keys[t]) {
+            if (lo < 0) lo = t;
+            hi = t;
+          }
+        if (lo < 0) continue;
+        a = lo;
+        // To frame a from the latest snapshot before it (one is taken at its bucket's start on the way).
+        let at = -1;
+        for (const q of snaps.keys()) if (q <= a && q > at) at = q;
+        const tr = performance.now();
+        if (at >= 0) this.sim.restore(snaps.get(at)!);
+        else {
+          this.sim.restore(START_SLOT);
+          at = 0;
+        }
+        this.stats.bruteRestoreMs += performance.now() - tr;
+        this.stats.bruteFrames -= at;
+        const b0 = Math.floor(a / BRUTE_BUCKET) * BRUTE_BUCKET;
+        if (at < b0) {
+          drive(plan.keys, at, b0, null, null);
+          at = b0;
+          if (snaps.size < Math.min(this.sectorSnaps, BRUTE_SNAPS, Math.floor(SECTOR_BYTES / this.sim.heap.length))) {
+            const used = new Set(snaps.values());
+            let slot = SECTOR_SLOT;
+            while (used.has(slot)) slot--;
+            this.sim.save(slot);
+            snaps.set(b0, slot);
+          }
+        }
+        drive(plan.keys, at, a, null, null);
+        const out = new Float32Array(trace.length);
+        const f = drive(keys, a, plan.n + 1, trace, out, job.thinkRand() < BRUTE_DRIFT, hi);
+        this.stats.bruteFrames += this.#raw.frames;
+        if (f < 0 || f > plan.n) {
+          fails[Math.floor(a / BRUTE_BUCKET)]++;
+          continue;
+        }
+        const next: BotPlan = { ref: plan.ref, notes: plan.notes, keys: keys.slice(0, f), n: f, sin: plan.sin.map((x) => Math.min(x, f - 1)) };
+        const apart = keysApart(next, rec);
+        if (f === plan.n && apart <= diff) {
+          fails[Math.floor(a / BRUTE_BUCKET)]++;
+          continue;
+        }
+        if (f < plan.n) this.stats.bruteWins++;
+        else this.stats.bruteDrift++;
+        // Its place from frame a on is the new run's.
+        const keep = Math.floor(a / TRACE_EVERY) * 3 + 3;
+        const nt = new Float32Array(3 * (Math.floor(f / TRACE_EVERY) + 2));
+        nt.set(trace.subarray(0, Math.min(keep, nt.length)));
+        if (keep < nt.length) nt.set(out.subarray(keep, Math.min(out.length, nt.length)), keep);
+        trace = nt;
+        plan = next;
+        diff = apart;
+        better = true;
+        fails[Math.floor(a / BRUTE_BUCKET)] = 0;
+        for (const [q, slot] of [...snaps])
+          if (q > a) {
+            this.sim.dropSlot(slot);
+            snaps.delete(q);
+          }
+      }
+      this.stats.bruteGain += n0 - plan.n;
+    } finally {
+      for (const slot of snaps.values()) this.sim.dropSlot(slot);
+      this.sim.dropSlot(START_SLOT);
+      this.sim.deleteCar(car);
+      this.#carChanged = changed;
+      this.#busy = false;
+      this.stats.thinkMs += performance.now() - t0;
+    }
+    if (better) {
+      job.plan = plan;
+      this.onPlan(job, plan);
+    }
+  }
+
   #share(job: Job, ref: Reference, kind: Tip['kind'], k: number, v: number[], gain: number) {
     const i = Math.max(0, Math.min(ref.n - 1, k));
     const tip: Tip = { kind, by: job.name, x: ref.px[i], y: ref.py[i], z: ref.pz[i], cp: ref.cp[i], ref: refKey(ref), s: Math.floor(i / SECTION), v, gain };
@@ -1038,14 +1385,19 @@ export class Planner {
     this.onTip(tip);
   }
 
+  // Going over runs goes on until the deadline, or (lab) until `budget` tries are spent.
+  #more(deadline: number) {
+    return this.budget > 0 && performance.now() < deadline;
+  }
+
   // The section to go over next: where the run loses most against its hint run (each section is a second of
   // it), now and then any; `bonus` adds weight (other bots found a faster way through there).
-  #pickSection(plan: BotPlan, rand: () => number, n: number, bonus: ((s: number) => number) | null = null) {
+  #pickSection(plan: BotPlan, rand: () => number, n: number, bonus: ((s: number) => number) | null = null, fails: Float32Array | null = null) {
     const w: number[] = [];
     let sum = 0;
     for (let s = 0; s < n - 1; s++) {
       const a = plan.sin[s], b = plan.sin[s + 1];
-      const v = a > 0 && b > a ? Math.max(0, b - a - SECTION) + 40 + (bonus?.(s) ?? 0) : 0;
+      const v = a > 0 && b > a ? (Math.max(0, b - a - SECTION) + 40 + (bonus?.(s) ?? 0)) / (1 + Planner.failWeight * (fails?.[s] ?? 0)) : 0;
       w.push(v);
       sum += v;
     }

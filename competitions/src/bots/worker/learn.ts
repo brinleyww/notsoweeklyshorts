@@ -147,6 +147,8 @@ export class Learner {
     this.#rand = rng(seed);
     if (polish.length) {
       const pl = (this.#polisher = new Planner(c.sim, c.route, c.refs, 2, c.clear, c.full));
+      // Going over a run starts each try from a sector snapshot (about a quarter more tries a second).
+      pl.sectorSnaps = 6;
       pl.onPlan = (job, plan) => this.onPlan(job.name, plan);
       pl.onTip = (tip) => this.onTip(tip);
       polish.forEach((p, i) => {
