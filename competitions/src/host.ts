@@ -99,6 +99,9 @@ export class Organizer {
   #cupRuns = new Map<string, RefInput[]>();
   // Bots secretly driving as experts, to the last round they do.
   #secret = new Map<number, number>();
+  // The world record bot (Persona.wr): the site owner's alone, off at the start of every cup and switched on from
+  // the panel once this page has passed the owner check (never a cup rule, so no one else sees it).
+  #wrBot = false;
   // Uploaded tracks' import codes by track id, and uploads still arriving by "uid:upload id".
   #codes = new Map<string, string>();
   #parts = new Map<string, { at: number; parts: (string | null)[]; got: number }>();
@@ -348,6 +351,18 @@ export class Organizer {
   }
 
   // Bot u's counting run in round n as the TAS tool's text, or null (not finished, or no longer kept).
+  get wrBot() {
+    return this.#wrBot;
+  }
+
+  // Only the panel calls this, and only after the owner check passed on this page.
+  setWrBot(on: boolean) {
+    this.#wrBot = on;
+    const ph = this.state.phase;
+    if (ph === 'results') this.#prePlan();
+    else if (ph === 'loading' || ph === 'warmup') this.#planBots();
+  }
+
   botInputs(n: number, u: number) {
     const keys = this.#bots?.inputs(n, u);
     return keys ? inputsText(keys) : null;
@@ -405,7 +420,7 @@ export class Organizer {
     const names = bots.map((p) => BOT_NAMES.indexOf(p.name));
     // The record chaser: the real expert first by name (never a secret one, whose skill is only borrowed).
     let chaser = -1;
-    bots.forEach((p, i) => p.bot!.s / 100 >= EXPERT_SKILL && (chaser < 0 || names[i] < names[chaser]) && (chaser = i));
+    if (this.#wrBot) bots.forEach((p, i) => p.bot!.s / 100 >= EXPERT_SKILL && (chaser < 0 || names[i] < names[chaser]) && (chaser = i));
     const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, names, chaser);
     list.forEach((persona, i) => (persona.u = bots[i].u));
     mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS, bumper: s.rules.collisions });

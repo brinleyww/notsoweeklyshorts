@@ -309,8 +309,10 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   28.588, skill 0.8 32.43 -> 29.73, 0.55 30.80 -> 30.25, 0.2 32.67 -> 30.91; experts on Solaris (27.22)
   28.79 -> 28.02 and Natsu (26.04) 27.77 -> 26.35. Rounds (`t29_rounds.mjs`): Anubis expert 28.86, 28.69,
   28.68, 28.62 over four rounds.
-- The record chaser (`Persona.wr`): in a cup with expert bots, the real expert first by name (never a
-  secret expert) goes after the fastest run. It starts as that run's own inputs (so its first round is the
+- The record chaser (`Persona.wr`, "World record bot"): only when the site owner organizes and switches it on
+  (a switch in the Bots rules shown only on their page after the owner check, off at the start of every cup and never a
+  cup rule, so no one else sees it), the real expert first by name (never a secret expert) goes after the
+  fastest run. It starts as that run's own inputs (so its first round is the
   record's time) and goes over them as a TAS runner would (`Planner.#brute`): one edit in a window of 0.06-0.6 s
   (a press or release of one key moved up to 20 frames, a tap added or taken away, a stretch of a key held or
   let go made longer or shorter by up to a third, or taken out), the rest of its inputs as they were, the

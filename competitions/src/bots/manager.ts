@@ -387,6 +387,13 @@ export class BotManager {
       }
     for (const persona of bots) {
       let b = plan.bots.get(persona.u);
+      // The world record bot switched on or off before GO: that bot plans again.
+      if (b && plan.startAt == null && !!b.persona.wr !== !!persona.wr) {
+        this.#cancel(b);
+        plan.bots.delete(b.u);
+        this.#byId.delete(b.id);
+        b = undefined;
+      }
       if (!b) {
         b = { u: persona.u, id: `${plan.g}.${persona.u}.${++this.#jobs}`, persona, slot: null, frontier: 0, rate: 0, chunks: [], raw: [], handed: 0, result: null, over: false, failed: false, checked: false, closed: false, runs: 0 };
         plan.bots.set(b.u, b);

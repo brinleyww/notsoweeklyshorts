@@ -416,21 +416,25 @@ export class Panel {
     return [h('div', { class: 'sect' }, h('h3', null, 'Standings'), h('div', { class: 'list' }, table.map((p, i) => this.#standRow(s, p.u, i + 1)))), matrix];
   }
 
+  // Whether this organizer is the site owner (the bot inputs export and the world record bot are theirs).
+  #askOwner() {
+    if (!this.app.isHost || this.#ownerAsked) return;
+    this.#ownerAsked = true;
+    site.__nswsOwner
+      ?.check()
+      .then((ok) => {
+        this.#owner = ok;
+        this.#key = '';
+        this.render();
+      })
+      .catch(() => {});
+  }
+
   // ---- Rounds ----
 
   #roundsTab(s: CupState) {
     const hist = [...this.app.history].reverse();
-    if (this.app.isHost && !this.#ownerAsked) {
-      this.#ownerAsked = true;
-      site.__nswsOwner
-        ?.check()
-        .then((ok) => {
-          this.#owner = ok;
-          this.#key = '';
-          this.render();
-        })
-        .catch(() => {});
-    }
+    this.#askOwner();
     if (!hist.length) return h('div', { class: 'empty' }, 'Rounds show up here as they finish.');
     return h(
       'div',
@@ -757,6 +761,16 @@ export class Panel {
       ),
     );
     botCount.classList.add('wide');
+    this.#askOwner();
+    const org = app.org;
+    // The owner's alone, and not a rule: no one else in the cup sees it.
+    let wrBot: HTMLElement | null = null;
+    if (host && org && this.#owner && r.bots && !r.collisions) {
+      const sw = h('button', { class: 'switch' + (org.wrBot ? ' on' : ''), 'aria-pressed': String(org.wrBot), onclick: click(() => (org.setWrBot(!org.wrBot), (this.#key = ''), this.render())) });
+      wrBot = row('World record bot', 'Only you see this. The first expert starts from the record and searches it for a faster run', sw);
+      wrBot.classList.add('toggleable');
+      wrBot.querySelector('label')!.addEventListener('click', () => sw.click());
+    }
     const skillHint =
       r.botSkill === 'match' ? "They start at medium and follow the humans' pace round by round" : r.botSkill === 'mixed' ? 'A quarter each of easy, medium, hard and expert' : 'How fast and how boldly they drive';
     const bots = sect(
@@ -772,6 +786,7 @@ export class Panel {
             ['match', 'Match the field'],
           ])
         : null,
+      wrBot,
     );
     const players = sect(
       'Players',
