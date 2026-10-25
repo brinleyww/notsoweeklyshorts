@@ -210,7 +210,12 @@ the ones pages have and aren't sent twice (`Job.sameUntil`: it used to send the 
 start-line snapshot, and the bot stood still on every page until that caught up). On the page whose car hit
 it, the bot is drawn pushed at once (`BotView.nudge`, 400 ms at most) until its new frames come; on every page
 a replacement that moves what was already drawn eases in over ~60 ms (up to 5 m; more jumps). A pushed run
-never becomes a bot's best run. Lab: `botlab/t43_bump.mjs`; browser: `cdp/sc_botbump.mjs`, `cdp/sc_bumplab.mjs`
+never becomes a bot's best run. A respawn within 5 s of a hit is the hit's doing, so it doesn't count towards
+starting the run over (`Planner.hitRespawnsFree`, `hitFailMs`; more than 6 respawns a run, or 3 at one
+checkpoint, send a bot back to the start line). Lab `botlab/t52_restarts.mjs` (12 CTs, 3 skills, `HITS=1 GAP=6000`:
+a sideways hit every 6-10 s): restarts 36 -> 24 in 36 runs, mid-race ones 18 -> 10; the rest are before the first
+checkpoint, where the game's reset is a restart (mostly weak bots, and Winterfell, 7 s to its first). Without
+hits, 3 (normal cup) and 6 (bumper pacing) in the same 36. Lab: `botlab/t43_bump.mjs`; browser: `cdp/sc_botbump.mjs`, `cdp/sc_bumplab.mjs`
 (bot freezes, hits and pushes on both pages; `RAM=1` for a rear-end between the two players).
 
 Hits (the sim worker's collision step): for 2 s after a car spawns (the start, a restart or a respawn: its own

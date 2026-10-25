@@ -618,6 +618,11 @@ export class Planner {
   static explore = true;
   // The record chaser starts from the record's own inputs (off only for lab comparisons).
   static seedRecord = true;
+  // Respawns after another car knocked the bot off don't count towards starting its run over (off only for lab
+  // comparisons).
+  static hitRespawnsFree = true;
+  // A failure this soon after another car hit the bot was the hit's doing (bumper cups).
+  static hitFailMs = 5000;
   // Share of the record chaser's goes over its run made its own way rather than by editing its inputs.
   static ownShare = 0.25;
   // Frames behind its run's place at which a try is given up.
@@ -1866,6 +1871,7 @@ export class Planner {
     this.stats.accepted++;
     job.fix = null;
     const why = job.failWhy;
+    const hit = Planner.hitRespawnsFree && job.failAt - job.kickFloor < Planner.hitFailMs;
     job.failAt = -1;
     job.failWhy = null;
     readRaw(job.prev, this.#raw);
@@ -1881,15 +1887,18 @@ export class Planner {
       job.speedHist = [];
       return;
     }
-    job.respawns++;
-    const again = this.#raw.cp === job.respawnCp;
-    job.cpRespawns = again ? job.cpRespawns + 1 : 1;
-    job.respawnCp = this.#raw.cp;
     // A respawn that keeps failing before the next checkpoint is a dead end (it goes the same way every
-    // time), and so is one that can't get up to the speed the place needs.
-    if (job.respawns > 6 || job.cpRespawns > 3 || (again && job.failSlow)) {
-      this.#startOver(job);
-      return;
+    // time), and so is one that can't get up to the speed the place needs. One after another car knocked it off
+    // is the hit's doing, not a dead end.
+    if (!hit) {
+      job.respawns++;
+      const again = this.#raw.cp === job.respawnCp;
+      job.cpRespawns = again ? job.cpRespawns + 1 : 1;
+      job.respawnCp = this.#raw.cp;
+      if (job.respawns > 6 || job.cpRespawns > 3 || (again && job.failSlow)) {
+        this.#startOver(job);
+        return;
+      }
     }
     if (this.#raw.respawnable) {
       job.forceReset = true;
