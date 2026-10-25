@@ -1,6 +1,7 @@
 // One page's view of a cup: follows the game's multiplayer connection, talks to the organizer,
 // and runs the local car, the spectator camera and live timing. The organizer's page also runs
 // the Organizer (host.ts).
+import type { ClashHost } from './bots/clash.ts';
 import { BotView } from './bots/view.ts';
 import { CupChat } from './chat.ts';
 import { Driver } from './driver.ts';
@@ -326,6 +327,7 @@ export class App {
     } else this.native.visibility(g, null, this.selfPid);
     this.native.presentation(g, true, this.watch.active || covered);
     const crashing = s.rules.collisions && s.phase === 'racing' && this.driver.racing && !this.driver.done;
+    this.native.bumperLook?.(g, s.rules.collisions && s.phase === 'racing');
     this.bots.bumper = crashing;
     this.native.collisions(
       g,
@@ -338,6 +340,14 @@ export class App {
     );
     this.native.leaderboardUploads(g, s.rules.uploads && !s.rules.collisions && s.round?.track.cat !== 'custom');
   }
+
+  #clashHost: ClashHost = {
+    now: () => {
+      const r = this.state?.phase === 'racing' ? this.state.round : null;
+      return r?.startAt != null ? this.now() - r.startAt : null;
+    },
+    hit: (u, at, v) => this.org?.botHit(u, at, v),
+  };
 
   // Just before the game moves and draws the other cars, so the spectator camera and the car it
   // follows show the same state.
@@ -378,6 +388,7 @@ export class App {
     this.#fanIds(c);
     if (this.isHost) this.#relayDirect(c);
     this.chat.tick();
+    this.bots.clashes = this.org && this.state?.rules.collisions ? this.#clashHost : null;
     if (this.org) this.org.tick(Date.now());
     else this.#clientTick();
     const s = this.state,
@@ -497,8 +508,10 @@ export class App {
     if (!s || !g || !s.rules.collisions || s.phase !== 'racing') return;
     for (const hit of this.native.bumps(g)) {
       this.report({ k: 'bump', n: s.round!.n, to: hit.id, i: hit.impulse, ...(Number.isFinite(hit.at) ? { f: hit.at } : {}) }, false);
-      // The other car is pushed here at once; its own states show the push only after a round trip.
-      if (hit.impulse.length === 3 && hit.impulse.every(Number.isFinite)) nudgeCar(this.info?.connection, hit.id, hit.impulse as [number, number, number]);
+      // The other car is pushed here at once; its own states (a bot's frames) show the push only after a round trip.
+      if (hit.impulse.length !== 3 || !hit.impulse.every(Number.isFinite)) continue;
+      if (hit.id < 0) this.bots.nudge(hit.id, hit.impulse, hit.at ?? NaN);
+      else nudgeCar(this.info?.connection, hit.id, hit.impulse as [number, number, number]);
     }
   }
 
@@ -564,7 +577,7 @@ export class App {
         if (typeof m.text === 'string') this.notify(m.text.slice(0, 200), m.tone ?? 'info');
         return;
       case 'bump':
-        if (this.game && Array.isArray(m.i) && m.n === this.state?.round?.n) this.native.bump(this.game, m.i);
+        if (this.game && Array.isArray(m.i) && m.n === this.state?.round?.n) this.native.bump(this.game, m.i, m.from);
         return;
       case 'bots':
         this.bots.receive(m);

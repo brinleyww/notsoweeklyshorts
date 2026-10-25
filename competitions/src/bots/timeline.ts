@@ -134,11 +134,13 @@ export class BotTimeline {
   #eventAt = 0;
   #eventsUsed = false;
 
+  // True when the chunk replaced frames this timeline had.
   push(frames: Keyframe[]) {
     // A chunk that starts at or before the end replaces everything from its first frame (a bot in a bumper cup
     // driven again from where another car hit it).
     const first = frames[0], e = this.#e;
-    if (first && e.length > this.#start && first.f <= e[e.length - 1].k.f) {
+    const replaced = !!first && e.length > this.#start && first.f <= e[e.length - 1].k.f;
+    if (replaced) {
       let i = e.length;
       while (i > this.#start && e[i - 1].k.f >= first.f) i--;
       e.length = i;
@@ -150,6 +152,7 @@ export class BotTimeline {
       const event = !!last && (k.nextCheckpointIndex !== last.nextCheckpointIndex || k.finishFrames !== last.finishFrames);
       this.#e.push({ k, event, bare: null });
     }
+    return replaced;
   }
 
   get end(): number {
@@ -219,6 +222,29 @@ export class BotTimeline {
       out.push({ f: k.f, p: [k.pos[0], k.pos[1], k.pos[2]], q: [k.quat[0], k.quat[1], k.quat[2], k.quat[3]] });
     }
     return out;
+  }
+
+  // Where the car is at t on the bot's clock for bots hitting each other: place and rotation between the
+  // keyframes around t, velocity in units/s, and ms since it spawned (its run started, or a cut: a respawn or
+  // restart). Null before its run starts, after it finishes, past the last keyframe and across a cut or a jump.
+  pose(t: number): { p: number[]; q: number[]; v: number[]; since: number } | null {
+    const e = this.#e, i = this.#find(t);
+    if (i < this.#start) return null;
+    const a = e[i].k;
+    if (!a.hasStarted || a.finishFrames != null) return null;
+    const b = e[i + 1]?.k;
+    let since = a.frames + (t - a.f);
+    for (let j = i; j >= this.#start && t - e[j].k.f < since; j--)
+      if (e[j].k.cut) {
+        since = t - e[j].k.f;
+        break;
+      }
+    if (!b) return t === a.f ? { p: [...a.pos], q: [...a.quat], v: [0, 0, 0], since } : null;
+    const d = [b.pos[0] - a.pos[0], b.pos[1] - a.pos[1], b.pos[2] - a.pos[2]], span = Math.max(1, b.f - a.f);
+    if (b.cut || !b.hasStarted || Math.hypot(d[0], d[1], d[2]) > JUMP_M) return null;
+    const k = Math.min(1, (t - a.f) / span), s = a.quat[0] * b.quat[0] + a.quat[1] * b.quat[1] + a.quat[2] * b.quat[2] + a.quat[3] * b.quat[3] < 0 ? -1 : 1;
+    const q = [0, 1, 2, 3].map((j) => a.quat[j] + (b.quat[j] * s - a.quat[j]) * k), ql = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+    return { p: d.map((x, j) => a.pos[j] + x * k), q: q.map((x) => x / ql), v: d.map((x) => (x * 1000) / span), since };
   }
 
   // The last entry at or before t, or #start - 1.

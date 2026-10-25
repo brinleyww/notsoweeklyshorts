@@ -13405,21 +13405,23 @@
             }
             // Not So Weekly Shorts: cup collisions. The main thread sends the other racers' cars as it
             // draws them (keyframes on their own clock), and after every physics frame of the local car
-            // its hull box is pushed out of theirs with a bounce (yaw only, never pitch or roll). Cars
-            // that overlap after a spawn, restart or respawn pass through each other until they have
-            // separated. Each hit is passed on to the other car (equal masses) through the cup's organizer.
+            // its hull box is pushed out of theirs with a bounce (yaw only, never pitch or roll). For 2 s
+            // after a car spawns (the start, a restart or a respawn) it can't hit or be hit, and a pair still
+            // overlapping then passes through until it has separated. Each hit is passed on to the other car
+            // (equal masses) through the cup's organizer; when both pages felt the same hit, each car takes
+            // it once.
             const __collide = new Map();
             const __HALF = [.7732, .3822, 1.8431]
               , __CENTER = [0, .6162, -.1532];
             function __collideSet(m) {
                 let c = __collide.get(m.carId);
-                c || __collide.set(m.carId, c = { ghosts: new Map, lastHit: new Map, owed: new Map, owedAt: new Map, impulses: [], origin: null });
+                c || __collide.set(m.carId, c = { ghosts: new Map, lastHit: new Map, owed: new Map, owedAt: new Map, ownHit: new Map, gotHit: new Map, impulses: [], origin: null, spawn: 0, last: -1 });
                 c.frame = Number.isFinite(m.frame) ? m.frame : 0;
                 c.cars = Array.isArray(m.cars) ? m.cars : [];
             }
             function __collideImpulse(m) {
                 const c = __collide.get(m.carId);
-                c && Array.isArray(m.impulse) && 3 == m.impulse.length && m.impulse.every(Number.isFinite) && c.impulses.length < 20 && c.impulses.push(m.impulse);
+                c && Array.isArray(m.impulse) && 3 == m.impulse.length && m.impulse.every(Number.isFinite) && c.impulses.length < 20 && c.impulses.push({ v: m.impulse, from: Number.isFinite(m.from) ? m.from : null });
             }
             const __dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
               , __sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
@@ -13484,6 +13486,12 @@
                   , ql = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
                 return { p: __add(a.p, __mul(__sub(b.p, a.p), k)), q: q.map((x => x / ql)), v }
             }
+            // A car spawned this long ago can't hit or be hit; a pair that hit passes through this long (the other car is
+            // drawn pushed at once on this page, really pushed a round trip later); a hit both pages felt counts once
+            // within this long.
+            const __SPAWN_MS = 2e3
+              , __COOL_MS = 250
+              , __SAME_MS = 300;
             function __collideStep(car) {
                 if (null == car.userControls)
                     return;
@@ -13499,37 +13507,50 @@
                 const F = t.HEAPF32
                   , r4 = R >> 2
                   , frame = new DataView(t.HEAPU8.buffer, n, s).getUint32(4, !0) & 16777215;
-                for (const impulse of c.impulses.splice(0)) {
+                // A restart starts the car's clock again.
+                if (frame < c.last) {
+                    c.spawn = frame;
+                    c.ownHit.clear(), c.gotHit.clear(), c.lastHit.clear(), c.owed.clear(), c.owedAt.clear();
+                    for (const g of c.ghosts.values())
+                        g.spawn = -1 / 0, g.cool = -1 / 0;
+                }
+                c.last = frame;
+                for (const {v: impulse, from} of c.impulses.splice(0)) {
+                    // This page felt the same hit already.
+                    if (null != from && frame - (c.ownHit.get(from) ?? -1 / 0) < __SAME_MS)
+                        continue;
+                    null != from && c.gotHit.set(from, frame);
                     const L = __len(impulse), k = L > 30 ? 30 / L : 1;
                     for (let j = 0; j < 3; j++)
                         F[(R + 312 >> 2) + j] += impulse[j] * k
                 }
                 const origin = [F[r4 + 13], F[r4 + 14], F[r4 + 15]];
-                // A respawn moves the car in one frame: everything it now overlaps passes through for a moment.
-                if (c.origin && __len(__sub(origin, c.origin)) > 5)
-                    for (const g of c.ghosts.values())
-                        g.ghost = !0;
+                // A respawn moves the car in one frame.
+                c.origin && __len(__sub(origin, c.origin)) > 5 && (c.spawn = frame);
                 c.origin = origin;
                 if (!c.cars.length)
                     return;
-                const rows = [0, 1, 2].map((i => [F[r4 + 1 + 4 * i], F[r4 + 2 + 4 * i], F[r4 + 3 + 4 * i]]))
+                const self = frame - c.spawn < __SPAWN_MS
+                  , rows = [0, 1, 2].map((i => [F[r4 + 1 + 4 * i], F[r4 + 2 + 4 * i], F[r4 + 3 + 4 * i]]))
                   , axes = [0, 1, 2].map((k => [rows[0][k], rows[1][k], rows[2][k]]))
                   , A = __box(origin, axes)
                   , invM = F[R + 344 >> 2]
                   , Ii = i => [F[(R + 264 + 16 * i) >> 2], F[(R + 268 + 16 * i) >> 2], F[(R + 272 + 16 * i) >> 2]]
                   , Iinv = [Ii(0), Ii(1), Ii(2)]
                   , Imul = a => [__dot(Iinv[0], a), __dot(Iinv[1], a), __dot(Iinv[2], a)];
+                // Several cars at once (a pile of them on one spot) bounce this car once a frame, off the hardest hit.
+                let bounced = !1;
                 for (const other of c.cars) {
                     const keys = Array.isArray(other.keys) ? other.keys.filter((k => k && Number.isFinite(k.f) && Array.isArray(k.p) && Array.isArray(k.q))) : [];
                     if (!keys.length)
                         continue;
                     let g = c.ghosts.get(other.id);
-                    g || c.ghosts.set(other.id, g = { ghost: !0, reset: other.reset });
+                    g || c.ghosts.set(other.id, g = { ghost: !0, reset: other.reset, spawn: frame, cool: -1 / 0 });
                     if (g.reset !== other.reset)
-                        g.ghost = !0,
+                        g.spawn = frame,
                         g.reset = other.reset;
                     for (let i = 1; i < keys.length; i++)
-                        __len(__sub(keys[i].p, keys[i - 1].p)) > 5 && (g.ghost = !0);
+                        __len(__sub(keys[i].p, keys[i - 1].p)) > 5 && (g.spawn = frame);
                     const at = keys[0].f + (frame - c.frame)
                       , pose = __remotePose(keys, at)
                       , B = __box(pose.p, __axes(pose.q))
@@ -13538,12 +13559,19 @@
                         g.ghost = !1;
                         continue
                     }
+                    // Either car spawned a moment ago (its own clock says so, or this page saw it respawn).
+                    if (self || keys[0].f < __SPAWN_MS || frame - g.spawn < __SPAWN_MS) {
+                        g.ghost = !0;
+                        continue
+                    }
                     if (g.ghost)
                         continue;
                     const corr = .2 * Math.max(0, hit.depth - .005);
                     for (const o of [52, 116])
                         for (let j = 0; j < 3; j++)
                             F[(R + o >> 2) + j] += hit.n[j] * corr;
+                    if (frame < g.cool)
+                        continue;
                     let rr = __sub(__mul(__add(__closest(A, B.c), __closest(B, A.c)), .5), origin);
                     rr = __sub(rr, __mul(axes[1], __dot(rr, axes[1])));
                     const v = [F[R + 312 >> 2], F[R + 316 >> 2], F[R + 320 >> 2]]
@@ -13552,6 +13580,11 @@
                       , vn = __dot(vrel, hit.n);
                     if (vn >= 0)
                         continue;
+                    g.cool = frame + __COOL_MS;
+                    // The other page felt this hit first and sent it here: both cars have it already.
+                    if (frame - (c.gotHit.get(other.id) ?? -1 / 0) < __SAME_MS)
+                        continue;
+                    c.ownHit.set(other.id, frame);
                     // Equal masses: this car takes half the impulse, the other car is sent the other half.
                     const kN = invM + .5 * __dot(__cross(Imul(__cross(rr, hit.n)), rr), hit.n)
                       , jn = -1.25 * vn / kN * .5;
@@ -13563,17 +13596,17 @@
                           , jt = Math.min(vtl / kT * .5, .3 * jn);
                         J = __sub(J, __mul(tn, jt))
                     }
-                    for (let j = 0; j < 3; j++)
-                        F[(R + 312 >> 2) + j] += J[j] * invM;
-                    const dw = Imul(__cross(rr, J));
-                    for (let j = 0; j < 3; j++)
-                        F[(R + 328 >> 2) + j] += .5 * dw[j];
+                    if (!bounced) {
+                        bounced = !0;
+                        for (let j = 0; j < 3; j++)
+                            F[(R + 312 >> 2) + j] += J[j] * invM;
+                        const dw = Imul(__cross(rr, J));
+                        for (let j = 0; j < 3; j++)
+                            F[(R + 328 >> 2) + j] += .5 * dw[j]
+                    }
                     c.owed.set(other.id, __add(c.owed.get(other.id) ?? [0, 0, 0], __mul(J, -invM)));
                     // When the hit was on the other car's own clock (a Cuppa bot is pushed back from that frame).
-                    c.owedAt.has(other.id) || c.owedAt.set(other.id, Math.round(at));
-                    // The other car is drawn where it was a moment ago; it has really been pushed away
-                    // already, so the pair passes through until it separates instead of hitting again.
-                    g.ghost = !0
+                    c.owedAt.has(other.id) || c.owedAt.set(other.id, Math.round(at))
                 }
                 // Hits on each car are sent at most every 150 ms.
                 const hits = [];

@@ -132,6 +132,8 @@ export interface Native {
   showRoundTime(g: Game, frames: number): void;
   showRoundCheckpoint(g: Game, frames: number): void;
   showRoundFinish(g: Game, frames: number): void;
+  // The finish banner compares with this round's best from here on, and shows the all-time PB on its own row.
+  resetRoundBest?(g: Game): void;
   // marks: cars hidden now whose skid marks stay on the road (bots that finished and left).
   visibility(g: Game, ids: number[] | null, self: number | null, marks?: number[]): void;
   drivingView(g: Game): 0 | 1;
@@ -148,7 +150,10 @@ export interface Native {
   collisions(g: Game, ids: number[] | null): void;
   // A hit's frame `at` is on the other car's own clock.
   bumps(g: Game): { id: number; impulse: number[]; at?: number }[];
-  bump(g: Game, impulse: number[]): void;
+  // `from`: the player whose page felt the hit (so a hit both pages felt counts once).
+  bump(g: Game, impulse: number[], from?: number): void;
+  // A bumper cup: cars that spawned less than 2 s ago pulse blue.
+  bumperLook?(g: Game, on: boolean): void;
   sound(name: 'tick' | 'go' | 'record' | 'checkpoint' | 'finish'): void;
   saveClip(run: { recording: string; frames: number; trackId: string; carStyle: string; nickname: string; name: string }): Promise<boolean | 'duplicate'>;
   carStyle(g: Game): string;

@@ -165,7 +165,8 @@
     // Songs that come with the game (audio/songs), credited in the list. Where each one starts is
     // kept on this device.
     const PRESETS = [
-        { id: "preset:nocturne", name: "Not So Weekly Nocturne", by: "@LBpiano", file: "not-so-weekly-nocturne.mp3", duration: 51.6 },
+        { id: "preset:nocturne", name: "La vallée des rêveries", by: "@LBpiano", file: "not-so-weekly-nocturne.mp3", duration: 51.6 },
+        { id: "preset:orchestra", name: "Not So Weekly Orchestra", by: "@LBpiano", file: "not-so-weekly-orchestra.mp3", duration: 53.6 },
         { id: "preset:cut-through", name: "Cut Through", by: "The Big GPT", file: "cut-through.mp3", duration: 93.6 },
         { id: "preset:slide", name: "Slide Through The Turn", by: "The Big GPT", file: "slide-through-the-turn.mp3", duration: 61.5 },
         { id: "preset:drift-brutal", name: "Drift Brutal", by: "The Big GPT", file: "drift-brutal.mp3", duration: 150 },

@@ -197,15 +197,40 @@ and a joining human takes a bot's place on a full grid.
 
 Bots in bumper cups (`bumper` jobs): a bot is still planned on the organizer's page, but only up to 2 s ahead of
 the race clock, with retries until 0.7 s ahead, and pages get its frames only 0.4 s past the race clock
-(`Planner.showBy`, `commitAll`, short chunks). Every racing page puts the bots into its own car's collision
+(`Planner.showBy`, `commitAll`, short chunks), so the organizer hands them over every tick (100 ms), not every
+500 ms (frames that came in bursts every 600 ms had every bot standing still 300-400 ms out of 600). Every racing page puts the bots into its own car's collision
 step (`native.botKeys`: the pose drawn now and the next keyframes), so a page sees both sides of a hit
 between its car and a bot: its own half as with any car, and the bot's half sent as a `bump` with the frame
 it happened on (the sim worker reports `at` on the hit car's clock). The organizer passes it to the bot's
 worker (`{b:'bump'}`); `Planner.bump` restores a snapshot from before that frame, drives the bot's own keys
 up to it, adds the velocity change there (`Job.kicks`, applied again on every replay) and plans on, never
-going back before a hit. Its frames from there go out again in a chunk of their own, which pages take as
-replacing everything from its first frame (`BotTimeline.push`). Bots don't collide with each other, and a
-pushed run never becomes a bot's best run. Lab: `botlab/t43_bump.mjs`; browser: `cdp/sc_botbump.mjs`.
+going back before a hit. Its frames from the hit on go out again in a chunk of their own, which pages take as
+replacing everything from its first frame (`BotTimeline.push`); the frames it drives again before the hit are
+the ones pages have and aren't sent twice (`Job.sameUntil`: it used to send the whole run again from the
+start-line snapshot, and the bot stood still on every page until that caught up). On the page whose car hit
+it, the bot is drawn pushed at once (`BotView.nudge`, 400 ms at most) until its new frames come; on every page
+a replacement that moves what was already drawn eases in over ~60 ms (up to 5 m; more jumps). A pushed run
+never becomes a bot's best run. Lab: `botlab/t43_bump.mjs`; browser: `cdp/sc_botbump.mjs`, `cdp/sc_bumplab.mjs`
+(bot freezes, hits and pushes on both pages; `RAM=1` for a rear-end between the two players).
+
+Hits (the sim worker's collision step): for 2 s after a car spawns (the start, a restart or a respawn: its own
+clock under 2 s, or a jump of over 5 m or a reset this page saw) it can't hit or be hit, and a pair still
+overlapping after that passes through until it has separated. A pair that hit doesn't hit again for 250 ms
+(it is pushed apart meanwhile), so pushing a car is a run of small bumps instead of driving through it. Each
+page bounces its own car and sends the other car its half; when both pages felt the same hit (within 300 ms,
+`messageType: 13` carries who sent it), each car takes it once. A car that runs into several at once (a pile
+of them on one spot) bounces once a frame, off the first, and each of them still gets its push.
+
+Bots hit each other too (`bots/clash.ts`): the organizer's page checks every pair of bots in their keyframes as
+they come in (a moment ahead of the race clock, every 10 ms, between keyframes), with the sim worker's hull
+boxes and bounce (equal masses, restitution 0.25, a little friction), and sends each bot its half as a hit at
+that frame (`BotManager.bump`, as a player's hit). The same 2 s after a spawn, passing through until apart and
+250 ms between a pair's hits; a bot that was hit is checked only up to the hit until its planner sends its
+frames from there again (1 s at most).
+
+In a bumper cup's race every car that spawned less than 2 s ago pulses blue on every page, spectators' too
+(`native.bumperLook`; its own clock under 2 s, or a jump of over 5 m or a reset seen on that page; `cupPulse` on
+the car: a blue emissive, the brake light left alone).
 
 Custom tracks get the top runs of their own board like any other track (Kodub keeps a board for every
 track id), as well as the organizer's PB and runs finished in the cup. When bots still sit a track out,

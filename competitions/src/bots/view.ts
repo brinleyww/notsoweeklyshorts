@@ -1,11 +1,12 @@
 // Bots on every page, the organizer's included. Their keyframes come in {k:'bots'} chunks (the organizer's
 // page hands its own over directly) and each car is drawn at exactly cupNow - startAt on the race clock,
 // never ahead of the keyframes it has.
-import type { CarState, Game, Native } from '../game.ts';
+import type { CarState, Game, Native, Vec3 } from '../game.ts';
 import type { LiveTiming } from '../live.ts';
 import type { Msg } from '../protocol.ts';
 import { MAX_BOTS } from '../rules.ts';
 import { botPid, player, type CupState, type Round } from '../state.ts';
+import { BotClash, type ClashHost } from './clash.ts';
 import { decodeChunk, fromB64, inflate, type Keyframe } from './codec.ts';
 import { BotTimeline } from './timeline.ts';
 
@@ -33,6 +34,7 @@ interface Run {
   c: number;
 }
 interface Track {
+  u: number;
   // Deflated chunks by seq, and how many of them are in tl.
   data: (Uint8Array | undefined)[];
   decoded: number;
@@ -44,6 +46,14 @@ interface Track {
   sampled: boolean;
   // Respawns, restarts and jumps drawn so far (another car's collision step passes through across one).
   cuts: number;
+  // Bumper cups: where it was last drawn (bot time, place), what is left to ease out of a replacement that moved
+  // what was already drawn, and a hit this page's car made that its planner's frames don't show yet.
+  lastT: number;
+  lastPos: Vec3 | null;
+  fix: boolean;
+  err: Vec3 | null;
+  errAt: number;
+  nudge: { dv: Vec3; at: number; until: number } | null;
 }
 interface Plan {
   g: number;
@@ -52,13 +62,31 @@ interface Plan {
 
 const NONE: Bot[] = [];
 
-const newTrack = (): Track => ({ data: [], decoded: 0, epoch: 0, busy: false, tl: new BotTimeline(), runs: [], cutNext: false, sampled: false, cuts: 0 });
+const newTrack = (u: number): Track => ({ u, data: [], decoded: 0, epoch: 0, busy: false, tl: new BotTimeline(), runs: [], cutNext: false, sampled: false, cuts: 0, lastT: -Infinity, lastPos: null, fix: false, err: null, errAt: 0, nudge: null });
 // Keyframes after now a bumper cup's hit list gets for each bot.
 const HIT_KEYS = 3;
+// A replacement's difference from what was drawn eases out with this time constant (bot ms); a bigger one jumps.
+const EASE_MS = 60;
+const EASE_MAX = 5;
+// A hit this page's car made shows on the bot until its planner's frames come back with it, this long at most.
+const NUDGE_MS = 400;
+
+// A car state drawn `d` away from where it is (its wheel contacts too, for skidmarks and tyre sounds).
+function moved(st: CarState, d: Vec3): CarState {
+  const p = st.position;
+  return {
+    ...st,
+    position: { x: p.x + d.x, y: p.y + d.y, z: p.z + d.z },
+    wheelContact: st.wheelContact.map((c) => c && { ...c, position: { x: c.position.x + d.x, y: c.position.y + d.y, z: c.position.z + d.z } }) as CarState['wheelContact'],
+  };
+}
 
 export class BotView {
   // This page's car can hit bots (a bumper cup round it is racing in).
   bumper = false;
+  // The organizer's page in a bumper cup: bots hit each other.
+  clashes: ClashHost | null = null;
+  #clash = new BotClash();
   #plans = new Map<number, Plan>();
   #floor = -Infinity;
   #cup = '';
@@ -143,7 +171,7 @@ export class BotView {
     let track = plan.bots.get(u);
     if (!track) {
       if (plan.bots.size >= 2 * MAX_BOTS) return;
-      plan.bots.set(u, (track = newTrack()));
+      plan.bots.set(u, (track = newTrack(u)));
     }
     if (track.data[seq]) return;
     track.data[seq] = bytes;
@@ -183,11 +211,70 @@ export class BotView {
             last = track.runs[track.runs.length - 1];
           if (!last || Math.abs(c - last.c) > 1) track.runs.push({ f0: k.f, c });
         }
-        track.tl.push(frames);
+        const replaced = track.tl.push(frames);
+        if (replaced && frames[0].f <= track.lastT) {
+          track.fix = true;
+          if (track.nudge && frames[0].f <= track.nudge.at + 100) track.nudge = null;
+        }
+        this.#clashes(track, frames[0].f, replaced);
       }
     } finally {
       if (track.epoch === epoch) track.busy = false;
     }
+  }
+
+  #clashes(track: Track, f0: number, replaced: boolean) {
+    const host = this.clashes;
+    if (!host || !this.#plans.size) return;
+    const plan = this.#plans.get(Math.max(...this.#plans.keys()));
+    if (plan?.bots.get(track.u) === track) this.#clash.check(plan.bots, track.u, f0, replaced, host);
+  }
+
+  // This page's car hit bot `pid` at its frame `at`, changing its velocity by dv (units/s).
+  nudge(pid: number, dv: number[], at: number) {
+    const b = this.#list.find((x) => x.pid === pid), track = b && this.#plan?.bots.get(b.u);
+    if (!track || dv.length !== 3 || !dv.every(Number.isFinite) || !Number.isFinite(at)) return;
+    const was = track.nudge;
+    const sum = was ? { x: was.dv.x + dv[0], y: was.dv.y + dv[1], z: was.dv.z + dv[2] } : { x: dv[0], y: dv[1], z: dv[2] };
+    track.nudge = { dv: sum, at: was ? was.at : at, until: performance.now() + NUDGE_MS };
+  }
+
+  // How far from its keyframes bot `track` is drawn at t (bumper cups): what is left of a replacement's
+  // difference, and a hit of this page's car its frames don't show yet.
+  #offset(track: Track, st: CarState, t: number, reset: boolean): Vec3 | null {
+    if (track.fix) {
+      track.fix = false;
+      const d = track.lastPos && { x: track.lastPos.x - st.position.x, y: track.lastPos.y - st.position.y, z: track.lastPos.z - st.position.z };
+      if (d && !reset && Math.hypot(d.x, d.y, d.z) < EASE_MAX) {
+        track.err = d;
+        track.errAt = t;
+      } else track.err = null;
+    }
+    const nudge = track.nudge;
+    if (nudge && performance.now() > nudge.until) {
+      // Its planner turned the hit down: ease back from where it was shown.
+      const s = Math.max(0, t - nudge.at) / 1000, k = track.err ? Math.exp(-(t - track.errAt) / EASE_MS) : 0;
+      track.err = { x: nudge.dv.x * s + (track.err?.x ?? 0) * k, y: nudge.dv.y * s + (track.err?.y ?? 0) * k, z: nudge.dv.z * s + (track.err?.z ?? 0) * k };
+      track.errAt = t;
+      track.nudge = null;
+    }
+    let x = 0, y = 0, z = 0;
+    if (track.err) {
+      const k = Math.exp(-Math.max(0, t - track.errAt) / EASE_MS);
+      if (k < 0.01) track.err = null;
+      else {
+        x += track.err.x * k;
+        y += track.err.y * k;
+        z += track.err.z * k;
+      }
+    }
+    if (track.nudge) {
+      const s = Math.max(0, t - track.nudge.at) / 1000;
+      x += track.nudge.dv.x * s;
+      y += track.nudge.dv.y * s;
+      z += track.nudge.dv.z * s;
+    }
+    return x || y || z ? { x, y, z } : null;
   }
 
   // The same plan from the start again (the round was restarted).
@@ -287,6 +374,10 @@ export class BotView {
       const at = tl.sample(t, lerp);
       if (!at) continue;
       if (at.reset) track.cuts++;
+      const off = this.bumper || track.err || track.nudge || track.fix ? this.#offset(track, at.state, t, at.reset) : null;
+      if (off) at.state = moved(at.state, off);
+      track.lastT = t;
+      track.lastPos = at.state.position;
       this.live.bot(b.pid, this.#raceTime(track, at.state, t));
       if (!g) continue;
       const was = this.#drawn.get(b.pid);
@@ -302,7 +393,9 @@ export class BotView {
       this.native.botState(g, b.pid, at.state, at.reset || jump || was !== this.#frameNo - 1);
       if (this.bumper && at.state.hasStarted && at.state.finishFrames == null) {
         const p = at.state.position, q = at.state.quaternion;
-        this.native.botKeys?.(g, b.pid, b.pid, tl.next(t, HIT_KEYS, [{ f: Math.round(t), p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w] }]), track.cuts);
+        const keys = tl.next(t, HIT_KEYS, [{ f: Math.round(t), p: [p.x, p.y, p.z], q: [q.x, q.y, q.z, q.w] }]);
+        if (off) for (let i = 1; i < keys.length; i++) keys[i].p = [keys[i].p[0] + off.x, keys[i].p[1] + off.y, keys[i].p[2] + off.z];
+        this.native.botKeys?.(g, b.pid, b.pid, keys, track.cuts);
       } else this.native.botKeys?.(g, b.pid, b.pid, null, 0);
       this.#drawn.set(b.pid, this.#frameNo);
       this.#last.set(b.pid, at.state);

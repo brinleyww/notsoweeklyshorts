@@ -363,6 +363,11 @@ export class Organizer {
     else if (ph === 'loading' || ph === 'warmup') this.#planBots();
   }
 
+  // Two bots hit each other (found on this page, bots/clash.ts): bot u's velocity change v at its frame `at`.
+  botHit(u: number, at: number, v: number[]) {
+    this.#bots?.bump(u, at, v);
+  }
+
   botInputs(n: number, u: number) {
     const keys = this.#bots?.inputs(n, u);
     return keys ? inputsText(keys) : null;
@@ -661,7 +666,7 @@ export class Organizer {
       return;
     }
     if (m.to === this.app.selfPid) {
-      if (this.app.game) this.app.native.bump(this.app.game, impulse);
+      if (this.app.game) this.app.native.bump(this.app.game, impulse, pid);
     } else this.app.net.send(m.to, { k: 'bump', n: m.n, from: pid, i: impulse });
   }
 

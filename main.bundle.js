@@ -4061,11 +4061,12 @@ window.__nswsAutoGhostNote = function(trackId) {
                         cars: t.cars
                     })
                 }
-                impulseCar(e, t) {
+                impulseCar(e, t, from) {
                     r.get(this, h, "f").postMessage({
                         messageType: 13,
                         carId: e,
-                        impulse: t
+                        impulse: t,
+                        from
                     })
                 }
             }
@@ -10343,6 +10344,19 @@ window.__nswsAutoGhostNote = function(trackId) {
                         }
                     })
                 }
+                // Not So Weekly Shorts: a bumper cup's car that can't be hit right now glows blue (k 0-1, 0 = its own colours).
+                set cupPulse(k) {
+                    if ((this.__pulse ?? 0) === k)
+                        return;
+                    this.__pulse = k;
+                    const brake = l.get(this, Ee, "f");
+                    l.get(this, ve, "f").traverse(e => {
+                        if (e.isMesh)
+                            for (const m of Array.isArray(e.material) ? e.material : [e.material])
+                                m !== brake && m.emissive?.isColor && (m.userData.__nswsEmissive ??= m.emissive.clone(),
+                                m.emissive.copy(m.userData.__nswsEmissive).lerp(this.__pulseBlue ??= new THREE.Color(.1, .45, 1), k))
+                    })
+                }
                 // Not So Weekly Shorts: a cup's bots get eight-sided wheels (the default ones are 700 triangles each).
                 lowPolyWheels() {
                     for (const e of l.get(this, ke, "f"))
@@ -10367,10 +10381,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , n = l.get(this, ne, "f");
                     null != t && null != n && t.setRemoteCars(n, e)
                 }
-                applyImpulse(e) {
+                applyImpulse(e, from) {
                     const t = l.get(this, Z, "f")
                       , n = l.get(this, ne, "f");
-                    null != t && null != n && t.impulseCar(n, e)
+                    null != t && null != n && t.impulseCar(n, e, from)
                 }
                 takeBumps() {
                     const t = l.get(this, Z, "f")
@@ -42081,7 +42095,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         ;
         const TimeAnnouncerUI = class {
-            constructor(e, t, n, i, r, a, s, o, l) {
+            constructor(e, t, n, i, r, a, s, o, l, cup = null) {
                 Je.add(this),
                 Xe.set(this, void 0),
                 Ye.set(this, void 0),
@@ -42099,7 +42113,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                     break;
                 case "session-best":
                     c.classList.add("session-best"),
-                    c.textContent = t.get("NEW SESSION BEST")
+                    c.textContent = t.get("NEW SESSION BEST");
+                    break;
+                case "round-best":
+                    c.classList.add("session-best"),
+                    c.textContent = "NEW ROUND BEST"
                 }
                 C.get(this, Ye, "f").appendChild(c);
                 const h = document.createElement("div");
@@ -42132,7 +42150,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                 if (A.appendChild(y),
                 C.get(this, Xe, "f").appendChild(C.get(this, Ye, "f")),
                 u.textContent = Ve.A.formatTimeString(r),
-                null == a)
+                cup) {
+                    // Not So Weekly Shorts: a cup compares with this round's best (a = null on the first finish).
+                    cup.banner && (c.classList.remove("hidden"),
+                    C.get(this, Je, "m", et).call(this, n));
+                    if (null == a)
+                        g.className = "hidden";
+                    else {
+                        const e = r.difference(a);
+                        m.textContent = Ve.A.formatTimeString(e, !0),
+                        g.className = e.isNegative() ? "difference" : "difference red"
+                    }
+                } else if (null == a)
                     c.classList.remove("hidden"),
                     g.className = "hidden",
                     C.get(this, Je, "m", et).call(this, n);
@@ -42157,6 +42186,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                     v.textContent = o.nickname,
                     y.textContent = Ve.A.formatTimeString(e, !0),
                     e.isNegative() ? A.className = "difference" : A.className = "difference red"
+                }
+                if (null != cup?.allTime) {
+                    const e = r.difference(cup.allTime)
+                      , row = document.createElement("div")
+                      , title = document.createElement("p")
+                      , value = document.createElement("p");
+                    title.className = "title",
+                    title.textContent = t.get("Personal best"),
+                    value.textContent = Ve.A.formatTimeString(e, !0),
+                    row.className = e.isNegative() ? "difference" : "difference red",
+                    row.append(title, value),
+                    C.get(this, Ye, "f").appendChild(row)
                 }
                 const b = performance.now();
                 l.then((e => {
@@ -45037,7 +45078,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , i = e.getRecording()
                   , r = e.getCarStyle();
                 let a;
-                const s = C.get(this, Ua, "f");
+                const s = C.get(this, Ua, "f")
+                  , cupPrevPB = cupRoundBest.has(this) ? C.get(this, Br, "f").getRecordTime(C.get(this, Dr, "f").profileSlot, C.get(this, Yr, "f").getId()) : null;
                 if (null == C.get(this, Ua, "f") || t.lessThan(C.get(this, Ua, "f").time)) {
                     if (a = (async () => {
                         if (C.get(this, jr, "f")) {
@@ -45147,7 +45189,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     record: c.settings.time,
                     nickname: c.settings.nickname
                 }),
-                null == C.get(this, Sa, "f"))
+                cupRoundBest.has(this)) {
+                    // Cuppa: the main difference is to this round's best; the all-time PB gets its own row (not in collision cups).
+                    const roundBest = cupRoundBest.get(this)
+                      , saved = C.get(this, jr, "f") && (null == cupPrevPB || t.lessThan(cupPrevPB));
+                    cupRoundBest.set(this, null == roundBest || t.lessThan(roundBest) ? t : roundBest);
+                    C.set(this, oa, new TimeAnnouncerUI(C.get(this, ea, "f").element,C.get(this, Ur, "f"),C.get(this, Nr, "f"),C.get(this, Xr, "f").name,t,roundBest,saved ? "personal-best" : "round-best",l,Promise.resolve(null),{
+                        banner: saved || null != roundBest && t.lessThan(roundBest),
+                        allTime: cupCollisionCups.has(this) ? null : cupPrevPB
+                    }), "f")
+                } else if (null == C.get(this, Sa, "f"))
                     C.set(this, oa, new TimeAnnouncerUI(C.get(this, ea, "f").element,C.get(this, Ur, "f"),C.get(this, Nr, "f"),C.get(this, Xr, "f").name,t,s?.time ?? null,"personal-best",l,a), "f");
                 else
                     switch (C.get(this, Sa, "f").gameMode) {
@@ -45285,10 +45336,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         ;
         // Not So Weekly Shorts: race sessions in a collision cup, and the racers each one can hit now.
         const cupCollisions = new WeakMap
-          , cupCollisionCups = new WeakSet;
+          , cupCollisionCups = new WeakSet
+          , cupBumperLook = new WeakSet;
         // Cuppa bots' cars per race session (id -> {car, style, nickname}), drawn like the other racers' cars.
         // null once the session is disposed, so a late call can't add cars to the shared scene.
         const cupBotCars = new WeakMap;
+        // Cuppa: this round's best finish per race session (null before the first); only cup sessions are in it.
+        const cupRoundBest = new WeakMap;
         // Builds the Init message the game's physics workers get; set at startup.
         let cupPhysicsInit = null;
         // Called by every race session once a frame, after the cars moved and before the frame is drawn.
@@ -45560,6 +45614,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     Ja.call(g);
                     Ya.call(g);
                 },
+                resetRoundBest: g => cupRoundBest.set(g, null),
                 clearRecords: c => {
                     if (c instanceof Fn) {
                         fn.get(c).record = null;
@@ -45607,7 +45662,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     mp && (on ? mp.remoteDelay !== .4 && (mp.remoteDelay = .4) : Object.hasOwn(mp, "remoteDelay") && delete mp.remoteDelay);
                 },
                 bumps: g => C.get(g, wa, "f")?.takeBumps?.() ?? [],
-                bump: (g, impulse) => C.get(g, wa, "f")?.applyImpulse?.(impulse),
+                bump: (g, impulse, from) => C.get(g, wa, "f")?.applyImpulse?.(impulse, from),
+                bumperLook: (g, on) => on ? cupBumperLook.add(g) : cupBumperLook.delete(g),
                 sound: name => window.__nswsSfx?.(name),
                 saveClip: run => window.__nswsSaveClip?.(run) ?? Promise.resolve(!1),
                 carStyle: g => C.get(g, wa, "f")?.getCarStyle?.()?.serialize?.() ?? "",
@@ -46422,6 +46478,30 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             cars
                         }),
                         this.__cupCollide = !!collide
+                    }
+                    // Not So Weekly Shorts: in a bumper cup a car that spawned less than 2 s ago (the start, a restart or a
+                    // respawn) can't hit or be hit, and pulses blue (the sim worker's collision step has the same rule).
+                    if (cupBumperLook.has(this) || this.__cupPulsing) {
+                        const on = cupBumperLook.has(this)
+                          , now = performance.now()
+                          , k = .3 * (1 - Math.cos(now / 1e3 * 3 * Math.PI))
+                          , look = (car, reset) => {
+                            if (null == car)
+                                return;
+                            const st = on ? car.getCarState() : null
+                              , p = st?.position;
+                            if (p && car.__spawnPos && (Math.hypot(p.x - car.__spawnPos.x, p.y - car.__spawnPos.y, p.z - car.__spawnPos.z) > 5 || reset !== car.__spawnReset))
+                                car.__spawnAt = now;
+                            car.__spawnPos = p ? { x: p.x, y: p.y, z: p.z } : null,
+                            car.__spawnReset = reset;
+                            car.cupPulse = st?.hasStarted && null == st.finishFrames && (st.frames < 2e3 || now - (car.__spawnAt ?? -1 / 0) < 2e3) ? k : 0
+                        };
+                        for (const e of C.get(this, Ra, "f").values())
+                            look(e.car, e.resetCounter);
+                        for (const b of cupBotCars.get(this)?.values() ?? [])
+                            look(b.car, b.car.__cupReset ?? 0);
+                        look(C.get(this, wa, "f"), 0);
+                        this.__cupPulsing = on
                     }
                     C.get(this, _r, "m", $a).call(this),
                     window.__nswsGhostLod?.(C.get(this, xa, "f").filter((e => !e.hasEnded && !ghostsHidden && null != e.car)).map((e => e.car)), C.get(this, wa, "f"), C.get(this, zr, "f").camera),

@@ -421,6 +421,10 @@ export class Job {
   // the latest one may be driven again (it happened where it happened).
   kicks = new Map<number, number[]>();
   kickFloor = -Infinity;
+  // The last frame handed over, and (after a hit sent it back to a snapshot) the frame before which what it
+  // drives again is what pages already have: those frames aren't handed over twice.
+  sent = -Infinity;
+  sameUntil = -Infinity;
   readonly drill: boolean;
   // Practice and drilling: the hint run's section the car is in, when it left each one and how fast, and the
   // last section practised.
@@ -791,6 +795,7 @@ export class Planner {
     if (job.car) this.sim.deleteCar(job.car);
     job.kicks.clear();
     job.kickFloor = -Infinity;
+    job.sameUntil = -Infinity;
     // A run that went onto another player's line to get through somewhere starts again on its own hint.
     if (job.hint >= 0) job.useRef(job.hint);
     // An expert drives its own best run as it is (it goes over it between runs; see #think).
@@ -1787,6 +1792,7 @@ export class Planner {
       j.load(from);
       j.force = at > from.t ? { keys: j.keys.slice(from.t, at), at: from.t, until: at } : null;
       j.committed = Math.min(j.committed, from.t);
+      j.sameUntil = at;
     }
     this.#ring = this.#ring.filter((s) => s.tick <= snap!.tick);
     return true;
@@ -1929,7 +1935,17 @@ export class Planner {
     if (limit <= job.committed) return;
     let n = 0;
     while (n < job.out.length && job.out[n].f < limit) n++;
-    if (n) this.onCommit(job, job.out.splice(0, n));
+    if (n) {
+      let outs = job.out.splice(0, n);
+      if (job.sameUntil > -Infinity) {
+        outs = outs.filter((o) => o.f >= job.sameUntil || o.f > job.sent);
+        if (limit > job.sameUntil) job.sameUntil = -Infinity;
+      }
+      if (outs.length) {
+        job.sent = Math.max(job.sent, outs[outs.length - 1].f);
+        this.onCommit(job, outs);
+      }
+    }
     job.committed = Math.max(job.committed, Math.min(limit, job.t));
   }
 }

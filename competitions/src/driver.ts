@@ -137,6 +137,7 @@ export class Driver {
       }
       this.#view ??= app.native.drivingView(g);
       app.native.reset(g);
+      app.native.resetRoundBest?.(g);
       if (app.connection) app.native.clearRecords(app.connection);
       app.native.release(g, this.#view);
       app.refreshInfo();

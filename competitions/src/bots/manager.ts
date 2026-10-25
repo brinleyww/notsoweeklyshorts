@@ -315,11 +315,12 @@ export class BotManager {
   }
 
   // Called every organizer tick. Chunks for round n that are due to go out (every HAND_MS, at
-  // once for a bot's first one), as messages for every page; the organizer's own page gets them here.
+  // once for a bot's first one; every tick in a bumper cup, whose bots are handed over only a moment
+  // ahead of the race clock), as messages for every page; the organizer's own page gets them here.
   take(now: number, n: number | undefined): BotsMsg[] | null {
     this.#tickAt = now;
     const plan = this.#plan;
-    if (!plan || plan.n !== n || (!plan.first && now - this.#handAt < HAND_MS)) return null;
+    if (!plan || plan.n !== n || (!plan.first && !plan.bumper && now - this.#handAt < HAND_MS)) return null;
     this.#handAt = now;
     plan.first = false;
     const c: [number, number, string][] = [];
