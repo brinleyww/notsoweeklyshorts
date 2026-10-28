@@ -10344,11 +10344,13 @@
                 xa.set(this, []),
                 Ca.set(this, []),
                 Sa.set(this, null),
+                this.rocket = [[], [], [], [], [], [], []],
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
                 Xi(this, Ba, t.down, "f"),
                 Xi(this, xa, t.left, "f"),
-                Xi(this, Ca, t.reset, "f"))
+                Xi(this, Ca, t.reset, "f"),
+                null != t.rocket && (this.rocket = t.rocket))
             }
             recordFrame(t, e) {
                 if (t > ya.maxFrames)
@@ -10365,19 +10367,26 @@
                 e.right != r && ji(this, Ia, "f").push(t),
                 e.down != s && ji(this, Ba, "f").push(t),
                 e.left != n && ji(this, xa, "f").push(t),
-                e.reset != a && ji(this, Ca, "f").push(t)
+                e.reset != a && ji(this, Ca, "f").push(t);
+                const o = e.rocket | 0;
+                for (let e = 0; e < 7; e++)
+                    (o >> e & 1) != this.rocket[e].length % 2 && this.rocket[e].push(t)
             }
             getFrame(t) {
+                let e = 0;
+                for (let i = 0; i < 7; i++)
+                    this.rocket[i].length && (ji(this, ba, "m", ka).call(this, t, this.rocket[i]) + 1) % 2 != 0 && (e |= 1 << i);
                 return {
                     up: (ji(this, ba, "m", ka).call(this, t, ji(this, wa, "f")) + 1) % 2 != 0,
                     right: (ji(this, ba, "m", ka).call(this, t, ji(this, Ia, "f")) + 1) % 2 != 0,
                     down: (ji(this, ba, "m", ka).call(this, t, ji(this, Ba, "f")) + 1) % 2 != 0,
                     left: (ji(this, ba, "m", ka).call(this, t, ji(this, xa, "f")) + 1) % 2 != 0,
-                    reset: (ji(this, ba, "m", ka).call(this, t, ji(this, Ca, "f")) + 1) % 2 != 0
+                    reset: (ji(this, ba, "m", ka).call(this, t, ji(this, Ca, "f")) + 1) % 2 != 0,
+                    rocket: e
                 }
             }
             serialize() {
-                const t = new Uint8Array(3 + 3 * ji(this, wa, "f").length + 3 + 3 * ji(this, Ia, "f").length + 3 + 3 * ji(this, Ba, "f").length + 3 + 3 * ji(this, xa, "f").length + 3 + 3 * ji(this, Ca, "f").length);
+                let t = new Uint8Array(3 + 3 * ji(this, wa, "f").length + 3 + 3 * ji(this, Ia, "f").length + 3 + 3 * ji(this, Ba, "f").length + 3 + 3 * ji(this, xa, "f").length + 3 + 3 * ji(this, Ca, "f").length);
                 ji(this, ba, "m", _a).call(this, ji(this, wa, "f"), t.subarray(0, 3 + 3 * ji(this, wa, "f").length)),
                 ji(this, ba, "m", _a).call(this, ji(this, Ia, "f"), t.subarray(3 + 3 * ji(this, wa, "f").length, 3 + 3 * ji(this, wa, "f").length + 3 + 3 * ji(this, Ia, "f").length)),
                 ji(this, ba, "m", _a).call(this, ji(this, Ba, "f"), t.subarray(3 + 3 * ji(this, wa, "f").length + 3 + 3 * ji(this, Ia, "f").length, 3 + 3 * ji(this, wa, "f").length + 3 + 3 * ji(this, Ia, "f").length + 3 + 3 * ji(this, Ba, "f").length)),
@@ -10386,6 +10395,18 @@
                 const e = new Ma.Deflate({
                     level: 9
                 });
+                // Rocket League inputs (jump, boost, air roll, roll left, roll right, pitch down, pitch up) follow as
+                // seven more channels.
+                // Readers that only know the first five stop before them.
+                if (this.rocket.some((t => t.length))) {
+                    const e = new Uint8Array(t.length + this.rocket.reduce(((t, e) => t + 3 + 3 * e.length), 0));
+                    e.set(t);
+                    let i = t.length;
+                    for (const t of this.rocket)
+                        ji(this, ba, "m", _a).call(this, t, e.subarray(i, i + 3 + 3 * t.length)),
+                        i += 3 + 3 * t.length;
+                    t = e
+                }
                 return e.push(new Uint8Array(t), !0),
                 function(t) {
                     let e = "";
@@ -10422,12 +10443,25 @@
                 if (null == o)
                     return null;
                 const l = ji(ya, ya, "m", Ea).call(ya, r.subarray(3 + 3 * s.length + 3 + 3 * n.length + 3 + 3 * a.length + 3 + 3 * o.length));
-                return null == l ? null : new ya({
+                if (null == l)
+                    return null;
+                let h = 3 + 3 * s.length + 3 + 3 * n.length + 3 + 3 * a.length + 3 + 3 * o.length + 3 + 3 * l.length;
+                const c = [];
+                if (h < r.length)
+                    for (let t = 0; t < 7; t++) {
+                        const t = ji(ya, ya, "m", Ea).call(ya, r.subarray(h));
+                        if (null == t)
+                            return null;
+                        c.push(t),
+                        h += 3 + 3 * t.length
+                    }
+                return new ya({
                     up: s,
                     right: n,
                     down: a,
                     left: o,
-                    reset: l
+                    reset: l,
+                    rocket: c.length ? c : null
                 })
             }
         }
@@ -13127,6 +13161,7 @@
                             carId: l,
                             result: A
                         }),
+                        __rocketFree(l),
                         t.ccall("deleteCarModel", "void", ["number"], [l]),
                         n.dispose()
                     }(s);
@@ -13162,6 +13197,7 @@
                                 down: !1,
                                 left: !1,
                                 reset: !1,
+                                rocket: 0,
                                 buffer: []
                             };
                         else {
@@ -13193,6 +13229,7 @@
                             const s = e[i];
                             if (s.id == r) {
                                 s.controls.dispose(),
+                                __rocketFree(r),
                                 t.ccall("deleteCarModel", "void", ["number"], [r]),
                                 e.splice(i, 1);
                                 break
@@ -13229,7 +13266,8 @@
                                         right: t.right,
                                         down: t.down,
                                         left: t.left,
-                                        reset: t.reset
+                                        reset: t.reset,
+                                        rocket: t.rocket | 0
                                     });
                                 else {
                                     const e = s.userControls.buffer[s.userControls.buffer.length - 1].frame;
@@ -13239,14 +13277,16 @@
                                         right: t.right,
                                         down: t.down,
                                         left: t.left,
-                                        reset: t.reset
+                                        reset: t.reset,
+                                        rocket: t.rocket | 0
                                     } : r > e && s.userControls.buffer.push({
                                         frame: r,
                                         up: t.up,
                                         right: t.right,
                                         down: t.down,
                                         left: t.left,
-                                        reset: t.reset
+                                        reset: t.reset,
+                                        rocket: t.rocket | 0
                                     })
                                 }
                                 break
@@ -13304,13 +13344,19 @@
                 t.ccall("createCarModel", "void", ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "number"], [e, a, i.length, r.x, r.y, r.z, l, o, n.position.x, n.position.y, n.position.z, n.quaternion.x, n.quaternion.y, n.quaternion.z, n.quaternion.w]),
                 t.ccall("free", "void", ["number"], [a]),
                 t.ccall("free", "void", ["number"], [l]),
-                __royaleInit(e, s)
+                __royaleInit(e, s),
+                __rocketInit(e, s)
             }
             // Royale tracks: crossing a checkpoint moves the respawn point to the gate of the same order
             // that starts the next segment, facing its rotation's travel direction. With two gates per order
             // (null here) that is the other one; tracks with more list each order's next gate by tile.
             const __royaleTracks = new Map([
                 ["7aab60253c33dc06864436f53db8400b46b474bd66520134fef5a2040b80523c", null],
+                ["8a35fa08981d6aff50ed71d7f0a9869bbfc46cea3ec77a31694d8cc80c35a716", new Map([
+                    [0, { x: 112, y: 18, z: 24 }],
+                    // This gate is rotated against its travel direction (+x).
+                    [1, { x: 130, y: 18, z: 95, q: [0, Math.SQRT1_2, 0, Math.SQRT1_2], d: [-1.35, .35, 0] }]
+                ])],
                 ["53c1ab56218454d4beb08db5c5d39e6b0efb08173cb8656d2e70443a881d3926", new Map([
                     [0, { x: 0, y: 30, z: -70 }],
                     [1, { x: 0, y: 30, z: -130 }],
@@ -13621,9 +13667,215 @@
                 }
                 hits.length && postMessage({ messageType: 12, carId: car.id, hits })
             }
+            // Not So Weekly Shorts: Rocket League mode. On these tracks the car can jump (higher the longer
+            // it's held), double jump or flip once in the air, boost, and pitch/yaw/roll in the air. Rocket
+            // League's own numbers, with its gravity (650 uu/s^2) scaled to this one, so timings match.
+            // controls.rocket bits: 1 jump, 2 boost, 4 air roll, 8 roll left, 16 roll right, 32 pitch nose down, 64 nose
+            // up. Pitch has its own bits so the page decides when Accelerate/Brake (always held) also tilt the car.
+            // Brake in the air without the nose-up bit is Trackmania's air brake: the spin stops, the speed doesn't.
+            const __rocketTracks = new Set([
+                "5287130bed6bf4859e4e39fcd3167df0eb0f47c4a5f4a8d2732b7a9fcbe7b8b8",
+                "225fad12335dadc12b60bfa1b31369b1026d8a084fd4670583870fb3b71f7ec0",
+                "f68a709a296a60f6e6f73a2da670f95aca424be0f2fda5d6b608ece71f339b7c",
+                "29d18d900712605f11afabf28a19b63b8e291d4156b8c246a048865193b591fa"
+            ]);
+            const __rocketCars = new Map();
+            const __RL = (() => {
+                const g = 9.81 / 650;
+                return {
+                    jumpV: 291.667 * g, jumpAcc: 1458.333 * g, jumpMin: 25, jumpMax: 200, secondFor: 1250,
+                    dodgeV: 500 * g, refSpeed: 2300 * g, backScale: 16 / 15, sideScale: 1.9,
+                    flipFor: 650, flipW: 5.5, zDampFrom: 150, zDampTo: 210, zDamp: Math.pow(.65, .12),
+                    boostGround: 991.667 * g, boostAir: 1700 * g, boostUse: .033333, boostMin: 100, boostFull: 100,
+                    // Not boosting for 0.5 s, the meter climbs back towards full: 63% of what's missing every 5 s.
+                    regenAfter: 500, regen: 1 - Math.exp(-.001 / 5),
+                    // Boosting into a wall: a kick up, then lift for 0.4 s, at most once every 0.6 s.
+                    wallKick: 3, wallLift: 14, wallFor: 400, wallCool: 600,
+                    airThrottle: 66.667 * g, pitchT: 12.146, yawT: 8.92, rollT: 36.08, pitchD: 2.798, yawD: 1.886, rollD: 4.472, maxW: 5.5,
+                    airBrake: Math.exp(-.015)
+                }
+            })();
+            // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
+            // 0 previous inputs (bit 8 reset), 1 has jumped, 2 frames since the jump, 3 jump held phase, 4 frames
+            // since the jump phase ended, 5 second jump used, 6 frames into a flip (-1 none), 7-8 flip forward/side
+            // (floats), 9 boost 0-100 (float), 10 frames boosting, 11 checkpoints passed, 12-14 jump/double
+            // jump/flip counters, 15 status bits, 16 frames since boosting, 17 frames into a wall lift (-1 none),
+            // 18 wall lift cooldown, 19 wall lift counter.
+            function __rocketInit(id, track) {
+                if (__rocketFree(id), !__rocketTracks.has(track.getId()))
+                    return;
+                const block = t.ccall("malloc", "number", ["number"], [96]);
+                if ("number" != typeof block || 0 == block)
+                    throw new Error("Failed to allocate memory for rocket state");
+                const b = block >> 2, I = new Int32Array(t.HEAPU8.buffer);
+                I.fill(0, b, b + 24), I[b + 2] = -1, I[b + 6] = -1, I[b + 17] = -1;
+                t.HEAPF32[b + 9] = __RL.boostFull;
+                __rocketCars.set(id, block)
+            }
+            function __rocketFree(id) {
+                const block = __rocketCars.get(id);
+                null != block && (__rocketCars.delete(id), t.ccall("free", "void", ["number"], [block]))
+            }
+            function __rocketStep(car, c) {
+                const U8 = t.HEAPU8;
+                U8[n + 227] = 0;
+                const block = __rocketCars.get(car.id);
+                if (null == block)
+                    return;
+                const ptr = __royaleCarPointer(car.id);
+                if (0 == ptr)
+                    return;
+                const R = new Uint32Array(U8.buffer)[ptr + 36 >> 2];
+                if (0 == R)
+                    return;
+                const I = new Int32Array(U8.buffer), F = t.HEAPF32, b = block >> 2, r4 = R >> 2, K = __RL;
+                const flags = U8[n + 11], wheels = flags >> 3 & 15;
+                let p = n + 12 + (2 & flags ? 3 : 0);
+                const cp = U8[p] | U8[p + 1] << 8;
+                p += 30;
+                const hits = U8[p];
+                p += 1 + 4 * hits;
+                const ground = [0, 0, 0];
+                for (let i = 0; i < 4; i++)
+                    if (wheels >> i & 1) {
+                        const D = new DataView(U8.buffer, p + 12, 12);
+                        ground[0] += D.getFloat32(0, !0), ground[1] += D.getFloat32(4, !0), ground[2] += D.getFloat32(8, !0), p += 24
+                    }
+                const ctrlAt = p + 68
+                  , onGround = ((wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)) >= 3
+                  , live = 1 & flags && !(2 & flags) && !c.reset
+                  , bits = live ? 127 & (c.rocket | 0) : 0
+                  , prev = I[b];
+                I[b] = bits | (c.reset ? 256 : 0);
+                const pressed = bits & ~prev
+                  , rows = [0, 1, 2].map((i => [F[r4 + 1 + 4 * i], F[r4 + 2 + 4 * i], F[r4 + 3 + 4 * i]]))
+                  , left = [rows[0][0], rows[1][0], rows[2][0]]
+                  , up = [rows[0][1], rows[1][1], rows[2][1]]
+                  , fwd = [rows[0][2], rows[1][2], rows[2][2]]
+                  , v = [F[(R + 312 >> 2)], F[(R + 316 >> 2)], F[(R + 320 >> 2)]]
+                  , w = [F[(R + 328 >> 2)], F[(R + 332 >> 2)], F[(R + 336 >> 2)]];
+                let wl = __dot(w, left), wu = __dot(w, up), wf = __dot(w, fwd);
+                cp > I[b + 11] && (F[b + 9] = K.boostFull);
+                I[b + 11] = cp;
+                if (c.reset) {
+                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0;
+                    F[b + 9] = K.boostFull
+                }
+                const throttle = live ? (c.up ? 1 : 0) - (c.down ? 1 : 0) : 0
+                  , pitchIn = (bits >> 5 & 1) - (bits >> 6 & 1)
+                  , steer = live ? (c.right ? 1 : 0) - (c.left ? 1 : 0) : 0
+                  , rollKeys = (bits >> 4 & 1) - (bits >> 3 & 1)
+                  , freeRoll = 4 & bits
+                  , yawIn = freeRoll ? 0 : steer
+                  , rollIn = Math.max(-1, Math.min(1, rollKeys + (freeRoll ? steer : 0)));
+                let landed = !1;
+                if (I[b + 2] >= 0 && I[b + 2]++,
+                I[b + 6] >= 0 && I[b + 6]++,
+                I[b + 3] && (I[b + 2] < K.jumpMin || 1 & bits && I[b + 2] < K.jumpMax ? (v[0] += up[0] * K.jumpAcc * .001, v[1] += up[1] * K.jumpAcc * .001, v[2] += up[2] * K.jumpAcc * .001) : I[b + 3] = 0),
+                I[b + 1] && !I[b + 3] && !onGround && I[b + 4]++,
+                onGround && !I[b + 3] && (I[b + 2] < 0 || I[b + 2] > 50) && (I[b + 1] = 0, I[b + 2] = -1, I[b + 4] = 0, I[b + 5] = 0),
+                // Touching anything ends a flip's spin and its bounce, as the ground does in Rocket League: a flip just
+                // before landing (a wave dash, a zap dash) keeps its speed instead of vaulting the car over its nose.
+                (wheels || hits) && I[b + 6] > 20 && I[b + 6] < K.flipFor + 600 && (I[b + 6] = -1, landed = !0),
+                1 & pressed)
+                    if (onGround && !I[b + 1])
+                        I[b + 1] = 1, I[b + 2] = 0, I[b + 3] = 1, I[b + 4] = 0, I[b + 5] = 0, I[b + 12]++,
+                        v[0] += up[0] * K.jumpV, v[1] += up[1] * K.jumpV, v[2] += up[2] * K.jumpV;
+                    else if (!onGround && !I[b + 5] && (!I[b + 1] || I[b + 4] < K.secondFor)) {
+                        I[b + 5] = 1, I[b + 3] = 0;
+                        const side = Math.max(-1, Math.min(1, steer + rollKeys))
+                          , ahead = Math.max(-1, Math.min(1, throttle + pitchIn));
+                        if (0 == ahead && 0 == side)
+                            I[b + 13]++,
+                            v[0] += up[0] * K.jumpV, v[1] += up[1] * K.jumpV, v[2] += up[2] * K.jumpV;
+                        else {
+                            const L = Math.sqrt(ahead * ahead + side * side), df = ahead / L, ds = side / L
+                              , fh = Math.sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2]);
+                            if (I[b + 14]++, I[b + 6] = 0, F[b + 7] = df, F[b + 8] = ds, fh > .1) {
+                                const f2 = [fwd[0] / fh, 0, fwd[2] / fh], r2 = [-f2[2], 0, f2[0]]
+                                  , speed = __dot(v, fwd), ratio = Math.min(1, Math.abs(speed) / K.refSpeed)
+                                  , back = Math.abs(speed) < 100 * 9.81 / 650 ? df < 0 : df >= 0 != speed >= 0;
+                                let ix = df * K.dodgeV * ((back ? K.backScale - 1 : 0) * ratio + 1), iy = ds * K.dodgeV * ((K.sideScale - 1) * ratio + 1);
+                                back && (ix *= K.backScale);
+                                for (let j = 0; j < 3; j += 2)
+                                    v[j] += ix * f2[j] + iy * r2[j]
+                            }
+                        }
+                    }
+                // ...and turns the car flush with what it touched (0.12 s, longer for big angles), so a flip that meets
+                // the road nose first settles onto its wheels instead of balancing on its bumper.
+                if (landed) {
+                    v[1] > 0 && (v[1] = 0);
+                    const gl = Math.sqrt(__dot(ground, ground)), nrm = gl > .1 ? __mul(ground, 1 / gl) : [0, 1, 0]
+                      , ax = __cross(up, nrm), sa = Math.sqrt(__dot(ax, ax));
+                    for (let j = 0; j < 3; j++)
+                        w[j] = up[j] * wu;
+                    const cosA = __dot(up, nrm);
+                    if (cosA > -.2 && sa > 1e-4) {
+                        const a = Math.acos(Math.max(-1, Math.min(1, cosA))), k = a / (.12 + .08 * Math.max(0, a - .8)) / sa;
+                        for (let j = 0; j < 3; j++)
+                            w[j] += ax[j] * k
+                    }
+                    wl = __dot(w, left), wu = __dot(w, up), wf = __dot(w, fwd)
+                }
+                const flipping = I[b + 6] >= 0 && I[b + 6] <= K.flipFor;
+                if (flipping) {
+                    const df = F[b + 7], ds = F[b + 8];
+                    wl = 0 != df && pitchIn * df < 0 ? .97 * wl : df * K.flipW;
+                    wf = ds * K.flipW;
+                    I[b + 6] >= K.zDampFrom && (I[b + 6] < K.zDampTo || v[1] < 0) && (v[1] *= K.zDamp)
+                } else if (!onGround) {
+                    const ap = Math.abs(pitchIn), ay = Math.abs(yawIn);
+                    wl += (K.pitchT * pitchIn - K.pitchD * wl * (1 - ap)) * .001;
+                    wu += (-K.yawT * yawIn - K.yawD * wu * (1 - ay)) * .001;
+                    wf += (K.rollT * rollIn - K.rollD * wf) * .001
+                }
+                if (!onGround) {
+                    const airBrake = live && c.down && !(64 & bits) && !flipping;
+                    airBrake && (wl *= K.airBrake, wu *= K.airBrake, wf *= K.airBrake);
+                    const m = Math.sqrt(wl * wl + wu * wu + wf * wf);
+                    m > K.maxW && (wl *= K.maxW / m, wu *= K.maxW / m, wf *= K.maxW / m);
+                    for (let j = 0; j < 3; j++)
+                        w[j] = left[j] * wl + up[j] * wu + fwd[j] * wf,
+                        v[j] += fwd[j] * K.airThrottle * (airBrake ? Math.max(0, throttle) : throttle) * .001
+                }
+                let boosting = !1;
+                if (live && F[b + 9] > 0 && (2 & bits || I[b + 10] > 0 && I[b + 10] < K.boostMin)) {
+                    boosting = !0, I[b + 10]++;
+                    const a = (onGround ? K.boostGround : K.boostAir) * .001;
+                    for (let j = 0; j < 3; j++)
+                        v[j] += fwd[j] * a;
+                    F[b + 9] = Math.max(0, F[b + 9] - K.boostUse),
+                    I[b + 16] = 0
+                } else
+                    I[b + 10] = 0,
+                    ++I[b + 16] > K.regenAfter && F[b + 9] < K.boostFull && (F[b + 9] = F[b + 9] > K.boostFull - .05 ? K.boostFull : F[b + 9] + (K.boostFull - F[b + 9]) * K.regen);
+                // A hull hit while boosting that isn't a landing (not falling fast, roughly upright) is a wall.
+                I[b + 18] > 0 && I[b + 18]--;
+                boosting && hits && I[b + 17] < 0 && !I[b + 18] && v[1] > -1.5 && up[1] > .3 && (I[b + 17] = 0, I[b + 19]++, v[1] += K.wallKick);
+                if (I[b + 17] >= 0)
+                    boosting && I[b + 17] < K.wallFor ? (v[1] += K.wallLift * .001, I[b + 17]++) : (I[b + 17] = -1, I[b + 18] = K.wallCool);
+                for (let j = 0; j < 3; j++)
+                    F[(R + 312 >> 2) + j] = v[j],
+                    F[(R + 328 >> 2) + j] = w[j];
+                const canFirst = onGround && !I[b + 1]
+                  , canSecond = !onGround && !I[b + 5] && (!I[b + 1] || I[b + 4] < K.secondFor);
+                I[b + 15] = (onGround ? 1 : 0) | (canFirst ? 2 : 0) | (canSecond ? 4 : 0) | (boosting ? 8 : 0) | (flipping ? 16 : 0) | (I[b + 3] ? 32 : 0) | (I[b + 17] >= 0 ? 64 : 0);
+                U8[ctrlAt] = 63 & U8[ctrlAt] | (boosting ? 64 : 0) | (flipping || I[b + 3] ? 128 : 0);
+                U8[n + 227] = 82,
+                U8[n + 228] = bits,
+                U8[n + 229] = Math.round(2 * F[b + 9]),
+                U8[n + 230] = I[b + 15],
+                U8[n + 231] = 255 & I[b + 12],
+                U8[n + 232] = 255 & I[b + 13],
+                U8[n + 233] = 255 & I[b + 14],
+                U8[n + 234] = Math.round(100 * F[b + 7]) & 255,
+                U8[n + 235] = Math.round(100 * F[b + 8]) & 255
+            }
             jo.length = 0,
             onmessage = i;
-            const s = 227
+            // 227 bytes of car state from the physics, then the Rocket League mode's 9 (see __rocketStep).
+            const s = 236
               , n = ( () => {
                 const e = t.ccall("malloc", "number", ["number"], [s]);
                 if ("number" != typeof e || 0 == e)
@@ -13634,7 +13886,8 @@
             function stepCar(e, i) {
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
                 __royaleStep(e.id),
-                __collideStep(e);
+                __collideStep(e),
+                __rocketStep(e, i);
                 return new Uint8Array(t.HEAPU8.buffer,n,s)
             }
             function a(e, i) {
@@ -13691,7 +13944,8 @@
                                     t.userControls.right = e.right,
                                     t.userControls.down = e.down,
                                     t.userControls.left = e.left,
-                                    t.userControls.reset = e.reset)
+                                    t.userControls.reset = e.reset,
+                                    t.userControls.rocket = e.rocket)
                                 }
                                 i.push({
                                     car: t,
@@ -13700,7 +13954,8 @@
                                         right: t.userControls.right,
                                         down: t.userControls.down,
                                         left: t.userControls.left,
-                                        reset: t.userControls.reset
+                                        reset: t.userControls.reset,
+                                        rocket: t.userControls.rocket
                                     }
                                 }),
                                 t.frames++

@@ -261,7 +261,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
     }
     function isKeyBindingInUse(binding) {
-        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)));
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)), window.__nswsRocket?.allKeys() ?? []);
         return all.some(b => null != b && sameKeyBinding(b, binding));
     }
     // What each key last went down as, so its release matches the same bindings
@@ -285,6 +285,12 @@ window.__nswsAutoGhostNote = function(trackId) {
         return !held.length || !isKeyBindingInUse(pressed);
     }
     window.__nswsKeyBindingMatches = keyBindingMatches;
+    window.__nswsKeyBindings = {
+        matches: keyBindingMatches,
+        record: recordKeyBinding,
+        format: formatClipKeyName,
+        settings: () => keyBindSettings
+    };
     // Records a key binding from the keys pressed next: one key, or one key with
     // Ctrl/Alt/Shift/Meta held. A modifier pressed and released with nothing else
     // pressed meanwhile is recorded by itself. Escape cancels with onDone(null),
@@ -3433,11 +3439,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.set(this, []),
                     c.set(this, []),
                     h.set(this, null),
+                    this.rocket = [[], [], [], [], [], [], []],
                     null != e && (f.set(this, a, e.up, "f"),
                     f.set(this, s, e.right, "f"),
                     f.set(this, o, e.down, "f"),
                     f.set(this, l, e.left, "f"),
-                    f.set(this, c, e.reset, "f"))
+                    f.set(this, c, e.reset, "f"),
+                    null != e.rocket && (this.rocket = e.rocket))
                 }
                 recordFrame(e, t) {
                     if (e > r.maxFrames)
@@ -3454,16 +3462,27 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t.right != i && f.get(this, s, "f").push(e),
                     t.down != d && f.get(this, o, "f").push(e),
                     t.left != u && f.get(this, l, "f").push(e),
-                    t.reset != p && f.get(this, c, "f").push(e)
+                    t.reset != p && f.get(this, c, "f").push(e);
+                    const g = t.rocket | 0;
+                    for (let t = 0; t < 7; t++)
+                        (g >> t & 1) != this.rocket[t].length % 2 && this.rocket[t].push(e)
                 }
                 getFrame(e) {
+                    let t = 0;
+                    for (let n = 0; n < 7; n++)
+                        this.rocket[n].length && (f.get(this, i, "m", d).call(this, e, this.rocket[n]) + 1) % 2 != 0 && (t |= 1 << n);
                     return {
                         up: (f.get(this, i, "m", d).call(this, e, f.get(this, a, "f")) + 1) % 2 != 0,
                         right: (f.get(this, i, "m", d).call(this, e, f.get(this, s, "f")) + 1) % 2 != 0,
                         down: (f.get(this, i, "m", d).call(this, e, f.get(this, o, "f")) + 1) % 2 != 0,
                         left: (f.get(this, i, "m", d).call(this, e, f.get(this, l, "f")) + 1) % 2 != 0,
-                        reset: (f.get(this, i, "m", d).call(this, e, f.get(this, c, "f")) + 1) % 2 != 0
+                        reset: (f.get(this, i, "m", d).call(this, e, f.get(this, c, "f")) + 1) % 2 != 0,
+                        rocket: t
                     }
+                }
+                // Whether any Rocket League input (jump, boost, air roll, roll left/right, pitch) was ever pressed.
+                hasRocketInputs() {
+                    return this.rocket.some((e => e.length))
                 }
                 // How many frames the press of key e ("up", "right", "down", "left" or
                 // "reset") that covers frame t lasts: 0 if the key isn't held at t,
@@ -3480,12 +3499,23 @@ window.__nswsAutoGhostNote = function(trackId) {
                     return x % 2 != 0 ? 0 : x + 1 < n.length ? n[x + 1] - n[x] : 1 / 0
                 }
                 serialize() {
-                    const e = new Uint8Array(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length + 3 + 3 * f.get(this, c, "f").length);
+                    let e = new Uint8Array(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length + 3 + 3 * f.get(this, c, "f").length);
                     f.get(this, i, "m", u).call(this, f.get(this, a, "f"), e.subarray(0, 3 + 3 * f.get(this, a, "f").length)),
                     f.get(this, i, "m", u).call(this, f.get(this, s, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length)),
                     f.get(this, i, "m", u).call(this, f.get(this, o, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length)),
                     f.get(this, i, "m", u).call(this, f.get(this, l, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length)),
                     f.get(this, i, "m", u).call(this, f.get(this, c, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length + 3 + 3 * f.get(this, c, "f").length));
+                    // Rocket League inputs (jump, boost, air roll, roll left, roll right, pitch down, pitch up) follow as
+                    // seven more channels. Readers that only know the first five stop before them.
+                    if (this.hasRocketInputs()) {
+                        const t = new Uint8Array(e.length + this.rocket.reduce(( (e, t) => e + 3 + 3 * t.length), 0));
+                        t.set(e);
+                        let n = e.length;
+                        for (const e of this.rocket)
+                            f.get(this, i, "m", u).call(this, e, t.subarray(n, n + 3 + 3 * e.length)),
+                            n += 3 + 3 * e.length;
+                        e = t
+                    }
                     const t = new g.Ay.Deflate({
                         level: 9
                     });
@@ -3516,12 +3546,25 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (null == l)
                         return null;
                     const c = f.get(r, r, "m", p).call(r, i.subarray(3 + 3 * a.length + 3 + 3 * s.length + 3 + 3 * o.length + 3 + 3 * l.length));
-                    return null == c ? null : new r({
+                    if (null == c)
+                        return null;
+                    let h = 3 + 3 * a.length + 3 + 3 * s.length + 3 + 3 * o.length + 3 + 3 * l.length + 3 + 3 * c.length;
+                    const d = [];
+                    if (h < i.length)
+                        for (let e = 0; e < 7; e++) {
+                            const e = f.get(r, r, "m", p).call(r, i.subarray(h));
+                            if (null == e)
+                                return null;
+                            d.push(e),
+                            h += 3 + 3 * e.length
+                        }
+                    return new r({
                         up: a,
                         right: s,
                         down: o,
                         left: l,
-                        reset: c
+                        reset: c,
+                        rocket: d.length ? d : null
                     })
                 }
             }
@@ -3889,7 +3932,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                                       , n = e[0] | e[1] << 8 | e[2] << 16 | e[3] << 24
                                       , i = r.get(this, f, "f").get(n);
                                     if (null != i) {
-                                        i(m.VO(e.subarray(4)).carState)
+                                        const t = m.VO(e.subarray(4)).carState;
+                                        e.length >= 236 && 82 == e[227] && (t.controls.rocket = e[228],
+                                        t.rocket = {
+                                            boost: e[229] / 2,
+                                            status: e[230],
+                                            jumps: e[231],
+                                            doubleJumps: e[232],
+                                            flips: e[233],
+                                            flipForward: (e[234] << 24 >> 24) / 100,
+                                            flipSide: (e[235] << 24 >> 24) / 100
+                                        }),
+                                        i(t)
                                     }
                                 }
                                 break
@@ -4032,7 +4086,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     };
                     r.get(this, h, "f").postMessage(n)
                 }
-                controlCar(e, t, n, i, a, s) {
+                controlCar(e, t, n, i, a, s, rocket) {
                     const l = {
                         messageType: o.ControlCar,
                         carId: e,
@@ -4040,7 +4094,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         right: n,
                         down: i,
                         left: a,
-                        reset: s
+                        reset: s,
+                        rocket: rocket | 0
                     };
                     r.get(this, h, "f").postMessage(l)
                 }
@@ -5213,7 +5268,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 n += 16,
                 i.set(new Uint8Array(new Float32Array([e.steering]).buffer), n),
                 n += 4,
-                i[n] = (e.controls.up ? 1 : 0) | (e.controls.right ? 1 : 0) << 1 | (e.controls.down ? 1 : 0) << 2 | (e.controls.left ? 1 : 0) << 3 | (e.controls.reset ? 1 : 0) << 4 | (e.brakeLightEnabled ? 1 : 0) << 5,
+                i[n] = (e.controls.up ? 1 : 0) | (e.controls.right ? 1 : 0) << 1 | (e.controls.down ? 1 : 0) << 2 | (e.controls.left ? 1 : 0) << 3 | (e.controls.reset ? 1 : 0) << 4 | (e.brakeLightEnabled ? 1 : 0) << 5 | (3 & (e.rocketFx | 0)) << 6,
                 n += 1,
                 i
             }
@@ -5343,7 +5398,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     left: !!(8 & e[i]),
                     reset: !!(16 & e[i])
                 }
-                  , S = !!(32 & e[i]);
+                  , S = !!(32 & e[i])
+                  , rocketFx = e[i] >> 6;
                 return i += 1,
                 {
                     numberOfBytes: i,
@@ -5364,7 +5420,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         wheelSkidInfo: b,
                         steering: w,
                         brakeLightEnabled: S,
-                        controls: x
+                        controls: x,
+                        rocketFx
                     }
                 }
             }
@@ -10087,6 +10144,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         }, "f");
                     if (l.get(this, $, "f")?.call(this, l.get(this, ie, "f")),
                     l.set(this, re, i, "f"),
+                    this.__userControls = i,
+                    window.__nswsTHREE || (window.__nswsTHREE = THREE),
                     null == n)
                         l.set(this, ae, null != l.get(this, re, "f"), "f"),
                         l.set(this, se, new lt.A, "f"),
@@ -10130,9 +10189,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (l.get(this, Ae, "f").scene.add(l.get(this, ve, "f")),
                     null != l.get(this, re, "f") && null != l.get(this, ne, "f")) {
                         const e = l.get(this, ne, "f");
-                        l.get(this, Z, "f")?.controlCar(e, l.get(this, re, "f").up, l.get(this, re, "f").right, l.get(this, re, "f").down, l.get(this, re, "f").left, l.get(this, re, "f").reset),
+                        l.get(this, Z, "f")?.controlCar(e, l.get(this, re, "f").up, l.get(this, re, "f").right, l.get(this, re, "f").down, l.get(this, re, "f").left, l.get(this, re, "f").reset, l.get(this, re, "f").rocket),
                         l.get(this, re, "f").addChangeCallback(l.set(this, Be, (t => {
-                            l.get(this, te, "f") || l.get(this, Z, "f")?.controlCar(e, t.up, t.right, t.down, t.left, t.reset)
+                            l.get(this, te, "f") || l.get(this, Z, "f")?.controlCar(e, t.up, t.right, t.down, t.left, t.reset, t.rocket)
                         }
                         ), "f"))
                     }
@@ -10144,6 +10203,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     ), "f"))
                 }
                 dispose() {
+                    window.__nswsRocketFx?.dispose(this),
                     l.set(this, Fe, !0, "f"),
                     l.get(this, G, "m", Oe).call(this),
                     l.get(this, Ae, "f").scene.remove(l.get(this, X, "f").camera),
@@ -10230,7 +10290,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     return l.get(this, te, "f")
                 }
                 set isControlsDisabled(e) {
-                    e != l.get(this, te, "f") && (null != l.get(this, re, "f") && null != l.get(this, ne, "f") && (e ? l.get(this, Z, "f")?.controlCar(l.get(this, ne, "f"), !1, !1, !1, !1, !1) : l.get(this, Z, "f")?.controlCar(l.get(this, ne, "f"), l.get(this, re, "f").up, l.get(this, re, "f").right, l.get(this, re, "f").down, l.get(this, re, "f").left, l.get(this, re, "f").reset)),
+                    e != l.get(this, te, "f") && (null != l.get(this, re, "f") && null != l.get(this, ne, "f") && (e ? l.get(this, Z, "f")?.controlCar(l.get(this, ne, "f"), !1, !1, !1, !1, !1) : l.get(this, Z, "f")?.controlCar(l.get(this, ne, "f"), l.get(this, re, "f").up, l.get(this, re, "f").right, l.get(this, re, "f").down, l.get(this, re, "f").left, l.get(this, re, "f").reset, l.get(this, re, "f").rocket)),
                     l.set(this, te, e, "f"))
                 }
                 getControls() {
@@ -10402,7 +10462,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (l.get(this, Fe, "f"))
                         return;
                     const n = l.get(this, ie, "f");
-                    l.set(this, ie, e, "f");
+                    l.set(this, ie, e, "f"),
+                    (e.rocket || e.rocketFx || this.__rocketFx) && window.__nswsRocketFx?.state(this, e, n, t);
                     const i = .001;
                     if (t) {
                         l.set(this, Ne, null, "f"),
@@ -10434,7 +10495,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     (t || l.get(this, ie, "f").frames % 50 == 0) ? l.get(this, $, "f")?.call(this, l.get(this, ie, "f")) : l.get(this, ie, "f").frames % 25 == 0 && l.get(this, $, "f") && window.__nswsCarSample?.(l.get(this, ie, "f"))
                 }
                 update(e) {
-                    if (this.__audioCulled || l.get(this, G, "m", Xe).call(this),
+                    if (this.__rocketFx && window.__nswsRocketFx?.update(this, e),
+                    this.__audioCulled || l.get(this, G, "m", Xe).call(this),
                     l.get(this, De, "f")?.update(e),
                     null != l.get(this, be, "f")) {
                         const e = this.getPosition()
@@ -42769,6 +42831,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Dt = new WeakMap;
         const Bt = class {
             constructor(e) {
+                this.__rocket = 0,
                 Rt.set(this, !1),
                 Pt.set(this, !1),
                 It.set(this, !1),
@@ -42788,7 +42851,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.addEventListener("keyup", C.set(this, Nt, (t => {
                     e.checkKeyBinding(t, KeyBind.VehicleAccelerate) ? this.up = !1 : e.checkKeyBinding(t, KeyBind.VehicleTurnRight) ? this.right = !1 : e.checkKeyBinding(t, KeyBind.VehicleBrake) ? this.down = !1 : e.checkKeyBinding(t, KeyBind.VehicleTurnLeft) && (this.left = !1)
                 }
-                ), "f"))
+                ), "f")),
+                window.__nswsRocket?.controls(this)
             }
             get up() {
                 return C.get(this, Rt, "f")
@@ -42840,6 +42904,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         e(this)
                 }
             }
+            get rocket() {
+                return this.__rocket
+            }
+            set rocket(e) {
+                if (this.__rocket != e) {
+                    this.__rocket = e;
+                    for (const e of C.get(this, Dt, "f"))
+                        e(this)
+                }
+            }
             addChangeCallback(e) {
                 C.get(this, Dt, "f").push(e)
             }
@@ -42848,6 +42922,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 t >= 0 && C.get(this, Dt, "f").splice(t, 1)
             }
             dispose() {
+                window.__nswsRocket?.controlsGone(this),
                 window.removeEventListener("keydown", C.get(this, zt, "f")),
                 window.removeEventListener("keyup", C.get(this, Nt, "f"))
             }
@@ -42857,7 +42932,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     right: this.right,
                     down: this.down,
                     left: this.left,
-                    reset: this.reset
+                    reset: this.reset,
+                    rocket: this.__rocket
                 }
             }
         }
@@ -45767,6 +45843,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Xr, m, "f"),
                 C.set(this, Yr, A, "f"),
                 window.__nswsTrackNotice?.(A.getId()),
+                window.__nswsRocket?.track(!!window.__nswsRocketTrack?.(A.getId())),
                 C.set(this, Zr, v, "f"),
                 null != w ? C.set(this, Sa, {
                     multiplayerConnection: w.multiplayerConnection,
@@ -46322,6 +46399,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             update(e) {
                 const t = !P.ip() && null == C.get(this, ca, "f") && !C.get(this, Pa, "f");
+                window.__nswsRocket?.tick(t && !C.get(this, Ba, "f").isEnabled && !C.get(this, _r, "m", Ha).call(this));
                 let n;
                 if (n = C.get(this, Ba, "f").isEnabled && null == C.get(this, Sa, "f") || !t ? 0 : e,
                 t) {
@@ -52935,6 +53013,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Checkpoint reset"), KeyBind.VehicleCheckpointReset),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Start reset"), KeyBind.VehicleStartReset),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Cockpit camera"), KeyBind.VehicleCockpitCamera),
+            window.__nswsRocket?.settings(C.get(this, ks, "f"), ( () => C.get(this, vs, "f").playUIClick())),
             C.get(this, ms, "m", Bs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Editor")),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Rotate part"), KeyBind.EditorRotatePart),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Height modifier"), KeyBind.EditorHeightModifier),
@@ -54571,7 +54650,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 } else
                     M.textContent += t.get("Unknown");
                 T.appendChild(M),
-                C.get(this, Wo, "f").appendChild(T);
+                C.get(this, Wo, "f").appendChild(T),
+                window.__nswsTrackDisclaimer?.(C.get(this, Wo, "f"), h);
                 const _ = document.createElement("div");
                 _.className = "divider",
                 C.get(this, Wo, "f").appendChild(_);
@@ -58100,6 +58180,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             masks: ["4a4f1a3edaa0bafc", "93e0d9b0353e04f8", "6ea6e66d40f30ed2", "e6b5d615db0d9121"],
             file: "tracks/community/week10.track",
             tracks: [{ id: "4d1706081b6f519ed84ee6440314f7c470eb96e57ccc8a1b18fb9919cb2aa761", name: "1 - NyQuill is yummy", short: "NyQ", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week10_1.png" }, { id: "d182cdf7da064f274c33eb7e121e4f73703177db482b231f1a8e01711d52f660", name: "2 - chezbug", short: "Chez", author: "Not So Weekly Short Community", env: "Summer", thumb: "tracks/community/thumbnails/week10_2.png" }, { id: "bc2173bacc5a4bcaa72d0f1caea34bc0c718c82403f2026fad587526e25e43b5", name: "3 - ICE", short: "ICE", author: "Cookedbyapringle & Mask", env: "Summer", thumb: "tracks/community/thumbnails/week10_3.png" }, { id: "6cb8877fa603b233efbcba84764432229e719c7e8b23bf5e74a0151b9a229593", name: "4 - OneDrift", short: "1Drft", author: "Cookedbyapringle", env: "Winter", thumb: "tracks/community/thumbnails/week10_4.png" }, { id: "53c1ab56218454d4beb08db5c5d39e6b0efb08173cb8656d2e70443a881d3926", name: "5 - Thank u next", short: "TUN", author: "Simo_900", env: "Summer", thumb: "tracks/community/thumbnails/week10_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
+        },
+        {
+            week: 11,
+            chunks: ["8647c26486fefd17", "13e938f5a0879dc2", "44d28faccb72d1ba", "fb75428e39ea5707"],
+            masks: ["0f1b53257b0fe3ee", "e6db474116e653b1", "8b3e4069ddf951d0", "6000a5b2aaffe1be"],
+            file: "tracks/community/week11.track",
+            tracks: [{ id: "5287130bed6bf4859e4e39fcd3167df0eb0f47c4a5f4a8d2732b7a9fcbe7b8b8", name: "1 - Launch Control", short: "Lnch", author: "BonnieBeans", env: "Summer", thumb: "tracks/community/thumbnails/week11_1.png", rocket: true }, { id: "225fad12335dadc12b60bfa1b31369b1026d8a084fd4670583870fb3b71f7ec0", name: "2 - Solaris", short: "Solar", author: "HummusHere & cheesebob", env: "Desert", thumb: "tracks/community/thumbnails/week11_2.png", rocket: true }, { id: "f68a709a296a60f6e6f73a2da670f95aca424be0f2fda5d6b608ece71f339b7c", name: "3 - 4 seasons", short: "4Sea", author: "TD_blox & Xav", env: "Winter", thumb: "tracks/community/thumbnails/week11_3.png", rocket: true }, { id: "29d18d900712605f11afabf28a19b63b8e291d4156b8c246a048865193b591fa", name: "4 - Flying Dreams", short: "Dream", author: "Forty, Shovelfish, Hero", env: "Summer", thumb: "tracks/community/thumbnails/week11_4.png", rocket: true }, { id: "8a35fa08981d6aff50ed71d7f0a9869bbfc46cea3ec77a31694d8cc80c35a716", name: "5 - PRECISION MAPPENG", short: "Prec", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week11_5.png", notice: "Respawn after collecting each checkpoint to progress." }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -58164,9 +58251,25 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         window.__nswsTrackNotice = function(trackId) {
             let notice = null;
             __nswsWeeks.forEach(w => __nswsPartsOf(w).forEach(p => (p.tracks || []).forEach(t => { if (t.id === trackId && t.notice) notice = t.notice; })));
+            notice ??= window.__nswsRocketTrack?.(trackId) ? __nswsRocketDisclaimer : null;
             if (notice && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
                 window.__nswsMessageBox.show(notice, "Ok", null);
         };
+        // Rocket League mode (mod/nsws_rocket.js): a week, part or track with rocket: true. The physics has its own list
+        // (__rocketTracks in simulation_worker.bundle.js), which is what the anti-cheat checks against; keep them in step.
+        const __nswsRocketDisclaimer = "Rocket League mod: on this track your car can jump, double jump, flip, boost and air roll. Your keys are in Settings.";
+        // The track info panel's line under "Created".
+        window.__nswsTrackDisclaimer = function(panel, trackId) {
+            if (!window.__nswsRocketTrack?.(trackId)) return;
+            const d = document.createElement("div");
+            d.className = "last-modified";
+            d.textContent = "Mode: ";
+            const span = document.createElement("span");
+            span.textContent = "Rocket League mod (jump, boost, flips)";
+            d.appendChild(span);
+            panel.appendChild(d);
+        };
+        window.__nswsRocketTrack = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && !!(w.rocket || p.rocket || t.rocket))));
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
             if (!w) return [];
