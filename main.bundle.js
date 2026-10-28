@@ -58251,13 +58251,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         window.__nswsTrackNotice = function(trackId) {
             let notice = null;
             __nswsWeeks.forEach(w => __nswsPartsOf(w).forEach(p => (p.tracks || []).forEach(t => { if (t.id === trackId && t.notice) notice = t.notice; })));
-            notice ??= window.__nswsRocketTrack?.(trackId) ? __nswsRocketDisclaimer : null;
+            notice ??= window.__nswsRocketTrack?.(trackId) ? __nswsRocketDisclaimer() : null;
             if (notice && window.__nswsMessageBox && !window.__nswsMessageBox.isOpen)
                 window.__nswsMessageBox.show(notice, "Ok", null);
         };
         // Rocket League mode (mod/nsws_rocket.js): a week, part or track with rocket: true. The physics has its own list
         // (__rocketTracks in simulation_worker.bundle.js), which is what the anti-cheat checks against; keep them in step.
-        const __nswsRocketDisclaimer = "Rocket League mod: on this track your car can jump, double jump, flip, boost and air roll. Your keys are in Settings.";
+        const __nswsRocketDisclaimer = () => "Rocket League mod: on this track your car can jump, double jump, flip, boost and air roll. " + (document.body?.classList.contains("nsws-touch") ? "Use the JUMP, BOOST, ROLL and NOSE UP buttons." : "Your keys are in Settings.");
         // The track info panel's line under "Created".
         window.__nswsTrackDisclaimer = function(panel, trackId) {
             if (!window.__nswsRocketTrack?.(trackId)) return;

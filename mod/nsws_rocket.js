@@ -78,10 +78,13 @@
     }
     // "Space or Right click", for the tutorial and hints.
     function keysText(id) {
+        if (touch.on()) return { jump: "JUMP", boost: "BOOST", roll: "ROLL", pitchUp: "NOSE UP" }[id] ?? "?";
         const names = keys[id].filter(Boolean).map(keyName);
         return names.length ? names.join(" or ") : "(not bound)";
     }
+    const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
     function gameKeysText(bind) {
+        if (touch.on()) return ["the up arrow", "right", "the down arrow", "left"][bind] ?? "?";
         const s = window.__nswsKeyBindings?.settings();
         const first = s?.getKeyBindings(bind).find(Boolean);
         return first ? keyName(first) : "?";
@@ -152,7 +155,7 @@
 
     const isTyping = t => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
     // Anything on screen that takes clicks itself: menus, buttons, the tutorial, chat.
-    const isUi = t => !!(t && t.closest && t.closest("button, a, input, select, textarea, label, [role=button], .button, .nsws-rocket-tutorial, .nsws-rocket-touch"));
+    const isUi = t => !!(t && t.closest && t.closest("button, a, input, select, textarea, label, [role=button], .button, .nsws-rocket-tutorial, .nsws-rocket-pad"));
     function drivingKey(e) {
         const s = window.__nswsKeyBindings?.settings();
         return !!s && DRIVING_BINDS.some(b => s.checkKeyBinding(e, b));
@@ -195,48 +198,84 @@
 
     // ---- Touch -------------------------------------------------------------------------------------------
 
+    // Pads inside the game's own touch controls: Jump and Boost above the steering arrows (that thumb slides up
+    // onto them), Roll and Nose up beside the pedals (the other thumb, so air roll and steering work together).
     const touch = (() => {
-        let root = null;
-        const buttons = {};
+        const pads = {};
+        for (const [id, label, side] of [["jump", "JUMP", "steer"], ["boost", "BOOST", "steer"], ["roll", "ROLL", "pedal"], ["pitchUp", "NOSE UP", "pedal"]]) {
+            const d = document.createElement("div");
+            d.className = "nsws-rocket-pad " + side;
+            d.dataset.id = id;
+            d.textContent = label;
+            pads[id] = d;
+        }
+        const gap = document.createElement("br");
+        let held = new Set();
         const coarse = matchMedia("(pointer: coarse)");
         const wanted = () => document.body?.classList.contains("nsws-touch") || coarse.matches;
-        function build() {
-            root = document.createElement("div");
-            root.className = "nsws-rocket-touch";
-            for (const [id, label] of [["jump", "JUMP"], ["boost", "BOOST"], ["roll", "ROLL"]]) {
-                const b = document.createElement("div");
-                b.className = "b " + id;
-                b.textContent = label;
-                const down = e => {
-                    e.preventDefault();
-                    b.classList.add("active");
-                    press(id, "t" + id);
-                };
-                const up = () => {
-                    b.classList.remove("active");
-                    releaseSource("t" + id);
-                };
-                b.addEventListener("touchstart", down, { passive: false });
-                b.addEventListener("touchend", up);
-                b.addEventListener("touchcancel", up);
-                buttons[id] = b;
-                root.appendChild(b);
+        const on = () => wanted() && pads.jump.isConnected;
+        // The game's rule for its pads: every finger counts for the pad under it now, so thumbs can slide.
+        function onTouches(e) {
+            if (!pads.jump.isConnected && !held.size) return;
+            const now = new Set();
+            for (const t of e.touches) {
+                const el = document.elementFromPoint(t.clientX, t.clientY);
+                el?.classList.contains("nsws-rocket-pad") && now.add(el.dataset.id);
             }
+            for (const id of held) now.has(id) || (pads[id].classList.remove("active"), releaseSource("t" + id));
+            for (const id of now) held.has(id) || (pads[id].classList.add("active"), press(id, "t" + id));
+            held = now;
         }
+        for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"])
+            addEventListener(type, onTouches, { passive: true });
         return {
+            on,
             show(parent) {
                 if (!parent || !wanted()) return this.hide();
-                root || build();
-                // Above the steering pad when it is on the right (the default), else beside the pedals there.
-                root.classList.toggle("above", !!document.querySelector(".touch-controls-ui > .right-container.steering"));
-                root.parentElement !== parent && parent.appendChild(root);
+                // The game's touch layer switches its class to "hidden" until the first touch; its pad boxes keep theirs.
+                const boxes = [...document.querySelectorAll("#ui > div > .steering")];
+                const steer = boxes[boxes.length - 1];
+                const pedals = steer && [...steer.parentElement.children].find(e => e !== steer && /(left|right)-container/.test(e.className));
+                if (!steer || !pedals) return;
+                if (pads.jump.parentElement !== steer) {
+                    const first = steer.firstChild;
+                    steer.insertBefore(pads.jump, first);
+                    steer.insertBefore(pads.boost, first);
+                    steer.insertBefore(gap, first);
+                }
+                pads.roll.parentElement !== pedals && (pedals.appendChild(pads.roll), pedals.appendChild(pads.pitchUp));
+                const mirror = pedals.classList.contains("right-container");
+                pads.roll.classList.toggle("mirror", mirror);
+                pads.pitchUp.classList.toggle("mirror", mirror);
             },
             hide() {
-                root?.remove();
+                this.release();
+                for (const id in pads) pads[id].remove();
+                gap.remove();
             },
             release() {
-                for (const id in buttons) buttons[id].classList.remove("active");
+                for (const id of held) pads[id].classList.remove("active"), releaseSource("t" + id);
+                held = new Set();
             }
+        };
+    })();
+
+    const tutorialButton = (() => {
+        const b = document.createElement("button");
+        b.className = "button nsws-rocket-tutorial-button";
+        b.innerHTML = '<img class="button-icon" src="images/help.svg"> Tutorial';
+        b.tabIndex = -1;
+        b.addEventListener("click", () => {
+            b.blur();
+            tutorial.restart();
+        });
+        return {
+            show(ui) {
+                const bar = ui?.querySelector(".game-toolbar-ui .button-container");
+                if (!bar || window.__nswsCupApp?.inCup?.()) return b.remove();
+                b.parentElement !== bar && bar.appendChild(b);
+            },
+            hide: () => b.remove()
         };
     })();
 
@@ -266,10 +305,12 @@
                     root.parentElement !== ui && ui.appendChild(root);
                 }
                 touch.show(ui);
+                tutorialButton.show(ui);
             },
             unmount() {
                 root?.remove();
                 touch.hide();
+                tutorialButton.hide();
                 shown = status = -1;
             },
             set(boost, st) {
@@ -352,7 +393,7 @@
             lastTickAt = now;
             active && !mounted && mount();
             // The game shows its touch pad only after the first touch, and either side can hold the steering.
-            mounted && now - touchCheckAt > 500 && (touchCheckAt = now, touch.show(gameUi()), tutorial.maybeStart());
+            mounted && now - touchCheckAt > 500 && (touchCheckAt = now, touch.show(gameUi()), tutorialButton.show(gameUi()), tutorial.maybeStart());
         },
         controls(c) {
             controls && controls !== c && this.controlsGone(controls);
@@ -976,7 +1017,7 @@
             },
             {
                 title: "Flip",
-                text: () => `In the air, press <b>${keysText("jump")}</b> while holding a direction. ${gameKeysText(0)} + jump is a front flip: a burst of speed.`,
+                text: () => `In the air, press <b>${keysText("jump")}</b> while holding a direction. ${cap(gameKeysText(0))} + jump is a front flip: a burst of speed.`,
                 anim: "flip",
                 done: (r, b) => r.flips !== b.flips
             },
@@ -988,13 +1029,13 @@
             },
             {
                 title: "Air control",
-                text: () => `In the air ${gameKeysText(0)} tilts the nose down, <b>${keysText("pitchUp")}</b> tilts it up and steering turns, so you can aim your boost. ${gameKeysText(2)} is the air brake, like in Trackmania: it stops the car spinning without losing speed. Hold <b>${keysText("roll")}</b> and steer to roll, or use <b>${keysText("rollLeft")}</b> / <b>${keysText("rollRight")}</b>.`,
+                text: () => `In the air ${gameKeysText(0)} tilts the nose down, <b>${keysText("pitchUp")}</b> tilts it up and steering turns, so you can aim your boost. ${cap(gameKeysText(2))} is the air brake, like in Trackmania: it stops the car spinning without losing speed. Hold <b>${keysText("roll")}</b> and steer to roll${touch.on() ? "" : `, or use <b>${keysText("rollLeft")}</b> / <b>${keysText("rollRight")}</b>`}.`,
                 anim: "roll",
                 done: () => airMs > 350
             },
             {
                 title: "Wave dash",
-                text: () => `Pro tip: flip just before you land and the car keeps the flip's speed. A tiny hop straight into a flip (a zap dash) works on flat road too. Press <b>${gameKeysText(5)}</b> to restart for a clean run.`,
+                text: () => `Pro tip: flip just before you land and the car keeps the flip's speed. A tiny hop straight into a flip (a zap dash) works on flat road too. ${touch.on() ? "Restart the race" : `Press <b>${gameKeysText(5)}</b> to restart`} for a clean run. The Tutorial button next to Exit shows this again.`,
                 anim: "wave",
                 manual: "Done"
             }
@@ -1072,6 +1113,11 @@
             leave: hide,
             reset() {
                 write(TUTORIAL_KEY, null);
+            },
+            restart() {
+                hide();
+                write(TUTORIAL_KEY, null);
+                this.maybeStart();
             }
         };
     })();
@@ -1209,10 +1255,10 @@
 .nsws-rocket-hud.refill .num { animation: nsws-rocket-pop 0.5s ease-out; }
 @keyframes nsws-rocket-refill { 0% { background-color: #fff; } 100% { background-color: #ff9a2e; } }
 @keyframes nsws-rocket-pop { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
-.nsws-rocket-touch { position: absolute; right: calc(1.5cm + var(--safe-area-horizontal) + 190px); bottom: 1.5cm; display: flex; flex-direction: column; gap: 14px; pointer-events: none; }
-.nsws-rocket-touch.above { flex-direction: row; right: calc(1.5cm + var(--safe-area-horizontal)); bottom: calc(1.5cm + 190px); }
-.nsws-rocket-touch > .b { width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; font-size: 26px; color: var(--text-color); background-color: var(--button-color); opacity: 0.55; pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
-.nsws-rocket-touch > .b.active { background-color: var(--button-active-color); opacity: 0.75; }
+#ui .nsws-rocket-pad { box-sizing: border-box; line-height: 160px; text-align: center; vertical-align: top; font-size: 30px; white-space: nowrap; color: var(--text-color); user-select: none; -webkit-user-select: none; }
+#ui .nsws-rocket-pad.pedal { position: absolute; top: 0; left: 100%; }
+#ui .nsws-rocket-pad.pedal.mirror { left: auto; right: 100%; }
+#ui .nsws-rocket-pad.pedal[data-id=pitchUp] { top: 170px; font-size: 26px; }
 .nsws-rocket-tutorial { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 14px; width: min(640px, calc(100vw - 32px)); box-sizing: border-box; padding: 12px 14px; background-color: var(--surface-color); border-top: 4px solid #7272c2; color: var(--text-color); pointer-events: auto; z-index: 5; }
 .nsws-rocket-tutorial.success { border-top-color: #5f5; }
 .nsws-rocket-tutorial > .text { flex: 1; min-width: 0; }
