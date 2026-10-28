@@ -3440,6 +3440,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     c.set(this, []),
                     h.set(this, null),
                     this.rocket = [[], [], [], [], [], [], []],
+                    // The Rocket League physics version this run was driven with (the sim worker's __RL.version for a new one).
+                    this.rocketVersion = e?.rocketVersion ?? 2,
+                    this.rocketTrack = !1,
                     null != e && (f.set(this, a, e.up, "f"),
                     f.set(this, s, e.right, "f"),
                     f.set(this, o, e.down, "f"),
@@ -3464,6 +3467,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t.left != u && f.get(this, l, "f").push(e),
                     t.reset != p && f.get(this, c, "f").push(e);
                     const g = t.rocket | 0;
+                    this.rocketTrack ||= !!window.__nswsRocket?.trackIsRocket;
                     for (let t = 0; t < 7; t++)
                         (g >> t & 1) != this.rocket[t].length % 2 && this.rocket[t].push(e)
                 }
@@ -3506,12 +3510,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                     f.get(this, i, "m", u).call(this, f.get(this, l, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length)),
                     f.get(this, i, "m", u).call(this, f.get(this, c, "f"), e.subarray(3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length, 3 + 3 * f.get(this, a, "f").length + 3 + 3 * f.get(this, s, "f").length + 3 + 3 * f.get(this, o, "f").length + 3 + 3 * f.get(this, l, "f").length + 3 + 3 * f.get(this, c, "f").length));
                     // Rocket League inputs (jump, boost, air roll, roll left, roll right, pitch down, pitch up) follow as
-                    // seven more channels. Readers that only know the first five stop before them.
-                    if (this.hasRocketInputs()) {
-                        const t = new Uint8Array(e.length + this.rocket.reduce(( (e, t) => e + 3 + 3 * t.length), 0));
+                    // seven more channels, then the physics version as an eighth (version - 1 entries; none = version 1).
+                    // Readers that only know the first five stop before them, and v11.0/v11.1 pages before the eighth.
+                    const marked = this.rocketVersion >= 2 && (this.rocketTrack || this.hasRocketInputs());
+                    if (marked || this.hasRocketInputs()) {
+                        const version = marked ? Array.from({ length: this.rocketVersion - 1 }, ( (e, t) => t)) : null
+                          , channels = version ? [...this.rocket, version] : this.rocket
+                          , t = new Uint8Array(e.length + channels.reduce(( (e, t) => e + 3 + 3 * t.length), 0));
                         t.set(e);
                         let n = e.length;
-                        for (const e of this.rocket)
+                        for (const e of channels)
                             f.get(this, i, "m", u).call(this, e, t.subarray(n, n + 3 + 3 * e.length)),
                             n += 3 + 3 * e.length;
                         e = t
@@ -3550,7 +3558,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         return null;
                     let h = 3 + 3 * a.length + 3 + 3 * s.length + 3 + 3 * o.length + 3 + 3 * l.length + 3 + 3 * c.length;
                     const d = [];
-                    if (h < i.length)
+                    let version = 1;
+                    if (h < i.length) {
                         for (let e = 0; e < 7; e++) {
                             const e = f.get(r, r, "m", p).call(r, i.subarray(h));
                             if (null == e)
@@ -3558,13 +3567,21 @@ window.__nswsAutoGhostNote = function(trackId) {
                             d.push(e),
                             h += 3 + 3 * e.length
                         }
+                        if (h < i.length) {
+                            const e = f.get(r, r, "m", p).call(r, i.subarray(h));
+                            if (null == e)
+                                return null;
+                            version = 1 + e.length
+                        }
+                    }
                     return new r({
                         up: a,
                         right: s,
                         down: o,
                         left: l,
                         reset: c,
-                        rocket: d.length ? d : null
+                        rocket: d.length ? d : null,
+                        rocketVersion: version
                     })
                 }
             }

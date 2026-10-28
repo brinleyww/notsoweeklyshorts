@@ -10365,6 +10365,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
+                this.rocketVersion = t?.rocketVersion ?? 2,
+                this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
                 Xi(this, Ba, t.down, "f"),
@@ -10416,13 +10418,16 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     level: 9
                 });
                 // Rocket League inputs (jump, boost, air roll, roll left, roll right, pitch down, pitch up) follow as
-                // seven more channels.
-                // Readers that only know the first five stop before them.
-                if (this.rocket.some((t => t.length))) {
-                    const e = new Uint8Array(t.length + this.rocket.reduce(((t, e) => t + 3 + 3 * e.length), 0));
+                // seven more channels, then the physics version as an eighth (version - 1 entries; none = version 1).
+                // Readers that only know the first five stop before them, and v11.0/v11.1 pages before the eighth.
+                const marked = this.rocketVersion >= 2 && (this.rocketTrack || this.rocket.some((t => t.length)));
+                if (marked || this.rocket.some((t => t.length))) {
+                    const version = marked ? Array.from({ length: this.rocketVersion - 1 }, ((t, e) => e)) : null
+                      , channels = version ? [...this.rocket, version] : this.rocket
+                      , e = new Uint8Array(t.length + channels.reduce(((t, e) => t + 3 + 3 * e.length), 0));
                     e.set(t);
                     let i = t.length;
-                    for (const t of this.rocket)
+                    for (const t of channels)
                         ji(this, ba, "m", _a).call(this, t, e.subarray(i, i + 3 + 3 * t.length)),
                         i += 3 + 3 * t.length;
                     t = e
@@ -10467,7 +10472,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     return null;
                 let h = 3 + 3 * s.length + 3 + 3 * n.length + 3 + 3 * a.length + 3 + 3 * o.length + 3 + 3 * l.length;
                 const c = [];
-                if (h < r.length)
+                let version = 1;
+                if (h < r.length) {
                     for (let t = 0; t < 7; t++) {
                         const t = ji(ya, ya, "m", Ea).call(ya, r.subarray(h));
                         if (null == t)
@@ -10475,13 +10481,21 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         c.push(t),
                         h += 3 + 3 * t.length
                     }
+                    if (h < r.length) {
+                        const t = ji(ya, ya, "m", Ea).call(ya, r.subarray(h));
+                        if (null == t)
+                            return null;
+                        version = 1 + t.length
+                    }
+                }
                 return new ya({
                     up: s,
                     right: n,
                     down: a,
                     left: o,
                     reset: l,
-                    rocket: c.length ? c : null
+                    rocket: c.length ? c : null,
+                    rocketVersion: version
                 })
             }
         }
@@ -13160,7 +13174,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         if (null == o)
                             throw new Error("Track has no starting point");
                         const l = e.carId;
-                        r(l, e.mountainVertices, new R(e.mountainOffset.x,e.mountainOffset.y,e.mountainOffset.z), i, o);
+                        r(l, e.mountainVertices, new R(e.mountainOffset.x,e.mountainOffset.y,e.mountainOffset.z), i, o, s.rocketVersion);
                         const h = {
                             id: l,
                             hasFinished: !1,
@@ -13204,7 +13218,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         const i = createCarTrack.track;
                         if (null == i)
                             throw new Error("Failed to load track");
-                        let s, n = null;
+                        let s, n = null, version = __RL.version;
                         const a = t.carRecording;
                         if (null == a)
                             s = new Yo,
@@ -13221,13 +13235,14 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                             const t = Qa.deserialize(a);
                             if (null == t)
                                 throw new Error("Failed to deserialize recording");
-                            s = new tr(t)
+                            s = new tr(t),
+                            version = t.rocketVersion
                         }
                         const o = i.getStartTransform();
                         if (null == o)
                             throw new Error("Track has no starting point");
                         const l = t.carId;
-                        r(l, t.mountainVertices, new R(t.mountainOffset.x,t.mountainOffset.y,t.mountainOffset.z), i, o),
+                        r(l, t.mountainVertices, new R(t.mountainOffset.x,t.mountainOffset.y,t.mountainOffset.z), i, o, version),
                         e.push({
                             id: l,
                             controls: s,
@@ -13329,7 +13344,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
             }
             for (const t of jo)
                 i(t);
-            function r(e, i, r, s, n) {
+            function r(e, i, r, s, n, rocketVersion) {
                 const a = t.ccall("malloc", "number", ["number"], [4 * i.length]);
                 if ("number" != typeof a || 0 == a)
                     throw new Error("Failed to allocate memory for mountain vertices");
@@ -13362,7 +13377,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 t.ccall("free", "void", ["number"], [a]),
                 t.ccall("free", "void", ["number"], [l]),
                 __royaleInit(e, s),
-                __rocketInit(e, s)
+                __rocketInit(e, s, rocketVersion)
             }
             // Royale tracks: crossing a checkpoint moves the respawn point to the gate of the same order
             // that starts the next segment, facing its rotation's travel direction. With two gates per order
@@ -13709,7 +13724,12 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     // Boosting into a wall: a kick up, then lift for 0.4 s, at most once every 0.6 s.
                     wallKick: 3, wallLift: 14, wallFor: 400, wallCool: 600,
                     airThrottle: 66.667 * g, pitchT: 12.146, yawT: 8.92, rollT: 36.08, pitchD: 2.798, yawD: 1.886, rollD: 4.472, maxW: 5.5,
-                    airBrake: Math.exp(-.015)
+                    airBrake: Math.exp(-.015),
+                    // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
+                    // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
+                    version: 2,
+                    pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
+                    climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13717,15 +13737,17 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
             // since the jump phase ended, 5 second jump used, 6 frames into a flip (-1 none), 7-8 flip forward/side
             // (floats), 9 boost 0-100 (float), 10 frames boosting, 11 checkpoints passed, 12-14 jump/double
             // jump/flip counters, 15 status bits, 16 frames since boosting, 17 frames into a wall lift (-1 none),
-            // 18 wall lift cooldown, 19 wall lift counter.
-            function __rocketInit(id, track) {
+            // 18 wall lift cooldown, 19 wall lift/climb counter, 20 physics version, 21-23 velocity written last frame
+            // (floats), 24 frames into a wall climb (-1 none), 25 frames since a wall push, 26-27 wall normal x/z
+            // (floats), 28 last velocity valid.
+            function __rocketInit(id, track, version = __RL.version) {
                 if (__rocketFree(id), !__rocketTracks.has(track.getId()))
                     return;
-                const block = t.ccall("malloc", "number", ["number"], [96]);
+                const block = t.ccall("malloc", "number", ["number"], [128]);
                 if ("number" != typeof block || 0 == block)
                     throw new Error("Failed to allocate memory for rocket state");
                 const b = block >> 2, I = new Int32Array(t.HEAPU8.buffer);
-                I.fill(0, b, b + 24), I[b + 2] = -1, I[b + 6] = -1, I[b + 17] = -1;
+                I.fill(0, b, b + 32), I[b + 2] = -1, I[b + 6] = -1, I[b + 17] = -1, I[b + 20] = version, I[b + 24] = -1, I[b + 25] = 1e4;
                 t.HEAPF32[b + 9] = __RL.boostFull;
                 __rocketCars.set(id, block)
             }
@@ -13758,8 +13780,12 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         const D = new DataView(U8.buffer, p + 12, 12);
                         ground[0] += D.getFloat32(0, !0), ground[1] += D.getFloat32(4, !0), ground[2] += D.getFloat32(8, !0), p += 24
                     }
-                const ctrlAt = p + 68
-                  , onGround = ((wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)) >= 3
+                const v2 = I[b + 20] >= 2
+                  , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
+                  , ctrlAt = p + 68
+                  // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
+                  , onGround = touching >= (v2 ? 2 : 3)
+                  , inAir = v2 ? 0 == touching : !onGround
                   , live = 1 & flags && !(2 & flags) && !c.reset
                   , bits = live ? 127 & (c.rocket | 0) : 0
                   , prev = I[b];
@@ -13772,10 +13798,19 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                   , v = [F[(R + 312 >> 2)], F[(R + 316 >> 2)], F[(R + 320 >> 2)]]
                   , w = [F[(R + 328 >> 2)], F[(R + 332 >> 2)], F[(R + 336 >> 2)]];
                 let wl = __dot(w, left), wu = __dot(w, up), wf = __dot(w, fwd);
+                // What the physics did to the velocity this frame: a hull hit that pushed the car mostly sideways is a wall.
+                // Wall friction bends that push towards the travel direction, and track walls follow the grid, so it is
+                // snapped to the nearest grid direction.
+                let wallN = null;
+                if (v2 && I[b + 28] && !c.reset) {
+                    const dx = v[0] - F[b + 21], dy = v[1] - F[b + 22] + (touching ? 0 : 9.81 * .001), dz = v[2] - F[b + 23]
+                      , dh = Math.sqrt(dx * dx + dz * dz);
+                    dh > .004 && (hits && dh > 1.2 * Math.abs(dy) || I[b + 24] >= 0) && (wallN = Math.abs(dx) >= Math.abs(dz) ? [dx > 0 ? 1 : -1, 0, 0] : [0, 0, dz > 0 ? 1 : -1])
+                }
                 cp > I[b + 11] && (F[b + 9] = K.boostFull);
                 I[b + 11] = cp;
                 if (c.reset) {
-                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0;
+                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0, I[b + 24] = -1, I[b + 25] = 1e4;
                     F[b + 9] = K.boostFull
                 }
                 const throttle = live ? (c.up ? 1 : 0) - (c.down ? 1 : 0) : 0
@@ -13841,13 +13876,19 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     wl = 0 != df && pitchIn * df < 0 ? .97 * wl : df * K.flipW;
                     wf = ds * K.flipW;
                     I[b + 6] >= K.zDampFrom && (I[b + 6] < K.zDampTo || v[1] < 0) && (v[1] *= K.zDamp)
-                } else if (!onGround) {
-                    const ap = Math.abs(pitchIn), ay = Math.abs(yawIn);
-                    wl += (K.pitchT * pitchIn - K.pitchD * wl * (1 - ap)) * .001;
-                    wu += (-K.yawT * yawIn - K.yawD * wu * (1 - ay)) * .001;
-                    wf += (K.rollT * rollIn - K.rollD * wf) * .001
-                }
-                if (!onGround) {
+                } else if (inAir)
+                    if (v2) {
+                        const ease = (w, to, a) => w + Math.max(-a * .001, Math.min(a * .001, to - w));
+                        wl = pitchIn ? ease(wl, K.pitchMax * pitchIn, K.pitchA) : wl - K.pitchD * wl * .001;
+                        wu = yawIn ? ease(wu, -K.yawMax * yawIn, K.yawA) : wu - K.yawD * wu * .001;
+                        wf = rollIn ? ease(wf, K.rollMax * rollIn, K.rollA) : wf - K.rollD * wf * .001
+                    } else {
+                        const ap = Math.abs(pitchIn), ay = Math.abs(yawIn);
+                        wl += (K.pitchT * pitchIn - K.pitchD * wl * (1 - ap)) * .001;
+                        wu += (-K.yawT * yawIn - K.yawD * wu * (1 - ay)) * .001;
+                        wf += (K.rollT * rollIn - K.rollD * wf) * .001
+                    }
+                if (inAir) {
                     const airBrake = live && c.down && !(64 & bits) && !flipping;
                     airBrake && (wl *= K.airBrake, wu *= K.airBrake, wf *= K.airBrake);
                     const m = Math.sqrt(wl * wl + wu * wu + wf * wf);
@@ -13859,7 +13900,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 let boosting = !1;
                 if (live && F[b + 9] > 0 && (2 & bits || I[b + 10] > 0 && I[b + 10] < K.boostMin)) {
                     boosting = !0, I[b + 10]++;
-                    const a = (onGround ? K.boostGround : K.boostAir) * .001;
+                    const a = (inAir ? K.boostAir : K.boostGround) * .001;
                     for (let j = 0; j < 3; j++)
                         v[j] += fwd[j] * a;
                     F[b + 9] = Math.max(0, F[b + 9] - K.boostUse),
@@ -13869,15 +13910,49 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     ++I[b + 16] > K.regenAfter && F[b + 9] < K.boostFull && (F[b + 9] = F[b + 9] > K.boostFull - .05 ? K.boostFull : F[b + 9] + (K.boostFull - F[b + 9]) * K.regen);
                 // A hull hit while boosting that isn't a landing (not falling fast, roughly upright) is a wall.
                 I[b + 18] > 0 && I[b + 18]--;
-                boosting && hits && I[b + 17] < 0 && !I[b + 18] && v[1] > -1.5 && up[1] > .3 && (I[b + 17] = 0, I[b + 19]++, v[1] += K.wallKick);
-                if (I[b + 17] >= 0)
-                    boosting && I[b + 17] < K.wallFor ? (v[1] += K.wallLift * .001, I[b + 17]++) : (I[b + 17] = -1, I[b + 18] = K.wallCool);
+                if (v2) {
+                    // Boosting into a track wall (facing it within ~75 degrees, upright) climbs it: rise at climbV pressed
+                    // lightly against it, upright with the nose a little up; once nothing pushes back, hop over the top.
+                    I[b + 25] < 1e4 && I[b + 25]++;
+                    wallN && (F[b + 26] = wallN[0], F[b + 27] = wallN[2], I[b + 25] = 0);
+                    const nx = F[b + 26], nz = F[b + 27], fh = Math.sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2])
+                      , facing = fh > .1 ? (fwd[0] * nx + fwd[2] * nz) / fh : 0;
+                    I[b + 24] < 0 && boosting && wallN && facing < -.25 && up[1] > .5 && v[1] > -3 && (I[b + 24] = 0, I[b + 19]++);
+                    if (I[b + 24] >= 0) {
+                        const vn = v[0] * nx + v[2] * nz;
+                        if (!boosting || I[b + 25] > K.climbLose) {
+                            const d = boosting ? Math.min(0, -K.climbOver - vn) : 0;
+                            v[0] += d * nx, v[2] += d * nz, boosting && (v[1] = Math.max(v[1], K.climbHop)), I[b + 24] = -1;
+                            const wy = __dot(w, [0, 1, 0]);
+                            w[0] = 0, w[1] = wy, w[2] = 0
+                        } else {
+                            I[b + 24]++;
+                            v[1] = v[1] < K.climbV ? K.climbV : Math.max(K.climbV, v[1] - K.climbAcc * .001);
+                            const d = -K.climbPress - vn;
+                            v[0] += d * nx, v[2] += d * nz;
+                            const tk = fh > .1 ? K.climbTilt / fh : 0, tl = Math.sqrt(1 + K.climbTilt * K.climbTilt), to = [-fwd[0] * tk / tl, 1 / tl, -fwd[2] * tk / tl]
+                              , ax = __cross(up, to), sa = Math.sqrt(__dot(ax, ax)), wy = __dot(w, [0, 1, 0]);
+                            w[0] = 0, w[1] = .9 * wy, w[2] = 0;
+                            if (sa > 1e-4) {
+                                const k = Math.acos(Math.max(-1, Math.min(1, __dot(up, to)))) / .25 / sa;
+                                for (let j = 0; j < 3; j++)
+                                    w[j] += ax[j] * k
+                            }
+                        }
+                    }
+                } else {
+                    boosting && hits && I[b + 17] < 0 && !I[b + 18] && v[1] > -1.5 && up[1] > .3 && (I[b + 17] = 0, I[b + 19]++, v[1] += K.wallKick);
+                    if (I[b + 17] >= 0)
+                        boosting && I[b + 17] < K.wallFor ? (v[1] += K.wallLift * .001, I[b + 17]++) : (I[b + 17] = -1, I[b + 18] = K.wallCool)
+                }
                 for (let j = 0; j < 3; j++)
                     F[(R + 312 >> 2) + j] = v[j],
-                    F[(R + 328 >> 2) + j] = w[j];
+                    F[(R + 328 >> 2) + j] = w[j],
+                    F[b + 21 + j] = v[j];
+                I[b + 28] = 1;
                 const canFirst = onGround && !I[b + 1]
                   , canSecond = !onGround && !I[b + 5] && (!I[b + 1] || I[b + 4] < K.secondFor);
-                I[b + 15] = (onGround ? 1 : 0) | (canFirst ? 2 : 0) | (canSecond ? 4 : 0) | (boosting ? 8 : 0) | (flipping ? 16 : 0) | (I[b + 3] ? 32 : 0) | (I[b + 17] >= 0 ? 64 : 0);
+                I[b + 15] = (inAir ? 0 : 1) | (canFirst ? 2 : 0) | (canSecond ? 4 : 0) | (boosting ? 8 : 0) | (flipping ? 16 : 0) | (I[b + 3] ? 32 : 0) | (I[b + 17] >= 0 || I[b + 24] >= 0 ? 64 : 0);
                 U8[ctrlAt] = 63 & U8[ctrlAt] | (boosting ? 64 : 0) | (flipping || I[b + 3] ? 128 : 0);
                 U8[n + 227] = 82,
                 U8[n + 228] = bits,

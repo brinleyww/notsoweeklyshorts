@@ -55,9 +55,9 @@
     let keys = loadKeys();
     const saveKeys = () => write(KEYS_KEY, JSON.stringify(keys));
     const fxSetting = () => read(FX_KEY, "auto");
-    // "tm": W tilts the nose down, S is Trackmania's air brake (the physics stops the spin when Brake is held
-    // without the nose-up bit). "rl": W/S both tilt, as on keyboard in Rocket League. "again": both tilt, but
-    // only once pressed again after leaving the ground.
+    // "tm": W pressed again in the air tilts the nose down (held through the takeoff it doesn't, as in normal
+    // PolyTrack), S is Trackmania's air brake (the physics stops the spin when Brake is held without the nose-up
+    // bit). "rl": W/S both tilt, as on keyboard in Rocket League. "again": both tilt once pressed again in the air.
     const pitchSetting = () => {
         const v = read(PITCH_KEY, "tm");
         return { always: "rl", tilt: "rl", slow: "tm" }[v] ?? v;
@@ -118,7 +118,7 @@
         // Brake in the air always slows the spin (the physics does that itself); these bits are the tilt.
         if (controls) {
             const mode = pitchSetting(), again = "again" === mode;
-            controls.up && (!again || armed.up) && (bits |= BIT.pitchDown);
+            controls.up && ("rl" === mode || armed.up) && (bits |= BIT.pitchDown);
             controls.down && ("rl" === mode || again && armed.down) && (bits |= BIT.pitchUp);
         }
         return bits;
@@ -423,6 +423,9 @@
         allKeys: () => ACTIONS.flatMap(([id]) => keys[id]).filter(k => k && !k.startsWith("Mouse")),
         get active() {
             return live();
+        },
+        get trackIsRocket() {
+            return trackIsRocket;
         }
     };
 
@@ -1023,13 +1026,13 @@
             },
             {
                 title: "Boost",
-                text: () => `Hold <b>${keysText("boost")}</b>. The meter above your speed drains while you boost and slowly fills back up when you don't; checkpoints refill it. Boost into a side wall to lift off and start flying.`,
+                text: () => `Hold <b>${keysText("boost")}</b>. The meter above your speed drains while you boost and slowly fills back up when you don't; checkpoints refill it. Boost into a track wall to climb it and hop over the top.`,
                 anim: "boost",
                 done: () => boostMs > 400
             },
             {
                 title: "Air control",
-                text: () => `In the air ${gameKeysText(0)} tilts the nose down, <b>${keysText("pitchUp")}</b> tilts it up and steering turns, so you can aim your boost. ${cap(gameKeysText(2))} is the air brake, like in Trackmania: it stops the car spinning without losing speed. Hold <b>${keysText("roll")}</b> and steer to roll${touch.on() ? "" : `, or use <b>${keysText("rollLeft")}</b> / <b>${keysText("rollRight")}</b>`}.`,
+                text: () => `In the air, press ${gameKeysText(0)} again to tilt the nose down (held through the jump it keeps the car level), <b>${keysText("pitchUp")}</b> tilts it up and steering turns, so you can aim your boost. ${cap(gameKeysText(2))} is the air brake, like in Trackmania: it stops the car spinning without losing speed. Hold <b>${keysText("roll")}</b> and steer to roll${touch.on() ? "" : `, or use <b>${keysText("rollLeft")}</b> / <b>${keysText("rollRight")}</b>`}.`,
                 anim: "roll",
                 done: () => airMs > 350
             },
