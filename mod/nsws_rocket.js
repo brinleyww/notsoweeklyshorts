@@ -1026,7 +1026,7 @@
             },
             {
                 title: "Boost",
-                text: () => `Hold <b>${keysText("boost")}</b>. The meter above your speed drains while you boost and slowly fills back up when you don't; checkpoints refill it. Boost into a track wall to climb it and hop over the top.`,
+                text: () => `Hold <b>${keysText("boost")}</b>. The meter above your speed drains while you boost and fills back up when you don't (quickly in the air); checkpoints refill it. Boost into a track wall to climb it and hop over the top.`,
                 anim: "boost",
                 done: () => boostMs > 400
             },

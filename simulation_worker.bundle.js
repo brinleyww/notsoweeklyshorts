@@ -10345,7 +10345,7 @@
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
-                this.rocketVersion = t?.rocketVersion ?? 2,
+                this.rocketVersion = t?.rocketVersion ?? 3,
                 this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
@@ -13710,9 +13710,19 @@
                     airBrake: Math.exp(-.015),
                     // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
                     // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
-                    version: 2,
+                    version: 3,
                     pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
-                    climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27
+                    climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27,
+                    // Version 3: in the air, 0.1 s after letting go of boost the meter refills at 50/s (empty to full in 2 s).
+                    airRegenAfter: 100, airRegen: .05,
+                    // Version 3: Accelerate in the air pushes along the travel direction a bit harder than the wheels do
+                    // (PolyTrack's engine is ~20.5 m/s^2 less 0.03 per km/h of drag), so moves don't cost speed; air boost
+                    // is lower to match. A flip that lands within waveWithin ms (a wave dash) adds waveV m/s along the
+                    // flip, less at speed (none from waveTop m/s).
+                    airDrive: 21.5, boostAir3: 1100 * g, waveWithin: 400, waveV: 12, waveTop: 600 / 3.6,
+                    // PolyTrack gives no engine force for 0.2 s after landing, so the push carries on after a landing for as long
+                    // as the car was in the air, up to landDrive ms.
+                    landDrive: 200
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13722,7 +13732,7 @@
             // jump/flip counters, 15 status bits, 16 frames since boosting, 17 frames into a wall lift (-1 none),
             // 18 wall lift cooldown, 19 wall lift/climb counter, 20 physics version, 21-23 velocity written last frame
             // (floats), 24 frames into a wall climb (-1 none), 25 frames since a wall push, 26-27 wall normal x/z
-            // (floats), 28 last velocity valid.
+            // (floats), 28 last velocity valid, 29 frames of landing push left.
             function __rocketInit(id, track, version = __RL.version) {
                 if (__rocketFree(id), !__rocketTracks.has(track.getId()))
                     return;
@@ -13764,6 +13774,7 @@
                         ground[0] += D.getFloat32(0, !0), ground[1] += D.getFloat32(4, !0), ground[2] += D.getFloat32(8, !0), p += 24
                     }
                 const v2 = I[b + 20] >= 2
+                  , v3 = I[b + 20] >= 3
                   , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
                   , ctrlAt = p + 68
                   // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
@@ -13788,12 +13799,18 @@
                 if (v2 && I[b + 28] && !c.reset) {
                     const dx = v[0] - F[b + 21], dy = v[1] - F[b + 22] + (touching ? 0 : 9.81 * .001), dz = v[2] - F[b + 23]
                       , dh = Math.sqrt(dx * dx + dz * dz);
-                    dh > .004 && (hits && dh > 1.2 * Math.abs(dy) || I[b + 24] >= 0) && (wallN = Math.abs(dx) >= Math.abs(dz) ? [dx > 0 ? 1 : -1, 0, 0] : [0, 0, dz > 0 ? 1 : -1])
+                    dh > .004 && (hits && dh > 1.2 * Math.abs(dy) || I[b + 24] >= 0) && (wallN = Math.abs(dx) >= Math.abs(dz) ? [dx > 0 ? 1 : -1, 0, 0] : [0, 0, dz > 0 ? 1 : -1]);
+                    // Version 3: PolyTrack's downforce (along the car's floor, ~0.035 m/s^2 per km/h) also pulls in the air,
+                    // so a jump at top speed barely left the road. From a jump or flip until landing it is given back.
+                    if (v3 && inAir && !hits && (I[b + 1] || I[b + 5])) {
+                        const e = dx * up[0] + dy * up[1] + dz * up[2];
+                        e < 0 && (v[0] -= e * up[0], v[1] -= e * up[1], v[2] -= e * up[2])
+                    }
                 }
                 cp > I[b + 11] && (F[b + 9] = K.boostFull);
                 I[b + 11] = cp;
                 if (c.reset) {
-                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0, I[b + 24] = -1, I[b + 25] = 1e4;
+                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0, I[b + 24] = -1, I[b + 25] = 1e4, I[b + 29] = 0;
                     F[b + 9] = K.boostFull
                 }
                 const throttle = live ? (c.up ? 1 : 0) - (c.down ? 1 : 0) : 0
@@ -13803,7 +13820,12 @@
                   , freeRoll = 4 & bits
                   , yawIn = freeRoll ? 0 : steer
                   , rollIn = Math.max(-1, Math.min(1, rollKeys + (freeRoll ? steer : 0)));
-                let landed = !1;
+                let landed = !1, flipAge = -1;
+                const drive = () => {
+                    const vh = Math.sqrt(v[0] * v[0] + v[2] * v[2]), fh = Math.sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2])
+                      , dx = vh > 1 ? v[0] / vh : fh > .1 ? fwd[0] / fh : 0, dz = vh > 1 ? v[2] / vh : fh > .1 ? fwd[2] / fh : 0;
+                    v[0] += dx * K.airDrive * .001, v[2] += dz * K.airDrive * .001
+                };
                 if (I[b + 2] >= 0 && I[b + 2]++,
                 I[b + 6] >= 0 && I[b + 6]++,
                 I[b + 3] && (I[b + 2] < K.jumpMin || 1 & bits && I[b + 2] < K.jumpMax ? (v[0] += up[0] * K.jumpAcc * .001, v[1] += up[1] * K.jumpAcc * .001, v[2] += up[2] * K.jumpAcc * .001) : I[b + 3] = 0),
@@ -13811,7 +13833,7 @@
                 onGround && !I[b + 3] && (I[b + 2] < 0 || I[b + 2] > 50) && (I[b + 1] = 0, I[b + 2] = -1, I[b + 4] = 0, I[b + 5] = 0),
                 // Touching anything ends a flip's spin and its bounce, as the ground does in Rocket League: a flip just
                 // before landing (a wave dash, a zap dash) keeps its speed instead of vaulting the car over its nose.
-                (wheels || hits) && I[b + 6] > 20 && I[b + 6] < K.flipFor + 600 && (I[b + 6] = -1, landed = !0),
+                (wheels || hits) && I[b + 6] > 20 && I[b + 6] < K.flipFor + 600 && (flipAge = I[b + 6], I[b + 6] = -1, landed = !0),
                 1 & pressed)
                     if (onGround && !I[b + 1])
                         I[b + 1] = 1, I[b + 2] = 0, I[b + 3] = 1, I[b + 4] = 0, I[b + 5] = 0, I[b + 12]++,
@@ -13841,6 +13863,15 @@
                 // the road nose first settles onto its wheels instead of balancing on its bumper.
                 if (landed) {
                     v[1] > 0 && (v[1] = 0);
+                    if (v3 && wheels && flipAge <= K.waveWithin) {
+                        const fh = Math.sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2]), df = F[b + 7], ds = F[b + 8]
+                          , taper = Math.max(0, 1 - Math.sqrt(v[0] * v[0] + v[2] * v[2]) / K.waveTop);
+                        if (fh > .1 && taper > 0) {
+                            const fx = fwd[0] / fh, fz = fwd[2] / fh;
+                            v[0] += (df * fx - ds * fz) * K.waveV * taper,
+                            v[2] += (df * fz + ds * fx) * K.waveV * taper
+                        }
+                    }
                     const gl = Math.sqrt(__dot(ground, ground)), nrm = gl > .1 ? __mul(ground, 1 / gl) : [0, 1, 0]
                       , ax = __cross(up, nrm), sa = Math.sqrt(__dot(ax, ax));
                     for (let j = 0; j < 3; j++)
@@ -13878,19 +13909,22 @@
                     m > K.maxW && (wl *= K.maxW / m, wu *= K.maxW / m, wf *= K.maxW / m);
                     for (let j = 0; j < 3; j++)
                         w[j] = left[j] * wl + up[j] * wu + fwd[j] * wf,
-                        v[j] += fwd[j] * K.airThrottle * (airBrake ? Math.max(0, throttle) : throttle) * .001
+                        v[j] += fwd[j] * K.airThrottle * (airBrake ? Math.max(0, throttle) : throttle) * .001;
+                    v3 && throttle > 0 && drive()
                 }
+                v3 && (inAir ? I[b + 29] < K.landDrive && I[b + 29]++ : I[b + 29] > 0 && (I[b + 29]--, throttle > 0 && drive()));
                 let boosting = !1;
                 if (live && F[b + 9] > 0 && (2 & bits || I[b + 10] > 0 && I[b + 10] < K.boostMin)) {
                     boosting = !0, I[b + 10]++;
-                    const a = (inAir ? K.boostAir : K.boostGround) * .001;
+                    const a = (inAir ? v3 ? K.boostAir3 : K.boostAir : K.boostGround) * .001;
                     for (let j = 0; j < 3; j++)
                         v[j] += fwd[j] * a;
                     F[b + 9] = Math.max(0, F[b + 9] - K.boostUse),
                     I[b + 16] = 0
                 } else
                     I[b + 10] = 0,
-                    ++I[b + 16] > K.regenAfter && F[b + 9] < K.boostFull && (F[b + 9] = F[b + 9] > K.boostFull - .05 ? K.boostFull : F[b + 9] + (K.boostFull - F[b + 9]) * K.regen);
+                    ++I[b + 16],
+                    I[b + 20] >= 3 && inAir ? I[b + 16] > K.airRegenAfter && (F[b + 9] = Math.min(K.boostFull, F[b + 9] + K.airRegen)) : I[b + 16] > K.regenAfter && F[b + 9] < K.boostFull && (F[b + 9] = F[b + 9] > K.boostFull - .05 ? K.boostFull : F[b + 9] + (K.boostFull - F[b + 9]) * K.regen);
                 // A hull hit while boosting that isn't a landing (not falling fast, roughly upright) is a wall.
                 I[b + 18] > 0 && I[b + 18]--;
                 if (v2) {
