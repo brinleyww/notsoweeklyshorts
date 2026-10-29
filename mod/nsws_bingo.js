@@ -199,7 +199,9 @@
     function cardFor(week, round = roundOf(week)) {
         const key = week + ":" + round;
         if (cards.has(key)) return cards.get(key);
-        const tracks = window.__nswsTracksForWeek?.(week) ?? [];
+        const listed = window.__nswsTracksForWeek?.(week) ?? [];
+        const order = (window.__nswsWeeks || []).find((w) => w.week === week)?.bingoOrder;
+        const tracks = order ? order.map((id) => listed.find((t) => t.id === id)).filter(Boolean) : listed;
         if (!tracks.length) return null;
         const rnd = random(hash("nsws-bingo2|" + week + "|" + round + "|" + tracks.map((t) => t.id).join(",")));
         const columns = tracks.length >= SIZE
