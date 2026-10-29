@@ -3467,7 +3467,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     t.left != u && f.get(this, l, "f").push(e),
                     t.reset != p && f.get(this, c, "f").push(e);
                     const g = t.rocket | 0;
-                    this.rocketTrack ||= !!window.__nswsRocket?.trackIsRocket;
+                    // The physics reports rocket bits only for a car it drives as Rocket League; the page's flag can be cleared
+                    // by the previous race's controls going away after this race opened.
+                    this.rocketTrack ||= null != t.rocket || !!window.__nswsRocket?.trackIsRocket;
                     for (let t = 0; t < 7; t++)
                         (g >> t & 1) != this.rocket[t].length % 2 && this.rocket[t].push(e)
                 }

@@ -38,7 +38,10 @@ export class AntiCheat extends DurableObject {
         this.boards = new Map();
         this.payloads = new Map();
         this.snapshotDirty = true;
-        ctx.blockConcurrencyWhile(async () => this.migrate());
+        ctx.blockConcurrencyWhile(async () => {
+            this.migrate();
+            await this.recheckRocket();
+        });
     }
 
     migrate() {
@@ -80,6 +83,18 @@ export class AntiCheat extends DurableObject {
             /* already added */
         }
         this.migrateTallies();
+    }
+
+    // Once (2026-10-28): week 11's Rocket League runs failed when the page saved the wrong physics version or none, which
+    // the checker now tries past. Its failed board runs are checked again and its refused uploads may be sent again.
+    async recheckRocket() {
+        if (await this.ctx.storage.get("recheck-rocket-1")) return;
+        this.sql.exec(`INSERT INTO queue (run_id, track, week, user_id, nickname, frames, recording, added)
+            SELECT id, track, week, user_id, nickname, frames, NULL, ? FROM runs
+            WHERE week = 11 AND state = 'invalid' AND reason = 'no-finish'`, Date.now());
+        this.sql.exec("DELETE FROM rejects WHERE week = 11 AND reason = 'no-finish'");
+        await this.ctx.storage.put("recheck-rocket-1", true);
+        await this.kick();
     }
 
     // The dashboard's totals. Counting the tables on every refresh read every row each time, which

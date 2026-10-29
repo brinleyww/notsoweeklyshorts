@@ -13174,7 +13174,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         if (null == o)
                             throw new Error("Track has no starting point");
                         const l = e.carId;
-                        r(l, e.mountainVertices, new R(e.mountainOffset.x,e.mountainOffset.y,e.mountainOffset.z), i, o, s.rocketVersion);
+                        // rocketVersion: the anti-cheat replaying a Rocket League run with another physics version.
+                        r(l, e.mountainVertices, new R(e.mountainOffset.x,e.mountainOffset.y,e.mountainOffset.z), i, o, e.rocketVersion ?? s.rocketVersion);
                         const h = {
                             id: l,
                             hasFinished: !1,
@@ -13190,7 +13191,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                         postMessage({
                             messageType: Ki.VerifyResult,
                             carId: l,
-                            result: A
+                            result: A,
+                            rocket: __rocketCars.has(l) ? { version: e.rocketVersion ?? s.rocketVersion, latest: __RL.version } : null
                         }),
                         __rocketFree(l),
                         t.ccall("deleteCarModel", "void", ["number"], [l]),
