@@ -18,7 +18,7 @@
     const SOUND_KEY = "_nswsRocketSound";
     const TUTORIAL_KEY = "_nswsRocketTutorial";
     // Status bits the worker reports (U8[n + 230]).
-    const ON_GROUND = 1, CAN_FIRST = 2, CAN_SECOND = 4, BOOSTING = 8, FLIPPING = 16, WALL_LIFT = 64;
+    const ON_GROUND = 1, CAN_FIRST = 2, CAN_SECOND = 4, BOOSTING = 8, FLIPPING = 16, WALL_LIFT = 64, PLAIN_SECOND = 128;
     // Accelerate, turn right, brake, turn left, checkpoint reset, restart: never swallowed even if also bound here.
     const DRIVING_BINDS = [0, 1, 2, 3, 4, 5];
     const MOUSE_NAMES = ["Left click", "Middle click", "Right click", "Mouse back", "Mouse forward"];
@@ -284,17 +284,20 @@
     // ---- Boost meter -------------------------------------------------------------------------------------
 
     const hud = (() => {
-        let root = null, fill = null, num = null, pips = null, shown = -1, status = -1, flashTimer = 0;
+        let root = null, fill = null, num = null, pips = null, kind = null, shown = -1, status = -1, flashTimer = 0, watching = false;
         function build() {
             root = document.createElement("div");
             root.className = "nsws-rocket-hud";
-            root.innerHTML = '<div class="jumps"><span></span><span></span></div><div class="box"><div class="container"><div class="bar"><div class="fill"></div></div><p class="num">100</p></div></div>';
+            root.innerHTML = '<div class="jumps"><span></span><span></span><b class="kind"></b></div><div class="box"><div class="container"><div class="bar"><div class="fill"></div></div><p class="num">100</p></div></div>';
             fill = root.querySelector(".fill");
             num = root.querySelector(".num");
             pips = root.querySelectorAll(".jumps > span");
+            kind = root.querySelector(".kind");
         }
         return {
-            mount() {
+            // watch: a replay's car (Watch): no touch pads, tutorial button or refill sound.
+            mount(watch = false) {
+                watching = watch;
                 root || build();
                 const ui = gameUi();
                 if (!ui) return;
@@ -306,9 +309,9 @@
                     root.classList.add("alone");
                     root.parentElement !== ui && ui.appendChild(root);
                 }
-                touch.show(ui);
-                tutorialButton.show(ui);
+                watch || (touch.show(ui), tutorialButton.show(ui));
             },
+            mounted: () => !!root?.isConnected,
             unmount() {
                 root?.remove();
                 touch.hide();
@@ -327,9 +330,12 @@
                 }
                 if (st !== status) {
                     status = st;
-                    // First pip: the jump from the ground. Second: the double jump or flip in the air.
+                    // First pip: the jump from the ground. Second: the double jump or flip in the air, orange while a
+                    // direction would make it a flip; in the air the label says which it is.
                     pips[0].classList.toggle("on", !!(st & CAN_FIRST));
                     pips[1].classList.toggle("on", !!(st & (CAN_FIRST | CAN_SECOND)));
+                    pips[1].classList.toggle("flip", !!(st & (CAN_FIRST | CAN_SECOND)) && !(st & PLAIN_SECOND));
+                    kind.textContent = st & ON_GROUND || !(st & CAN_SECOND) ? "" : st & PLAIN_SECOND ? "JUMP" : "FLIP";
                     root.classList.toggle("boosting", !!(st & BOOSTING));
                 }
             },
@@ -339,7 +345,7 @@
                 root.classList.add("refill");
                 clearTimeout(flashTimer);
                 flashTimer = setTimeout(() => root.classList.remove("refill"), 700);
-                sound.refill();
+                watching || sound.refill();
             }
         };
     })();
@@ -429,6 +435,13 @@
                 want !== sources[id].has("pad") && (want ? sources[id].add("pad") : sources[id].delete("pad"), changed = true);
             }
             changed && sync();
+        },
+        // The car shown while watching a record (main.bundle.js): its boost meter and jumps, or null when the watch ends.
+        watch(r) {
+            if (controls) return;
+            if (!r) return void (hud.mounted() && hud.unmount());
+            hud.mounted() || hud.mount(true);
+            hud.set(r.boost, r.status);
         },
         settings: buildSettings,
         allKeys: () => ACTIONS.flatMap(([id]) => keys[id]).filter(k => k && !k.startsWith("Mouse")),
@@ -1264,6 +1277,9 @@
 .speedometer-ui.up > .nsws-rocket-hud > .jumps { margin: 6px 6px 0; }
 .nsws-rocket-hud > .jumps > span { width: 22px; height: 8px; background-color: var(--surface-tertiary-color); opacity: 0.85; clip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%); transition: background-color 0.08s; }
 .nsws-rocket-hud > .jumps > span.on { background-color: #fff; }
+.nsws-rocket-hud > .jumps > span.on.flip { background-color: #ff9a2e; }
+.clip-watching-hud:not(.clip-inputs) .nsws-rocket-hud { display: none !important; }
+.nsws-rocket-hud > .jumps > .kind { min-width: 3em; font-size: 12px; line-height: 8px; font-weight: normal; color: var(--text-color); }
 .nsws-rocket-hud > .box { padding: 6px 10px; min-width: 140px; box-sizing: border-box; opacity: 0.9; background-color: var(--surface-color); clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%); }
 .nsws-rocket-hud > .box > .container { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 14px; background-color: var(--surface-tertiary-color); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%); }
 .nsws-rocket-hud .bar { flex: 1; height: 10px; min-width: 70px; background-color: rgba(255, 255, 255, 0.12); }

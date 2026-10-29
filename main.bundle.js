@@ -3484,7 +3484,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     h.set(this, null),
                     this.rocket = [[], [], [], [], [], [], []],
                     // The Rocket League physics version this run was driven with (the sim worker's __RL.version for a new one).
-                    this.rocketVersion = e?.rocketVersion ?? 7,
+                    this.rocketVersion = e?.rocketVersion ?? 8,
                     this.rocketTrack = !1,
                     null != e && (f.set(this, a, e.up, "f"),
                     f.set(this, s, e.right, "f"),
@@ -62019,6 +62019,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const i = C.get(this, uf, "f")[C.get(this, df, "f")].car;
                     C.get(this, vf, "f").time = new yt.A(n),
                     C.get(this, bf, "f").update(this.getDisplayedControls()),
+                    window.__nswsRocket?.watch(i.getCarState()?.rocket ?? null),
                     C.get(this, wf, "f").update(i),
                     C.get(this, xf, "f").update(i),
                     C.get(this, Sf, "f").update(i)
@@ -62182,6 +62183,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             dispose() {
                 if (watchSession === this) watchSession = null;
+                window.__nswsRocket?.watch(null);
                 this.cinematic?.dispose(),
                 C.get(this, $p, "f").clear(),
                 C.get(this, rf, "f").clearMountains();
@@ -62243,6 +62245,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, vf, "f").time = C.get(this, uf, "f")[C.get(this, df, "f")].car.getTime(),
                 C.get(this, vf, "f").loadedTime = n,
                 C.get(this, bf, "f").update(this.getDisplayedControls()),
+                window.__nswsRocket?.watch(C.get(this, uf, "f")[C.get(this, df, "f")].car.getCarState()?.rocket ?? null),
                 C.get(this, wf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car),
                 C.get(this, xf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car),
                 C.get(this, Sf, "f").update(C.get(this, uf, "f")[C.get(this, df, "f")].car);

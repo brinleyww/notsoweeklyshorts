@@ -10345,7 +10345,7 @@
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
-                this.rocketVersion = t?.rocketVersion ?? 7,
+                this.rocketVersion = t?.rocketVersion ?? 8,
                 this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
@@ -13712,7 +13712,7 @@
                     airBrake: Math.exp(-.015),
                     // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
                     // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
-                    version: 7,
+                    version: 8,
                     pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
                     climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27,
                     // Version 3: in the air, 0.1 s after letting go of boost the meter refills at 50/s (empty to full in 2 s).
@@ -13739,7 +13739,8 @@
                     rideKeep: 150, wallSlow: 2
                     // Version 6: the first jump works in the air too (driven off a ramp without jumping), so the double jump or flip
                     // is still there after it. Version 7: the second jump (double jump or flip) lasts until landing instead of
-                    // secondFor ms after the first jump.
+                    // secondFor ms after the first jump. Version 8: after those secondFor ms it is a double jump even with a direction
+                    // held; only inside them does it flip (status bit 128 says the second jump won't flip).
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13797,6 +13798,7 @@
                   , v5 = I[b + 20] >= 5
                   , v6 = I[b + 20] >= 6
                   , v7 = I[b + 20] >= 7
+                  , v8 = I[b + 20] >= 8
                   , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
                   , ctrlAt = p + 68
                   // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
@@ -13873,7 +13875,7 @@
                         I[b + 5] = 1, I[b + 3] = 0;
                         const side = Math.max(-1, Math.min(1, steer + rollKeys))
                           , ahead = Math.max(-1, Math.min(1, throttle + pitchIn));
-                        if (0 == ahead && 0 == side)
+                        if (0 == ahead && 0 == side || v8 && I[b + 1] && I[b + 4] >= K.secondFor)
                             I[b + 13]++,
                             v[0] += up[0] * K.jumpV, v[1] += up[1] * K.jumpV, v[2] += up[2] * K.jumpV;
                         else {
@@ -14015,7 +14017,7 @@
                 I[b + 28] = 1;
                 const canFirst = (onGround || v6) && !I[b + 1]
                   , canSecond = !onGround && !I[b + 5] && (!I[b + 1] || v7 || I[b + 4] < K.secondFor);
-                I[b + 15] = (inAir ? 0 : 1) | (canFirst ? 2 : 0) | (canSecond ? 4 : 0) | (boosting ? 8 : 0) | (flipping ? 16 : 0) | (I[b + 3] ? 32 : 0) | (I[b + 17] >= 0 || I[b + 24] >= 0 ? 64 : 0);
+                I[b + 15] = (inAir ? 0 : 1) | (canFirst ? 2 : 0) | (canSecond ? 4 : 0) | (boosting ? 8 : 0) | (flipping ? 16 : 0) | (I[b + 3] ? 32 : 0) | (I[b + 17] >= 0 || I[b + 24] >= 0 ? 64 : 0) | (v8 && canSecond && I[b + 1] && I[b + 4] >= K.secondFor ? 128 : 0);
                 U8[ctrlAt] = 63 & U8[ctrlAt] | (boosting ? 64 : 0) | (flipping || I[b + 3] ? 128 : 0);
                 U8[n + 227] = 82,
                 U8[n + 228] = bits,
