@@ -10365,7 +10365,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
-                this.rocketVersion = t?.rocketVersion ?? 3,
+                this.rocketVersion = t?.rocketVersion ?? 4,
                 this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
@@ -13727,7 +13727,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     airBrake: Math.exp(-.015),
                     // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
                     // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
-                    version: 3,
+                    version: 4,
                     pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
                     climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27,
                     // Version 3: in the air, 0.1 s after letting go of boost the meter refills at 50/s (empty to full in 2 s).
@@ -13739,7 +13739,10 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     airDrive: 21.5, boostAir3: 1100 * g, waveWithin: 400, waveV: 12, waveTop: 600 / 3.6,
                     // PolyTrack gives no engine force for 0.2 s after landing, so the push carries on after a landing for as long
                     // as the car was in the air, up to landDrive ms.
-                    landDrive: 200
+                    landDrive: 200,
+                    // Version 4: boosting in the air turns the horizontal momentum toward the nose (boostSteer rad/s side-on,
+                    // easing as they line up) without changing the horizontal speed.
+                    boostSteer: 3
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13792,6 +13795,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     }
                 const v2 = I[b + 20] >= 2
                   , v3 = I[b + 20] >= 3
+                  , v4 = I[b + 20] >= 4
                   , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
                   , ctrlAt = p + 68
                   // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
@@ -13936,6 +13940,11 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     const a = (inAir ? v3 ? K.boostAir3 : K.boostAir : K.boostGround) * .001;
                     for (let j = 0; j < 3; j++)
                         v[j] += fwd[j] * a;
+                    const sh = Math.sqrt(v[0] * v[0] + v[2] * v[2]);
+                    if (v4 && inAir && sh > 1) {
+                        const x = v[0] / sh + fwd[0] * K.boostSteer * .001, z = v[2] / sh + fwd[2] * K.boostSteer * .001, n = Math.sqrt(x * x + z * z);
+                        n > 0 && (v[0] = x / n * sh, v[2] = z / n * sh)
+                    }
                     F[b + 9] = Math.max(0, F[b + 9] - K.boostUse),
                     I[b + 16] = 0
                 } else
