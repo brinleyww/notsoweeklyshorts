@@ -360,6 +360,15 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   chat's slur list (loaded from `proxy/src/chatfilter.js`). The search box must say "Search
   KLIPY". The Worker only accepts KLIPY media URLs (`static*.klipy.com`) and censors the title.
   Extra blocked search terms and keywords can be set per key in KLIPY's Partner Panel.
+- **Networks that block KLIPY** (schools often do; the chat itself still gets through on the
+  HTTPS fallback): KLIPY's Integration Requirements forbid routing its API or media through our
+  servers, or caching it, without their written approval (developers@klipy.com), so the Worker
+  can't fetch them instead. The page notices instead: a KLIPY request that fails to connect or
+  gets something other than JSON (a firewall's block page), or a KLIPY image that fails to load
+  (KLIPY answers removed GIFs with a placeholder image, so a failed load means the network). The
+  GIF panel then says KLIPY can't be reached, with an "Upload a GIF" button, opens on Favourites,
+  and KLIPY GIFs in messages read "GIF blocked on this network (KLIPY)". Uploaded GIFs are served
+  by the Worker, so they show on those networks.
 - **Favourites** are in `localStorage` (`_nswsChatGifStars`, up to 100). A starred upload also keeps
   a copy of the file in IndexedDB (`nsws-chat`), since uploads leave the server; sending it uploads
   it again, which the hash makes cheap.

@@ -290,6 +290,11 @@
 #nsws-chat>.gif-panel .tile:hover>.star,#nsws-chat>.gif-panel .tile>.star.on{display:flex;}
 #nsws-chat>.gif-panel .tile>.star.on{color:#f0b232;}
 #nsws-chat>.gif-panel>.grid>.note{padding:24px 12px;text-align:center;font-size:14px;opacity:.65;}
+#nsws-chat>.gif-panel>.grid>.note>button{margin-top:10px;padding:6px 14px;border:0;border-radius:4px;background:var(--button-color,#334b77);color:inherit;font:inherit;font-size:14px;cursor:pointer;}
+#nsws-chat>.gif-panel>.grid>.note>button:hover{background:var(--button-hover-color,#3d5a8f);}
+#nsws-chat>.gif-panel .tile.blocked{min-height:60px;}
+#nsws-chat>.gif-panel .tile.blocked>img{visibility:hidden;}
+#nsws-chat>.gif-panel .tile.blocked::after{content:"Blocked on this network";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:4px;font-size:12px;text-align:center;opacity:.6;}
 #nsws-chat>.gif-panel>.foot{flex-shrink:0;padding:4px 10px 6px;font-size:11px;text-align:right;opacity:.55;}
 #nsws-chat-lightbox{position:fixed;inset:0;z-index:10005;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:rgba(0,0,0,.82);cursor:zoom-out;}
 #nsws-chat-lightbox>img{max-width:92vw;max-height:84vh;object-fit:contain;}
@@ -1178,7 +1183,10 @@
             img.addEventListener("error", () => {
                 const gone = document.createElement("div");
                 gone.className = "gone";
-                gone.textContent = source.gif ? "GIF unavailable" : "Image unavailable";
+                // KLIPY answers a removed GIF with a placeholder image, so a failed load means the network.
+                if (m.media.g) klipyBlocked = true;
+                gone.textContent = m.media.g ? "GIF blocked on this network (KLIPY)" : source.gif ? "GIF unavailable" : "Image unavailable";
+                if (m.media.g) gone.title = "This network blocks klipy.com, where search GIFs come from. Uploaded GIFs still show.";
                 img.replaceWith(gone);
             });
             img.addEventListener("click", () => openLightbox(source));
@@ -1470,6 +1478,10 @@
     }
 
     let klipyId = null;
+    // Set when this network can't reach KLIPY (schools often block it). KLIPY's terms don't let the
+    // Worker fetch its GIFs instead, so the chat says so and points at uploads, which the Worker serves.
+    let klipyBlocked = false;
+    const KLIPY_BLOCKED_NOTE = "GIF search can't reach KLIPY on this network (schools and workplaces often block it). Uploaded GIFs still work.";
     async function klipyCustomer() {
         if (!klipyId) {
             const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("nsws-klipy:" + visitorId()));
@@ -1499,9 +1511,27 @@
     async function klipyPage(kind, query, page) {
         const params = new URLSearchParams({ page: String(page), per_page: String(GIF_PAGE), customer_id: await klipyCustomer(), content_filter: "low", format_filter: "webp,gif" });
         if (kind === "search") params.set("q", query);
-        const res = await fetch(KLIPY_API + encodeURIComponent(KLIPY_KEY) + "/gifs/" + kind + "?" + params, { referrerPolicy: "no-referrer" });
+        // A network that blocks KLIPY either refuses the connection or answers with its own page, not KLIPY's JSON.
+        const blocked = () => {
+            klipyBlocked = true;
+            return Object.assign(new Error("KLIPY blocked"), { blocked: true });
+        };
+        let res;
+        try {
+            res = await fetch(KLIPY_API + encodeURIComponent(KLIPY_KEY) + "/gifs/" + kind + "?" + params, { referrerPolicy: "no-referrer" });
+        } catch {
+            throw blocked();
+        }
+        if (!/json/i.test(res.headers.get("Content-Type") || "")) throw blocked();
         if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = (await res.json())?.data;
+        let body;
+        try {
+            body = await res.json();
+        } catch {
+            throw blocked();
+        }
+        klipyBlocked = false;
+        const data = body?.data;
         const list = (Array.isArray(data?.data) ? data.data : []).map(klipyStar).filter(Boolean);
         return { list, more: !!data?.has_next && list.length > 0 };
     }
@@ -1526,10 +1556,20 @@
         return (await slurCheck)(query).length > 0;
     }
 
-    function gifNote(text) {
+    function gifNote(text, withUpload) {
         const note = document.createElement("div");
         note.className = "note";
         note.textContent = text;
+        if (withUpload) {
+            const upload = document.createElement("button");
+            upload.type = "button";
+            upload.textContent = "Upload a GIF";
+            upload.addEventListener("click", () => {
+                closeGifPanel();
+                fileInput?.click();
+            });
+            note.append(document.createElement("br"), upload);
+        }
         gifPanel.querySelector(".grid").appendChild(note);
     }
 
@@ -1543,6 +1583,11 @@
         img.referrerPolicy = "no-referrer";
         sizeImage(img, star.w, star.h, 200, 4000);
         if (star.k === "g") {
+            img.addEventListener("error", () => {
+                klipyBlocked = true;
+                tile.classList.add("blocked");
+                tile.title = "This network blocks KLIPY";
+            }, { once: true });
             img.src = star.prev;
         } else {
             idb("get", star.id).then((blob) => {
@@ -1621,6 +1666,7 @@
             const stars = loadStars();
             if (!stars.length) gifNote("Star a GIF in the chat" + (KLIPY_KEY ? " or in search" : "") + " to keep it here.");
             addGifTiles(stars);
+            if (klipyBlocked && KLIPY_KEY) gifNote(KLIPY_BLOCKED_NOTE, true);
             return;
         }
         loadMoreGifs();
@@ -1637,13 +1683,14 @@
             } else {
                 page = await klipyPage(view.tab === "search" ? "search" : "trending", view.query, view.page + 1);
             }
-        } catch {
-            page = null;
+        } catch (err) {
+            page = err.blocked ? "blocked" : null;
         }
         if (gifView !== view) return;
         view.loading = false;
-        if (!page) {
+        if (!page || page === "blocked") {
             view.more = false;
+            if (page === "blocked" && view.page === 0) return gifNote(KLIPY_BLOCKED_NOTE, true);
             return gifNote("Couldn't load GIFs. Try again in a moment.");
         }
         view.page++;
@@ -1727,7 +1774,7 @@
         search.value = "";
         gifPanel.classList.add("on");
         gifButton.classList.add("on");
-        showGifs(loadStars().length || !KLIPY_KEY ? "stars" : "trending", "");
+        showGifs(loadStars().length || !KLIPY_KEY || klipyBlocked ? "stars" : "trending", "");
         if (KLIPY_KEY) search.focus();
         document.addEventListener("pointerdown", outsideGifPanel, true);
     }
