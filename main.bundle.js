@@ -53078,6 +53078,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Start reset"), KeyBind.VehicleStartReset),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Cockpit camera"), KeyBind.VehicleCockpitCamera),
             window.__nswsRocket?.settings(C.get(this, ks, "f"), ( () => C.get(this, vs, "f").playUIClick())),
+            window.__nswsGamepad?.settings(C.get(this, ks, "f"), ( () => C.get(this, vs, "f").playUIClick())),
             C.get(this, ms, "m", Bs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Editor")),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Rotate part"), KeyBind.EditorRotatePart),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Height modifier"), KeyBind.EditorHeightModifier),

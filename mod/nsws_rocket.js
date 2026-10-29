@@ -1176,12 +1176,6 @@
             row.appendChild(wrap);
             container.appendChild(row);
         }
-        const pad = document.createElement("div");
-        pad.className = "setting";
-        const padText = document.createElement("p");
-        padText.textContent = "Controller: A jump, B boost, X air roll, LB / RB roll, left stick up / down tilts in the air (RT / LT drive, Y respawn, View restart, Menu pause on every track)";
-        pad.appendChild(padText);
-        container.appendChild(pad);
         choiceRow(container, click, "W / S in the air", [["tm", "Trackmania"], ["rl", "RL"], ["again", "Re-press"]], pitchSetting, v => write(PITCH_KEY, v));
         choiceRow(container, click, "Rocket League effects", [["auto", "Auto"], ["high", "High"], ["low", "Low"], ["off", "Off"]], fxSetting, v => write(FX_KEY, v));
         choiceRow(container, click, "Rocket League sounds", [["off", "Off"], ["on", "On"]], () => soundOn() ? "on" : "off", v => write(SOUND_KEY, v));
