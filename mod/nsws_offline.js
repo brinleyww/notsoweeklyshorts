@@ -154,6 +154,8 @@
     let nextTry = 0;
     let lastProbe = 0;
     let flushing = false;
+    // The queued run being sent: its upload says when it was set (the Worker checks that against its outages).
+    let sending = null;
 
     function lock() {
         const held = Number(get(QUEUE_LOCK_KEY));
@@ -182,7 +184,9 @@
                 }
                 try {
                     // "Upload" once the run reached the server; null while the game isn't ready to send.
-                    if ((await records.syncRecord(item.s, item.t, null)) === "Upload") {
+                    sending = item;
+                    const sent = await records.syncRecord(item.s, item.t, null).finally(() => (sending = null));
+                    if (sent === "Upload") {
                         drop();
                         clear();
                     }
@@ -204,10 +208,11 @@
     }
 
     window.__nswsUploadQueue = {
-        add(slot, trackId) {
+        // at: when the run was set; frames: its time, so a later record on that track never takes its date.
+        add(slot, trackId, at = Date.now(), frames = null) {
             if (!Number.isSafeInteger(slot) || typeof trackId !== "string") return;
             const list = readQueue().filter((q) => !(q.s === slot && q.t === trackId));
-            list.push({ s: slot, t: trackId, at: Date.now() });
+            list.push({ s: slot, t: trackId, at, f: Number.isSafeInteger(frames) ? frames : null });
             writeQueue(list.slice(-50));
             nextTry = Math.max(nextTry, Date.now() + QUEUE_RETRY_MS);
             if (busyUntil()) {
@@ -217,6 +222,10 @@
             }
         },
         pending: () => readQueue().length,
+        achievedTag(trackId, frames) {
+            return sending && sending.t === trackId && sending.f === frames && Number.isSafeInteger(sending.at)
+                ? "&nswsAchievedAt=" + sending.at : "";
+        },
         flush,
     };
 

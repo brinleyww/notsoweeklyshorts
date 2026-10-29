@@ -757,6 +757,17 @@ busy, 5xx or no reply goes in a queue (`_nswsUploadQueue`) and is sent through t
 `syncRecord` once the server is back. While busy, one queued upload is still tried every 10
 minutes. Lobby runs are never queued.
 
+A queued run remembers when it was set (and its time, so a later record on that track never takes the
+date) and its upload sends `nswsAchievedAt`. The Worker notes each spell in which it refused uploads
+for the limits in KV (`upload-outages`, `{from, to}`), and believes the date only inside one of them
+(10 minutes' slack before `from`). The anti-cheat stores it (`runs.achieved`) and gives the run a
+`tie_id`: the smallest id among equal times on that board set after it, so the run sorts where it
+would have landed. Equal times always go to whoever set theirs first: Kodub orders them by upload id,
+and the snapshot's per-board `late` list ([id, tie id, achieved, nickname, frames, week]) moves
+backdated runs into place. `GET /nsws/late?week=N` (site origin, ended weeks only) hands that list
+out, and the standings page adds the runs set before an ended week's `frozenAt` to its saved file
+(only files that carry `runs`, written by the freeze script since this change).
+
 The chat shows its last 40 messages (`_nswsChatLog`) and "paused until …", and looks again every 10
 minutes. A busy poll ends the HTTPS session, so the page goes back to WebSockets afterwards
 instead of long-polling for 12 hours.

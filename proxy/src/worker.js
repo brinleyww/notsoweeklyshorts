@@ -73,6 +73,13 @@ const SNAPSHOT_TTL_MS = 5 * 60_000;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
+// KV (FALLBACK): [{from, to}] spells in which this Worker refused uploads for the daily limits. A run the
+// page kept and sent later counts as set when it says only if that moment is inside one of them, give or
+// take the slack (the run was finished a little before its upload was refused).
+const OUTAGES_KEY = "upload-outages";
+const OUTAGES_MAX = 60;
+const ACHIEVED_SLACK_MS = 10 * 60_000;
+const LATE_CACHE_S = 300;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -519,6 +526,34 @@ function busy(origin) {
     return json({ error: "busy", retry: DO_LIMIT_RETRY_S, until: limitLiftsAt() }, origin, 503);
 }
 
+// Until when this instance has already written the outage it is in.
+let outageNotedUntil = 0;
+
+function noteUploadOutage(env, ctx) {
+    const now = Date.now();
+    if (!env.FALLBACK || now < outageNotedUntil) return;
+    const to = limitLiftsAt();
+    outageNotedUntil = to;
+    ctx.waitUntil((async () => {
+        const list = (await env.FALLBACK.get(OUTAGES_KEY, "json")) ?? [];
+        if (list.some((o) => o.from <= now && now <= o.to)) return;
+        list.push({ from: now, to });
+        await env.FALLBACK.put(OUTAGES_KEY, JSON.stringify(list.slice(-OUTAGES_MAX)));
+    })().catch((err) => {
+        outageNotedUntil = 0;
+        console.error("outage note failed:", err && err.message);
+    }));
+}
+
+// The page's nswsAchievedAt (ms) if it falls in a noted outage, else null: the run then counts from its upload.
+async function achievedAt(env, value) {
+    if (!env.FALLBACK || !/^[0-9]{13}$/.test(value ?? "")) return null;
+    const at = Number(value);
+    if (at > Date.now()) return null;
+    const list = await env.FALLBACK.get(OUTAGES_KEY, "json").catch(() => null);
+    return Array.isArray(list) && list.some((o) => o.from - ACHIEVED_SLACK_MS <= at && at <= o.to) ? at : null;
+}
+
 function antiCheat(env) {
     return env.ANTICHEAT ? env.ANTICHEAT.get(env.ANTICHEAT.idFromName("global")) : null;
 }
@@ -652,6 +687,46 @@ async function snapshotBlocked(env, cfg, track, view) {
     return blocked;
 }
 
+// Equal times go to whoever set theirs first. Upstream already orders them by upload; a run set during an
+// outage and uploaded after it sorts by where the anti-cheat placed it (tie id, then when it was set).
+async function orderTies(env, track, view) {
+    const late = track.week != null ? (await verdictSnapshot(env))?.tracks?.[track.trackId]?.late : null;
+    if (!late?.length) return view;
+    const keys = new Map(late.map(([id, tie, at]) => [id, [tie, at]]));
+    const key = (e) => keys.get(e.id) ?? [e.id, Infinity];
+    const entries = view.entries.slice().sort((a, b) => {
+        if (a.frames !== b.frames) return a.frames - b.frames;
+        const ka = key(a);
+        const kb = key(b);
+        return ka[0] - kb[0] || ka[1] - kb[1];
+    });
+    return { ...view, entries };
+}
+
+// An ended week's runs that were set during an outage and uploaded after it, for the page to add to standings
+// locked before they arrived (it keeps those set before the lock).
+async function handleLate(url, env, cfg, origin) {
+    const week = Number(url.searchParams.get("week"));
+    const tracks = {};
+    const snap = Number.isSafeInteger(week) && cfg.currentWeek != null && week < cfg.currentWeek
+        ? await verdictSnapshot(env) : null;
+    for (const [id, saved] of Object.entries(snap?.tracks ?? {})) {
+        if ((snap.weeks?.[id] ?? week) !== week || !saved.late?.length) continue;
+        const blocked = new Set(saved.blocked);
+        const runs = saved.late
+            .filter(([runId, , , nickname, , runWeek]) => runWeek === week && !blocked.has(runId) && !cfg.banned.has(normalizeNickname(nickname)))
+            .map(([, tie, at, nickname, frames]) => ({ nickname: censor(nickname), frames, at, tie }));
+        if (runs.length) tracks[id] = runs;
+    }
+    return new Response(JSON.stringify({ week, tracks }), {
+        headers: {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "public, max-age=" + LATE_CACHE_S,
+            ...corsHeaders(origin),
+        },
+    });
+}
+
 // Runs on the board the snapshot hasn't seen; everything when there is no snapshot of it.
 async function unseenRuns(env, track, entries) {
     const saved = (await verdictSnapshot(env))?.tracks?.[track.trackId];
@@ -684,7 +759,7 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     const hash = await callerHash(params, track);
     const owner = cfg.owner || await isOwner(params.get("userToken"), cfg);
 
-    const view = await loadView(cfg, request, track, read);
+    const view = await orderTies(env, track, await loadView(cfg, request, track, read));
     if (track.week != null) observeNames(env, ctx, await unseenRuns(env, track, view.entries));
     // If the anti-cheat is unreachable the board still loads, filtered by its last verdicts.
     cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
@@ -710,13 +785,13 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     return json(body, origin);
 }
 
-async function handleUserEntry(request, url, cfg, origin) {
+async function handleUserEntry(request, url, env, cfg, origin) {
     const params = url.searchParams;
     const track = await trackContext(cfg, params.get("trackId"), params.get("nswsWeek"));
     const hash = await callerHash(params, track);
     if (!hash) return json(null, origin);
     const read = readOptions(params);
-    const view = await loadView(cfg, request, track, read);
+    const view = await orderTies(env, track, await loadView(cfg, request, track, read));
     return json(censorNames(await ownEntry(cfg, request, track, read, view, hash)), origin);
 }
 
@@ -790,7 +865,10 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     // time it claims never reaches Kodub.
     const anti = track.week != null && !ownerUpload ? antiCheat(env) : null;
     let check = null;
-    if (anti && doLimited()) return busy(origin);
+    if (anti && doLimited()) {
+        noteUploadOutage(env, ctx);
+        return busy(origin);
+    }
     if (anti) {
         const recording = form.get("recording") ?? "";
         const nickname = (form.get("nickname") ?? "").slice(0, 64);
@@ -838,6 +916,7 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         await anti.confirm({
             track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
             state: check.state, recording: check.state === "pending" ? check.recording : null,
+            achieved: await achievedAt(env, url.searchParams.get("nswsAchievedAt")),
         });
         if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
     } else if (check?.hold != null) {
@@ -1577,6 +1656,10 @@ export default {
                     return doLimited() ? busy(requestOrigin) : plain(500, "Accounts failed", requestOrigin);
                 }
             }
+            if (url.pathname === TRAFFIC_PREFIX + "late" && request.method === "GET") {
+                if (!fromSite) return forbidden();
+                return handleLate(url, env, cfg, requestOrigin);
+            }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
             if (!fromSite && ["beat", "poll", "like"].some((p) => url.pathname === TRAFFIC_PREFIX + p)) return forbidden();
             const origin = requestOrigin || "*";
@@ -1617,13 +1700,15 @@ export default {
                 if (request.method === "GET") return await handleLeaderboard(request, url, env, cfg, origin, ctx);
                 if (request.method === "POST") return await handleSubmit(request, url, env, cfg, origin, ctx);
             } else if (url.pathname === "/v6/leaderboardUserEntry" && request.method === "GET") {
-                return await handleUserEntry(request, url, cfg, origin);
+                return await handleUserEntry(request, url, env, cfg, origin);
             } else if (url.pathname === "/v6/user") {
                 if (request.method === "GET") return await handleUserRead(request, url, env, cfg, origin, ctx);
                 if (request.method === "POST") return await handleUserUpdate(request, url, env, cfg, origin);
             }
         } catch (err) {
-            return errorResponse(err, origin);
+            const response = errorResponse(err, origin);
+            if (request.method === "POST" && url.pathname === "/v6/leaderboard" && doLimited()) noteUploadOutage(env, ctx);
+            return response;
         }
 
         return passThrough(request, url, cfg, origin, ctx);

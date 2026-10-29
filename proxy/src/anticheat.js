@@ -82,6 +82,17 @@ export class AntiCheat extends DurableObject {
         } catch {
             /* already added */
         }
+        // achieved: when a run that waited out a server outage on the player's device was really set.
+        // tie_id: where it sorts among equal times, in place of its own (later) upload id.
+        // uploaded: when a run came through this proxy; NULL for runs from before this column.
+        try {
+            this.sql.exec("ALTER TABLE runs ADD COLUMN achieved INTEGER");
+            this.sql.exec("ALTER TABLE runs ADD COLUMN tie_id INTEGER");
+            this.sql.exec("ALTER TABLE runs ADD COLUMN uploaded INTEGER");
+        } catch {
+            /* already added */
+        }
+        this.sql.exec("CREATE INDEX IF NOT EXISTS runs_achieved ON runs(achieved) WHERE achieved IS NOT NULL");
         this.migrateTallies();
     }
 
@@ -155,14 +166,14 @@ export class AntiCheat extends DurableObject {
         return board;
     }
 
-    saveRun(track, week, entry, state, source, reason) {
+    saveRun(track, week, entry, state, source, reason, uploaded = null) {
         // An upsert, not INSERT OR REPLACE: a replace deletes the old row without firing the tally trigger.
-        this.sql.exec(`INSERT INTO runs (id, track, week, user_id, nickname, frames, state, source, reason, at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        this.sql.exec(`INSERT INTO runs (id, track, week, user_id, nickname, frames, state, source, reason, at, uploaded)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET track = excluded.track, week = excluded.week, user_id = excluded.user_id,
                 nickname = excluded.nickname, frames = excluded.frames, state = excluded.state, source = excluded.source,
-                reason = excluded.reason, at = excluded.at`,
-            entry.id, track, week, entry.userId ?? null, entry.nickname ?? null, entry.frames, state, source, reason ?? null, Date.now());
+                reason = excluded.reason, at = excluded.at, uploaded = COALESCE(runs.uploaded, excluded.uploaded)`,
+            entry.id, track, week, entry.userId ?? null, entry.nickname ?? null, entry.frames, state, source, reason ?? null, Date.now(), uploaded);
         this.snapshotDirty = true;
         const run = { state, source };
         this.boards.get(track)?.runs.set(entry.id, run);
@@ -237,6 +248,11 @@ export class AntiCheat extends DurableObject {
             for (const r of this.sql.exec("SELECT track, user_id, frames, upload_id FROM lobby_runs WHERE state IN ('review', 'hidden')")) {
                 slot(r.track).holds.push(...this.holdKeys(r));
             }
+            // [id, tie id, achieved, nickname, frames, week] for runs set during an outage and uploaded after it.
+            for (const r of this.sql.exec(`SELECT id, track, tie_id, achieved, nickname, frames, week FROM runs
+                WHERE achieved IS NOT NULL AND state != 'invalid'`)) {
+                (slot(r.track).late ??= []).push([r.id, r.tie_id ?? r.id, r.achieved, r.nickname ?? "", r.frames, r.week]);
+            }
             const weeks = Object.fromEntries((await this.trackWeeks()).map(([id, week]) => [id, week]));
             const wrsSaved = JSON.parse(this.wrsText);
             const body = JSON.stringify({ tracks, weeks, wrs: wrsSaved });
@@ -288,11 +304,26 @@ export class AntiCheat extends DurableObject {
 
     async confirm(r) {
         const entry = { id: r.uploadId, userId: r.userId, nickname: r.nickname, frames: r.frames };
-        if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) this.saveRun(r.track, r.week, entry, r.state, "proxy");
+        if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) {
+            const now = Date.now();
+            this.saveRun(r.track, r.week, entry, r.state, "proxy", null, now);
+            if (Number.isSafeInteger(r.achieved) && r.achieved < now) this.backdate(r, now);
+        }
         if (r.state === "pending") {
             this.enqueue(Number.isSafeInteger(r.uploadId) ? r.uploadId : null, r.track, r.week, entry, r.recording);
             await this.kick();
         }
+    }
+
+    // A run uploaded late but set at r.achieved goes ahead of every equal time set after it. Upload ids only
+    // grow with time, so it takes the place of the earliest such run (tie_id) and orders by achieved within it.
+    backdate(r, now) {
+        const row = this.sql.exec(`SELECT MIN(COALESCE(tie_id, id)) AS tie FROM runs WHERE track = ? AND frames = ?
+            AND id != ? AND COALESCE(user_id, '') != ? AND state != 'invalid' AND COALESCE(achieved, uploaded, 0) > ?`,
+            r.track, r.frames, r.uploadId, r.userId ?? "", r.achieved).one();
+        const tie = Number.isSafeInteger(row.tie) && row.tie < r.uploadId ? row.tie : r.uploadId;
+        this.sql.exec("UPDATE runs SET achieved = ?, tie_id = ? WHERE id = ?", r.achieved, tie, r.uploadId);
+        this.snapshotDirty = true;
     }
 
     async kick() {

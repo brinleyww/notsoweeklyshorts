@@ -56933,9 +56933,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 .then(r => r.ok ? r.json() : null).catch(() => null);
                             if (stCurrentWeek !== week) return;
                             if (frozen && frozen.boards) {
+                                const late = frozen.runs ? await stFetchLate(week) : null;
+                                if (stCurrentWeek !== week) return;
                                 const maps = LB_TRACKS.map(t => {
                                     const m = {};
-                                    (frozen.boards[t.id] || []).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
+                                    stLockedBoard(frozen, t.id, late).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
                                     return m;
                                 });
                                 const sorted = stTotals(maps);
@@ -56984,6 +56986,25 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 listWrap.innerHTML = '<div style="color:rgba(255,120,120,0.7);font-size:18px;padding:20px 8px;">Failed to load standings.</div>';
                             }
                         }
+                    }
+                    // Runs set during a server outage before the week locked, but uploaded after it. Saved files with
+                    // runs ([nickname, frames, id]) can take them; equal times order as on the boards (id, or tie + at).
+                    function stFetchLate(week) {
+                        return fetch(window.__nswsApiBase + "nsws/late?week=" + week).then(r => r.ok ? r.json() : null).catch(() => null);
+                    }
+                    function stLockedBoard(frozen, trackId, late) {
+                        const runs = frozen.runs && frozen.runs[trackId];
+                        const extra = late && late.tracks && late.tracks[trackId];
+                        const lockedAt = Date.parse(frozen.frozenAt);
+                        if (!runs || !extra || !(lockedAt > 0)) return frozen.boards[trackId] || [];
+                        const best = new Map();
+                        const put = (nick, frames, tie, at) => {
+                            const kept = best.get(nick);
+                            if (!kept || frames < kept.frames || (frames === kept.frames && (tie < kept.tie || (tie === kept.tie && at < kept.at)))) best.set(nick, { nick, frames, tie, at });
+                        };
+                        runs.forEach(([nick, frames, id]) => put(nick, frames, id, Infinity));
+                        extra.forEach(r => { if (r.at < lockedAt) put((r.nickname || "").trim(), r.frames, r.tie, r.at); });
+                        return [...best.values()].sort((a, b) => a.frames - b.frames || a.tie - b.tie || a.at - b.at).map(r => r.nick);
                     }
                     // Saved with nicknames only: standings need nothing else, and full 500-run boards are large.
                     function stFetchBoard(url) {
@@ -57941,12 +57962,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 t >= 0 && C.get(this, Vh, "f").splice(t, 1)
             }
             async setRecord(e, t, n, i, r) {
-                const a = C.get(this, Oh, "f").getUserProfile(e);
+                const __nswsSetAt = Date.now()
+                  , a = C.get(this, Oh, "f").getUserProfile(e);
                 if (null == a)
                     return null;
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
                 const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
-                __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t),
+                __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
                 null)));
                 for (const e of C.get(this, Vh, "f"))
                     e();
@@ -60702,7 +60724,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         else {
                             window.__nswsTraffic?.event("uploads", r);
                             const __nswsWeek = window.__nswsTrackWeek(r)
-                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? ""));
+                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? "") + (window.__nswsUploadQueue?.achievedTag?.(r, s.numberOfFrames) ?? ""));
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;
