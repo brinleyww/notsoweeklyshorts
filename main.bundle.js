@@ -105,7 +105,7 @@ window.__nswsAutoGhostNote = function(trackId) {
     (function() {
         var style = document.createElement("style");
         style.id = "_bw-clip-hud-css";
-        style.textContent = ".clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .speedometer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .input-visualizer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.main-buttons-container{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.logo{display:none!important;visibility:hidden!important;}.clips-menu-open .menu-ui>.discord-link{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.info{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.warning-message{display:none!important;visibility:hidden!important;}.clips-menu-open .menu-ui>.button-bar{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open #nsws-subtitle{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open #nsws-disclaimer{display:none!important;visibility:hidden!important;pointer-events:none!important;}";
+        style.textContent = ".clip-watching-hud .timer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud .speedometer-ui{display:none!important;visibility:hidden!important;}.clip-watching-hud:not(.clip-inputs) .input-visualizer-ui{display:none!important;visibility:hidden!important;}body.clip-watching-hud.clip-inputs .input-visualizer-ui{display:block!important;visibility:visible!important;}.clip-watching-hud .preview-toolbar-ui button:has(img[src=\"images/graph.svg\"]){display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.main-buttons-container{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.logo{display:none!important;visibility:hidden!important;}.clips-menu-open .menu-ui>.discord-link{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.info{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open .menu-ui>.warning-message{display:none!important;visibility:hidden!important;}.clips-menu-open .menu-ui>.button-bar{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open #nsws-subtitle{display:none!important;visibility:hidden!important;pointer-events:none!important;}.clips-menu-open #nsws-disclaimer{display:none!important;visibility:hidden!important;pointer-events:none!important;}";
         document.head.appendChild(style);
     })();
     (function() {
@@ -120,10 +120,53 @@ window.__nswsAutoGhostNote = function(trackId) {
                 if (buttons[i].querySelector('img[src="images/graph.svg"]')) return buttons[i];
             return null;
         }
+        // The owner can show the input display in clips with the watch toolbar's input button (off by default,
+        // remembered on this device); for everyone else that button is hidden while a clip plays.
+        var clipOwner = null;
+        var clipInputs = false;
+        try {
+            clipInputs = localStorage.getItem("nsws_clip_inputs") === "1";
+        } catch (e) {}
+        function clipInputsButton(hide) {
+            var btn = document.querySelector(".nsws-watch-inputs");
+            if (!btn) return;
+            if (!btn.__clipHooked) {
+                btn.__clipHooked = true;
+                btn.addEventListener("click", function(e) {
+                    if (!watchingClip) return;
+                    e.stopImmediatePropagation();
+                    if (!clipOwner) return;
+                    clipInputs = !clipInputs;
+                    try {
+                        localStorage.setItem("nsws_clip_inputs", clipInputs ? "1" : "0");
+                    } catch (err) {}
+                    applyHudState();
+                }, true);
+            }
+            if (hide) {
+                btn.style.display = clipOwner ? "" : "none";
+                btn.classList.toggle("off", !clipInputs);
+            } else if (btn.__clipShown === false) {
+                btn.style.removeProperty("display");
+                btn.classList.toggle("off", document.body.classList.contains("nsws-hide-inputs"));
+            }
+            btn.__clipShown = !hide;
+        }
         function applyHudState() {
             var hide = !!watchingClip;
+            if (hide && null == clipOwner) {
+                clipOwner = false;
+                window.__nswsOwner?.check().then(function(ok) {
+                    clipOwner = !!ok;
+                }, function() {});
+            }
+            var showInputs = hide && clipOwner && clipInputs;
             document.body.classList.toggle("clip-watching-hud", hide);
-            var els = [ document.querySelector(".timer-ui"), document.querySelector(".speedometer-ui"), document.querySelector(".input-visualizer-ui"), findGraphButton(document.querySelector(".preview-toolbar-ui")) ];
+            document.body.classList.toggle("clip-inputs", showInputs);
+            clipInputsButton(hide);
+            var els = [ document.querySelector(".timer-ui"), document.querySelector(".speedometer-ui"), showInputs ? null : document.querySelector(".input-visualizer-ui"), findGraphButton(document.querySelector(".preview-toolbar-ui")) ];
+            showInputs && document.querySelector(".input-visualizer-ui")?.style.removeProperty("display");
+            showInputs && document.querySelector(".input-visualizer-ui")?.style.removeProperty("visibility");
             for (var i = 0; i < els.length; i++) {
                 var el = els[i];
                 if (!el) continue;
