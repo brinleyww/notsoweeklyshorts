@@ -10365,7 +10365,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
-                this.rocketVersion = t?.rocketVersion ?? 4,
+                this.rocketVersion = t?.rocketVersion ?? 5,
                 this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
@@ -13727,7 +13727,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     airBrake: Math.exp(-.015),
                     // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
                     // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
-                    version: 4,
+                    version: 5,
                     pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
                     climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27,
                     // Version 3: in the air, 0.1 s after letting go of boost the meter refills at 50/s (empty to full in 2 s).
@@ -13742,7 +13742,16 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     landDrive: 200,
                     // Version 4: boosting in the air turns the horizontal momentum toward the nose (boostSteer rad/s side-on,
                     // easing as they line up) without changing the horizontal speed.
-                    boostSteer: 3
+                    boostSteer: 3,
+                    // Version 5: the climb starts only with the nose more than 60 degrees into the wall (climbFace = sin 60).
+                    // A hit travelling within 60 degrees of along the wall scrapes it: no speed lost, at most scrapeOut m/s
+                    // of bounce, no kick up or pitch/roll spin from the hit, and the car swings parallel (yaw rate scrapeTurn x the sine of
+                    // the angle).
+                    climbFace: .866, scrapeOut: .5, scrapeTurn: 10,
+                    // Friction makes the push along a wall bigger than the push out of it, so in v5 a wall counts only on the axis
+                    // the car's velocity fell most on (under half, or flipped), the wall it is riding (rideKeep ms since a scrape) or
+                    // climbing, or any push when the car moves slower than wallSlow m/s.
+                    rideKeep: 150, wallSlow: 2
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13752,7 +13761,8 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
             // jump/flip counters, 15 status bits, 16 frames since boosting, 17 frames into a wall lift (-1 none),
             // 18 wall lift cooldown, 19 wall lift/climb counter, 20 physics version, 21-23 velocity written last frame
             // (floats), 24 frames into a wall climb (-1 none), 25 frames since a wall push, 26-27 wall normal x/z
-            // (floats), 28 last velocity valid, 29 frames of landing push left.
+            // (floats), 28 last velocity valid, 29 frames of landing push left,
+            // 30 frames since the last wall scrape.
             function __rocketInit(id, track, version = __RL.version) {
                 if (__rocketFree(id), !__rocketTracks.has(track.getId()))
                     return;
@@ -13760,7 +13770,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 if ("number" != typeof block || 0 == block)
                     throw new Error("Failed to allocate memory for rocket state");
                 const b = block >> 2, I = new Int32Array(t.HEAPU8.buffer);
-                I.fill(0, b, b + 32), I[b + 2] = -1, I[b + 6] = -1, I[b + 17] = -1, I[b + 20] = version, I[b + 24] = -1, I[b + 25] = 1e4;
+                I.fill(0, b, b + 32), I[b + 2] = -1, I[b + 6] = -1, I[b + 17] = -1, I[b + 20] = version, I[b + 24] = -1, I[b + 25] = 1e4, I[b + 30] = 1e4;
                 t.HEAPF32[b + 9] = __RL.boostFull;
                 __rocketCars.set(id, block)
             }
@@ -13796,6 +13806,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 const v2 = I[b + 20] >= 2
                   , v3 = I[b + 20] >= 3
                   , v4 = I[b + 20] >= 4
+                  , v5 = I[b + 20] >= 5
                   , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
                   , ctrlAt = p + 68
                   // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
@@ -13821,6 +13832,15 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                     const dx = v[0] - F[b + 21], dy = v[1] - F[b + 22] + (touching ? 0 : 9.81 * .001), dz = v[2] - F[b + 23]
                       , dh = Math.sqrt(dx * dx + dz * dz);
                     dh > .004 && (hits && dh > 1.2 * Math.abs(dy) || I[b + 24] >= 0) && (wallN = Math.abs(dx) >= Math.abs(dz) ? [dx > 0 ? 1 : -1, 0, 0] : [0, 0, dz > 0 ? 1 : -1]);
+                    if (v5 && wallN) {
+                        const px = F[b + 21], pz = F[b + 23], rx = Math.abs(px) > .5 ? v[0] / px : 1, rz = Math.abs(pz) > .5 ? v[2] / pz : 1;
+                        if ((I[b + 30] < K.rideKeep || I[b + 24] >= 0) && dx * F[b + 26] + dz * F[b + 27] > 0)
+                            wallN = [F[b + 26], 0, F[b + 27]];
+                        else if (Math.min(rx, rz) < .5)
+                            wallN = rx <= rz ? [px > 0 ? -1 : 1, 0, 0] : [0, 0, pz > 0 ? -1 : 1];
+                        else
+                            Math.sqrt(px * px + pz * pz) > K.wallSlow && (wallN = null)
+                    }
                     // Version 3: PolyTrack's downforce (along the car's floor, ~0.035 m/s^2 per km/h) also pulls in the air,
                     // so a jump at top speed barely left the road. From a jump or flip until landing it is given back.
                     if (v3 && inAir && !hits && (I[b + 1] || I[b + 5])) {
@@ -13831,7 +13851,7 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 cp > I[b + 11] && (F[b + 9] = K.boostFull);
                 I[b + 11] = cp;
                 if (c.reset) {
-                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0, I[b + 24] = -1, I[b + 25] = 1e4, I[b + 29] = 0;
+                    I[b + 1] = 0, I[b + 2] = -1, I[b + 3] = 0, I[b + 4] = 0, I[b + 5] = 0, I[b + 6] = -1, I[b + 10] = 0, I[b + 16] = 0, I[b + 17] = -1, I[b + 18] = 0, I[b + 24] = -1, I[b + 25] = 1e4, I[b + 29] = 0, I[b + 30] = 1e4;
                     F[b + 9] = K.boostFull
                 }
                 const throttle = live ? (c.up ? 1 : 0) - (c.down ? 1 : 0) : 0
@@ -13956,11 +13976,21 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
                 if (v2) {
                     // Boosting into a track wall (facing it within ~75 degrees, upright) climbs it: rise at climbV pressed
                     // lightly against it, upright with the nose a little up; once nothing pushes back, hop over the top.
-                    I[b + 25] < 1e4 && I[b + 25]++;
+                    I[b + 25] < 1e4 && I[b + 25]++, I[b + 30] < 1e4 && I[b + 30]++;
                     wallN && (F[b + 26] = wallN[0], F[b + 27] = wallN[2], I[b + 25] = 0);
                     const nx = F[b + 26], nz = F[b + 27], fh = Math.sqrt(fwd[0] * fwd[0] + fwd[2] * fwd[2])
                       , facing = fh > .1 ? (fwd[0] * nx + fwd[2] * nz) / fh : 0;
-                    I[b + 24] < 0 && boosting && wallN && facing < -.25 && up[1] > .5 && v[1] > -3 && (I[b + 24] = 0, I[b + 19]++);
+                    I[b + 24] < 0 && boosting && wallN && facing < (v5 ? -K.climbFace : -.25) && up[1] > .5 && v[1] > -3 && (I[b + 24] = 0, I[b + 19]++);
+                    if (v5 && wallN && I[b + 24] < 0) {
+                        const px = F[b + 21], pz = F[b + 23], s0 = Math.sqrt(px * px + pz * pz), vn0 = px * nx + pz * nz;
+                        if (s0 > 1 && vn0 < K.scrapeOut + .1 && -vn0 < K.climbFace * s0) {
+                            I[b + 30] = 0;
+                            const tl = Math.sqrt((px - vn0 * nx) ** 2 + (pz - vn0 * nz) ** 2), tx = (px - vn0 * nx) / tl, tz = (pz - vn0 * nz) / tl
+                              , out = Math.min(K.scrapeOut, Math.max(0, v[0] * nx + v[2] * nz)), along = Math.sqrt(s0 * s0 - out * out);
+                            v[0] = tx * along + nx * out, v[1] = Math.min(v[1], F[b + 22]), v[2] = tz * along + nz * out, w[0] = 0, w[2] = 0;
+                            fh > .1 && (w[1] = (fwd[2] * tx - fwd[0] * tz) * (fwd[0] * tx + fwd[2] * tz < 0 ? -1 : 1) / fh * K.scrapeTurn)
+                        }
+                    }
                     if (I[b + 24] >= 0) {
                         const vn = v[0] * nx + v[2] * nz;
                         if (!boosting || I[b + 25] > K.climbLose) {
