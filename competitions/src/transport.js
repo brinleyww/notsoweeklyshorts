@@ -44,6 +44,11 @@ const MAX_RESUME_BYTES = 4 * 1024 * 1024;
 const LOG_BYTES = 1024 * 1024;
 // A connection still waiting for its other end this long after re-linking is gone.
 const RELINK_MS = 30000;
+// Some firewalls let a WebSocket open and then hold its traffic back or cut it without a word, so
+// the socket still looks open. A quiet socket pings (the room answers "pong" itself, without waking),
+// and one that hears nothing for DEAD_MS is treated as dropped.
+const KEEPALIVE_MS = 5000;
+const DEAD_MS = 15000;
 // The game's unreliable channel may lose messages, so on it:
 // - an empty car batch (the organizer's game sends everyone one every 100 ms) or a car state the
 //   other end already has never goes;
@@ -203,22 +208,56 @@ class Mux {
         // This page's own car: session and resets of its last full update, its frames, its player id.
         this.own = null;
         this.mesh = new Mesh(this);
+        this.heardAt = 0;
+        this.pingAt = 0;
+        this.watchedAt = performance.now();
         this.connect(false);
     }
 
     connect(resume) {
         const ws = new (window.__nswsSocket || WebSocket)(socketBase() + "nsws/cup/mux?code=" + this.code + "&token=" + this.token + "&fan=1" + (resume ? "&resume=1&relink=1" : ""));
         this.ws = ws;
+        this.heardAt = performance.now();
         ws.binaryType = "arraybuffer";
         ws.addEventListener("open", () => {
+            this.heardAt = performance.now();
             if (resume) return;
             for (const c of this.controls.splice(0)) ws.send(c);
             if (this.queue.length) this.flush();
         });
-        ws.addEventListener("message", (e) => this.receive(e.data));
-        ws.addEventListener("close", () => {
-            if (this.ws === ws) this.dropped();
+        ws.addEventListener("message", (e) => {
+            if (this.ws === ws) this.heardAt = performance.now();
+            this.receive(e.data);
         });
+        ws.addEventListener("close", () => {
+            if (this.ws === ws && !ws._gone) this.dropped();
+        });
+    }
+
+    // On the ticker. The HTTPS fallback (ws.transport) watches its own requests.
+    watch(now) {
+        const ws = this.ws;
+        // A frozen or sleeping page judges from now on: what arrived meanwhile is still to be read.
+        if (now - this.watchedAt > 3000) this.heardAt = Math.max(this.heardAt, now);
+        this.watchedAt = now;
+        if (this.dead || ws.readyState !== WebSocket.OPEN || ws.transport === "https") return;
+        const quiet = now - this.heardAt;
+        if (quiet >= DEAD_MS) {
+            ws._gone = true;
+            // mod/nsws_socket.js's stale() also counts it towards using HTTPS on this network.
+            if (!ws.stale?.()) {
+                try {
+                    ws.close();
+                } catch {}
+            }
+            return this.dropped();
+        }
+        if (quiet >= KEEPALIVE_MS && now - this.pingAt >= KEEPALIVE_MS) {
+            this.pingAt = now;
+            try {
+                ws.send("ping");
+            } catch {}
+        }
     }
 
     // A socket that closes while links are in use reconnects and resumes them.
@@ -850,6 +889,10 @@ export function installTransport() {
         // Every page of a cup: the organizer (0) and the links the cup lists for its players.
         window.__nswsTicker.every(500, () => {
             for (const mux of muxes.values()) mux.mesh.tick(new Set([0, ...(window.__nswsFanIds?.keys() ?? [])]));
+        });
+        window.__nswsTicker.every(1000, () => {
+            const now = performance.now();
+            for (const mux of muxes.values()) mux.watch(now);
         });
     }
     // main.bundle.js: the organizer's own car update, and a pose of this page's car between updates.

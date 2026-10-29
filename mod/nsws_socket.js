@@ -8,6 +8,11 @@
 // Kept cheap on Cloudflare's free plan (PROXY.md "HTTPS fallback for sockets"):
 // - Only sockets that can't open use HTTPS. A network that blocked one is remembered for
 //   HTTP_REMEMBER_MS (the same key the main chat uses), checked again once per visit.
+// - Some firewalls let a WebSocket open and then hold back or cut its traffic. Two such breaks within
+//   BREAK_WINDOW_MS (a drop, or the page calling stale() on one that went silent) send this
+//   network's sockets over HTTPS too, remembered under BREAK_KEY. The once-a-visit check can't clear
+//   it, since there a socket opening proves nothing, and the main chat (which clears the shared key
+//   whenever its own socket starts) doesn't read it.
 // - Every socket a page has in one cup shares one session: one stream down, one stream up.
 // - Down: one streamed response every STREAM_MS, however busy the cup is. If the network's proxy
 //   holds responses back until they end, it switches to long-polling (and remembers that).
@@ -21,6 +26,11 @@
     const TRANSPORT_KEY = "_nswsChatHttpAt";
     const POLL_KEY = "_nswsSockPollAt";
     const NO_UPLOAD_KEY = "_nswsSockNoUploadAt";
+    const BREAK_KEY = "_nswsSockBreakAt";
+    const BREAKS_KEY = "_nswsSockBreaks";
+    const BREAK_WINDOW_MS = 10 * 60000;
+    // Every socket of a page drops at once in a proxy deploy or a Wi-Fi change: that is one break.
+    const BREAK_SAME_MS = 5000;
     const HTTP_REMEMBER_MS = 12 * 3600000;
     const WS_OPEN_TIMEOUT_MS = 8000;
     const FIRST_BYTE_MS = 5000;
@@ -56,6 +66,22 @@
     function recently(key) {
         const at = Number(storageGet(key));
         return at > 0 && Date.now() - at < HTTP_REMEMBER_MS;
+    }
+
+    function useHttp() {
+        return recently(TRANSPORT_KEY) || recently(BREAK_KEY);
+    }
+
+    function wsBroke() {
+        const now = Date.now();
+        let breaks = [];
+        try {
+            breaks = JSON.parse(storageGet(BREAKS_KEY) || "[]").filter((t) => Number.isFinite(t) && now - t < BREAK_WINDOW_MS);
+        } catch {}
+        if (breaks.length && now - breaks[breaks.length - 1] < BREAK_SAME_MS) return;
+        breaks.push(now);
+        storageSet(BREAKS_KEY, JSON.stringify(breaks));
+        if (breaks.length >= 2) storageSet(BREAK_KEY, String(now));
     }
 
     function apiBase() {
@@ -549,8 +575,8 @@
             this._wsFailed = false;
             const base = apiBase().replace(/^http/, "ws");
             this._path = this.url.startsWith(base) ? this.url.slice(base.length) : null;
-            if (this._path != null && recently(TRANSPORT_KEY)) {
-                probeWebSocket();
+            if (this._path != null && useHttp()) {
+                if (!recently(BREAK_KEY)) probeWebSocket();
                 void openHttp(this, this._path);
             } else {
                 this._tryWebSocket();
@@ -603,9 +629,25 @@
                 clearTimeout(timer);
                 if (!opened && this.readyState === NswsSocket.CONNECTING) return this._wsFailedToOpen();
                 if (this.readyState === NswsSocket.CLOSED) return;
+                if (this.readyState === NswsSocket.OPEN && e.code === 1006 && this._path != null) wsBroke();
                 this.readyState = NswsSocket.CLOSED;
                 this._fire("close", { code: e.code, reason: e.reason, wasClean: e.wasClean });
             });
+        }
+
+        // Not part of WebSocket: the page heard nothing on this socket for too long. A real WebSocket
+        // is closed as dropped (1006) and counts as a break; returns false over HTTPS, which watches
+        // its own requests.
+        stale() {
+            const ws = this._ws;
+            if (!ws || this.readyState !== NswsSocket.OPEN) return false;
+            if (this._path != null) wsBroke();
+            this.readyState = NswsSocket.CLOSED;
+            try {
+                ws.close();
+            } catch {}
+            setTimeout(() => this._fire("close", { code: 1006, reason: "", wasClean: false }), 0);
+            return true;
         }
 
         // The WebSocket never got going: carry on over HTTPS.

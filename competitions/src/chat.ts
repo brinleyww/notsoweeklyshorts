@@ -27,6 +27,8 @@ class Room {
   #retryAt = 0;
   #fails = 0;
   #keepAlive = 0;
+  #heard = 0;
+  #pinged = 0;
   #waiting: { resolve(): void; reject(e: Error): void; timer: number } | null = null;
 
   constructor(private changed: () => void) {}
@@ -64,10 +66,26 @@ class Room {
       if (secret) hello.host = secret;
       if (this.#ws !== ws) return;
       ws.send(JSON.stringify(hello));
-      this.#keepAlive = window.setInterval(() => ws.readyState === WebSocket.OPEN && !document.hidden && ws.send('ping'), KEEPALIVE_MS);
+      this.#heard = Date.now();
+      this.#pinged = 0;
+      this.#keepAlive = window.setInterval(() => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        if (document.hidden) return void (this.#pinged = 0);
+        // The room answers pings itself, so an unanswered one means a firewall is holding this socket's
+        // traffic (transport.js has the same check); stale() also moves the next socket to HTTPS.
+        const sock = ws as WebSocket & { stale?(): boolean; transport?: string };
+        if (this.#pinged && this.#heard < this.#pinged && sock.transport !== 'https') {
+          if (!sock.stale?.()) ws.close();
+          return;
+        }
+        this.#pinged = Date.now();
+        ws.send('ping');
+      }, KEEPALIVE_MS);
     };
     ws.onmessage = (e) => {
-      if (this.#ws !== ws || e.data === 'pong') return;
+      if (this.#ws !== ws) return;
+      this.#heard = Date.now();
+      if (e.data === 'pong') return;
       try {
         this.#server(JSON.parse(e.data));
       } catch {}

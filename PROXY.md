@@ -688,6 +688,14 @@ noticing. The main chat has its own fallback (see "Chat") and doesn't use this.
   that works, the page remembers it for 12 hours (`_nswsChatHttpAt`, the same key the main chat
   uses) and later sockets go straight to HTTPS. Once a visit the page quietly tries a WebSocket
   again, and if it opens, the next visit uses WebSockets.
+- **Sockets that open and then stop:** some filters let the WebSocket open and then hold back or
+  cut its traffic without closing it. The relay pings when it has heard nothing for 5 s (the room
+  answers "pong" itself) and treats 15 s of silence as a drop; the cup chat does the same with an
+  unanswered 30 s ping. Two such breaks (or 1006 drops) within 10 minutes, counted once per 5 s so
+  a deploy is one, set `_nswsSockBreakAt`, and the cup's sockets use HTTPS for 12 hours. The
+  once-a-visit check doesn't clear it (a socket opening proves nothing there), and the main chat
+  doesn't read it. Tested behind a fake firewall that stalls WebSockets after they open: on HTTPS
+  about 30 s after the stall, where the old page heard nothing for the rest of the test.
 - **The bridge:** `SocketBridge` (`proxy/src/bridge.js`, binding `BRIDGE`, migration `v6`), one per
   cup code. It opens the real WebSockets to `LobbyRoom` and `ChatRoom` on the page's behalf, so
   those rooms see ordinary sockets and needed no changes. `/nsws/sock/open` resolves a socket path
