@@ -591,6 +591,8 @@
         if (min) {
             hideSuggest();
             closePanel();
+            // Keys pressed while focus is inside the chat never reach the game.
+            root.contains(document.activeElement) && document.activeElement.blur();
         } else {
             unread = mentions = 0;
             updateUnread();
@@ -2643,6 +2645,7 @@
             updateBell();
         });
         updateBell();
+        for (const button of [minButton, fullButton, bellButton]) button.addEventListener("mousedown", (e) => e.preventDefault());
         bar.append(title, onlineLabel, unreadBadge, bellButton, fullButton, minButton);
 
         log = document.createElement("div");
