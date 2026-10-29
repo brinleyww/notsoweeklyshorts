@@ -79,12 +79,14 @@
     // "Space or Right click", for the tutorial and hints.
     function keysText(id) {
         if (touch.on()) return { jump: "JUMP", boost: "BOOST", roll: "ROLL", pitchUp: "NOSE UP" }[id] ?? "?";
+        if (window.__nswsGamepad?.recent()) return window.__nswsGamepad.names[id] ?? "?";
         const names = keys[id].filter(Boolean).map(keyName);
         return names.length ? names.join(" or ") : "(not bound)";
     }
     const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
     function gameKeysText(bind) {
         if (touch.on()) return ["the up arrow", "right", "the down arrow", "left"][bind] ?? "?";
+        if (window.__nswsGamepad?.recent()) return window.__nswsGamepad.driveNames[bind] ?? "?";
         const s = window.__nswsKeyBindings?.settings();
         const first = s?.getKeyBindings(bind).find(Boolean);
         return first ? keyName(first) : "?";
@@ -418,6 +420,15 @@
             hud.unmount();
             tutorial.leave();
             sound.stop();
+        },
+        // The controller's moves (mod/nsws_gamepad.js), every frame; only held while driving.
+        pad(ids) {
+            let changed = false;
+            for (const [id] of ACTIONS) {
+                const want = live() && ids.has(id);
+                want !== sources[id].has("pad") && (want ? sources[id].add("pad") : sources[id].delete("pad"), changed = true);
+            }
+            changed && sync();
         },
         settings: buildSettings,
         allKeys: () => ACTIONS.flatMap(([id]) => keys[id]).filter(k => k && !k.startsWith("Mouse")),
@@ -1152,6 +1163,12 @@
             row.appendChild(wrap);
             container.appendChild(row);
         }
+        const pad = document.createElement("div");
+        pad.className = "setting";
+        const padText = document.createElement("p");
+        padText.textContent = "Controller: A jump, B boost, X air roll, LB / RB roll, left stick up / down tilts in the air (RT / LT drive, Y respawn, View restart, Menu pause on every track)";
+        pad.appendChild(padText);
+        container.appendChild(pad);
         choiceRow(container, click, "W / S in the air", [["tm", "Trackmania"], ["rl", "RL"], ["again", "Re-press"]], pitchSetting, v => write(PITCH_KEY, v));
         choiceRow(container, click, "Rocket League effects", [["auto", "Auto"], ["high", "High"], ["low", "Low"], ["off", "Off"]], fxSetting, v => write(FX_KEY, v));
         choiceRow(container, click, "Rocket League sounds", [["off", "Off"], ["on", "On"]], () => soundOn() ? "on" : "off", v => write(SOUND_KEY, v));

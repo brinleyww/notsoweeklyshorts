@@ -42871,7 +42871,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     e.checkKeyBinding(t, KeyBind.VehicleAccelerate) ? this.up = !1 : e.checkKeyBinding(t, KeyBind.VehicleTurnRight) ? this.right = !1 : e.checkKeyBinding(t, KeyBind.VehicleBrake) ? this.down = !1 : e.checkKeyBinding(t, KeyBind.VehicleTurnLeft) && (this.left = !1)
                 }
                 ), "f")),
-                window.__nswsRocket?.controls(this)
+                window.__nswsRocket?.controls(this),
+                window.__nswsGamepad?.controls(this)
             }
             get up() {
                 return C.get(this, Rt, "f")
@@ -42942,6 +42943,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             dispose() {
                 window.__nswsRocket?.controlsGone(this),
+                window.__nswsGamepad?.controlsGone(this),
                 window.removeEventListener("keydown", C.get(this, zt, "f")),
                 window.removeEventListener("keyup", C.get(this, Nt, "f"))
             }
