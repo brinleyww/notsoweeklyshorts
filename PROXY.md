@@ -319,19 +319,32 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   delete anyone's), censors edits like new messages, keeps the original pings so an edit can't
   notify anyone, and allows 8 edits per player per 20 s. Reply quotes show the original's
   current text while it is still in the chat.
-- **Images and GIFs:** the (+) button, pasting or dropping a file attaches an image; the GIF
+- **Files, images and GIFs:** the (+) button, pasting or dropping a file attaches it; the GIF
   button opens a picker with Favourites and KLIPY's Trending and search. A message carries
-  `media: { f: id }` (an upload) or `media: { g: { url, prev, slug, w, h, title } }` (a KLIPY
-  GIF) and may have no text. Settings → Chat → "Images and GIFs" can hide other players'
-  images behind a "Show" button. The owner's moderation tools add "Ban this image/GIF", which
-  deletes every message showing it and refuses it for good.
+  `media: { f: { id, type, w, h, name?, size? } }` (an upload; only non-images have a name) or
+  `media: { g: { url, prev, slug, w, h, title } }` (a KLIPY GIF) and may have no text. Images show
+  inline; video and audio get a click-to-play player (`preload="none"`, so nothing loads until
+  someone presses play) above a download card; every other file is only a download card.
+  Settings → Chat → "Images, GIFs and videos" can hide other players' images, video and audio
+  behind a "Show" button. The owner's moderation tools add "Ban this image/GIF/video/audio/file",
+  which deletes every message showing it and refuses it for good.
 - **Uploads** go to `POST /nsws/chat/upload` (text/plain body: 4-byte header length, header JSON
-  `{v, key}`, then the file) and are stored in the main `ChatRoom` under the first 32 hex of their
-  SHA-256, in 1 MB parts, while a message shows them (or 15 minutes after upload). `GET
-  /nsws/chat/file/<id>` serves them with no Origin check, since `<img>` sends none. The page
-  redraws non-GIF images as WebP (at most 1600 px, which also drops photo metadata); GIFs go up
-  as they are. Limits: 6 MB GIFs, 4 MB other images, 5 uploads a minute and 40 a day per player,
-  200 a day per network. Cup chats take no images.
+  `{v, key, name}`, then the file) and are stored in the main `ChatRoom` under the first 32 hex of
+  their SHA-256, in 1 MB parts, while a message shows them (or 15 minutes after upload). `GET
+  /nsws/chat/file/<id>` serves them with no Origin check, since `<img>` sends none, and answers
+  `Range` requests (Safari only plays video that way). The page redraws non-GIF images as WebP (at
+  most 1600 px, which also drops photo metadata); GIFs and other files go up as they are. The bytes
+  decide what a file is: anything that sniffs as an image takes the checked image path whatever its
+  name. Other files (`proxy/src/chatfiles.js`, which the page also loads for a quick answer) are
+  refused if their name ends in a program or script extension (exe, bat, msi, apk, ps1, js, html,
+  svg, macro Office files, disk images, ...), if their bytes are a program (MZ, ELF, Mach-O, Java
+  class, `#!`), or if they are a zip with such a name inside (other archives can't be looked into).
+  Names are cleaned and censored. Video and audio are recognised by their bytes and served as
+  themselves; everything else as `application/octet-stream` with `Content-Disposition: attachment`.
+  All uploads keep `nosniff` and a sandbox CSP. Non-images are not checked by the model, so they
+  rely on the owner's delete and ban. Limits: 10 MB per file, 4 MB still images (the page's WebP
+  is far smaller), 5 uploads a minute and 40 a day per player, 200 a day per network. Cup chats
+  take no uploads.
 - **Checking uploads** (`proxy/src/chatmedia.js`, Workers AI binding `AI`): Clef-flash rates
   nudity/sexual content, hate symbols and gore, and Moondream reads out any text, which goes
   through the chat's slur filter (Clef doesn't flag slurs written in an image). A GIF is decoded

@@ -7,6 +7,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { censor, cleanText } from "./chatfilter.js";
 import { sniffImage, moderate } from "./chatmedia.js";
+import { checkFile, MAX_FILE_NAME } from "./chatfiles.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
@@ -71,10 +72,11 @@ const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 const CUP_MUTE_MS = 24 * 3600_000;
 const CUP_KEEP_MS = 24 * 3600_000;
 
-// Uploaded images and GIFs (main room only). A file is kept while a message shows it, and for
-// PENDING_MS after its upload so the message can follow. Stored in parts because a SQLite value
-// can be at most 2 MB.
-const MAX_UPLOAD = 6 * 1024 * 1024;
+// Uploaded images, GIFs and other files (main room only). A file is kept while a message shows it,
+// and for PENDING_MS after its upload so the message can follow. Stored in parts because a SQLite
+// value can be at most 2 MB. Only images are checked by the model; other files are served as
+// downloads (video and audio as themselves, so the chat can play them).
+const MAX_UPLOAD = 10 * 1024 * 1024;
 const MAX_STILL = 4 * 1024 * 1024;
 const PART = 1_000_000;
 const PENDING_MS = 15 * 60_000;
@@ -103,6 +105,22 @@ function duration(ms) {
     if (seconds < 60) return seconds + (seconds === 1 ? " second" : " seconds");
     const minutes = Math.ceil(seconds / 60);
     return minutes + (minutes === 1 ? " minute" : " minutes");
+}
+
+// What a message carries for an upload. Files that aren't images also have their name and size.
+function fileMedia(row) {
+    const f = { id: row.id, type: row.type, w: row.w, h: row.h };
+    if (row.name != null) {
+        f.name = row.name;
+        f.size = row.size;
+    }
+    return f;
+}
+
+function attachmentHeader(name) {
+    const plain = name.replace(/[^\x20-\x7e]|["\\]/g, "_");
+    const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+    return "attachment; filename=\"" + plain + "\"; filename*=UTF-8''" + encoded;
 }
 
 function jsonReply(data, status = 200) {
@@ -157,6 +175,11 @@ export class ChatRoom extends DurableObject {
             nick TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (msg, emoji, uid))`);
         this.sql.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, hash TEXT NOT NULL, type TEXT NOT NULL,
             w INTEGER NOT NULL, h INTEGER NOT NULL, size INTEGER NOT NULL, at INTEGER NOT NULL)`);
+        try {
+            this.sql.exec("ALTER TABLE files ADD COLUMN name TEXT");
+        } catch {
+            // Already there.
+        }
         this.sql.exec("CREATE TABLE IF NOT EXISTS file_parts (id TEXT NOT NULL, part INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (id, part))");
         this.sql.exec("CREATE TABLE IF NOT EXISTS verdicts (hash TEXT PRIMARY KEY, ok INTEGER NOT NULL, why TEXT, at INTEGER NOT NULL)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS uploads (at INTEGER NOT NULL, uid TEXT NOT NULL, ip TEXT NOT NULL)");
@@ -181,7 +204,7 @@ export class ChatRoom extends DurableObject {
         const ipHash = request.headers.get("X-Chat-Ip") || "";
         if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
             const path = new URL(request.url).pathname;
-            if (path.includes("/file/")) return this.file(path.slice(path.lastIndexOf("/") + 1));
+            if (path.includes("/file/")) return this.file(path.slice(path.lastIndexOf("/") + 1), request.headers.get("Range"));
             if (path.endsWith("/upload")) return this.upload(request, ipHash);
             return this.http(request, ipHash);
         }
@@ -356,30 +379,52 @@ export class ChatRoom extends DurableObject {
         return jsonReply({ replies });
     }
 
-    // GET /file/<id>: an uploaded image, while a message (or a pending upload) still has it.
-    file(id) {
-        const row = FILE_ID.test(id) ? this.sql.exec("SELECT type FROM files WHERE id = ?", id).toArray()[0] : null;
+    // GET /file/<id>: an upload, while a message (or a pending upload) still has it. Ranges are
+    // answered because Safari only plays video that way.
+    file(id, range) {
+        const row = FILE_ID.test(id) ? this.sql.exec("SELECT type, size, name FROM files WHERE id = ?", id).toArray()[0] : null;
         if (!row) return new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
-        const parts = this.sql.exec("SELECT data FROM file_parts WHERE id = ? ORDER BY part", id).toArray().map((r) => new Uint8Array(r.data));
-        return new Response(new Blob(parts), {
-            headers: {
-                "Content-Type": row.type,
-                // The id is the file's hash, so its bytes never change.
-                "Cache-Control": "public, max-age=31536000, immutable",
-                "X-Content-Type-Options": "nosniff",
-                "Content-Security-Policy": "default-src 'none'; sandbox",
-                "Access-Control-Allow-Origin": "*",
-            },
-        });
+        const headers = {
+            "Content-Type": row.type,
+            // The id is the file's hash, so its bytes never change.
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Access-Control-Allow-Origin": "*",
+            "Accept-Ranges": "bytes",
+        };
+        if (row.name != null && row.type === "application/octet-stream") headers["Content-Disposition"] = attachmentHeader(row.name);
+        let start = 0;
+        let end = row.size - 1;
+        const asked = /^bytes=(\d*)-(\d*)$/.exec(range ?? "");
+        if (asked && (asked[1] || asked[2])) {
+            if (asked[1]) {
+                start = Number(asked[1]);
+                if (asked[2]) end = Math.min(end, Number(asked[2]));
+            } else {
+                start = Math.max(0, row.size - Number(asked[2]));
+            }
+            if (start > end || start >= row.size) {
+                return new Response(null, { status: 416, headers: { ...headers, "Content-Range": "bytes */" + row.size } });
+            }
+        }
+        const first = Math.floor(start / PART);
+        const last = Math.floor(end / PART);
+        const parts = this.sql.exec("SELECT data FROM file_parts WHERE id = ? AND part BETWEEN ? AND ? ORDER BY part", id, first, last)
+            .toArray().map((r) => new Uint8Array(r.data));
+        if (start === 0 && end === row.size - 1) return new Response(new Blob(parts), { headers });
+        const body = new Blob(parts).slice(start - first * PART, end + 1 - first * PART);
+        return new Response(body, { status: 206, headers: { ...headers, "Content-Range": "bytes " + start + "-" + end + "/" + row.size } });
     }
 
-    // POST /upload: [4-byte little-endian header length][header JSON: v, key][file bytes]. The file
-    // is checked by the model, stored under its hash and answered with { file: { id, type, w, h } }.
-    // A message then shows it with media: { f: id }.
+    // POST /upload: [4-byte little-endian header length][header JSON: v, key, name][file bytes].
+    // Images are checked by the model; anything else needs a name and goes through checkFile. Stored
+    // under its hash and answered with { file: fileMedia(...) }. A message then shows it with
+    // media: { f: id }.
     async upload(request, ipHash) {
         if (request.method !== "POST") return jsonReply({ error: "Method not allowed" }, 405);
         const body = new Uint8Array(await request.arrayBuffer());
-        if (body.length < 8 || body.length > MAX_UPLOAD + 4096) return jsonReply({ error: "That file is too big (6 MB at most)." }, 413);
+        if (body.length < 8 || body.length > MAX_UPLOAD + 4096) return jsonReply({ error: "That file is too big (10 MB at most)." }, 413);
         const headerLength = new DataView(body.buffer).getUint32(0, true);
         if (headerLength > 4096 || 4 + headerLength >= body.length) return jsonReply({ error: "Bad request" }, 400);
         let header;
@@ -391,6 +436,7 @@ export class ChatRoom extends DurableObject {
         const me = await this.identify(header);
         if (!me) return jsonReply({ error: "Bad request" }, 400);
         const bytes = body.subarray(4 + headerLength);
+        if (bytes.length > MAX_UPLOAD) return jsonReply({ error: "That file is too big (10 MB at most)." }, 413);
         const now = Date.now();
         const until = this.mutedUntil(me.uid);
         if (until) return jsonReply({ error: "You're muted for " + duration(until - now) + "." });
@@ -398,10 +444,16 @@ export class ChatRoom extends DurableObject {
             const timeout = this.sql.exec("SELECT until FROM timeouts WHERE uid = ?", me.uid).toArray()[0];
             if (timeout && timeout.until > now) return jsonReply({ error: "You're timed out for " + duration(timeout.until - now) + "." });
         }
-        const info = sniffImage(bytes);
-        if (!info) return jsonReply({ error: "That isn't an image the chat can show (GIF, PNG, JPEG or WebP)." });
-        if (info.animated && info.type !== "image/gif") return jsonReply({ error: "Animated images have to be GIFs." });
-        if (info.type !== "image/gif" && bytes.length > MAX_STILL) return jsonReply({ error: "That image is too big (4 MB at most)." });
+        let info = sniffImage(bytes);
+        if (info) {
+            if (info.animated && info.type !== "image/gif") return jsonReply({ error: "Animated images have to be GIFs." });
+            if (info.type !== "image/gif" && bytes.length > MAX_STILL) return jsonReply({ error: "That image is too big (4 MB at most)." });
+        } else {
+            if (typeof header.name !== "string") return jsonReply({ error: "That isn't an image the chat can show (GIF, PNG, JPEG or WebP)." });
+            const checked = checkFile(bytes, censor(cleanText(header.name, MAX_FILE_NAME)));
+            if (checked.error) return jsonReply({ error: checked.error });
+            info = { type: checked.type, w: 0, h: 0, name: checked.name };
+        }
 
         this.sql.exec("DELETE FROM uploads WHERE at < ?", now - 86400_000);
         if (!me.owner) {
@@ -417,8 +469,8 @@ export class ChatRoom extends DurableObject {
         this.dropPendingFiles(now);
         const stored = this.sql.exec("SELECT id FROM files WHERE id = ?", id).toArray()[0];
         let verdict = this.sql.exec("SELECT ok, why FROM verdicts WHERE hash = ? AND at > ?", hash, now - VERDICT_MS).toArray()[0];
-        if (verdict && !verdict.ok) return jsonReply({ error: "That image isn't allowed in the chat (" + (verdict.why || "blocked") + ")." });
-        if (!verdict && !stored && !me.owner) {
+        if (verdict && !verdict.ok) return jsonReply({ error: "That " + (info.name != null ? "file" : "image") + " isn't allowed in the chat (" + (verdict.why || "blocked") + ")." });
+        if (!verdict && !stored && !me.owner && info.name == null) {
             const day = new Date(now).toISOString().slice(0, 10);
             const used = this.sql.exec("SELECT checks FROM ai_days WHERE day = ?", day).toArray()[0]?.checks ?? 0;
             if (used >= AI_CHECKS_PER_DAY || !this.env.AI) return jsonReply({ error: "Image uploads are paused for today. GIF search still works." });
@@ -437,14 +489,14 @@ export class ChatRoom extends DurableObject {
             if (!verdict.ok) return jsonReply({ error: "That image isn't allowed in the chat (" + verdict.why + ")." });
         }
         if (stored) {
-            this.sql.exec("UPDATE files SET at = ? WHERE id = ?", now, id);
+            this.sql.exec("UPDATE files SET at = ?, name = ? WHERE id = ?", now, info.name ?? null, id);
         } else {
-            this.sql.exec("INSERT INTO files (id, hash, type, w, h, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)", id, hash, info.type, info.w, info.h, bytes.length, now);
+            this.sql.exec("INSERT INTO files (id, hash, type, w, h, size, at, name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", id, hash, info.type, info.w, info.h, bytes.length, now, info.name ?? null);
             for (let i = 0, part = 0; i < bytes.length; i += PART, part++) {
                 this.sql.exec("INSERT INTO file_parts (id, part, data) VALUES (?, ?, ?)", id, part, bytes.slice(i, i + PART).buffer);
             }
         }
-        return jsonReply({ file: { id, type: info.type, w: info.w, h: info.h } });
+        return jsonReply({ file: fileMedia({ id, type: info.type, w: info.w, h: info.h, name: info.name ?? null, size: bytes.length }) });
     }
 
     // Drops files that no message shows: all of them, or only those in `ids`. Unless `now` is null,
@@ -479,8 +531,8 @@ export class ChatRoom extends DurableObject {
         if (media == null) return null;
         if (typeof media !== "object") return "Bad attachment.";
         if (media.f != null) {
-            const row = FILE_ID.test(media.f ?? "") ? this.sql.exec("SELECT id, type, w, h FROM files WHERE id = ?", media.f).toArray()[0] : null;
-            return row ? { f: { id: row.id, type: row.type, w: row.w, h: row.h } } : "That upload has expired. Attach it again.";
+            const row = FILE_ID.test(media.f ?? "") ? this.sql.exec("SELECT id, type, w, h, name, size FROM files WHERE id = ?", media.f).toArray()[0] : null;
+            return row ? { f: fileMedia(row) } : "That upload has expired. Attach it again.";
         }
         const g = media.g;
         const size = (n) => Number.isSafeInteger(n) && n > 0 && n <= 4096;
@@ -746,7 +798,7 @@ export class ChatRoom extends DurableObject {
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
-            if (msg.media != null && me.cup) return reply({ t: "err", text: "Images and GIFs only go in the main chat." });
+            if (msg.media != null && me.cup) return reply({ t: "err", text: "Files, images and GIFs only go in the main chat." });
             const media = this.mediaFor(msg.media);
             if (typeof media === "string") return reply({ t: "err", text: media });
             if (!text && !media) return;
@@ -802,7 +854,7 @@ export class ChatRoom extends DurableObject {
             this.sql.exec("DELETE FROM reactions WHERE uid = ? OR msg NOT IN (SELECT id FROM messages)", String(msg.uid ?? ""));
             this.broadcast({ t: "clear", uid: msg.uid });
         } else if (msg?.t === "ban" && Number.isSafeInteger(msg.id)) {
-            // Bans a message's image or GIF for good, and takes down every message showing it.
+            // Bans a message's file, image or GIF for good, and takes down every message showing it.
             const row = this.sql.exec("SELECT file, gif FROM messages WHERE id = ?", msg.id).toArray()[0];
             if (!row?.file && !row?.gif) return;
             const now = Date.now();

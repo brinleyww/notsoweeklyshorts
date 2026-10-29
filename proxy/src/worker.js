@@ -53,8 +53,8 @@ const OWNER_KEY_PREFIX = "nsws-owner:";
 const TRAFFIC_PREFIX = "/nsws/";
 const MAX_TRAFFIC_BODY = 4096;
 const MAX_CHAT_BODY = 6144;
-// A chat image or GIF upload: the 6 MB file plus a small header (see ChatRoom.upload).
-const MAX_CHAT_UPLOAD = 6 * 1024 * 1024 + 4096;
+// A chat upload: the 10 MB file plus a small header (see ChatRoom.upload).
+const MAX_CHAT_UPLOAD = 10 * 1024 * 1024 + 4096;
 // Big tracks reach ~470 KB; the stored payload must stay under Durable Object SQLite's 2 MB value limit.
 const MAX_TRACK_SYNC_BODY = 1_500_000;
 const MAX_ACCOUNT_BODY = 400_000;
@@ -1337,7 +1337,8 @@ async function handleChat(request, url, env, fromSite, origin) {
         if (!env.CHAT) return new Response("Not found", { status: 404 });
         if (doLimited()) return new Response("Busy", { status: 503, headers: { "Cache-Control": "no-store" } });
         try {
-            return await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/file/" + file[1]));
+            const range = request.headers.get("Range");
+            return await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/file/" + file[1], { headers: range ? { Range: range } : {} }));
         } catch (err) {
             noteDoError(err);
             return new Response("Busy", { status: 503, headers: { "Cache-Control": "no-store" } });

@@ -53202,7 +53202,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const _row = document.createElement("div");
                 _row.className = "setting";
                 const _label = document.createElement("p");
-                _label.textContent = "Images and GIFs";
+                _label.textContent = "Images, GIFs and videos";
                 _row.appendChild(_label);
                 const _wrap = document.createElement("div");
                 _wrap.className = "button-wrapper";

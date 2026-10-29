@@ -29,9 +29,10 @@
     const BUSY_CHECK_MS = 10 * 60000;
     const SEND_ABORT_MS = 15000;
     const EMOJI_URL = "mod/nsws_emoji.json";
-    // Uploaded images, served by the Worker after its model has checked them (proxy/src/chatmedia.js).
+    // Uploads, served by the Worker. Images are checked by its model first (proxy/src/chatmedia.js);
+    // other files only for programs (proxy/src/chatfiles.js).
     const FILE_URL = API + "nsws/chat/file/";
-    const MAX_UPLOAD = 6 * 1024 * 1024;
+    const MAX_UPLOAD = 10 * 1024 * 1024;
     // Other images are redrawn as WebP at most this many pixels across, which also drops their metadata.
     const STILL_SIDE = 1600;
     // GIF search comes from KLIPY, called straight from the page as their terms require. The key
@@ -83,6 +84,7 @@
     const STAR_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 3 2.7 5.6 6.1.8-4.4 4.3 1 6.1L12 17l-5.4 2.8 1-6.1-4.4-4.3 6.1-.8z"/></svg>';
     const STARRED_ICON = STAR_ICON.replace('fill="none"', 'fill="currentColor"');
     const ATTACH_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>';
+    const FILE_ICON = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
     const TAB_ICONS = [0x1f600, 0x1f44b, 0x1f43b, 0x1f354, 0x1f697, 0x26bd, 0x1f4a1, 0x1f523, 0x1f3c1];
 
     // A font only downloads once something on screen uses it. Credits: mod/fonts/LICENSES.txt.
@@ -243,6 +245,15 @@
 #nsws-chat .m>.media>.star:hover{background:var(--button-hover-color,#334b77);}
 #nsws-chat .m>.media>.reveal{padding:10px 14px;border:0;border-radius:6px;background:rgba(0,0,0,.25);color:inherit;font:inherit;font-size:.85em;cursor:pointer;}
 #nsws-chat .m>.media>.reveal:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat .m>.media>video{display:block;max-width:min(100%,360px);max-height:240px;border-radius:6px;background:#000;}
+#nsws-chat .m>.media>audio{display:block;width:min(300px,100%);}
+#nsws-chat .m>.media>.file{display:flex;align-items:center;gap:10px;width:min(300px,100%);box-sizing:border-box;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,.25);}
+#nsws-chat .m>.media>video+.file,#nsws-chat .m>.media>audio+.file{margin-top:4px;padding:4px 8px;}
+#nsws-chat .m>.media>.file>svg{flex-shrink:0;opacity:.75;}
+#nsws-chat .m>.media>.file>div{min-width:0;}
+#nsws-chat .m>.media>.file a{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#00a8fc;text-decoration:none;}
+#nsws-chat .m>.media>.file a:hover{text-decoration:underline;}
+#nsws-chat .m>.media>.file .size{font-size:.75em;opacity:.6;}
 #nsws-chat .m>.media>.gone{padding:8px 12px;border-radius:6px;background:rgba(0,0,0,.2);font-size:.8em;font-style:italic;opacity:.6;}
 #nsws-chat>form>button.icon-button{display:flex;align-items:center;justify-content:center;padding:0 6px;background:transparent;opacity:.75;}
 #nsws-chat>form>button.icon-button:hover,#nsws-chat>form>button.icon-button.on{background:transparent;opacity:1;}
@@ -252,6 +263,7 @@
 #nsws-chat>.attach{display:none;flex-shrink:0;align-items:center;gap:10px;padding:6px 6px 0 8px;font-size:14px;}
 #nsws-chat>.attach.on{display:flex;}
 #nsws-chat>.attach>img{width:48px;height:48px;flex-shrink:0;object-fit:cover;border-radius:6px;background:rgba(0,0,0,.25);}
+#nsws-chat>.attach>img.file{object-fit:none;}
 #nsws-chat>.attach>.what{flex:1;min-width:0;}
 #nsws-chat>.attach>.what>div{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
 #nsws-chat>.attach>.what>.state{font-size:.85em;opacity:.7;}
@@ -261,7 +273,7 @@
 #nsws-chat.has-attach>.suggest,#nsws-chat.has-attach>.emoji-panel,#nsws-chat.has-attach>.gif-panel{bottom:102px;}
 #nsws-chat.has-attach.has-reply>.suggest,#nsws-chat.has-attach.has-reply>.emoji-panel,#nsws-chat.has-attach.has-reply>.gif-panel{bottom:134px;}
 #nsws-chat.has-reply>.gif-panel{bottom:80px;}
-#nsws-chat.drop::after{content:"Drop an image or GIF to attach it";position:absolute;inset:36px 0 0 0;z-index:7;display:flex;align-items:center;justify-content:center;border:2px dashed rgba(255,255,255,.6);background:rgba(17,32,82,.85);font-size:15px;pointer-events:none;}
+#nsws-chat.drop::after{content:"Drop a file to attach it";position:absolute;inset:36px 0 0 0;z-index:7;display:flex;align-items:center;justify-content:center;border:2px dashed rgba(255,255,255,.6);background:rgba(17,32,82,.85);font-size:15px;pointer-events:none;}
 #nsws-chat>.gif-panel{position:absolute;right:6px;bottom:48px;z-index:3;display:none;flex-direction:column;width:min(420px,calc(100% - 12px));height:min(420px,calc(100% - 90px));background:var(--surface-tertiary-color,#192042);box-shadow:0 -4px 20px rgba(0,0,0,.5);}
 #nsws-chat>.gif-panel.on{display:flex;}
 #nsws-chat>.gif-panel>input{flex-shrink:0;margin:8px 8px 6px;padding:6px 8px;border:0;outline:0;background:var(--surface-secondary-color,#212b58);color:inherit;font:inherit;font-size:15px;user-select:text;}
@@ -1058,15 +1070,24 @@
         return storageGet(MEDIA_KEY) === "click" ? "click" : "show";
     }
 
+    // Uploads that aren't images carry their name.
+    function fileKind(f) {
+        if (f.name == null) return "image";
+        return /^video\//.test(f.type) ? "video" : /^audio\//.test(f.type) ? "audio" : "file";
+    }
+
     function mediaLabel(m) {
         if (m?.media?.g) return "GIF";
-        if (m?.media?.f) return m.media.f.type === "image/gif" ? "GIF" : "Image";
-        return "";
+        if (!m?.media?.f) return "";
+        const kind = fileKind(m.media.f);
+        if (kind === "image") return m.media.f.type === "image/gif" ? "GIF" : "Image";
+        return kind === "video" ? "Video" : kind === "audio" ? "Audio" : "File";
     }
 
     // A message as one line of text, for places that show no images (toasts, race previews, Cuppa).
     function lineText(m) {
-        const label = mediaLabel(m);
+        let label = mediaLabel(m);
+        if (m.media?.f?.name != null) label += ": " + m.media.f.name;
         if (!label) return m.text;
         return m.text ? m.text + " [" + label + "]" : "[" + label + "]";
     }
@@ -1085,7 +1106,65 @@
         img.style.aspectRatio = w + " / " + h;
     }
 
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + " B";
+        return bytes >= 1024 * 1024 ? (bytes / 1024 / 1024).toFixed(1) + " MB" : Math.round(bytes / 1024) + " KB";
+    }
+
+    // Every file gets a card that downloads it (the Worker sends it as an attachment). Video and audio
+    // also play in the chat; preload none, so nothing is fetched until someone presses play.
+    function fileElement(m) {
+        const f = m.media.f;
+        const kind = fileKind(f);
+        const src = FILE_URL + f.id;
+        const box = document.createElement("div");
+        box.className = "media";
+        const card = () => {
+            const row = document.createElement("div");
+            row.className = "file";
+            row.innerHTML = FILE_ICON;
+            const info = document.createElement("div");
+            const link = document.createElement("a");
+            link.href = src;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.download = f.name;
+            link.title = "Download " + f.name;
+            link.textContent = f.name;
+            const size = document.createElement("div");
+            size.className = "size";
+            size.textContent = formatSize(f.size);
+            info.append(link, size);
+            row.appendChild(info);
+            return row;
+        };
+        const show = () => {
+            box.textContent = "";
+            const player = document.createElement(kind);
+            player.controls = true;
+            player.preload = "none";
+            if (kind === "video") player.playsInline = true;
+            player.addEventListener("error", () => player.remove(), { once: true });
+            player.src = src;
+            box.append(player, card());
+        };
+        if (kind === "file") {
+            box.appendChild(card());
+        } else if (mediaMode() === "click" && m.uid !== me?.uid) {
+            const reveal = document.createElement("button");
+            reveal.type = "button";
+            reveal.className = "reveal";
+            reveal.textContent = "Show " + mediaLabel(m);
+            reveal.addEventListener("click", show);
+            box.appendChild(reveal);
+        } else {
+            show();
+        }
+        return box;
+    }
+
     function mediaElement(m) {
+        if (m.media.f && fileKind(m.media.f) !== "image") return fileElement(m);
         const box = document.createElement("div");
         box.className = "media";
         const source = mediaSource(m.media);
@@ -1244,20 +1323,27 @@
         return b;
     }
 
-    // GIFs keep their animation and bytes (and are checked frame by frame on the server). Anything
-    // else is redrawn as a still WebP, which also strips metadata such as where a photo was taken.
+    let fileRules = null;
+
+    // GIFs keep their animation and bytes (and are checked frame by frame on the server). Other
+    // images are redrawn as a still WebP, which also strips metadata such as where a photo was
+    // taken. Anything else goes up as it is, with its name: { blob, name }.
     async function prepareUpload(file) {
+        if (file.size > MAX_UPLOAD) throw new Error("Files can be up to 10 MB.");
         const head = new Uint8Array(await file.slice(0, 6).arrayBuffer());
-        if (String.fromCharCode(...head.slice(0, 4)) === "GIF8") {
-            if (file.size > MAX_UPLOAD) throw new Error("GIFs can be up to 6 MB.");
-            return file;
+        if (String.fromCharCode(...head.slice(0, 4)) === "GIF8") return { blob: file };
+        const name = file.name || "file";
+        let bitmap = null;
+        if (/^image\//.test(file.type)) {
+            try {
+                bitmap = await createImageBitmap(file);
+            } catch {}
         }
-        if (!/^image\//.test(file.type)) throw new Error("Only images and GIFs can be posted.");
-        let bitmap;
-        try {
-            bitmap = await createImageBitmap(file);
-        } catch {
-            throw new Error("Couldn't read that image.");
+        if (!bitmap) {
+            fileRules = fileRules || import(new URL("proxy/src/chatfiles.js", document.baseURI).href).catch(() => null);
+            const why = (await fileRules)?.blockedName(name);
+            if (why) throw new Error(why);
+            return { blob: file, name };
         }
         const scale = Math.min(1, STILL_SIDE / Math.max(bitmap.width, bitmap.height));
         const canvas = document.createElement("canvas");
@@ -1270,12 +1356,13 @@
         // Browsers without a WebP encoder hand back a PNG instead.
         if (!blob || blob.type !== "image/webp" || blob.size > 4 * 1024 * 1024) blob = await encode("image/jpeg", 0.85);
         if (!blob) throw new Error("Couldn't read that image.");
-        return blob;
+        return { blob };
     }
 
     // A text/plain body, like the chat's other requests, so there is no CORS preflight.
-    async function uploadBlob(blob) {
+    async function uploadBlob(blob, name) {
         const head = { v: visitorId() };
+        if (name != null) head.name = name;
         const key = await ownerKey();
         if (key) head.key = key;
         const header = new TextEncoder().encode(JSON.stringify(head));
@@ -1292,11 +1379,11 @@
         } catch {
             throw new Error("Couldn't upload that. Check your connection.");
         }
-        if (res.status === 413) throw new Error("That file is too big (6 MB at most).");
+        if (res.status === 413) throw new Error("That file is too big (10 MB at most).");
         const data = await res.json().catch(() => null);
         if (data?.error === "busy") {
             window.__nswsBusy?.fromData(data);
-            throw new Error("Images are paused until " + (window.__nswsBusy?.label() ?? "later") + ".");
+            throw new Error("Uploads are paused until " + (window.__nswsBusy?.label() ?? "later") + ".");
         }
         if (data?.error) throw new Error(data.error);
         if (!res.ok || !data?.file) throw new Error("Couldn't upload that. Try again.");
@@ -1306,16 +1393,21 @@
     async function attachFile(file) {
         if (!root) return;
         setAttachment(null);
-        const item = { name: file.name || "Pasted image", state: "working", url: null, file: null, error: null, send: false };
+        const image = /^image\//.test(file.type);
+        const item = { name: file.name || (image ? "Pasted image" : "file"), state: "working", url: null, plain: !image, file: null, error: null, send: false };
         try {
-            item.url = URL.createObjectURL(file);
+            if (image) item.url = URL.createObjectURL(file);
         } catch {}
         setAttachment(item);
         input?.focus();
         try {
-            const blob = await prepareUpload(file);
+            const { blob, name } = await prepareUpload(file);
             if (attachment !== item) return;
-            item.file = await uploadBlob(blob);
+            if (name != null && !item.plain) {
+                item.plain = true;
+                updateAttachBar();
+            }
+            item.file = await uploadBlob(blob, name);
             if (attachment !== item) return;
             item.state = "ready";
         } catch (err) {
@@ -1340,18 +1432,14 @@
         attachBar.classList.toggle("on", !!attachment);
         if (!attachment) return;
         const [thumb, what] = attachBar.children;
-        thumb.src = attachment.url || "";
+        thumb.classList.toggle("file", attachment.plain);
+        thumb.src = attachment.plain ? "data:image/svg+xml," + encodeURIComponent(FILE_ICON.replace("currentColor", "#fff")) : attachment.url || "";
         what.firstChild.textContent = attachment.name;
         const state = what.lastChild;
         state.classList.toggle("bad", attachment.state === "bad");
         state.textContent = attachment.state === "bad" ? attachment.error
             : attachment.state === "ready" ? "Ready to send"
-                : attachment.send ? "Uploading... it sends when it's ready" : "Uploading and checking...";
-    }
-
-    function imageFrom(files) {
-        for (const f of files || []) if (f && (/^image\//.test(f.type) || /\.gif$/i.test(f.name || ""))) return f;
-        return null;
+                : attachment.send ? "Uploading... it sends when it's ready" : attachment.plain ? "Uploading..." : "Uploading and checking...";
     }
 
     // Sends a GIF on its own, like Discord, leaving whatever is typed in the box.
@@ -1680,7 +1768,7 @@
         add("Mute 1h", { t: "mute", uid: m.uid, minutes: 60 });
         add("Mute 1d", { t: "mute", uid: m.uid, minutes: 1440 });
         add("Delete all theirs", { t: "clear", uid: m.uid });
-        if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : "image"), { t: "ban", id: m.id });
+        if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : mediaLabel(m).toLowerCase()), { t: "ban", id: m.id });
         el.after(tools);
     }
 
@@ -2720,17 +2808,16 @@
         sendButton.textContent = "Send";
         fileInput = document.createElement("input");
         fileInput.type = "file";
-        fileInput.accept = "image/*";
         fileInput.style.display = "none";
         fileInput.addEventListener("change", () => {
-            const file = imageFrom(fileInput.files);
+            const file = fileInput.files?.[0];
             fileInput.value = "";
             if (file) attachFile(file);
         });
         attachButton = document.createElement("button");
         attachButton.type = "button";
         attachButton.className = "icon-button";
-        attachButton.title = "Upload an image or GIF";
+        attachButton.title = "Upload a file";
         attachButton.innerHTML = ATTACH_ICON;
         attachButton.addEventListener("click", () => fileInput.click());
         gifButton = document.createElement("button");
@@ -2812,7 +2899,7 @@
             else input.blur();
         });
         input.addEventListener("paste", (e) => {
-            const file = imageFrom(e.clipboardData?.files);
+            const file = e.clipboardData?.files?.[0];
             if (!file) return;
             e.preventDefault();
             attachFile(file);
@@ -2832,9 +2919,8 @@
             if (!hasFiles(e)) return;
             e.preventDefault();
             e.stopPropagation();
-            const file = imageFrom(e.dataTransfer.files);
+            const file = e.dataTransfer.files?.[0];
             if (file) attachFile(file);
-            else addSystem("Only images and GIFs can be posted.");
         });
         input.addEventListener("input", onInput);
         input.addEventListener("click", updateSuggest);
@@ -2966,7 +3052,7 @@
             storageSet(FONT_KEY, id);
             applyFont();
         },
-        // Settings > Chat > "Images and GIFs".
+        // Settings > Chat > "Images, GIFs and videos".
         media: {
             modes: MEDIA_MODES,
             get: mediaMode,
