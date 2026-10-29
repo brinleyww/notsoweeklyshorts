@@ -13706,10 +13706,10 @@ async function PolyTrackPhysics(t={}){var r,e=t,n=(t,r)=>{throw r};r=self.locati
             // up. Pitch has its own bits so the page decides when Accelerate/Brake (always held) also tilt the car.
             // Brake in the air without the nose-up bit is Trackmania's air brake: the spin stops, the speed doesn't.
             const __rocketTracks = new Set([
-                "5287130bed6bf4859e4e39fcd3167df0eb0f47c4a5f4a8d2732b7a9fcbe7b8b8",
-                "225fad12335dadc12b60bfa1b31369b1026d8a084fd4670583870fb3b71f7ec0",
-                "f68a709a296a60f6e6f73a2da670f95aca424be0f2fda5d6b608ece71f339b7c",
-                "29d18d900712605f11afabf28a19b63b8e291d4156b8c246a048865193b591fa"
+                "4ec25597eb1d3fdd83bc463a9a6cf60c85b0792150763487c388c9cde43a6ea0",
+                "cbe44e38c0e7c7db1360dc80cf1aebeb219fc2baff237b2e6587221c1f0dfb93",
+                "75d1e81d2964e64a61163891f057f0f9cd9f825ed13ba5155664bb975fa2c8e7",
+                "bac8cd4a54aaa720038c0a2e1dc7ecb3349d4316b16707db8bc649b275ab714b"
             ]);
             const __rocketCars = new Map();
             const __RL = (() => {
