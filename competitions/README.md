@@ -254,6 +254,13 @@ How a bot drives (all on the organizer's page, `src/bots/worker`, built to `mod/
   ledges, short jumps), and runs A* through the checkpoints to the finish. That works on ordinary
   roads; tracks built on walls, loops or long jumps it can't find a way through, and the bots then sit
   the track out.
+- Rocket League tracks (week 11): keys are 16 bits, the game's RL keys (jump, boost, rolls, nose) above the five
+  driving bits (`Keys.rocket`). References keep them and are replayed with their recording's physics version
+  (`Reference.version`, also used when a bot starts over on a record's keys); the driver presses the reference's RL keys
+  where it is on the reference (no boost where it must slow); the input search also moves jump and boost presses.
+  Keyframes carry the boost / flip effect bits only when they change (`X_ROCKET`, chunk version 2; chunks without
+  them stay version 1), so pages draw bots' flames. Lab `botlab/t60_rocket.mjs`: bots match a boosting reference
+  (13.93 s) where they drove 18.68 s without its RL keys.
 - The driver (`driver.ts`) copies the reference's keys exactly while it is on the reference's state
   (the strongest bots replay the record until they leave it), otherwise follows the reference's steering
   input with lateral and heading correction, and caps speed from the reference's (times `pace` in corners

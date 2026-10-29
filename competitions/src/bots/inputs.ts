@@ -9,7 +9,7 @@ const KEYS: [number, string][] = [
   [16, 'r'],
 ];
 
-export function inputsText(keys: Uint8Array) {
+export function inputsText(keys: Uint16Array) {
   const lines: string[] = [];
   let prev = '';
   for (let f = 0; f < keys.length; f++) {

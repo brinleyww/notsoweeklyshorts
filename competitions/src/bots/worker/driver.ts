@@ -214,6 +214,7 @@ export class Driver {
         out.down = (kk & 4) !== 0;
         out.left = (kk & 8) !== 0;
         out.reset = false;
+        out.rocket = kk >> 5;
         this.why = out.down ? 'imitate' : '';
         return;
       }
@@ -325,6 +326,8 @@ export class Driver {
     out.up = up;
     out.down = down;
     out.reset = false;
+    // Rocket League keys (week 11) as the reference pressed them here, without boost where this car must slow.
+    out.rocket = (rk >> 5) & (r.wheels > 0 && vms > allow + 0.5 ? ~2 : ~0);
   }
 
   // How much of a run's own style may show here: none in a jump's run-up or just before a takeoff (where

@@ -8,6 +8,8 @@ export interface Keys {
   down: boolean;
   left: boolean;
   reset: boolean;
+  // Rocket League keys (week 11): 1 jump, 2 boost, 4 air roll, 8 roll left, 16 roll right, 32 nose down, 64 nose up.
+  rocket?: number;
 }
 
 export interface TrackObj {
@@ -24,7 +26,7 @@ export interface SimInternals {
     HEAPU8: Uint8Array;
     ccall(name: string, ret: string | null, types: string[], args: unknown[]): unknown;
   };
-  create(id: number, mountain: Float32Array, offset: unknown, track: TrackObj, start: unknown): void;
+  create(id: number, mountain: Float32Array, offset: unknown, track: TrackObj, start: unknown, rocketVersion?: number): void;
   step(car: { id: number }, keys: Keys): Uint8Array;
   Track: { new (environment: unknown, sun: unknown): TrackObj; fromSaveString(s: string): TrackObj | null };
   Recording: { deserialize(s: string): unknown };
@@ -77,9 +79,10 @@ export class Sim {
     return { ...t, track: out };
   }
 
-  newCar(t: TrackLoad): number {
+  // rocketVersion: the Rocket League physics a recording was driven with (a replay of it); else the latest.
+  newCar(t: TrackLoad, rocketVersion?: number): number {
     const id = nextCarId++;
-    this.I.create(id, t.mountain, t.offset, t.track, t.start);
+    this.I.create(id, t.mountain, t.offset, t.track, t.start, rocketVersion);
     return id;
   }
 

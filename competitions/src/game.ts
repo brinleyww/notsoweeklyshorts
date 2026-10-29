@@ -32,6 +32,8 @@ export interface CarState {
   steering: number;
   brakeLightEnabled: boolean;
   controls: Controls & { reset: boolean };
+  // Rocket League effects (week 11): 1 boosting, 2 flipping or jumping (the sim worker's control byte >> 6).
+  rocketFx?: number;
 }
 export interface Car {
   getTime(): { numberOfFrames: number };

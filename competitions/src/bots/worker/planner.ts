@@ -101,7 +101,7 @@ export interface JobSpec {
   bumper?: boolean;
 }
 
-type Copy = { keys: Uint8Array; n: number; own?: boolean };
+type Copy = { keys: Uint16Array; n: number; own?: boolean; version?: number };
 export function adoptPlan(job: Job, name: number, plan: BotPlan) {
   const notes = job.notes;
   if (job.name !== name || !notes || plan.ref !== refKey(notes.ref) || plan.notes.length !== notes.v.length || plan.sin.length !== notes.n) return;
@@ -140,10 +140,13 @@ function keysApart(plan: BotPlan, rec: Reference) {
 
 // One TAS-style edit of keys[a, b): a press or release of one key moved up to 20 frames, a tap of it added or
 // taken away (1-40 frames), or a stretch of it up to 80 frames taken out. Never across a respawn press.
-function mutateKeys(keys: Uint8Array, a: number, b: number, rand: () => number) {
+function mutateKeys(keys: Uint16Array, a: number, b: number, rand: () => number) {
   if (b - a < 2) return false;
   for (let i = a; i < b; i++) if (keys[i] & 16) return false;
-  const x = rand(), bit = x < 0.2 ? 1 : x < 0.4 ? 4 : x < 0.7 ? 2 : 8;
+  // A run that uses Rocket League keys also gets its jump (32) and boost (64) presses moved.
+  const rl = keys.subarray(a, b).some((v) => v >= 32);
+  const x = rand(), y = rl ? (x - 0.3) / 0.7 : x;
+  const bit = rl && x < 0.3 ? (x < 0.15 ? 32 : 64) : y < 0.2 ? 1 : y < 0.4 ? 4 : y < 0.7 ? 2 : 8;
   const set = (i: number, on: boolean) => {
     if (i < 0 || i >= keys.length) return;
     keys[i] = on ? keys[i] | bit : keys[i] & ~bit;
@@ -195,7 +198,7 @@ function mutateKeys(keys: Uint8Array, a: number, b: number, rand: () => number) 
 }
 
 // Keys driven as they are from frame `at` to `until` (going over a run: an edit of the bot's own keys).
-type Force = { keys: Uint8Array; at: number; until: number; trade?: boolean };
+type Force = { keys: Uint16Array; at: number; until: number; trade?: boolean };
 
 // The bot's own keys from `at` to `until` with one stretch of braking or of no throttle (on its own, not a
 // respawn) shortened at either end or left out: braking becomes throttle, a lift holds throttle. Or (now
@@ -342,7 +345,7 @@ export class Job {
   runStart = 0;
   // Next step happens at this time.
   t = 0;
-  keys = new Uint8Array(1 << 16);
+  keys = new Uint16Array(1 << 16);
   out: Out[] = [];
   cutNext = true;
   committed = 0;
@@ -573,9 +576,9 @@ export class Job {
   }
 
   // keys[0..n) = src's (a run gone over from a snapshot: what came before it must be that run's own keys).
-  keysUpTo(src: Uint8Array, n: number) {
+  keysUpTo(src: Uint16Array, n: number) {
     if (this.keys.length < n + 1024) {
-      const g = new Uint8Array(Math.max(this.keys.length * 2, n + 1024));
+      const g = new Uint16Array(Math.max(this.keys.length * 2, n + 1024));
       g.set(this.keys);
       this.keys = g;
     }
@@ -584,11 +587,11 @@ export class Job {
 
   log(t: number, k: Keys) {
     if (t >= this.keys.length) {
-      const n = new Uint8Array(Math.max(this.keys.length * 2, t + 1024));
+      const n = new Uint16Array(Math.max(this.keys.length * 2, t + 1024));
       n.set(this.keys);
       this.keys = n;
     }
-    this.keys[t] = (k.up ? 1 : 0) | (k.right ? 2 : 0) | (k.down ? 4 : 0) | (k.left ? 8 : 0) | (k.reset ? 16 : 0);
+    this.keys[t] = (k.up ? 1 : 0) | (k.right ? 2 : 0) | (k.down ? 4 : 0) | (k.left ? 8 : 0) | (k.reset ? 16 : 0) | ((k.rocket ?? 0) << 5);
   }
 
   get live() {
@@ -602,6 +605,7 @@ const keysOf = (b: number, k: Keys) => {
   k.down = (b & 4) !== 0;
   k.left = (b & 8) !== 0;
   k.reset = (b & 16) !== 0;
+  k.rocket = b >> 5;
   return k;
 };
 
@@ -644,7 +648,7 @@ export class Planner {
   #fw = new Float32Array(3);
   #up = new Float32Array(3);
   #vel = new Float32Array(3);
-  #k: Keys = { up: false, right: false, down: false, left: false, reset: false };
+  #k: Keys = { up: false, right: false, down: false, left: false, reset: false, rocket: 0 };
   // A job changed cars since the last snapshot: older snapshots no longer hold its car.
   #carChanged = false;
   onCommit: (job: Job, outs: Out[]) => void = () => {};
@@ -811,7 +815,7 @@ export class Planner {
       job.p.pace = Math.min(1, job.basePace + (1 - job.basePace) * g);
       job.slips = 1 - g;
     }
-    job.car = this.sim.newCar(copy && !copy.own ? this.full : this.track);
+    job.car = copy && !copy.own ? this.sim.newCar(this.full, copy.version) : this.sim.newCar(this.track);
     job.sin.fill(-1);
     job.restartNow = false;
     job.fix = null;
@@ -1241,7 +1245,7 @@ export class Planner {
     // A try is given up once it is behind its run's place (it can't finish sooner), and, most times, once it is
     // back on the run's exact place (it can only finish when the run does; now and then it is driven on, for a
     // run as fast and further from the record).
-    const drive = (keys: Uint8Array, a: number, end: number, trace: Float32Array | null, out: Float32Array | null, drift = false, changed = 0) => {
+    const drive = (keys: Uint16Array, a: number, end: number, trace: Float32Array | null, out: Float32Array | null, drift = false, changed = 0) => {
       let same = 0, best = Math.floor(a / TRACE_EVERY);
       const d2at = (j: number) => {
         const ex = r.x - trace![j * 3], ey = r.y - trace![j * 3 + 1], ez = r.z - trace![j * 3 + 2];
@@ -1494,7 +1498,7 @@ export class Planner {
     }
     k.reset = false;
     if (!job.hasPrev) {
-      keysOf(ref.keys[0] & 15, k);
+      keysOf(ref.keys[0] & ~16, k);
       return;
     }
     readRaw(job.prev, r);
@@ -1516,7 +1520,7 @@ export class Planner {
       return;
     }
     if (st.openUntil >= t) {
-      keysOf(ref.keys[Math.min(ref.n - 1, st.openFrom + (t - st.openAt))] & 15, k);
+      keysOf(ref.keys[Math.min(ref.n - 1, st.openFrom + (t - st.openAt))] & ~16, k);
       return;
     }
     job.driver.decide(t, r, this.#vel, s, this.#fw, st, k);
@@ -1709,7 +1713,7 @@ export class Planner {
   #rebuild(job: Job, to: number, vary = true) {
     this.stats.rebuilds++;
     if (job.car) this.sim.deleteCar(job.car);
-    job.car = this.sim.newCar(job.copy && !job.copy.own ? this.full : this.track);
+    job.car = job.copy && !job.copy.own ? this.sim.newCar(this.full, job.copy.version) : this.sim.newCar(this.track);
     this.#carChanged = true;
     const k = this.#k;
     let buf: Uint8Array | null = null;

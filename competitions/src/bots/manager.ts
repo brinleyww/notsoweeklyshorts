@@ -52,7 +52,7 @@ const NOTES_KEY = 'nsws-cuppa-notes:';
 const NOTES_KEEP = 24;
 const NOTES_PER_TRACK = 32;
 // Each bot's own best run per track (worker/planner.ts, rethink), for this page's session only: keys are
-// ~1 byte a frame, too big to keep for every track.
+// 2 bytes a frame, too big to keep for every track.
 const PLAN_TRACKS = 8;
 // Tips kept per track (worker/shared.ts holds as many per worker).
 const MAX_TIPS = 400;
@@ -151,7 +151,7 @@ export class BotManager {
   #tips = new Map<string, Tip[]>();
   // Rounds each bot (by name) has raced per track in this page's session: practice makes it better there.
   #raced = new Map<string, Map<number, number>>();
-  #inputs = new Map<string, Uint8Array>();
+  #inputs = new Map<string, Uint16Array>();
 
   constructor(private host: BotHost) {}
 
@@ -614,7 +614,7 @@ export class BotManager {
   // are kept for later cups.
   #planned(m: Extract<FromWorker, { b: 'plan' }>) {
     const t = this.#track, p = m.plan;
-    if (!t || t.key !== m.key || !(p?.notes instanceof Float32Array) || !(p.keys instanceof Uint8Array) || !(p.sin instanceof Int32Array) || !(p.n > 0)) return;
+    if (!t || t.key !== m.key || !(p?.notes instanceof Float32Array) || !(p.keys instanceof Uint16Array) || !(p.sin instanceof Int32Array) || !(p.n > 0)) return;
     let store = this.#plans.get(t.trackId);
     if (!store) {
       this.#plans.set(t.trackId, (store = new Map()));
@@ -826,7 +826,7 @@ export class BotManager {
       b.rate = m.rate;
     } else if (m.b === 'result') {
       b.result = m;
-      if (m.inputs instanceof Uint8Array && m.finish != null && this.#plan) {
+      if (m.inputs instanceof Uint16Array && m.finish != null && this.#plan) {
         const key = `${this.#plan.n}:${b.u}`;
         this.#inputs.delete(key);
         this.#inputs.set(key, m.inputs);

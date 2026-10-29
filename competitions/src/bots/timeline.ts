@@ -285,6 +285,7 @@ export class BotTimeline {
       steering: k.steering,
       brakeLightEnabled: !!(c & 32),
       controls: { up: !!(c & 1), right: !!(c & 2), down: !!(c & 4), left: !!(c & 8), reset: !!(c & 16) },
+      rocketFx: k.rocketFx,
     });
   }
 

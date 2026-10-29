@@ -30,10 +30,13 @@ export class Reference {
   readonly ux: Float32Array;
   readonly uy: Float32Array;
   readonly uz: Float32Array;
-  // km/h, steering input (-1..1), keys (1 up, 2 right, 4 down, 8 left, 16 reset), wheels on the ground, next checkpoint.
+  // km/h, steering input (-1..1), keys (1 up, 2 right, 4 down, 8 left, 16 reset, Rocket League keys << 5), wheels on the
+  // ground, next checkpoint.
   readonly speed: Float32Array;
   readonly steer: Float32Array;
-  readonly keys: Uint8Array;
+  readonly keys: Uint16Array;
+  // The Rocket League physics version its recording was driven with (undefined: none, or an explored route).
+  version?: number;
   readonly wheels: Uint8Array;
   readonly cp: Uint16Array;
   readonly arc: Float32Array;
@@ -67,7 +70,7 @@ export class Reference {
     this.steer = f();
     this.arc = f();
     this.curv = f();
-    this.keys = new Uint8Array(n);
+    this.keys = new Uint16Array(n);
     this.wheels = new Uint8Array(n);
     this.cp = new Uint16Array(n);
     this.minY = Infinity;
@@ -84,7 +87,8 @@ export class Reference {
     if (!rec || !(frames > 0) || frames > 1_200_000) return null;
     const controls = new sim.I.Controls(rec);
     const ref = new Reference(id, kind, rank, frames);
-    const car = sim.newCar(t);
+    const version = (ref.version = (rec as { rocketVersion?: number }).rocketVersion);
+    const car = sim.newCar(t, version);
     const r = newRaw();
     const fw = new Float32Array(3), up = new Float32Array(3), vel = new Float32Array(3);
     let finished = -1;
@@ -110,7 +114,7 @@ export class Reference {
         ref.uz[i] = up[2];
         ref.speed[i] = r.speed;
         ref.steer[i] = sim.steerInput(car);
-        ref.keys[i] = (k.up ? 1 : 0) | (k.right ? 2 : 0) | (k.down ? 4 : 0) | (k.left ? 8 : 0) | (k.reset ? 16 : 0);
+        ref.keys[i] = (k.up ? 1 : 0) | (k.right ? 2 : 0) | (k.down ? 4 : 0) | (k.left ? 8 : 0) | (k.reset ? 16 : 0) | ((k.rocket ?? 0) << 5);
         ref.wheels[i] = r.wheels;
         ref.cp[i] = r.cp;
         if (r.cp !== lastCp) {

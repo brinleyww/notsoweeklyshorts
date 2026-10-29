@@ -26,9 +26,14 @@ export interface Keyframe {
   steering: number;
   // 1 up, 2 right, 4 down, 8 left, 16 reset, 32 brake light.
   controls: number;
+  // Rocket League effects: 1 boosting, 2 flipping or jumping.
+  rocketFx: number;
 }
 
+// A chunk with Rocket League effects in it (X_ROCKET) is version 2, so older pages turn it down instead of misreading
+// it; every other chunk is still version 1.
 const VERSION = 1;
+const VERSION_ROCKET = 2;
 const POS = 200;
 const QUAT = 32767;
 const SPEED = 10;
@@ -45,6 +50,7 @@ const X_RESPAWN = 8;
 const X_CP = 16;
 const X_FINISH = 32;
 const X_IMPULSES = 64;
+const X_ROCKET = 128;
 
 const B_BRAKE = 16;
 const B_RESET = 32;
@@ -86,6 +92,7 @@ export function decodeRaw(raw: Uint8Array): Omit<Keyframe, 'f' | 'cut'> {
   const skid = four();
   const steering = f32(i);
   const controls = raw[i + 4] & 63;
+  const rocketFx = raw[i + 4] >> 6;
   return {
     frames,
     speedKmh,
@@ -102,6 +109,7 @@ export function decodeRaw(raw: Uint8Array): Omit<Keyframe, 'f' | 'cut'> {
     skid,
     steering,
     controls,
+    rocketFx,
   };
 }
 
@@ -160,6 +168,7 @@ class Predictor {
   speed = 0;
   wheels = 0;
   steer = 0;
+  rocketFx = 0;
   susp = [0, 0, 0, 0];
   rot = [0, 0, 0, 0];
   // The last two keyframes since the latest cut, as integers.
@@ -201,6 +210,7 @@ class Predictor {
 
 export class KeyframeEncoder {
   #count = 0;
+  #rocket = false;
   #p = new Predictor();
   #a = new Bytes();
   #b = new Bytes();
@@ -235,6 +245,7 @@ export class KeyframeEncoder {
     if (s.nextCheckpointIndex !== p.cp) x |= X_CP;
     if (finish !== p.finish) x |= X_FINISH;
     if (imps.length) x |= X_IMPULSES;
+    if (s.rocketFx !== p.rocketFx) x |= X_ROCKET;
     if (x) {
       b |= B_EXT;
       this.#x.byte(x);
@@ -246,6 +257,7 @@ export class KeyframeEncoder {
         ext.int(imps.length);
         for (const v of imps) ext.int(v);
       }
+      if (x & X_ROCKET) ext.int(s.rocketFx), (this.#rocket = true);
     }
     this.#b.byte(b);
     for (let w = 0; w < 4; w++) if (skid[w] !== SKID) this.#skid.byte(skid[w]);
@@ -278,6 +290,7 @@ export class KeyframeEncoder {
     p.speed = speed;
     p.wheels = s.wheels;
     p.steer = steer;
+    p.rocketFx = s.rocketFx;
     p.push(f, cut, pos, quat);
     this.#count++;
   }
@@ -285,7 +298,8 @@ export class KeyframeEncoder {
   take(): Uint8Array | null {
     if (!this.#count) return null;
     const head = new Bytes();
-    head.byte(VERSION);
+    head.byte(this.#rocket ? VERSION_ROCKET : VERSION);
+    this.#rocket = false;
     head.int(this.#count);
     const parts = [head, this.#a, this.#b, this.#x, this.#ext, this.#speed, this.#pos, this.#quat, this.#steer, this.#susp, this.#rot, this.#skid];
     const out = new Uint8Array(parts.reduce((n, p) => n + p.n, 0));
@@ -303,7 +317,8 @@ export class KeyframeEncoder {
 
 export function decodeChunk(bytes: Uint8Array): Keyframe[] {
   const r = new Reader(bytes);
-  if (r.byte() !== VERSION) throw new Error('Unknown bot chunk version');
+  const version = r.byte();
+  if (version !== VERSION && version !== VERSION_ROCKET) throw new Error('Unknown bot chunk version');
   const n = r.int();
   if (!(n >= 0 && n <= bytes.length)) throw new Error('Bad bot chunk');
   const a = new Uint8Array(n),
@@ -317,7 +332,7 @@ export function decodeChunk(bytes: Uint8Array): Keyframe[] {
   // Extended fields first, in keyframe order, as the encoder wrote them.
   const ext = [];
   for (let k = 0; k < n; k++) {
-    const e = { f: GRID_MS, frames: 0, cp: 0, finish: 0, imps: [] as number[] };
+    const e = { f: GRID_MS, frames: 0, cp: 0, finish: 0, imps: [] as number[], rocketFx: -1 };
     if (x[k] & X_F) e.f = r.int();
     if (x[k] & X_FRAMES) e.frames = r.int();
     if (x[k] & X_CP) e.cp = r.int();
@@ -327,6 +342,7 @@ export function decodeChunk(bytes: Uint8Array): Keyframe[] {
       if (count < 0 || count > 4) throw new Error('Bad bot chunk');
       for (let j = 0; j < count; j++) e.imps.push(r.int());
     }
+    if (x[k] & X_ROCKET) e.rocketFx = r.int();
     ext.push(e);
   }
   const speeds = new Int32Array(n);
@@ -356,6 +372,7 @@ export function decodeChunk(bytes: Uint8Array): Keyframe[] {
     const pos = [0, 1, 2].map((j) => p.pos(f, cut, j) + posR[k * 3 + j]);
     const quat = [0, 1, 2, 3].map((j) => p.quat(f, cut, j) + quatR[k * 4 + j]);
     const steer = p.steer + steers[k];
+    const rocketFx = e.rocketFx >= 0 ? e.rocketFx : p.rocketFx;
     const susp = [0, 0, 0, 0],
       rot = [0, 0, 0, 0],
       skid = [1, 1, 1, 1];
@@ -385,6 +402,7 @@ export function decodeChunk(bytes: Uint8Array): Keyframe[] {
       skid: skid as Keyframe['skid'],
       steering: steer / FINE,
       controls: (a[k] >> 4) | (b[k] & B_RESET ? 16 : 0) | (b[k] & B_BRAKE ? 32 : 0),
+      rocketFx,
     });
     p.frames = frames;
     p.started = started;
@@ -394,6 +412,7 @@ export function decodeChunk(bytes: Uint8Array): Keyframe[] {
     p.speed = speed;
     p.wheels = wheels;
     p.steer = steer;
+    p.rocketFx = rocketFx;
     p.push(f, cut, pos, quat);
   }
   return out;

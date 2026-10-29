@@ -385,7 +385,7 @@ export class BotView {
         // Leaving the track: one last still state, so a hidden car doesn't keep its engine running.
         const last = this.#last.get(b.pid);
         if (was === this.#frameNo - 1 && last)
-          this.native.botState?.(g, b.pid, { ...last, speedKmh: 0, wheelDeltaRotation: [0, 0, 0, 0], wheelSkidInfo: [0, 0, 0, 0], collisionImpulses: [], brakeLightEnabled: false, controls: { up: false, right: false, down: false, left: false, reset: false } }, false);
+          this.native.botState?.(g, b.pid, { ...last, speedKmh: 0, wheelDeltaRotation: [0, 0, 0, 0], wheelSkidInfo: [0, 0, 0, 0], collisionImpulses: [], brakeLightEnabled: false, rocketFx: 0, controls: { up: false, right: false, down: false, left: false, reset: false } }, false);
         this.native.botKeys?.(g, b.pid, b.pid, null, 0);
         continue;
       }
