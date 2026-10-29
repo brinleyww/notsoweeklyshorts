@@ -3484,7 +3484,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     h.set(this, null),
                     this.rocket = [[], [], [], [], [], [], []],
                     // The Rocket League physics version this run was driven with (the sim worker's __RL.version for a new one).
-                    this.rocketVersion = e?.rocketVersion ?? 6,
+                    this.rocketVersion = e?.rocketVersion ?? 7,
                     this.rocketTrack = !1,
                     null != e && (f.set(this, a, e.up, "f"),
                     f.set(this, s, e.right, "f"),
