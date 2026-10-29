@@ -59,6 +59,7 @@
     const MAX_SUGGEST = 12;
     // Messages of only emoji, up to this many, are shown large.
     const JUMBO_MAX = 27;
+    const LINK = /\bhttps?:\/\/[^\s<>"]+/gi;
     const TITLE_MARK = "(@) ";
     const MIN_W = 260;
     const MIN_H = 180;
@@ -132,6 +133,8 @@
 #nsws-chat .m.pinged{background:rgba(240,178,50,.12);box-shadow:inset 3px 0 0 #f0b232;}
 #nsws-chat .m.pinged:hover,#nsws-chat .m.pinged.open{background:rgba(240,178,50,.18);}
 #nsws-chat .mention{padding:0 2px;background:rgba(88,101,242,.35);color:#d4d8ff;}
+#nsws-chat a.link{color:#00a8fc;text-decoration:none;cursor:pointer;}
+#nsws-chat a.link:hover{text-decoration:underline;}
 #nsws-chat .m>.actions{position:absolute;top:-14px;right:10px;z-index:1;display:none;align-items:center;gap:1px;padding:2px;border-radius:6px;background:var(--surface-color,#28346a);box-shadow:0 2px 10px rgba(0,0,0,.45);}
 #nsws-chat .m:first-child>.actions{top:2px;}
 #nsws-chat .m:hover>.actions,#nsws-chat .m.open>.actions{display:flex;}
@@ -705,6 +708,49 @@
     }
 
     function appendText(el, text, pings) {
+        let at = 0;
+        for (const match of text.matchAll(LINK)) {
+            const raw = linkEnd(match[0]);
+            const link = linkElement(raw);
+            if (!link) continue;
+            appendMentions(el, text.slice(at, match.index), pings);
+            el.appendChild(link);
+            at = match.index + raw.length;
+        }
+        appendMentions(el, text.slice(at), pings);
+    }
+
+    // Punctuation after a link usually ends the sentence, and a ")" closes a bracket opened before the link.
+    function linkEnd(raw) {
+        for (;;) {
+            const trimmed = raw.replace(/[.,!?;:'*_~]+$/, "");
+            if (!trimmed.endsWith(")") || trimmed.split("(").length >= trimmed.split(")").length) return trimmed;
+            raw = trimmed.slice(0, -1);
+        }
+    }
+
+    // The link shows exactly what was typed; the hover title shows where it really goes (punycode for look-alike domains).
+    // Links with a user name ("https://google.com@evil.com") stay plain text.
+    function linkElement(raw) {
+        let url;
+        try {
+            url = new URL(raw);
+        } catch {
+            return null;
+        }
+        if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
+        const a = document.createElement("a");
+        a.className = "link";
+        a.href = url.href;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        a.title = url.href;
+        a.textContent = raw;
+        return a;
+    }
+
+    function appendMentions(el, text, pings) {
+        if (!text) return;
         const nicks = (pings || []).map((p) => p.nick).filter(Boolean).sort((a, b) => b.length - a.length);
         if (!nicks.length) return el.append(text);
         const re = new RegExp("@(?:" + nicks.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|") + ")", "giu");
@@ -1850,7 +1896,7 @@
         if (pingsMe(m)) el.classList.add("pinged");
         // Touch screens have no hover, so a tap opens the action bar.
         el.addEventListener("click", (e) => {
-            if (lastPointer !== "touch" || e.target.closest("button")) return;
+            if (lastPointer !== "touch" || e.target.closest("button, a")) return;
             const open = !el.classList.contains("open");
             for (const other of log.querySelectorAll(".m.open")) other.classList.remove("open");
             el.classList.toggle("open", open);
