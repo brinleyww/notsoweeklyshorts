@@ -3441,7 +3441,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     h.set(this, null),
                     this.rocket = [[], [], [], [], [], [], []],
                     // The Rocket League physics version this run was driven with (the sim worker's __RL.version for a new one).
-                    this.rocketVersion = e?.rocketVersion ?? 5,
+                    this.rocketVersion = e?.rocketVersion ?? 6,
                     this.rocketTrack = !1,
                     null != e && (f.set(this, a, e.up, "f"),
                     f.set(this, s, e.right, "f"),
@@ -3650,7 +3650,7 @@ window.__nswsAutoGhostNote = function(trackId) {
               , r = __webpack_require__.n(i)
               , a = __webpack_require__(6314)
               , s = __webpack_require__.n(a)()(r());
-            s.push([module.id, ".input-visualizer-ui {\n    position: absolute;\n    left: var(--safe-area-horizontal);\n    bottom: 106px;\n    margin: 20px;\n    padding: 0;\n    --size: 96px;\n    width: calc(var(--size) * 3);\n    height: calc(var(--size) * 2);\n    opacity: 0.9;\n}\n\n.input-visualizer-ui > div {\n    position: absolute;\n    margin: 0;\n    padding: 0;\n    width: var(--size);\n    height: var(--size);\n    background-color: var(--surface-color);\n}\n\n.input-visualizer-ui > .arrow-up {\n    left: var(--size);\n    top: 0;\n}\n\n.input-visualizer-ui > .arrow-right {\n    left: calc(var(--size) * 2);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-down {\n    left: var(--size);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-left {\n    left: 0;\n    top: var(--size);\n}\n\n.input-visualizer-ui > div.active {\n    background-color: var(--surface-tertiary-color);\n}\n\n.input-visualizer-ui > div > img {\n    margin: 0;\n    padding: 20px;\n    width: 100%;\n    height: 100%;\n    box-sizing: border-box;\n}\n.input-visualizer-ui > div.active > img {\n    padding: 25px;\n}", ""]);
+            s.push([module.id, ".input-visualizer-ui {\n    position: absolute;\n    left: var(--safe-area-horizontal);\n    bottom: 106px;\n    margin: 20px;\n    padding: 0;\n    --size: 96px;\n    width: calc(var(--size) * 3);\n    height: calc(var(--size) * 2);\n    opacity: 0.9;\n}\n\n.input-visualizer-ui > div {\n    position: absolute;\n    margin: 0;\n    padding: 0;\n    width: var(--size);\n    height: var(--size);\n    background-color: var(--surface-color);\n}\n\n.input-visualizer-ui > .arrow-up {\n    left: var(--size);\n    top: 0;\n}\n\n.input-visualizer-ui > .arrow-right {\n    left: calc(var(--size) * 2);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-down {\n    left: var(--size);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-left {\n    left: 0;\n    top: var(--size);\n}\n\n.input-visualizer-ui > div.active {\n    background-color: var(--surface-tertiary-color);\n}\n\n.input-visualizer-ui > div > img {\n    margin: 0;\n    padding: 20px;\n    width: 100%;\n    height: 100%;\n    box-sizing: border-box;\n}\n.input-visualizer-ui > div.active > img {\n    padding: 25px;\n}\n.input-visualizer-ui > .rk {\n    display: none;\n    box-sizing: border-box;\n    align-items: center;\n    justify-content: center;\n    color: var(--text-color);\n    font-size: 22px;\n    white-space: nowrap;\n}\n.input-visualizer-ui.rocket > .rk {\n    display: flex;\n}\n.input-visualizer-ui > .rk-jump { left: 0; top: 0; }\n.input-visualizer-ui > .rk-boost { left: calc(var(--size) * 2); top: 0; }\n.input-visualizer-ui > .rk-roll, .input-visualizer-ui > .rk-roll-left, .input-visualizer-ui > .rk-roll-right, .input-visualizer-ui > .rk-nose-down, .input-visualizer-ui > .rk-nose-up {\n    top: calc(var(--size) * -0.42);\n    width: calc(var(--size) * 0.6 - 4px);\n    height: calc(var(--size) * 0.36);\n    font-size: 12px;\n}\n.input-visualizer-ui > .rk-roll { left: 0; }\n.input-visualizer-ui > .rk-roll-left { left: calc(var(--size) * 0.6); }\n.input-visualizer-ui > .rk-roll-right { left: calc(var(--size) * 1.2); }\n.input-visualizer-ui > .rk-nose-down { left: calc(var(--size) * 1.8); }\n.input-visualizer-ui > .rk-nose-up { left: calc(var(--size) * 2.4); }", ""]);
             const o = s
         }
         ,
@@ -61084,7 +61084,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Ou, document.createElement("div"), "f"),
                 C.get(this, Ou, "f").className = "arrow-left",
                 C.get(this, Ou, "f").innerHTML = '<img src="images/arrow_left.svg">',
-                C.get(this, Du, "f").appendChild(C.get(this, Ou, "f"))
+                C.get(this, Du, "f").appendChild(C.get(this, Ou, "f"));
+                // Rocket League buttons (week 11): Jump and Boost beside the up arrow, the rest in a strip above. Shown only
+                // for a car whose controls carry them; a press stays lit at least 100 ms so a tap can be seen.
+                this.rocketKeys = [["jump", "JUMP", 1], ["boost", "BOOST", 2], ["roll", "ROLL", 4], ["roll-left", "\u25c0 ROLL", 8], ["roll-right", "ROLL \u25b6", 16], ["nose-down", "NOSE \u25bc", 32], ["nose-up", "NOSE \u25b2", 64]].map((([e, t, n]) => {
+                    const i = document.createElement("div");
+                    return i.className = "rk rk-" + e,
+                    i.textContent = t,
+                    C.get(this, Du, "f").appendChild(i),
+                    { element: i, bit: n, at: -1 / 0 }
+                }))
             }
             dispose() {
                 C.get(this, Nu, "f").removeChild(C.get(this, Du, "f"))
@@ -61093,7 +61102,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bu, "f").className = e.up ? "active arrow-up" : "arrow-up",
                 C.get(this, Gu, "f").className = e.right ? "active arrow-right" : "arrow-right",
                 C.get(this, Fu, "f").className = e.down ? "active arrow-down" : "arrow-down",
-                C.get(this, Ou, "f").className = e.left ? "active arrow-left" : "arrow-left"
+                C.get(this, Ou, "f").className = e.left ? "active arrow-left" : "arrow-left";
+                const r = e.rocket, now = performance.now();
+                C.get(this, Du, "f").classList.toggle("rocket", null != r);
+                for (const t of this.rocketKeys)
+                    r & t.bit && (t.at = now),
+                    t.element.classList.toggle("active", null != r && now - t.at < 100)
             }
         }
         ;
