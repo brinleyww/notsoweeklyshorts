@@ -761,7 +761,11 @@ then stops calling DOs for 10 minutes at a time (`doLimited()`), and what still 
 - **Leaderboards** load, filtered by the anti-cheat's last verdicts. Every 5 minutes a cron asks
   `AntiCheat.saveSnapshot()` to save them to Workers KV (binding `FALLBACK`, only when they
   changed). Per board, the snapshot holds the newest run id seen, the runs to hide, the lobby holds,
-  and the valid runs newer than that id. While limited, a board uses this instance's own verdicts
+  and the valid runs newer than that id. Each board's part is kept in the object (`snap_tracks`) and
+  worked out again only when that board changed (`snap_dirty`), so a cron with nothing new reads
+  one row. Rebuilding every board on every cron read the whole `runs` table 12 times an hour; with
+  week 11's reused track (2,000+ old Kodub runs) that alone used up the 5M daily reads on 10-29.
+  While limited, a board uses this instance's own verdicts
   first, then the snapshot. A run newer than both stays hidden until the anti-cheat is back,
   because no upload reaches Kodub through the proxy while it is limited. A board neither has seen
   counts as all legacy, as it would on its first anti-cheat visit.

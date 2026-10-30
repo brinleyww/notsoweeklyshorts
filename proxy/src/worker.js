@@ -68,6 +68,7 @@ const DO_LIMIT_PAUSE_MS = 10 * 60_000;
 const DO_LIMIT_RETRY_S = 600;
 // Cloudflare resets those limits at 00:00 UTC but lifted the block about 14 minutes later.
 const DO_LIMIT_LIFT_MS = 15 * 60_000;
+const DO_LIMIT_LATE_MS = 3 * 3600_000;
 // How long an instance reuses the anti-cheat snapshot it read from KV (see AntiCheat.saveSnapshot).
 const SNAPSHOT_TTL_MS = 5 * 60_000;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
@@ -515,11 +516,14 @@ function noteDoError(err) {
     if (/free tier|exceeded allowed/i.test(err?.message ?? "")) doLimitedUntil = Date.now() + DO_LIMIT_PAUSE_MS;
 }
 
-// When the daily limits are expected to lift, for pages to tell players.
+// When the daily limits are expected to lift, for pages to tell players. Still refused soon after the
+// reset means Cloudflare is late lifting yesterday's block (10-30: past 00:40), not a new day used up.
 function limitLiftsAt() {
-    const now = new Date();
-    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) + DO_LIMIT_LIFT_MS;
-    return now.getTime() < today ? today : today + 86_400_000;
+    const now = Date.now();
+    const today = now - (now % 86_400_000) + DO_LIMIT_LIFT_MS;
+    if (now < today) return today;
+    if (now < today + DO_LIMIT_LATE_MS) return now + DO_LIMIT_RETRY_S * 1000;
+    return today + 86_400_000;
 }
 
 function busy(origin) {
