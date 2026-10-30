@@ -10345,7 +10345,7 @@
                 Ca.set(this, []),
                 Sa.set(this, null),
                 this.rocket = [[], [], [], [], [], [], []],
-                this.rocketVersion = t?.rocketVersion ?? 8,
+                this.rocketVersion = t?.rocketVersion ?? 9,
                 this.rocketTrack = !1,
                 null != t && (Xi(this, wa, t.up, "f"),
                 Xi(this, Ia, t.right, "f"),
@@ -13712,7 +13712,7 @@
                     airBrake: Math.exp(-.015),
                     // Version 2 (recordings made from v11.2 on): air turning eases to a capped rate (rad/s, rad/s^2)
                     // instead of RL's ever-faster spin; boosting into a track wall climbs it at climbV m/s.
-                    version: 8,
+                    version: 9,
                     pitchMax: 2, yawMax: 1.3, rollMax: 3, pitchA: 8, yawA: 6, rollA: 12,
                     climbV: 4, climbAcc: 25, climbPress: .5, climbOver: 6, climbHop: 3, climbLose: 150, climbTilt: .27,
                     // Version 3: in the air, 0.1 s after letting go of boost the meter refills at 50/s (empty to full in 2 s).
@@ -13740,7 +13740,8 @@
                     // Version 6: the first jump works in the air too (driven off a ramp without jumping), so the double jump or flip
                     // is still there after it. Version 7: the second jump (double jump or flip) lasts until landing instead of
                     // secondFor ms after the first jump. Version 8: after those secondFor ms it is a double jump even with a direction
-                    // held; only inside them does it flip (status bit 128 says the second jump won't flip).
+                    // held; only inside them does it flip (status bit 128 says the second jump won't flip). Version 9: boost that
+                    // runs dry while held stops until it is let go or the meter is full again, so the meter refills meanwhile.
                 }
             })();
             // State per car (24 ints, kept in the physics heap so heap snapshots restore it too):
@@ -13751,7 +13752,7 @@
             // 18 wall lift cooldown, 19 wall lift/climb counter, 20 physics version, 21-23 velocity written last frame
             // (floats), 24 frames into a wall climb (-1 none), 25 frames since a wall push, 26-27 wall normal x/z
             // (floats), 28 last velocity valid, 29 frames of landing push left,
-            // 30 frames since the last wall scrape.
+            // 30 frames since the last wall scrape, 31 boost ran dry while held (v9).
             function __rocketInit(id, track, version = __RL.version) {
                 if (__rocketFree(id), !__rocketTracks.has(track.getId()))
                     return;
@@ -13799,6 +13800,7 @@
                   , v6 = I[b + 20] >= 6
                   , v7 = I[b + 20] >= 7
                   , v8 = I[b + 20] >= 8
+                  , v9 = I[b + 20] >= 9
                   , touching = (wheels & 1) + (wheels >> 1 & 1) + (wheels >> 2 & 1) + (wheels >> 3 & 1)
                   , ctrlAt = p + 68
                   // Version 2: two wheels down is the ground for jumps, and air control needs all four off.
@@ -13947,7 +13949,8 @@
                 }
                 v3 && (inAir ? I[b + 29] < K.landDrive && I[b + 29]++ : I[b + 29] > 0 && (I[b + 29]--, throttle > 0 && drive()));
                 let boosting = !1;
-                if (live && F[b + 9] > 0 && (2 & bits || I[b + 10] > 0 && I[b + 10] < K.boostMin)) {
+                v9 && (!(2 & bits) || F[b + 9] >= K.boostFull) && (I[b + 31] = 0);
+                if (live && F[b + 9] > 0 && !(v9 && I[b + 31]) && (2 & bits || I[b + 10] > 0 && I[b + 10] < K.boostMin)) {
                     boosting = !0, I[b + 10]++;
                     const a = (inAir ? v3 ? K.boostAir3 : K.boostAir : K.boostGround) * .001;
                     for (let j = 0; j < 3; j++)
@@ -13958,7 +13961,8 @@
                         n > 0 && (v[0] = x / n * sh, v[2] = z / n * sh)
                     }
                     F[b + 9] = Math.max(0, F[b + 9] - K.boostUse),
-                    I[b + 16] = 0
+                    I[b + 16] = 0,
+                    v9 && F[b + 9] <= 0 && (I[b + 31] = 1, I[b + 10] = 0)
                 } else
                     I[b + 10] = 0,
                     ++I[b + 16],
