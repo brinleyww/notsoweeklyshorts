@@ -40,6 +40,9 @@ const RANGES = {
 // Sessions opened this recently are put back online when the object restarts; older ones come back
 // with their next beat, which for a hidden tab is when it is shown again.
 const RESTORE_MS = 3 * 60 * 60_000;
+// The sessions_open index starts here: indexing every session ever would write a row per dead tab.
+// Must stay older than RESTORE_MS before the deploy that created the index.
+const OPEN_INDEX_FROM = Date.UTC(2026, 9, 30);
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
@@ -108,9 +111,10 @@ export class TrafficStats extends DurableObject {
     constructor(ctx, env) {
         super(ctx, env);
         this.sql = ctx.storage.sql;
-        this.online = new Map();
-        // Most players online in each recent minute, oldest first: [minute, count].
-        this.ring = [];
+        // Null until something needs it. See restoreLive.
+        this.online = null;
+        // The newest row of `minutes`, or null until a beat needs it.
+        this.minute = null;
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
         this.ann = null;
@@ -127,12 +131,12 @@ export class TrafficStats extends DurableObject {
         this.playAlarm = false;
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
-            this.restoreLive();
             // This object leaves memory after a few idle seconds, usually long before a flush is due.
             // So owed time waits in play_due, and an alarm set before that must not be pushed back.
             this.playAlarm = (await ctx.storage.getAlarm()) != null;
-            this.ann = this.sql.exec("SELECT * FROM announcements WHERE stopped IS NULL AND until > ? ORDER BY id DESC LIMIT 1",
-                Date.now()).toArray()[0] ?? null;
+            // A new announcement stops the one before it, so only the newest row can be live.
+            const newest = this.sql.exec("SELECT * FROM announcements ORDER BY id DESC LIMIT 1").toArray()[0];
+            this.ann = newest && newest.stopped == null && newest.until > Date.now() ? newest : null;
         });
     }
 
@@ -151,6 +155,7 @@ export class TrafficStats extends DurableObject {
             repeat_visit INTEGER NOT NULL DEFAULT 0, nickname TEXT, country TEXT, device TEXT, os TEXT, browser TEXT,
             referrer TEXT, site TEXT)`);
         this.sql.exec("CREATE INDEX IF NOT EXISTS sessions_start ON sessions(start)");
+        this.sql.exec(`CREATE INDEX IF NOT EXISTS sessions_open ON sessions(start) WHERE ended = 0 AND start > ${OPEN_INDEX_FROM}`);
         this.sql.exec(`CREATE TABLE IF NOT EXISTS visitors (
             id TEXT PRIMARY KEY, first INTEGER NOT NULL, last INTEGER NOT NULL, opens INTEGER NOT NULL DEFAULT 0)`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS minutes (m INTEGER PRIMARY KEY, online INTEGER NOT NULL)");
@@ -187,6 +192,12 @@ export class TrafficStats extends DurableObject {
         // Person-seconds online for the odometer. Buckets from before it existed stay NULL and count their runtime.
         if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "online_s"))
             this.sql.exec("ALTER TABLE buckets ADD COLUMN online_s REAL");
+        // When the odometer was last credited, and for how many people from then on. They live on the row
+        // every beat writes anyway, so they cost no row.
+        if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "credit_at")) {
+            this.sql.exec("ALTER TABLE buckets ADD COLUMN credit_at INTEGER");
+            this.sql.exec("ALTER TABLE buckets ADD COLUMN credit_people INTEGER");
+        }
         if (!this.sql.exec("PRAGMA table_info(sessions)").toArray().some((c) => c.name === "account"))
             this.sql.exec("ALTER TABLE sessions ADD COLUMN account TEXT");
     }
@@ -235,13 +246,15 @@ export class TrafficStats extends DurableObject {
         if (this.sql.exec("SELECT 1 FROM play_due LIMIT 1").toArray().length) this.armPlayAlarm();
     }
 
-    // The in-memory list of who is online is lost when the object is evicted.
+    // The in-memory list of who is online is lost when the object is evicted, which in production is
+    // between nearly every two calls. Each wake that needs it pays one read per row here, so alarms and
+    // votes skip it, and the partial index leaves out sessions that said goodbye.
     restoreLive() {
-        const now = Date.now();
-        this.ring = this.sql.exec("SELECT m, online FROM minutes WHERE m > ? ORDER BY m",
-            Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
+        if (this.online) return;
+        this.online = new Map();
+        const now = this.onlineCredit.at;
         const rows = this.sql.exec(
-            "SELECT * FROM sessions WHERE start > ? AND ended = 0", now - RESTORE_MS).toArray();
+            `SELECT * FROM sessions INDEXED BY sessions_open WHERE ended = 0 AND start > ${OPEN_INDEX_FROM} AND start > ?`, now - RESTORE_MS).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last,
@@ -250,7 +263,15 @@ export class TrafficStats extends DurableObject {
                 browser: row.browser, site: row.site, state: "menu", track: null,
             });
         }
-        this.onlineCredit = { at: now, people: this.liveCounts(now).people, owed: new Map() };
+        // People only change on a beat, so the time since the last one counts for the people it reported.
+        // Nobody stays online longer than RESTORE_MS without a beat, which also limits what an outage adds.
+        const last = this.sql.exec("SELECT credit_at, credit_people FROM buckets ORDER BY t DESC LIMIT 1").toArray()[0];
+        if (last?.credit_at != null) {
+            this.onlineCredit.at = Math.max(last.credit_at, now - RESTORE_MS);
+            this.onlineCredit.people = last.credit_people;
+        } else {
+            this.onlineCredit.people = this.liveCounts(now).people;
+        }
     }
 
     creditOnline(now) {
@@ -298,6 +319,7 @@ export class TrafficStats extends DurableObject {
     // counted by personOf: any active tab makes them active, and `people` includes the away ones.
     // Each shown tab beats, so the beat budget uses `activeTabs`.
     liveCounts(now) {
+        this.restoreLive();
         let activeTabs = 0;
         const person = this.personOf();
         // person -> has an active tab
@@ -323,13 +345,12 @@ export class TrafficStats extends DurableObject {
 
     noteMinute(now, online) {
         const minute = Math.floor(now / 60_000);
-        const last = this.ring[this.ring.length - 1];
-        if (last && last[0] === minute) {
-            if (online <= last[1]) return;
-            last[1] = online;
+        this.minute ??= this.sql.exec("SELECT m, online FROM minutes ORDER BY m DESC LIMIT 1").toArray()[0] ?? { m: null, online: 0 };
+        if (this.minute.m === minute) {
+            if (online <= this.minute.online) return;
+            this.minute.online = online;
         } else {
-            this.ring.push([minute, online]);
-            while (this.ring.length > MINUTE_RING) this.ring.shift();
+            this.minute = { m: minute, online };
             this.sql.exec("DELETE FROM minutes WHERE m <= ?", minute - MINUTE_RING);
         }
         this.sql.exec("INSERT OR REPLACE INTO minutes (m, online) VALUES (?, ?)", minute, online);
@@ -381,15 +402,18 @@ export class TrafficStats extends DurableObject {
 
     record(b, meta) {
         const now = Date.now();
+        this.restoreLive();
         this.creditOnline(now);
         let s = this.online.get(b.s);
         let opened = false;
         let isNew = false;
+        let wasEnded = false;
         if (!s) {
             const row = this.sql.exec("SELECT * FROM sessions WHERE id = ?", b.s).toArray()[0];
             if (row) {
                 // Another visitor's session id is never taken over.
                 if (row.visitor !== b.v) return;
+                wasEnded = !!row.ended;
                 s = {
                     id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last, expires: 0,
                     runtime: row.runtime, ended: false, nickname: row.nickname, country: row.country,
@@ -421,10 +445,12 @@ export class TrafficStats extends DurableObject {
         s.track = b.tk;
 
         const ev = b.ev;
-        this.sql.exec(`UPDATE sessions SET last = ?, runtime = runtime + ?, focus = focus + ?, driving = driving + ?,
-            attempts = attempts + ?, finishes = finishes + ?, ended = ?, nickname = COALESCE(?, nickname),
+        // Setting `ended`, even to the same value, rewrites the row's sessions_open entry: a row written per beat.
+        const setEnded = s.ended !== wasEnded ? `ended = ${s.ended ? 1 : 0},` : "";
+        this.sql.exec(`UPDATE sessions SET ${setEnded} last = ?, runtime = runtime + ?, focus = focus + ?, driving = driving + ?,
+            attempts = attempts + ?, finishes = finishes + ?, nickname = COALESCE(?, nickname),
             account = COALESCE(?, account) WHERE id = ?`,
-            now, runtime, focus, driving, ev.attempts, ev.finishes, s.ended ? 1 : 0, b.nick, b.a, b.s);
+            now, runtime, focus, driving, ev.attempts, ev.finishes, b.nick, b.a, b.s);
 
         const counts = this.liveCounts(now);
         const online = counts.people;
@@ -448,10 +474,11 @@ export class TrafficStats extends DurableObject {
             if (!this.totals.peak || online > this.totals.peak.online) this.totals.peak = { online, t };
         }
         this.sql.exec(`INSERT INTO buckets (t, runtime, focus, driving, opens, new_visitors, peak,
-                attempts, finishes, uploads, replays, clips, editor, garage, standings, online_s)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attempts, finishes, uploads, replays, clips, editor, garage, standings, online_s, credit_at, credit_people)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(t) DO UPDATE SET runtime = runtime + excluded.runtime, focus = focus + excluded.focus,
                 online_s = COALESCE(online_s, runtime) + excluded.online_s,
+                credit_at = excluded.credit_at, credit_people = excluded.credit_people,
                 driving = driving + excluded.driving, opens = opens + excluded.opens,
                 new_visitors = new_visitors + excluded.new_visitors, peak = MAX(peak, excluded.peak),
                 attempts = attempts + excluded.attempts, finishes = finishes + excluded.finishes,
@@ -459,7 +486,7 @@ export class TrafficStats extends DurableObject {
                 clips = clips + excluded.clips, editor = editor + excluded.editor,
                 garage = garage + excluded.garage, standings = standings + excluded.standings`,
             t, runtime, focus, driving, opened ? 1 : 0, isNew ? 1 : 0, online,
-            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings, onlineNow);
+            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings, onlineNow, now, online);
 
         const day = Math.floor(now / DAY_MS);
         for (const [track, [attempts, finishes, uploads]] of b.tr) {
@@ -622,6 +649,7 @@ export class TrafficStats extends DurableObject {
     // One row per person (see liveCounts), showing their active tab over an away one, then the one that
     // beat last. `pending` is the odometer's seconds not credited yet, which keeps its running total exact.
     liveView(now) {
+        this.restoreLive();
         // person -> { s: the tab shown, isAway, tabs, since }
         const people = new Map();
         const person = this.personOf();
@@ -654,8 +682,9 @@ export class TrafficStats extends DurableObject {
             });
         }
         sessions.sort((a, b) => a.since - b.since);
-        const minute = Math.floor(now / 60_000);
-        const ring = this.ring.filter(([m]) => m > minute - MINUTE_RING);
+        // Most players online in each recent minute, oldest first: [minute, count].
+        const ring = this.sql.exec("SELECT m, online FROM minutes WHERE m > ? ORDER BY m",
+            Math.floor(now / 60_000) - MINUTE_RING).toArray().map((r) => [r.m, r.online]);
         return { online: sessions.length, away, pending, sessions, ring, now };
     }
 

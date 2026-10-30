@@ -158,12 +158,31 @@ chat window shows "n online".
   that beat last, "N tabs" when there are several, on the site since the earliest
   tab opened); the visitor id and account key never reach the panel.
 - **Runtime and the beat budget count tabs.** Every shown tab beats and adds its own
-  runtime, so the live reply's `pending` and `activeTabs` are per tab and the
-  all-time odometer climbs by `activeTabs`. Past 20 shown tabs
+  runtime, and `activeTabs` is per tab. Past 20 shown tabs
   (`BEAT_BUDGET_PER_MIN`), `nv` stretches every tab's gap, to at most 15 minutes
   (`MAX_VISIBLE_GAP_S`), so the whole site stays near 20 beats a minute.
-- All of this is worked out in memory over the live sessions, with no extra rows
-  read or written.
+- **The all-time odometer counts people, away ones too.** Each beat credits the time
+  since the last one, for the people that beat reported (`onlineCredit`,
+  `buckets.online_s`). A restart picks up from `credit_at` and `credit_people` on the
+  newest bucket, which the beat writes anyway, so they add no row. A gap with no beats
+  credits at most 3 hours (`RESTORE_MS`), so an outage can't add much. Time before
+  2026-10-30's fix was mostly lost, because each restart started the count over; it
+  isn't restored.
+- Once the live sessions are in memory, all of this is worked out there, with no
+  extra rows read or written.
+- **What a wake costs.** Production drops this object from memory after about 10 idle
+  seconds, so at a few beats a minute nearly every beat wakes it. A wake reads one row:
+  the newest announcement, the only one that can be live, since a new one stops the one
+  before. The first call that needs the counts then reads the sessions that haven't said
+  goodbye, opened in the last 3 hours (`restoreLive`, through the partial index
+  `sessions_open`), and the odometer's row; alarms and votes never ask. A beat reads one
+  more row for the newest minute, and the last-3-hours chart is read only when Race
+  Control asks (up to 180 rows per load). `ended` is only set when it changes, because
+  setting it rewrites the index entry, which would be one more row written per beat.
+  Measured in `workerd` (`cursor.rowsRead`) on the same simulated traffic: 131 -> 20 rows
+  read per beat at 2-3 tabs, 95 -> 18 at about 8 tabs, 18 -> 7 at 60 tabs. A beat itself
+  still writes the same rows. Opens and goodbyes write one index row more, and the first
+  beat in a new bucket can write the previous bucket's row (at most 144 a day).
 
 `/nsws/stats`, `/nsws/live` and `/nsws/anticheat*` answer only the owner: the request
 body must hold the owner key (see "Owner access"). The page checks the same hash
