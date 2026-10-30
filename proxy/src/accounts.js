@@ -383,21 +383,39 @@ export class Accounts extends DurableObject {
     }
 
     // entries: [visitorId, seconds]. A visitor counts for the account its browser is linked to
-    // (chat_links, set on every visit). cap limits each visitor's share of one batch.
-    async creditPlay(entries, cap) {
-        if (!Array.isArray(entries)) return { error: "bad" };
+    // (chat_links, set on every visit).
+    async playByAccount(entries) {
         const perUser = new Map();
         for (const entry of entries) {
             const [visitor, seconds] = Array.isArray(entry) ? entry : [];
             if (!VISITOR.test(visitor ?? "") || !(seconds > 0)) continue;
             const uid = (await sha256Hex("nsws-chat:" + visitor)).slice(0, 16);
             const userId = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id;
-            if (userId) perUser.set(userId, (perUser.get(userId) ?? 0) + (cap > 0 ? Math.min(seconds, cap) : seconds));
+            if (userId) perUser.set(userId, (perUser.get(userId) ?? 0) + seconds);
         }
+        return perUser;
+    }
+
+    async creditPlay(entries) {
+        if (!Array.isArray(entries)) return { error: "bad" };
+        const perUser = await this.playByAccount(entries);
         this.ctx.storage.transactionSync(() => {
             for (const [userId, seconds] of perUser) {
                 this.sql.exec(`INSERT INTO playtime (user_id, seconds) VALUES (?, ?)
                     ON CONFLICT(user_id) DO UPDATE SET seconds = seconds + excluded.seconds`, userId, seconds);
+            }
+        });
+        return { ok: true, accounts: perUser.size };
+    }
+
+    // Lifts each account to the total given, and never lowers one.
+    async restorePlay(entries) {
+        if (!Array.isArray(entries)) return { error: "bad" };
+        const perUser = await this.playByAccount(entries);
+        this.ctx.storage.transactionSync(() => {
+            for (const [userId, seconds] of perUser) {
+                this.sql.exec(`INSERT INTO playtime (user_id, seconds) VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET seconds = MAX(seconds, excluded.seconds)`, userId, seconds);
             }
         });
         return { ok: true, accounts: perUser.size };

@@ -174,8 +174,8 @@ On the Workers Free plan each beat is one Worker request and one Durable Object
 request, with about two SQLite rows written. That is roughly 1,440 beats a day
 for each player who keeps the site open, so the free limits (100,000 requests
 and 100,000 rows written a day) cover about 30 players online around the clock.
-Hours played add one call to `Accounts` every 5 minutes, not one per beat, and one
-row written per active account per call.
+Hours played add one row written per beat (`play_due`), one call to `Accounts` every
+5 minutes, and two rows written per active player per call.
 
 `proxy/src/worker.js`:
 
@@ -468,11 +468,14 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   `refer/me` returns the last 5 confirmed referrals (`recent`); the page shows a
   toast for any it hasn't announced yet (`_nswsTagsSeen:<code>` in localStorage).
 - **Hours played.** `TrafficStats` adds up each visitor's focused seconds from the
-  beats in memory and hands them to `Accounts.creditPlay` in one call every 5
-  minutes (`PLAY_FLUSH_MS`, an alarm), capped at 10 minutes per visitor per batch.
-  `Accounts` maps the visitor to the account through `chat_links` and adds to
-  `playtime`. The first batch after this shipped was every session's `focus` so
-  far (`meta` key `play_backfill` in `TrafficStats`). Hours tags (`FIRST LAPS` 1 h,
+  beats in its `play_due` table and hands them to `Accounts.creditPlay` in one call
+  every 5 minutes (`PLAY_FLUSH_MS`, an alarm), at most 16 minutes per visitor per
+  batch (the rest waits for the next one). They can't wait in memory: the object
+  leaves memory after a few idle seconds, so nothing reached the accounts and each
+  wake pushed the alarm back, until 2026-10-30. `Accounts` maps the visitor to the
+  account through `chat_links` and adds to `playtime`. The first flush after that fix
+  lifted every account to its sessions' total `focus` (`restorePlay`, `meta` key
+  `play_restore` in `TrafficStats`). Hours tags (`FIRST LAPS` 1 h,
   `REGULAR` 5, `GRINDER` 10, `VETERAN` 25, `ROAD WARRIOR` 50, `CENTURION` 100,
   `LIFER` 250) are owned once the hours are there. The page puts a new one on when
   the player wears no tag or a smaller hours tag, and says so.

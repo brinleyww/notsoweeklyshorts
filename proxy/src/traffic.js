@@ -45,7 +45,7 @@ const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
 // Focused time goes to Accounts (hours played) in one batch per this long, not one call per beat.
 const PLAY_FLUSH_MS = 5 * 60_000;
-// Most one visitor can be credited per batch; a late alarm, or one stretched beat, still fits.
+// Most one visitor can be credited per batch; anything over it waits for the next batch.
 const PLAY_CAP_S = Math.max(2 * PLAY_FLUSH_MS / 1000, MAX_VISIBLE_GAP_S + 60);
 
 // Announcements: one is live at a time, and a newer one replaces it. Players get it with their
@@ -124,12 +124,13 @@ export class TrafficStats extends DurableObject {
         // change when a session opens or ends, so it is credited from the last change on each beat.
         // `owed` is bucket -> seconds not written yet.
         this.onlineCredit = { at: Date.now(), people: 0, owed: new Map() };
-        // visitor -> focused seconds not yet handed to Accounts. Lost if the object is evicted first.
-        this.play = new Map();
         this.playAlarm = false;
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
             this.restoreLive();
+            // This object leaves memory after a few idle seconds, usually long before a flush is due.
+            // So owed time waits in play_due, and an alarm set before that must not be pushed back.
+            this.playAlarm = (await ctx.storage.getAlarm()) != null;
             this.ann = this.sql.exec("SELECT * FROM announcements WHERE stopped IS NULL AND until > ? ORDER BY id DESC LIMIT 1",
                 Date.now()).toArray()[0] ?? null;
         });
@@ -182,6 +183,7 @@ export class TrafficStats extends DurableObject {
             ann INTEGER NOT NULL, voter TEXT NOT NULL, at INTEGER NOT NULL,
             PRIMARY KEY (ann, voter)) WITHOUT ROWID`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS play_due (visitor TEXT PRIMARY KEY, seconds REAL NOT NULL) WITHOUT ROWID");
         // Person-seconds online for the odometer. Buckets from before it existed stay NULL and count their runtime.
         if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "online_s"))
             this.sql.exec("ALTER TABLE buckets ADD COLUMN online_s REAL");
@@ -191,7 +193,12 @@ export class TrafficStats extends DurableObject {
 
     notePlay(visitor, seconds) {
         if (!(seconds > 0) || !this.env.ACCOUNTS) return;
-        this.play.set(visitor, (this.play.get(visitor) ?? 0) + seconds);
+        this.sql.exec(`INSERT INTO play_due (visitor, seconds) VALUES (?, ?)
+            ON CONFLICT(visitor) DO UPDATE SET seconds = seconds + excluded.seconds`, visitor, seconds);
+        this.armPlayAlarm();
+    }
+
+    armPlayAlarm() {
         if (this.playAlarm) return;
         this.playAlarm = true;
         this.ctx.storage.setAlarm(Date.now() + PLAY_FLUSH_MS).catch(() => {
@@ -202,23 +209,30 @@ export class TrafficStats extends DurableObject {
     async alarm() {
         this.playAlarm = false;
         if (!this.env.ACCOUNTS) return;
-        // The first batch ever is every session's focused time so far. Beats noted before now are
-        // already in those sums, so the pending map is dropped in the same step.
-        const backfill = !this.sql.exec("SELECT 1 FROM meta WHERE k = 'play_backfill'").toArray().length;
-        const entries = backfill
-            ? this.sql.exec("SELECT visitor, SUM(focus) AS s FROM sessions GROUP BY visitor HAVING s > 0").toArray().map((r) => [r.visitor, r.s])
-            : [...this.play];
-        this.play.clear();
-        if (!entries.length) return;
+        const accounts = this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global"));
         try {
-            await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).creditPlay(entries, backfill ? 0 : PLAY_CAP_S);
-            if (backfill) this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('play_backfill', ?)", String(Date.now()));
+            if (!this.sql.exec("SELECT 1 FROM meta WHERE k = 'play_restore'").toArray().length) {
+                // Once: time lost while owed time was only kept in memory is still in the sessions.
+                // What is owed so far is already in those sums.
+                const totals = this.sql.exec("SELECT visitor, SUM(focus) AS s FROM sessions GROUP BY visitor HAVING s > 0").toArray().map((r) => [r.visitor, r.s]);
+                this.sql.exec("DELETE FROM play_due");
+                await accounts.restorePlay(totals);
+                this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('play_restore', ?)", String(Date.now()));
+            } else {
+                const entries = this.sql.exec("SELECT visitor, seconds FROM play_due").toArray().map((r) => [r.visitor, Math.min(r.seconds, PLAY_CAP_S)]);
+                if (entries.length) await accounts.creditPlay(entries);
+                // A beat may have added to a row during the call, so take off only what was credited.
+                for (const [visitor, seconds] of entries) {
+                    this.sql.exec("DELETE FROM play_due WHERE visitor = ? AND seconds <= ?", visitor, seconds);
+                    this.sql.exec("UPDATE play_due SET seconds = seconds - ? WHERE visitor = ?", seconds, visitor);
+                }
+            }
         } catch (err) {
             console.error("play credit failed:", err && err.message);
-            if (!backfill) for (const [v, s] of entries) this.play.set(v, (this.play.get(v) ?? 0) + s);
-            this.playAlarm = true;
-            await this.ctx.storage.setAlarm(Date.now() + PLAY_FLUSH_MS);
+            this.armPlayAlarm();
+            return;
         }
+        if (this.sql.exec("SELECT 1 FROM play_due LIMIT 1").toArray().length) this.armPlayAlarm();
     }
 
     // The in-memory list of who is online is lost when the object is evicted.
