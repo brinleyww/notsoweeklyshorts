@@ -262,15 +262,18 @@ outside a browser has to tell the truth about any header, which is why the check
 above are done on the run itself.
 
 **Suspicious runs.** A TAS run replays fine, so the checks above can't catch one. `proxy/src/inputflags.js`
-reads a run's key presses and stores why they look machine-made in `runs.flags` (NULL = not looked at, "" =
-nothing stands out). A run is flagged for 3+ presses under 10 ms, more than 15 key changes a second, or 40%+ of
+reads a run's key presses and stores why they look machine-made in `runs.flags` (NULL = not flagged, "" = the
+owner cleared it). A run is flagged for 3+ presses under 10 ms, more than 15 key changes a second, or 40%+ of
 20+ presses the same length. The reset key doesn't count, since Royale tracks press it for a few ms on every run.
 On 2,200 real runs from weeks 1-10, 2 were flagged. Careful edits that only move a press by a few ms set off nothing.
 
 Flags hide nothing. Race Control's Anti-cheat tab lists them under Suspicious runs, and Clear removes a flag. New
-uploads are flagged at upload; "Scan older runs" goes through the rest 8 at a time (Kodub refuses 12 ids in one
-`/v6/recordings` read), which is one Kodub read and about 16 row reads and up to 8 row writes a step. A leaderboard
-reply carries `flagged` (ids on that page) only when the caller holds the owner key, and only then does the page
+uploads are flagged at upload; "Scan older runs" goes through the rest 40 at a time (5 Kodub reads at once, since
+Kodub refuses 12 ids in one `/v6/recordings` read). A step is one Worker request, one Durable Object request, up to 5
+Kodub reads, about 41 row reads and 1 row write plus 2 per run it flags; the place is kept in DO storage, and one press
+stops after 500 steps. A clean upload adds no row reads or writes, a flagged one adds two writes. An owner board read
+adds one Durable Object request and reads only the flagged rows on that track; other players' board reads add nothing.
+A leaderboard reply carries `flagged` (ids on that page) only when the caller holds the owner key, and only then does the page
 show its "Only you can see this" notice and red Flagged rows. Everyone else's reply has neither, so it can't be
 read from the network panel.
 

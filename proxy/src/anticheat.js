@@ -13,6 +13,8 @@ import { MACRO_LOCK_MS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 
 const CHECK_BATCH = 8;
+// 5 Kodub reads at once. Kodub refuses more than about 10 ids in one read.
+const SCAN_RUNS = 5 * CHECK_BATCH;
 const RETRY_MS = 60_000;
 const LOG_LIMIT = 60;
 // The Workers KV key (binding FALLBACK) for the verdicts the Worker uses while Cloudflare refuses
@@ -97,7 +99,7 @@ export class AntiCheat extends DurableObject {
             /* already added */
         }
         this.sql.exec("CREATE INDEX IF NOT EXISTS runs_achieved ON runs(achieved) WHERE achieved IS NOT NULL");
-        // flags: inputflags.js's verdict. NULL = not looked at yet, "" = nothing stands out.
+        // flags: why inputflags.js flagged the run. NULL = not flagged, "" = the owner cleared it.
         try {
             this.sql.exec("ALTER TABLE runs ADD COLUMN flags TEXT");
         } catch {
@@ -372,7 +374,7 @@ export class AntiCheat extends DurableObject {
         if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) {
             const now = Date.now();
             this.saveRun(r.track, r.week, entry, r.state, "proxy", null, now);
-            if (r.flags != null) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
+            if (r.flags) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
             if (Number.isSafeInteger(r.achieved) && r.achieved < now) this.backdate(r, now);
         }
         if (r.state === "pending") {
@@ -562,19 +564,25 @@ export class AntiCheat extends DurableObject {
         return { ok: true };
     }
 
-    // Looks at the next few runs from before flags existed. The page calls this until done, passing back next.
-    async scanFlags(after) {
-        const rows = this.sql.exec("SELECT id, frames, flags, source, state FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, CHECK_BATCH).toArray();
+    // Looks at the next few runs from before flags existed. The page calls this until done. Only a flagged run gets
+    // a write, and the place is kept in one key, so a scan writes about one row a step however clean the runs are.
+    async scanFlags() {
+        const after = (await this.ctx.storage.get("flag-scan")) ?? 0;
+        const rows = this.sql.exec("SELECT id, frames, flags, source, state FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, SCAN_RUNS).toArray();
         const todo = rows.filter((r) => r.flags == null && r.source !== "owner" && r.state !== "invalid");
-        const found = await this.fetchRecordings(todo.map((r) => r.id));
+        const reads = [];
+        for (let i = 0; i < todo.length; i += CHECK_BATCH) reads.push(this.fetchRecordings(todo.slice(i, i + CHECK_BATCH).map((r) => r.id)));
+        const found = new Map((await Promise.all(reads)).flatMap((part) => [...part]));
         let flagged = 0;
         for (const r of todo) {
             const recording = found.get(r.id);
             const flags = recording ? await inputFlags(recording, r.frames).catch(() => "") : "";
+            if (!flags) continue;
             this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", flags, r.id);
-            if (flags) flagged++;
+            flagged++;
         }
-        return { done: rows.length < CHECK_BATCH, next: rows.length ? rows[rows.length - 1].id : after, flagged };
+        if (rows.length) await this.ctx.storage.put("flag-scan", rows[rows.length - 1].id);
+        return { done: rows.length < SCAN_RUNS, scanned: rows.length, flagged };
     }
 
     async approve(id) {

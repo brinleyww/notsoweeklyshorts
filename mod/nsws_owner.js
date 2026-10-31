@@ -1307,6 +1307,9 @@
         renderLobbyRuns(body, a, blocked);
     }
 
+    // One press of Scan older runs: at most 20,000 runs, 500 requests and about 500 row writes.
+    const FLAG_SCAN_STEPS = 500;
+
     function flagReasons(raw) {
         let f = {};
         try {
@@ -1346,19 +1349,20 @@
         note.style.margin = "10px 0 0";
         scan.addEventListener("click", async () => {
             scan.disabled = true;
-            let after = 0, found = 0, pages = 0;
+            let scanned = 0, found = 0, done = false;
             try {
-                for (;;) {
-                    const step = await post("anticheat/scanflags", { after });
+                for (let i = 0; i < FLAG_SCAN_STEPS && !done; i++) {
+                    const step = await post("anticheat/scanflags", {});
                     found += step.flagged;
-                    after = step.next;
-                    note.textContent = "Scanned " + num(++pages * 8) + " runs, " + num(found) + " flagged…";
-                    if (step.done) break;
+                    scanned += step.scanned;
+                    done = step.done;
+                    note.textContent = "Scanned " + num(scanned) + " runs, " + num(found) + " flagged…";
                 }
-                note.textContent = "Done. " + num(found) + " newly flagged.";
+                note.textContent = done ? "Done. " + num(found) + " newly flagged." : num(scanned) + " runs scanned, " + num(found) + " flagged. There are more: press it again, or tomorrow if the day's usage is high.";
+                scan.disabled = done;
                 loadAnti();
             } catch {
-                note.textContent = "Scan stopped. Press it again to carry on; scanned runs are skipped.";
+                note.textContent = "Scan stopped. Press it again to carry on from where it stopped.";
                 scan.disabled = false;
             }
         });

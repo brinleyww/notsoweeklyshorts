@@ -842,7 +842,7 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     };
     if (owner && track.secret) body.owner = true;
     // Only the owner's reply says which runs are flagged, so no one else can read it from the network panel.
-    if (owner && track.week != null) {
+    if (owner && track.week != null && !doLimited()) {
         const flagged = await antiCheat(env)?.flaggedOn(track.trackId).catch(() => null);
         if (flagged) body.flagged = page.map((e) => e.id).filter((id) => flagged.includes(id));
     }
@@ -1364,10 +1364,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.unflag(body.id), origin);
     }
-    if (url.pathname === TRAFFIC_PREFIX + "anticheat/scanflags") {
-        if (!Number.isSafeInteger(body.after)) return plain(400, "Bad request", origin);
-        return json(await anti.scanFlags(body.after), origin);
-    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/scanflags") return json(await anti.scanFlags(), origin);
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         return json(await anti.approve(body.id), origin);
