@@ -149,6 +149,11 @@
             keepalive: true,
             credentials: "omit",
         }).then((response) => {
+            if (response.status === 403) {
+                response.json().then((data) => {
+                    if (data?.banned) showBanned(data.until);
+                }, () => {});
+            }
             if (!response.ok) return;
             if (body.nick) sentNick = body.nick;
             if (response.status === 200) {
@@ -170,6 +175,24 @@
                 }, () => {});
             }
         }).catch(keep);
+    }
+
+    // The Worker is what actually refuses a banned address; this only tells them why nothing loads.
+    async function showBanned(until) {
+        if (document.getElementById("nsws-banned") || await ownerToken()) return;
+        const box = document.createElement("div");
+        box.id = "nsws-banned";
+        box.style.cssText = "position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:var(--surface-color,#192042);color:var(--text-color,#fff);";
+        const title = document.createElement("div");
+        title.style.fontSize = "34px";
+        title.textContent = "You're banned from Not So Weekly Shorts";
+        const line = document.createElement("div");
+        line.style.cssText = "font-size:20px;max-width:640px;";
+        line.textContent = (until ? "This network's address is banned until " + new Date(until).toLocaleString() + "." : "This network's address is banned.")
+            + " Everyone on it is blocked, so if you share it (a school or a workplace), the ban may not be about you.";
+        box.append(title, line);
+        document.body.appendChild(box);
+        for (const type of ["keydown", "keyup", "keypress"]) window.addEventListener(type, (e) => e.stopImmediatePropagation(), true);
     }
 
     function tick() {

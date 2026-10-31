@@ -2,12 +2,13 @@
 // the hibernation API so idle sockets cost nothing. Networks whose firewall blocks WebSockets
 // get the same chat over plain HTTPS long-polling instead (see poll and sendHttp). Messages are censored (chatfilter.js)
 // before they are stored or sent. IP addresses are never stored; only a hash is kept on
-// each socket to cap connections per address.
+// each socket to cap connections per address, and on each message so the owner can ban its sender.
 
 import { DurableObject } from "cloudflare:workers";
 import { censor, cleanText } from "./chatfilter.js";
 import { sniffImage, moderate } from "./chatmedia.js";
 import { checkFile, MAX_FILE_NAME } from "./chatfiles.js";
+import { IP_BAN_DAYS } from "./traffic.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
@@ -162,7 +163,8 @@ export class ChatRoom extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
-        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT", "media TEXT", "file TEXT", "gif TEXT"]) {
+        this.sql.exec("CREATE TABLE IF NOT EXISTS ip_blocks (ip TEXT PRIMARY KEY, until INTEGER)");
+        for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT", "media TEXT", "file TEXT", "gif TEXT", "ip TEXT"]) {
             try {
                 this.sql.exec("ALTER TABLE messages ADD COLUMN " + column);
             } catch {
@@ -202,6 +204,7 @@ export class ChatRoom extends DurableObject {
     // Called by the Worker with the socket's upgrade request, after it has checked the origin.
     async fetch(request) {
         const ipHash = request.headers.get("X-Chat-Ip") || "";
+        if (ipHash && this.ipBlocked(ipHash)) return jsonReply({ error: "Banned" }, 403);
         if ((request.headers.get("Upgrade") || "").toLowerCase() !== "websocket") {
             const path = new URL(request.url).pathname;
             if (path.includes("/file/")) return this.file(path.slice(path.lastIndexOf("/") + 1), request.headers.get("Range"));
@@ -236,6 +239,31 @@ export class ChatRoom extends DurableObject {
     // Called by the Worker with the owner's announcements.
     announce(data) {
         this.broadcast(data);
+    }
+
+    // The Worker's own ban list reaches its other instances up to a few minutes late. Without this copy, a
+    // kicked player could reconnect through one of them and then keep that socket for good.
+    ipBlocked(ip) {
+        const row = this.sql.exec("SELECT until FROM ip_blocks WHERE ip = ?", ip).toArray()[0];
+        return !!row && (row.until == null || row.until > Date.now());
+    }
+
+    blockIp(ip, until) {
+        this.sql.exec("INSERT OR REPLACE INTO ip_blocks (ip, until) VALUES (?, ?)", ip, until);
+        this.sql.exec("DELETE FROM ip_blocks WHERE until IS NOT NULL AND until <= ?", Date.now());
+        for (const ws of this.ctx.getWebSockets()) {
+            if (ws.deserializeAttachment()?.ip !== ip) continue;
+            try {
+                ws.close(1008, "Banned");
+            } catch {}
+        }
+        for (const waiter of [...this.waiters]) {
+            if (waiter.ip === ip) waiter.wake();
+        }
+    }
+
+    unblockIp(ip) {
+        this.sql.exec("DELETE FROM ip_blocks WHERE ip = ?", ip);
     }
 
     // The tag a player's account wears (src/accounts.js), or null. Only new messages carry it.
@@ -320,6 +348,7 @@ export class ChatRoom extends DurableObject {
         }
         const me = await this.identify(body);
         if (!me) return jsonReply({ error: "Bad request" }, 400);
+        me.ip = ipHash;
         const path = new URL(request.url).pathname;
         if (path.endsWith("/poll")) return this.poll(me, body, ipHash);
         if (path.endsWith("/send")) {
@@ -829,9 +858,9 @@ export class ChatRoom extends DurableObject {
             const tag = TAG_ID.test(me.tag ?? "") ? me.tag : null;
             const message = { at: now, uid: me.uid, nick, owner: me.owner, tag, text: censor(text), pings, reply: quoted, reactions: [] };
             if (media) message.media = media;
-            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to, tag, media, file, gif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            message.id = this.sql.exec("INSERT INTO messages (at, uid, nick, owner, text, pings, reply_to, tag, media, file, gif, ip) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
                 message.at, message.uid, message.nick, message.owner ? 1 : 0, message.text, pings.length ? JSON.stringify(pings) : null,
-                quoted ? JSON.stringify(quoted) : null, tag, media ? JSON.stringify(media) : null, file, gif).one().id;
+                quoted ? JSON.stringify(quoted) : null, tag, media ? JSON.stringify(media) : null, file, gif, me.ip || null).one().id;
             this.deleteMessages(now, "id <= ?", message.id - HISTORY);
             this.sql.exec("DELETE FROM reactions WHERE msg <= ?", message.id - HISTORY);
             this.broadcast({ t: "msg", m: message });
@@ -873,6 +902,23 @@ export class ChatRoom extends DurableObject {
                 this.broadcast({ t: "del", id });
             }
             reply({ t: "err", text: "Banned. It can't be posted again." });
+        } else if (msg?.t === "ipban" && !me.cup && Number.isSafeInteger(msg.id) && IP_BAN_DAYS.includes(msg.days)) {
+            const row = this.sql.exec("SELECT uid, nick, owner, ip FROM messages WHERE id = ?", msg.id).toArray()[0];
+            if (!row) return;
+            // A message from before IP bans existed has no address, but its sender may still be connected.
+            const socket = this.ctx.getWebSockets().map((ws) => ws.deserializeAttachment()).find((a) => a?.uid === row.uid && a.ip);
+            const ip = row.ip || socket?.ip;
+            if (row.owner || (ip && ip === me.ip)) return reply({ t: "err", text: "That's your own address, so it wasn't banned." });
+            if (!ip) return reply({ t: "err", text: "No address saved for that message. Try Race Control -> Bans." });
+            const until = msg.days ? Date.now() + msg.days * 86400_000 : null;
+            try {
+                await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).banIp(ip, until, row.nick);
+            } catch (err) {
+                console.error("ip ban failed:", err && err.message);
+                return reply({ t: "err", text: "Couldn't ban that address. Try again in a moment." });
+            }
+            this.blockIp(ip, until);
+            reply({ t: "err", text: "IP banned " + (msg.days ? "for " + msg.days + (msg.days === 1 ? " day" : " days") : "for good") + ". Lift it in Race Control -> Bans." });
         }
     }
 

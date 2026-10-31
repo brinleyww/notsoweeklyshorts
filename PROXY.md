@@ -139,7 +139,7 @@ of races, finishes, uploads and so on. It never carries the account token. The
 Worker adds a coarse country, device, system and browser, and stores everything in
 one SQLite Durable Object, `TrafficStats` (`proxy/src/traffic.js`). IP addresses
 are only held in memory to cap new sessions at 120 per address per hour; they are
-never stored. The reply to a beat is `{"online": n, "away": m, "nv": s, ...}`; the
+never stored, only a hash on each session for IP bans ("IP bans"). The reply to a beat is `{"online": n, "away": m, "nv": s, ...}`; the
 chat window shows "n online".
 
 - **Online counts people, not tabs.** `TrafficStats` groups its live sessions by
@@ -779,6 +779,33 @@ has a slur is refused (`422 {nicknameBlocked}` / `{available: false, blocked: tr
 username isn't allowed"), upload nicknames are censored before they reach Kodub, and every nickname
 the leaderboard routes hand out is censored on the way out. Bans and name matching still use the
 raw name.
+
+## IP bans
+
+`BANNED_NICKNAMES` hides a name from the boards. An IP ban refuses an address everything the Worker serves:
+leaderboards, uploads, chat, cups, accounts and beats get `403 {"banned": true, "until": <ms or null>}`. The site
+itself is static files on GitHub Pages, which the Worker can't block, so a banned player can still load the page and
+drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_traffic.js`), which is only there to say why.
+
+- **The address is a hash:** `ipHash` in `worker.js`, the first 16 hex characters of
+  `sha256("nsws-chat-ip:" + address)`. Raw addresses are never stored, though a hash of an IPv4 address can be
+  reversed by anyone who has the database. IPv6 counts per /64, since a home connection holds a whole /64.
+- **Who holds what:** `TrafficStats.ip_bans` is the list; every change writes it to KV (`ip-bans`). Each Worker
+  instance rereads KV every `IP_BANS_TTL_MS` (2 minutes; a read per instance counts against KV's 100k a day), so a
+  ban reaches the other instances within a few minutes, and bans keep working on a bad day. If KV can't be read the
+  instance keeps its last list. The global `ChatRoom` has its own `ip_blocks` copy, which takes effect at once, so a
+  kicked player can't reconnect through an instance that hasn't heard yet.
+- **Finding the address:** Race Control -> Bans looks a nickname up in `sessions.ip` and shows the other names on
+  that address, with a warning past 3 browsers (probably a school or workplace). The chat's Moderate menu uses
+  `messages.ip`, or the sender's open socket for older messages. Visits and messages from before this feature have
+  no hash. Beats name their own nickname, so a lookup is only as honest as the page that sent it.
+- **Cost:** `sessions_ip` indexes only `ip`, one row written per visit. Don't add `nickname` to it: every beat's
+  UPDATE sets that column, which would rewrite the index entry per beat. A lookup walks the index, so it reads
+  every session with a hash; only the owner's click pays for that.
+- **The owner:** can't ban their own address or their own message. A request with the owner's key passes, and
+  `OWNER_ROUTE` skips the check on Race Control's routes, so the owner can lift a ban from a banned network.
+- **Not covered:** a cup socket that is already open keeps running until it drops (only new ones are refused). A VPN
+  or a new address from the ISP gets past any IP ban, and everyone sharing a banned address is blocked with the player.
 
 ## Bad days (free-plan limits)
 

@@ -1,8 +1,14 @@
 // Site traffic for the owner dashboard. One Durable Object ("global") holds it all in
 // SQLite. Visitors are random ids the page makes up; no token or IP is ever stored, only a
-// one-way hash of the token (`account`) so one account open in several browsers counts once.
+// one-way hash of the token (`account`) so one account open in several browsers counts once,
+// and a one-way hash of the address (`ip`) so the owner can find an address to ban.
 
 import { DurableObject } from "cloudflare:workers";
+
+// The Worker reads this list on every request, so it lives in KV: { <address hash>: until, or 0 for good }.
+export const IP_BANS_KEY = "ip-bans";
+// 0 = for good.
+export const IP_BAN_DAYS = [1, 7, 30, 0];
 
 // Everything is summed into 10-minute buckets: `t` is epoch seconds / BUCKET_S.
 const BUCKET_S = 600;
@@ -220,6 +226,45 @@ export class TrafficStats extends DurableObject {
             this.sql.exec("ALTER TABLE buckets ADD COLUMN live TEXT");
         if (!this.sql.exec("PRAGMA table_info(sessions)").toArray().some((c) => c.name === "account"))
             this.sql.exec("ALTER TABLE sessions ADD COLUMN account TEXT");
+        if (!this.sql.exec("PRAGMA table_info(sessions)").toArray().some((c) => c.name === "ip"))
+            this.sql.exec("ALTER TABLE sessions ADD COLUMN ip TEXT");
+        // Nothing updates `ip` after the insert, so this costs one row written per visit. An index holding
+        // `nickname` would cost one per beat, since every beat's UPDATE sets that column.
+        this.sql.exec("CREATE INDEX IF NOT EXISTS sessions_ip ON sessions(ip) WHERE ip IS NOT NULL");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER, who TEXT)");
+    }
+
+    // Every address this nickname opened the site from, newest first. Runs through every session that has
+    // an address, which only a click on Race Control's Bans tab pays for.
+    ipLookup(nickname) {
+        const matches = this.sql.exec(`SELECT ip AS hash, COUNT(*) AS visits, MAX(last) AS last, country, device, browser
+            FROM sessions WHERE ip IS NOT NULL AND nickname = ? COLLATE NOCASE GROUP BY ip ORDER BY last DESC LIMIT 10`, nickname).toArray();
+        for (const m of matches) {
+            m.people = this.sql.exec("SELECT COUNT(DISTINCT visitor) AS n FROM sessions WHERE ip = ?", m.hash).one().n;
+            m.names = this.sql.exec("SELECT DISTINCT nickname FROM sessions WHERE ip = ? AND nickname IS NOT NULL LIMIT 12", m.hash).toArray().map((r) => r.nickname);
+        }
+        return { matches };
+    }
+
+    ipBans() {
+        this.sql.exec("DELETE FROM ip_bans WHERE until IS NOT NULL AND until <= ?", Date.now());
+        return { bans: this.sql.exec("SELECT ip AS hash, at, until, who FROM ip_bans ORDER BY at DESC").toArray() };
+    }
+
+    async publishIpBans() {
+        const { bans } = this.ipBans();
+        if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(bans.map((b) => [b.hash, b.until ?? 0]))));
+        return { bans };
+    }
+
+    async banIp(hash, until, who) {
+        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who) VALUES (?, ?, ?, ?)", hash, Date.now(), until, who);
+        return this.publishIpBans();
+    }
+
+    async unbanIp(hash) {
+        this.sql.exec("DELETE FROM ip_bans WHERE ip = ?", hash);
+        return this.publishIpBans();
     }
 
     notePlay(visitor, seconds) {
@@ -401,9 +446,9 @@ export class TrafficStats extends DurableObject {
         if (isNew) this.sql.exec("INSERT INTO visitors (id, first, last, opens) VALUES (?, ?, ?, 1)", b.v, now, now);
         else this.sql.exec("UPDATE visitors SET last = ?, opens = opens + 1 WHERE id = ?", now, b.v);
         const start = now - b.rt * 1000;
-        this.sql.exec(`INSERT INTO sessions (id, visitor, account, start, last, repeat_visit, nickname, country, device, os, browser, referrer, site)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            b.s, b.v, b.a, start, start, isNew ? 0 : 1, b.nick, meta.country, meta.device, meta.os, meta.browser, b.ref, meta.site);
+        this.sql.exec(`INSERT INTO sessions (id, visitor, account, start, last, repeat_visit, nickname, country, device, os, browser, referrer, site, ip)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            b.s, b.v, b.a, start, start, isNew ? 0 : 1, b.nick, meta.country, meta.device, meta.os, meta.browser, b.ref, meta.site, meta.ipKey ?? null);
         return {
             session: {
                 id: b.s, visitor: b.v, account: b.a, start, last: start, expires: 0, ended: false,

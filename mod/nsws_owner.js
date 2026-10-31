@@ -9,7 +9,8 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"]];
+    const BAN_TIMES = [[1, "1 day"], [7, "7 days"], [30, "30 days"], [0, "For good"]];
     const DRIVER_SORTS = {
         runtime: ["Most time on the site", "combined runtime across all their visits"],
         driving: ["Most time driving", "time racing with the game in focus"],
@@ -611,6 +612,7 @@
         if (ui.tab === "anticheat") return "anti";
         if (ui.tab === "announce") return "ann";
         if (ui.tab === "tags") return "tags";
+        if (ui.tab === "bans") return "bans";
         return statsKey();
     }
 
@@ -688,6 +690,9 @@
         } else if (ui.tab === "tags") {
             ui.tags ??= cacheGet("tags");
             if (!ui.tags) loads.push(loadTags);
+        } else if (ui.tab === "bans") {
+            ui.bans ??= cacheGet("bans");
+            if (!ui.bans) loads.push(loadBans);
         } else {
             if (!ui.stats) {
                 ui.stats = cacheGet(statsKey());
@@ -709,6 +714,7 @@
         else if (tab === "anticheat") await loadAnti();
         else if (tab === "announce") await loadAnnouncements();
         else if (tab === "tags") await loadTags();
+        else if (tab === "bans") await loadBans();
         else await loadStats();
         if (!ui.refreshBtn) return;
         ui.refreshBtn.disabled = false;
@@ -2054,6 +2060,149 @@
         renderTagLists();
     }
 
+    async function loadBans() {
+        try {
+            ui.bans = await post("ipban", {});
+            cachePut("bans", ui.bans);
+            ui.bansError = null;
+        } catch (err) {
+            ui.bansError = err;
+        }
+        if (ui.overlay && ui.tab === "bans") renderBanLists();
+    }
+
+    async function changeBans(path, extra, done) {
+        ui.bansNote = "Saving…";
+        renderBanLists();
+        try {
+            const data = await post(path, extra);
+            if (data.error === "self") {
+                ui.bansNote = "That's your own address, so it wasn't banned.";
+            } else {
+                ui.bans = data;
+                cachePut("bans", data);
+                ui.bansNote = done;
+            }
+        } catch (err) {
+            ui.bansNote = err.status === 400 ? "That isn't an IP address." : "Couldn't save that. Try again in a moment.";
+        }
+        renderBanLists();
+    }
+
+    function banInput(placeholder) {
+        const input = el("input");
+        input.placeholder = placeholder;
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+        return input;
+    }
+
+    function banButtons(target) {
+        const box = el("div");
+        box.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;";
+        for (const [days, label] of BAN_TIMES) {
+            const b = el("button", "button", label);
+            b.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
+            b.addEventListener("click", () => {
+                const extra = target();
+                if (extra) changeBans("ipban/ban", { ...extra, days }, "Banned. Other server copies pick it up within a few minutes.");
+            });
+            box.appendChild(b);
+        }
+        return box;
+    }
+
+    function buildBans() {
+        const root = el("div");
+        const find = card("Find a player", "list", "Their exact name. This lists the addresses they opened the site from. Only visits made after IP bans went live have one.");
+        const row = el("div", "nrc-find");
+        const input = banInput("Nickname");
+        const go = el("button", "button", "Find");
+        const search = async () => {
+            const nickname = input.value.trim();
+            if (!nickname) return;
+            ui.bansNote = "Looking…";
+            renderBanLists();
+            try {
+                ui.bansFound = { nickname, ...(await post("ipban/lookup", { nickname })) };
+                ui.bansNote = "";
+            } catch {
+                ui.bansNote = "Couldn't look that up. Try again in a moment.";
+            }
+            renderBanLists();
+        };
+        go.addEventListener("click", search);
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") search();
+        });
+        row.append(input, go);
+        find.appendChild(row);
+        ui.bansFoundBox = el("div");
+        find.appendChild(ui.bansFoundBox);
+
+        const typed = card("Ban an address", "list", "Type an IP address if you already know it. The list below never shows it again, only a short id.");
+        const typedInput = banInput("IP address");
+        const typedRow = el("div", "nrc-find");
+        typedRow.appendChild(typedInput);
+        typed.append(typedRow, banButtons(() => {
+            const ip = typedInput.value.trim();
+            if (!ip) return null;
+            typedInput.value = "";
+            return { ip };
+        }));
+
+        ui.bansNoteBox = el("div", "nrc-sub");
+        ui.bansListBox = el("div");
+        root.append(find, typed, ui.bansNoteBox, ui.bansListBox);
+        return root;
+    }
+
+    function renderBanLists() {
+        if (!ui.bansRoot) return;
+        const banned = new Map((ui.bans?.bans ?? []).map((b) => [b.hash, b]));
+        const found = ui.bansFoundBox;
+        found.textContent = "";
+        if (ui.bansFound && !ui.bansFound.matches.length) {
+            found.appendChild(el("div", "nrc-empty", "No address saved for that name."));
+        } else if (ui.bansFound) {
+            found.appendChild(table([["Address"], ["Last seen", "num"], ["Visits", "num"], ["Where"], ["Names on it", "name"], ["Ban"]], ui.bansFound.matches.map((m) => {
+                const names = el("div", null, m.names.join(", "));
+                names.style.whiteSpace = "normal";
+                if (m.people > 3) {
+                    const warn = el("div", null, m.people + " browsers use this address. It may be a school or workplace.");
+                    warn.style.color = GOLD;
+                    names.appendChild(warn);
+                }
+                const action = banned.has(m.hash) ? el("span", null, "Banned") : banButtons(() => ({ hash: m.hash, who: ui.bansFound.nickname }));
+                return [m.hash.slice(0, 8), fmt.dateTime(m.last), num(m.visits), [m.country, m.device, m.browser].filter(Boolean).join(" · "), names, action];
+            })));
+        }
+        ui.bansNoteBox.textContent = ui.bansNote || "";
+        const list = ui.bansListBox;
+        list.textContent = "";
+        const c = card("Banned", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops.");
+        if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
+        else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
+        else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));
+        else c.appendChild(table([["Address"], ["Player", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
+            const lift = el("button", "button", "Unban");
+            lift.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
+            lift.addEventListener("click", () => changeBans("ipban/unban", { hash: b.hash }, "Unbanned. Other server copies pick it up within a few minutes."));
+            return [b.hash.slice(0, 8), b.who || "", fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
+        })));
+        list.appendChild(c);
+    }
+
+    function renderBansTab(body) {
+        if (!ui.bansRoot) ui.bansRoot = buildBans();
+        if (ui.bansRoot.parentNode !== body) {
+            body.textContent = "";
+            body.appendChild(ui.bansRoot);
+        }
+        renderBanLists();
+    }
+
     function render() {
         if (!ui.overlay) return;
         const body = ui.body;
@@ -2068,6 +2217,10 @@
         }
         if (ui.tab === "tags") {
             renderTagsTab(body);
+            return;
+        }
+        if (ui.tab === "bans") {
+            renderBansTab(body);
             return;
         }
         body.textContent = "";
@@ -2134,6 +2287,7 @@
         ui.charts = [];
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
         ui.tagsRoot = ui.tagsWho = ui.tagsLists = ui.tagsHitsBox = ui.tagsInput = null;
+        ui.bansRoot = null;
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
         ui.refreshBtn = ui.updatedText = ui.liveDot = ui.liveText = null;

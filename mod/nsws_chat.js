@@ -1816,6 +1816,18 @@
         add("Mute 1d", { t: "mute", uid: m.uid, minutes: 1440 });
         add("Delete all theirs", { t: "clear", uid: m.uid });
         if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : mediaLabel(m).toLowerCase()), { t: "ban", id: m.id });
+        if (!m.owner) {
+            const ipBan = document.createElement("button");
+            ipBan.textContent = "IP ban…";
+            ipBan.addEventListener("click", () => {
+                ipBan.remove();
+                add("IP ban 1d", { t: "ipban", id: m.id, days: 1 });
+                add("IP ban 7d", { t: "ipban", id: m.id, days: 7 });
+                add("IP ban 30d", { t: "ipban", id: m.id, days: 30 });
+                add("IP ban for good", { t: "ipban", id: m.id, days: 0 });
+            });
+            tools.appendChild(ipBan);
+        }
         el.after(tools);
     }
 

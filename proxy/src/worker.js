@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
@@ -71,6 +71,10 @@ const DO_LIMIT_LIFT_MS = 15 * 60_000;
 const DO_LIMIT_LATE_MS = 3 * 3600_000;
 // How long an instance reuses the anti-cheat snapshot it read from KV (see AntiCheat.saveSnapshot).
 const SNAPSHOT_TTL_MS = 5 * 60_000;
+// Every instance rereads the ban list from KV this often; each read counts against the free plan's 100k a day.
+const IP_BANS_TTL_MS = 2 * 60_000;
+// These routes check the owner's key themselves, so the owner can always lift a ban from a banned network.
+const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban)(\/|$)/;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -264,6 +268,55 @@ function hex(buffer) {
 // The game's userTokenHash is the SHA-256 of the token, as hex.
 async function sha256Hex(text) {
     return hex(await crypto.subtle.digest("SHA-256", encoder.encode(text)));
+}
+
+// A home IPv6 connection holds a whole /64 and can hop around inside it, so that counts as one address.
+function ipScope(ip) {
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
+    if (mapped) return mapped[1];
+    if (!ip.includes(":")) return ip;
+    const [head, tail] = ip.toLowerCase().split("::");
+    const left = head ? head.split(":") : [];
+    const right = tail ? tail.split(":") : [];
+    const zeros = tail === undefined ? [] : Array(Math.max(0, 8 - left.length - right.length)).fill("0");
+    return [...left, ...zeros, ...right].slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":");
+}
+
+async function ipHash(ip) {
+    return (await sha256Hex("nsws-chat-ip:" + ipScope(ip || ""))).slice(0, 16);
+}
+
+function readIp(text) {
+    const ip = typeof text === "string" ? text.trim() : "";
+    const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+    if (v4) return v4.slice(1).every((part) => Number(part) <= 255) ? ip : null;
+    return /^[0-9a-f:.]{2,45}$/i.test(ip) && ip.split(":").length >= 3 && ip.split("::").length <= 2 ? ip : null;
+}
+
+let ipBanList = null;
+
+async function currentIpBans(env) {
+    if (!env.FALLBACK) return {};
+    if (!ipBanList || Date.now() - ipBanList.at > IP_BANS_TTL_MS) {
+        const kept = ipBanList?.bans ?? {};
+        ipBanList = { at: Date.now(), bans: kept };
+        const read = await env.FALLBACK.get(IP_BANS_KEY, "json").catch((err) => {
+            console.error("ban list unavailable:", err && err.message);
+            return kept;
+        });
+        ipBanList.bans = read ?? {};
+    }
+    return ipBanList.bans;
+}
+
+// { until } (null = for good) if this request's address is banned, otherwise null.
+async function ipBanOf(request, env) {
+    const bans = await currentIpBans(env);
+    const ip = request.headers.get("CF-Connecting-IP");
+    if (!ip || !Object.keys(bans).length) return null;
+    const until = bans[await ipHash(ip)];
+    if (until === undefined || (until && until <= Date.now())) return null;
+    return { until: until || null };
 }
 
 // Same shape as a real track id, but nobody without TRACK_SALT can work it out.
@@ -1173,7 +1226,8 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         const beat = readBeat(text);
         if (!beat) return plain(400, "Bad request", origin);
         const client = describeClient(request);
-        const meta = { ...client, site: new URL(origin).host, ip: request.headers.get("CF-Connecting-IP") };
+        const connectingIp = request.headers.get("CF-Connecting-IP");
+        const meta = { ...client, site: new URL(origin).host, ip: connectingIp, ipKey: connectingIp ? await ipHash(connectingIp) : null };
         // The reply carries how many people are on the site, which the chat shows, and the
         // owner's live announcement.
         let reply = null;
@@ -1217,6 +1271,9 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     if (url.pathname === TRAFFIC_PREFIX + "live") return json(await stub.liveStats(), origin);
     if (url.pathname === TRAFFIC_PREFIX + "stats") {
         return json(await stub.stats(String(body.range ?? "day"), Number(body.tz) || 0), origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "ipban" || url.pathname.startsWith(TRAFFIC_PREFIX + "ipban/")) {
+        return handleIpBans(request, url, env, stub, body, origin);
     }
     const anti = antiCheat(env);
     if (url.pathname.startsWith(TRAFFIC_PREFIX + "anticheat") && !anti) return plain(503, "Anti-cheat is off", origin);
@@ -1281,6 +1338,42 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     return plain(404, "Not found", origin);
 }
 
+async function handleIpBans(request, url, env, stub, body, origin) {
+    const sub = url.pathname.slice((TRAFFIC_PREFIX + "ipban").length);
+    const chat = env.CHAT?.get(env.CHAT.idFromName("global"));
+    if (sub === "") return json(await stub.ipBans(), origin);
+    if (sub === "/lookup") {
+        const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 64) : "";
+        if (!nickname) return plain(400, "Bad request", origin);
+        return json(await stub.ipLookup(nickname), origin);
+    }
+    if (sub === "/ban") {
+        if (!IP_BAN_DAYS.includes(body.days)) return plain(400, "Bad request", origin);
+        const typed = body.ip != null ? readIp(body.ip) : null;
+        if (body.ip != null && !typed) return plain(400, "Bad request", origin);
+        const hash = typed ? await ipHash(typed) : body.hash;
+        if (!/^[0-9a-f]{16}$/.test(hash ?? "")) return plain(400, "Bad request", origin);
+        if (hash === await ipHash(request.headers.get("CF-Connecting-IP"))) return json({ error: "self" }, origin);
+        const until = body.days ? Date.now() + body.days * 86_400_000 : null;
+        const who = typed ? "Typed address" : typeof body.who === "string" ? body.who.slice(0, 64) : null;
+        const result = await stub.banIp(hash, until, who);
+        await chat?.blockIp(hash, until);
+        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: until ?? 0 };
+        return json(result, origin);
+    }
+    if (sub === "/unban") {
+        if (!/^[0-9a-f]{16}$/.test(body.hash ?? "")) return plain(400, "Bad request", origin);
+        const result = await stub.unbanIp(body.hash);
+        await chat?.unblockIp(body.hash);
+        if (ipBanList) {
+            const { [body.hash]: lifted, ...rest } = ipBanList.bans;
+            ipBanList.bans = rest;
+        }
+        return json(result, origin);
+    }
+    return plain(404, "Not found", origin);
+}
+
 // Players with the chat open hear about announcements straight away; everyone else on their next beat.
 async function chatBroadcast(env, data) {
     if (!env.CHAT) return;
@@ -1298,7 +1391,7 @@ async function chatTarget(url, connectingIp) {
     // ?cup=CODE is that cup's own chat room (src/chat.js), used by the Competitions panel.
     const cup = String(url.searchParams.get("cup") || "").toUpperCase();
     if (cup && !LOBBY_CODE.test(cup)) return { refused: "BadRequest" };
-    const ip = (await sha256Hex("nsws-chat-ip:" + (connectingIp || ""))).slice(0, 16);
+    const ip = await ipHash(connectingIp);
     const headers = { "X-Chat-Ip": ip };
     if (cup) headers["X-Chat-Cup"] = cup;
     return { ns: "CHAT", name: cup ? "cup:" + cup : "global", cup: cup || null, path: "nsws/chat" + url.search, headers };
@@ -1357,7 +1450,7 @@ async function handleChat(request, url, env, fromSite, origin) {
         const body = await request.arrayBuffer();
         if (body.byteLength > MAX_CHAT_UPLOAD) return plain(413, "Too large", origin);
         if (doLimited()) return busy(origin);
-        const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+        const ip = await ipHash(request.headers.get("CF-Connecting-IP"));
         let reply;
         try {
             reply = await env.CHAT.get(env.CHAT.idFromName("global")).fetch(new Request("https://chat.internal/nsws/chat/upload", {
@@ -1391,7 +1484,7 @@ async function handleChat(request, url, env, fromSite, origin) {
             return plain(503, "Chat is busy", origin);
         }
     }
-    const ip = (await sha256Hex("nsws-chat-ip:" + (request.headers.get("CF-Connecting-IP") || ""))).slice(0, 16);
+    const ip = await ipHash(request.headers.get("CF-Connecting-IP"));
     const room = env.CHAT.get(env.CHAT.idFromName("global"));
     if (request.method !== "POST") return plain(405, "Method not allowed", origin);
     const text = await readSmallBody(request, MAX_CHAT_BODY);
@@ -1624,6 +1717,13 @@ export default {
                 noteDoError(err);
                 console.error("cup link error:", err && err.message);
                 return plain(500, "Cup links failed", null);
+            }
+        }
+
+        if (request.method !== "OPTIONS" && !OWNER_ROUTE.test(url.pathname)) {
+            const ban = await ipBanOf(request, env);
+            if (ban && !(await carriesOwnerKey(request, url, cfg))) {
+                return json({ banned: true, until: ban.until }, request.headers.get("Origin") || "*", 403);
             }
         }
 
