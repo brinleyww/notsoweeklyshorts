@@ -501,8 +501,8 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   lifted every account to its sessions' total `focus` (`restorePlay`, `meta` key
   `play_restore` in `TrafficStats`). Hours tags (`FIRST LAPS` 1 h,
   `REGULAR` 5, `GRINDER` 10, `VETERAN` 25, `ROAD WARRIOR` 50, `CENTURION` 100,
-  `LIFER` 250) are owned once the hours are there. The page puts a new one on when
-  the player wears no tag or a smaller hours tag, and says so.
+  `LIFER` 250) are owned once the hours are there. No tag of any kind is ever put
+  on automatically: the page says a new one is theirs, and the player wears it.
 - **Weekly bingo.** Every NSWS week has one 5x5 card with a free centre, the same
   for everyone. `mod/nsws_bingo.js` makes it from the week's tracks (seeded by the
   week, the round and the track ids): one column per track with an easy, a medium
@@ -525,7 +525,7 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   `BLACKOUT` with one whole card. Squares are the player's own word, like the
   hours: the tags are for fun, not for the boards. (An earlier weekly streak left
   an unused `played_weeks` table and `meta` key `weeks_backfill`.)
-- **NSWS King.** One player at a time wears `NSWS KING`: whoever holds the most
+- **NSWS King.** One player at a time owns `NSWS KING`: whoever holds the most
   WRs (first place on a board) over every NSWS week, live week included. When the
   Worker serves the first page of an NSWS board (version 0.6.2, all runs, with the
   anti-cheat reachable), it passes the board's first place, after bans and hidden
@@ -534,9 +534,10 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   on another board counts for nothing. Each Worker instance remembers what it last
   sent per track, and `Accounts` keeps the `wrs` table in memory, so an
   unchanged board costs no rows. A tie keeps the current King; with no King among
-  the tied, whoever got there first. The new King has the tag put on by the
-  server (the tag they wore is kept in `wr_king.before`), and the old one gets
-  that tag back if they were still wearing the crown. The chat stores the King's
+  the tied, whoever got there first. The new King puts the tag on themselves, and
+  an old King still wearing it goes to no tag. (`wr_king.before` only holds a tag
+  for a King crowned before 2026-10-30, when the crown was put on for them; they
+  get that tag back.) The chat stores the King's
   tag with the count (`king:7`), and `refer/me` returns `wrs` (the player's
   own count) and `king` (`{nickname, wrs, since}`). Boards nobody opens would
   never be noted, so the owner's page opens every NSWS board once every 12 hours

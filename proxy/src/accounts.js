@@ -197,7 +197,8 @@ export class Accounts extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wrs (
             track TEXT PRIMARY KEY, week INTEGER NOT NULL, user_id TEXT NOT NULL, nickname TEXT NOT NULL,
             frames INTEGER NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID`);
-        // The one NSWS King; before is the tag they wore when crowned, put back when they lose it.
+        // The one NSWS King. before only holds a tag for a King crowned when the crown was still put
+        // on for them; they get it back when they lose the crown.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wr_king (
             id INTEGER PRIMARY KEY CHECK (id = 0), user_id TEXT NOT NULL, since INTEGER NOT NULL, before TEXT)`);
         this.top = null;
@@ -301,9 +302,7 @@ export class Accounts extends DurableObject {
                     retags.add(current);
                 }
                 if (best) {
-                    const before = this.tagProfile(best).equipped;
-                    this.setEquipped(best, "king");
-                    this.king = { user_id: best, since: Date.now(), before: before === "king" ? null : before };
+                    this.king = { user_id: best, since: Date.now(), before: null };
                     this.sql.exec("INSERT OR REPLACE INTO wr_king (id, user_id, since, before) VALUES (0, ?, ?, ?)",
                         best, this.king.since, this.king.before);
                     retags.add(best);
@@ -562,7 +561,7 @@ export class Accounts extends DurableObject {
         return { state, retag: { uids: this.chatUids(userId), tag: this.chatTagOf(userId) } };
     }
 
-    // Bought tags are kept for good and put on straight away.
+    // Bought tags are kept for good; the player puts them on.
     buyTag(userId, tag) {
         if (!isTag(tag) || TAGS[tag].kind !== "shop") return { error: "bad" };
         const state = this.tagState(userId);
@@ -570,7 +569,6 @@ export class Accounts extends DurableObject {
             if (state.points < TAGS[tag].cost) return { error: "points" };
             this.sql.exec("INSERT INTO tag_bought (user_id, tag, cost, at) VALUES (?, ?, ?, ?)", userId, tag, TAGS[tag].cost, Date.now());
         }
-        this.setEquipped(userId, tag);
         return this.changed(userId);
     }
 

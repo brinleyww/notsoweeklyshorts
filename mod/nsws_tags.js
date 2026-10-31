@@ -56,7 +56,7 @@
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
-        ["king", "NSWS King", "Only one player wears it: whoever holds the most WRs over every NSWS week. It moves to whoever takes the lead (a tie keeps the current King) and goes on by itself when you get it."],
+        ["king", "NSWS King", "Only one player can wear it: whoever holds the most WRs over every NSWS week. It moves to whoever takes the lead (a tie keeps the current King)."],
         ["bingo", "Bingo", "Earned with bingos on the weekly bingo card (a full row, column or diagonal). BLACKOUT needs every square of one card."],
         ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
@@ -313,12 +313,11 @@
         return n + (n === 1 ? " WR" : " WRs");
     }
 
-    // Tags that come by themselves. A new hours tag is put on when the player wears no tag or a smaller
-    // one; bingo tags never are. rank orders them within their kind.
+    // Tags that come by themselves. Only the player ever puts a tag on.
     const EARNED = [
-        { kind: "blackout", has: (t) => !!t.blackout, rank: () => 1 },
-        { kind: "bingo", has: (t) => t.bingos > 0, rank: (t) => t.bingos },
-        { kind: "hours", has: (t) => t.hours > 0, rank: (t) => t.hours, autoWear: true },
+        { kind: "blackout", has: (t) => !!t.blackout },
+        { kind: "bingo", has: (t) => t.bingos > 0 },
+        { kind: "hours", has: (t) => t.hours > 0 },
     ];
 
     function earnedKind(tag) {
@@ -346,10 +345,9 @@
         return null;
     }
 
-    // New hours tags and friends whose referral just counted get a toast once. A new hours tag is put
-    // on straight away when the player wears no tag or a smaller hours tag.
+    // New hours tags and friends whose referral just counted get a toast once.
     function announce(next) {
-        if (typeof next.code !== "string" || announce.busy) return;
+        if (typeof next.code !== "string") return;
         const earned = TAGS.filter((t) => earnedKind(t) && next.owned.includes(t.id));
         const latestRef = Math.max(0, ...(next.recent ?? []).map((r) => r.at));
         const seen = readSeen(next.code);
@@ -362,36 +360,21 @@
         }
         const king = next.owned.includes("king");
         if (king && !seen?.king) {
-            lines.push("You hold the most WRs on NSWS (" + wrsText(next.wrs ?? 0) + "): you're the NSWS KING"
-                + (next.equipped === "king" ? " and you're wearing the tag now." : ". Wear the tag from Garage → Tags."));
+            lines.push("You hold the most WRs on NSWS (" + wrsText(next.wrs ?? 0) + "): you're the NSWS KING. Wear the tag from Garage → Tags.");
         } else if (!king && seen?.king) {
             lines.push((next.king ? next.king.nickname + " holds more WRs now" : "You no longer hold the most WRs") + ", so the NSWS KING tag has moved on.");
         }
-        const worn = BY_ID.get(next.equipped);
-        let wear = null;
         for (const kind of EARNED) {
             const fresh = earned.filter((t) => kind.has(t) && !seenIds.includes(t.id));
             const top = fresh[fresh.length - 1];
             if (!top) continue;
-            const better = kind.autoWear && (next.equipped == null || (earnedKind(worn) === kind && kind.rank(worn) < kind.rank(top)));
-            if (!wear && better) wear = top.id;
             const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
                 : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"
                 : "You marked a whole bingo card: the BLACKOUT tag is yours";
-            lines.push(what + (wear === top.id ? " and you're wearing it now." : ". Wear it from Garage → Tags."));
+            lines.push(what + ". Wear it from Garage → Tags.");
         }
         storageSet(SEEN_KEY + next.code, JSON.stringify({ earned: earned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0), king }));
         if (lines.length) toast(lines.join(" "));
-        const token = profileToken();
-        if (wear && token) {
-            announce.busy = true;
-            api("tags/equip", { userToken: token, tag: wear }).then(({ status, data }) => {
-                announce.busy = false;
-                if (status === 200) setState(data);
-            }, () => {
-                announce.busy = false;
-            });
-        }
     }
 
     function savedState(token) {
@@ -553,7 +536,7 @@
         if (tag.group === "king") {
             if (owns(tag.id)) return "You hold the most WRs on NSWS (" + wrsText(state.wrs) + "), so you're the King. If someone takes the lead, the tag moves to them.";
             const king = state?.king;
-            return "Hold more WRs (first place on a board) than anyone else, counting every NSWS week. Only one player wears it, and a tie keeps the current King. "
+            return "Hold more WRs (first place on a board) than anyone else, counting every NSWS week. Only one player can wear it, and a tie keeps the current King. "
                 + (king ? "The King is " + king.nickname + " with " + wrsText(king.wrs) + "." : "Nobody holds it yet.")
                 + " You hold " + wrsText(state?.wrs ?? 0) + ".";
         }
@@ -585,7 +568,7 @@
         const { status, data } = await api(kind === "buy" ? "tags/buy" : "tags/equip", { userToken: token, tag });
         view.busy = false;
         if (status === 200) {
-            view.note = kind === "buy" ? "Bought! You're wearing it now. It shows in the chat on your next message."
+            view.note = kind === "buy" ? "Bought! It's yours for good. Press Wear it to put it on."
                 : tag ? "You're wearing it. It shows in the chat on your next message." : "No tag now.";
             setState(data);
         } else {
