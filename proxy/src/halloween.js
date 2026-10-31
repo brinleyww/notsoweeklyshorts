@@ -3,7 +3,7 @@
 export const HALLOWEEN = {
     week: 1031,
     from: Date.UTC(2026, 9, 31),
-    until: Date.UTC(2026, 10, 3, 3, 41),
+    until: Date.UTC(2026, 10, 5, 5, 41),
     horsemanTrack: "c6f92a36ad919acc18e680d1ac3c244fab63e6882f90807af315dd8a24930ee5",
     horsemanFrames: 12600,
 };

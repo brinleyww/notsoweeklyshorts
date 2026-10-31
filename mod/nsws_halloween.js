@@ -3,7 +3,7 @@
 // proxy/src/halloween.js and the week's entry in main.bundle.js.
 (function () {
     const FROM = Date.UTC(2026, 9, 31);
-    const UNTIL = Date.UTC(2026, 10, 3, 3, 41);
+    const UNTIL = Date.UTC(2026, 10, 5, 5, 41);
     const WEEK = 1031;
     const TRACK = "c6f92a36ad919acc18e680d1ac3c244fab63e6882f90807af315dd8a24930ee5";
         const LABEL = "Halloween";

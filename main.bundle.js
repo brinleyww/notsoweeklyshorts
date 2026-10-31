@@ -58596,7 +58596,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         {
             week: 1031,
             label: "Halloween",
-            event: { from: Date.UTC(2026, 9, 31, 0, 0), until: Date.UTC(2026, 10, 3, 3, 41) },
+            event: { from: Date.UTC(2026, 9, 31, 0, 0), until: Date.UTC(2026, 10, 5, 5, 41) },
             chunks: ["f72ff7f02283fa41", "cad90286ee96c22c", "0a62654196c8936b", "168d9f13ca628d03"],
             masks: ["e63acc39cb92438d", "a72d939c6c7f4f06", "91e349be745e2949", "edffdaba0c64910e"],
             file: "tracks/community/halloween.track",
