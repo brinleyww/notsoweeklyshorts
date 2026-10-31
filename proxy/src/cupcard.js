@@ -8,6 +8,7 @@
 
 import { FONT, FONT_UNITS } from "./cupfont.js";
 import { encodePng } from "./chatmedia.js";
+import { HALLOWEEN } from "./halloween.js";
 
 export const CARD_W = 1200;
 export const CARD_H = 630;
@@ -263,8 +264,11 @@ class Canvas {
 function poolLabel(pool) {
     const parts = [];
     if (pool?.shorts) {
-        const weeks = [...(pool.weeks ?? [])].sort((a, b) => a - b);
-        parts.push(weeks.length ? `Not So Weekly Shorts week${weeks.length > 1 ? "s" : ""} ${weeks.join(", ")}` : "Not So Weekly Shorts");
+        const all = pool.weeks ?? [];
+        const event = all.includes(HALLOWEEN.week);
+        const weeks = all.filter((w) => w !== HALLOWEEN.week).sort((a, b) => a - b);
+        if (weeks.length || !event) parts.push(weeks.length ? `Not So Weekly Shorts week${weeks.length > 1 ? "s" : ""} ${weeks.join(", ")}` : "Not So Weekly Shorts");
+        if (event) parts.push("Halloween");
     }
     if (pool?.main?.length) parts.push(pool.main.join(", ") + " main tracks");
     if (pool?.community?.length) parts.push("Community " + pool.community.join(", "));

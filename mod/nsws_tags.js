@@ -53,6 +53,9 @@
         { id: "author", label: "AUTHOR TIME", group: "discord", need: "Set the Author Time medals for a week." },
         { id: "og", label: "OG", group: "discord", need: "Have played NSWS since the early weeks." },
         { id: "cupchamp", label: "CUP CHAMPION", group: "discord", need: "Given by the owner to cup winners." },
+        { id: "horseman", label: "HORSEMAN SLAYER", group: "halloween", need: "Beat the Headless Horseman's time on Haunted - Bloodbourne, Halloween 2026." },
+        { id: "haunted", label: "HAUNTED", group: "halloween", haunted: true, need: "Get a bingo on the Halloween card, Halloween 2026." },
+        { id: "pumpkin", label: "PUMPKIN", group: "halloween", pumpkin: true, need: "Refer a friend or join with a code during the Halloween event, 2026. Both of you get it once the new player uploads a run." },
     ];
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
@@ -62,6 +65,7 @@
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
         ["earned", "Referral rewards", "Free once you get there."],
         ["discord", "Discord tags", "Only the owner gives these out, to go with the Discord roles."],
+        ["halloween", "Halloween", "Halloween 2026 only. You keep them for good, but they can't be earned after the event."],
     ];
 
     const CSS = `
@@ -92,6 +96,9 @@
 .nsws-tag.t-king::before{content:"";flex-shrink:0;width:.95em;height:.68em;background:currentColor;clip-path:polygon(0 100%,0 18%,26% 58%,50% 0,74% 58%,100% 18%,100% 100%);}
 .nsws-tag>.wr{margin-left:.05em;padding-left:.4em;border-left:1px solid currentColor;font-variant-numeric:tabular-nums;}
 .nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
+.nsws-tag.t-pumpkin{background:#e8700c;color:#2a1000;box-shadow:inset 0 -2px #4f8a25;}
+.nsws-tag.t-haunted{background:#2b1a4d;color:#b7ff7a;text-shadow:0 0 6px rgba(160,255,90,.7);}
+.nsws-tag.t-horseman{background:#0d0a12;color:#ff8a1e;box-shadow:inset 0 0 0 1px #ff8a1e;text-shadow:0 0 5px rgba(255,138,30,.8);}
 .nsws-tag>.ball{display:inline-flex;align-items:center;justify-content:center;min-width:1.3em;height:1.3em;margin:-.1em .05em -.1em -.25em;padding:0 .2em;box-sizing:border-box;border-radius:.65em;background:#fff;color:#14141e;font-size:.72em;font-style:normal;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 .14em rgba(0,0,0,.18);}
 .nsws-tag.t-bingo{background:#d23a4c;}
 .nsws-tag.t-dauber{background:linear-gradient(100deg,#7a2fd6,#d13bbd);}
@@ -318,6 +325,7 @@
         { kind: "blackout", has: (t) => !!t.blackout },
         { kind: "bingo", has: (t) => t.bingos > 0 },
         { kind: "hours", has: (t) => t.hours > 0 },
+        { kind: "halloween", has: (t) => t.group === "halloween" },
     ];
 
     function earnedKind(tag) {
@@ -370,6 +378,7 @@
             if (!top) continue;
             const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
                 : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"
+                : kind.kind === "halloween" ? "Halloween: the " + top.label + " tag is yours"
                 : "You marked a whole bingo card: the BLACKOUT tag is yours";
             lines.push(what + ". Wear it from Garage → Tags.");
         }
@@ -521,6 +530,7 @@
         if (tag.blackout) return "Whole card";
         if (tag.bingos) return Math.min(state?.bingo?.total ?? 0, tag.bingos) + " / " + bingosText(tag.bingos);
         if (tag.group === "discord") return "Owner only";
+        if (tag.group === "halloween") return "Halloween 2026";
         return "Use a code";
     }
 

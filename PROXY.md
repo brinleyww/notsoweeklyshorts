@@ -1019,3 +1019,21 @@ To go back to the old proxy:
 drop the `__nswsApiBase` block from `index.html`, and put back the
 `window.__nswsLeaderboardBanlist = [...]` script there — that bundle reads the
 ban list from the page. Times are then visible in the network panel again.
+
+## Halloween event (2026)
+
+A limited event, pseudo week 1031, label "Halloween" (`proxy/src/halloween.js`, `mod/nsws_halloween.js`, and the
+week's entry in `main.bundle.js`; keep the dates, ids and Horseman time the same in all three). The week number is above
+any real week and is never renumbered, since runs are stored under ids derived from it.
+
+- Its boards are not secret, unlike `week >= CURRENT_WEEK`. Its first places don't count toward the NSWS King.
+- Bingo marks for its card are only taken inside the window. The card counts alongside the weekly card.
+- Tags: `haunted` (a bingo on its card, read from `bingo` in `ownedTags`), `pumpkin` (either side of a confirmed referral
+  whose `at` is in the window, no extra rows: it shares the referrals scan) and `horseman` (a `tag_grants` row, written
+  by `handleSubmit` for a run on `horsemanTrack` the anti-cheat passed at upload, at or under `horsemanFrames`).
+- A run uploaded before the owner's page has synced the track is pending, so it never earns `horseman`. Open the live
+  site as owner straight after a deploy that adds a track. Race Control can still grant it by hand.
+- When the window ends the page drops the group from the Play menu and cup pools, and the theme and button go away.
+  Tags stay. Nothing has to ship to end it. Boards still accept uploads after the end, but no page offers the tracks.
+- The tracks are locked once players are on them: the card is seeded from the track ids and a board from the track's
+  id, so changing a track's parts moves every mark to the wrong square and starts an empty board.

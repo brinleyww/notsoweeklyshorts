@@ -94,6 +94,8 @@ export class Organizer {
   #poolAt = 0;
   #bots: BotManager | null = null;
   #botNames: number[] = [];
+  // During the Halloween event the record chaser races as the Horseman; bots stay keyed by their real names.
+  #realNames = new Map<number, string>();
   #botTier = '';
   #planTrack: { ref: TrackRef; data: TrackData } | null = null;
   #cupRuns = new Map<string, RefInput[]>();
@@ -320,6 +322,7 @@ export class Organizer {
       changed = true;
     }
     if (!changed) return;
+    if (lobby) this.#renameChaser();
     this.#botsReady();
     if (s.phase === 'draft') this.#botDraft();
     if (s.phase === 'loading' || s.phase === 'warmup') this.#planBots();
@@ -329,7 +332,7 @@ export class Organizer {
 
   #newBot() {
     const s = this.state;
-    const taken = new Set(s.players.filter((p) => p.bot).map((p) => p.name));
+    const taken = new Set(s.players.filter((p) => p.bot).map((p) => this.#realNames.get(p.u) ?? p.name));
     const k = this.#botNames.find((i) => !taken.has(BOT_NAMES[i]));
     if (k == null) return null;
     const u = this.#nextU++;
@@ -361,6 +364,7 @@ export class Organizer {
     const ph = this.state.phase;
     if (ph === 'results') this.#prePlan();
     else if (ph === 'loading' || ph === 'warmup') this.#planBots();
+    this.#renameChaser();
   }
 
   // Two bots hit each other (found on this page, bots/clash.ts): bot u's velocity change v at its frame `at`.
@@ -422,15 +426,48 @@ export class Organizer {
     const mgr = bots.length ? this.#manager() : this.#bots;
     if (n == null || !t || !mgr) return;
     const skills = bots.map((p) => ((this.#secret.get(p.u) ?? 0) >= n ? 1 : p.bot!.s / 100));
-    const names = bots.map((p) => BOT_NAMES.indexOf(p.name));
-    // The record chaser: the real expert first by name (never a secret one, whose skill is only borrowed).
-    let chaser = -1;
-    if (this.#wrBot) bots.forEach((p, i) => p.bot!.s / 100 >= EXPERT_SKILL && (chaser < 0 || names[i] < names[chaser]) && (chaser = i));
+    const names = this.#nameIds(bots);
+    const chaser = this.#chaser(bots, names);
+    this.#nameChaser(bots[chaser]);
     const list = personas(s.rules.botSkill, bots.length, seedOf(`${s.id}:${n}`), skills, names, chaser);
     list.forEach((persona, i) => (persona.u = bots[i].u));
     mgr.prepare(n, t.ref, t.data, this.#cupRuns.get(t.ref.id) ?? [], { bots: list, mode: s.rules.style === 'timeattack' ? 'ta' : 'run', end: this.#limitMs(t.ref.id) ?? BOT_PLAN_MS, bumper: s.rules.collisions });
     const r = s.round;
     if (mgr.failed && r && r.startAt == null) r.racers = r.racers.filter((u) => !isBot(player(s, u)));
+  }
+
+  #nameIds(bots: Player[]) {
+    return bots.map((p) => BOT_NAMES.indexOf(this.#realNames.get(p.u) ?? p.name));
+  }
+
+  // The record chaser: the real expert first by name (never a secret one, whose skill is only borrowed).
+  #chaser(bots: Player[], names: number[]) {
+    let chaser = -1;
+    if (this.#wrBot) bots.forEach((p, i) => p.bot!.s / 100 >= EXPERT_SKILL && (chaser < 0 || names[i] < names[chaser]) && (chaser = i));
+    return chaser;
+  }
+
+  #renameChaser() {
+    const bots = this.#seatedBots();
+    this.#nameChaser(bots[this.#chaser(bots, this.#nameIds(bots))]);
+  }
+
+  // Every bot, not just the round's: one knocked out or benched as the Horseman gets its name back too.
+  #nameChaser(chaser: Player | undefined) {
+    const event = !!(window as unknown as { __nswsHalloween?: { active(): boolean } }).__nswsHalloween?.active();
+    for (const p of this.state.players) {
+      if (!p.bot) continue;
+      const real = this.#realNames.get(p.u);
+      if (event && p === chaser && !real) {
+        this.#realNames.set(p.u, p.name);
+        p.name = 'Headless Horseman';
+        this.touch(true);
+      } else if (real && (!event || p !== chaser)) {
+        p.name = real;
+        this.#realNames.delete(p.u);
+        this.touch(true);
+      }
+    }
   }
 
   // Another round on the same track: its bots plan during the results.

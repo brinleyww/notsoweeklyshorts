@@ -56848,7 +56848,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         const words = base.split(/\s+/).filter(Boolean);
                         return words.length > 1 ? words.map(w => w[0].toUpperCase()).join("").slice(0, 5) : base.slice(0, 5);
                     };
-                    const stWeeksSorted = () => [...(window.__nswsWeeks || [])].sort((a, b) => b.week - a.week);
+                    const stWeeksSorted = () => (window.__nswsWeeks || []).filter(w => !w.event).sort((a, b) => b.week - a.week);
                     const stTracksForWeek = week => window.__nswsTracksForWeek ? window.__nswsTracksForWeek(week) : [];
 
                     const overlay = document.createElement("div");
@@ -57330,6 +57330,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ));
                 C.get(this, Bc, "f").appendChild(refBtn);
                 C.get(this, Gc, "f").push(refBtn);
+            }
+            if (window.__nswsHalloween?.active()) {
+                const hauntedBtn = document.createElement("button");
+                hauntedBtn.className = "button";
+                window.__nswsHalloween.mountButton(hauntedBtn);
+                hauntedBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsHalloween.open();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(hauntedBtn);
+                C.get(this, Gc, "f").push(hauntedBtn);
             }
             if (window.__nswsGrind) {
                 const grindBtn = document.createElement("button");
@@ -57886,6 +57898,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             // Returns whether the 3D background is switched off right now.
             syncBackground() {
+                document.documentElement.classList.toggle("nsws-menu-scene", !0);
                 const solid = C.get(this, lh, "f").getSettingBoolean(R.A.SolidMenuBackground);
                 if (!this.assetsLoaded || solid === this.solidBackground)
                     return !0 === this.solidBackground;
@@ -57898,6 +57911,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return solid
             }
             dispose() {
+                document.documentElement.classList.remove("nsws-menu-scene");
                 showSolidMenuBackground(!1),
                 C.get(this, ph, "f")?.dispose(),
                 C.get(this, uh, "f").dispose(),
@@ -58516,6 +58530,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // The bingo card keeps the order the tracks had when it was dealt (it is seeded from it), so marks stay put.
             bingoOrder: ["4ec25597eb1d3fdd83bc463a9a6cf60c85b0792150763487c388c9cde43a6ea0", "cbe44e38c0e7c7db1360dc80cf1aebeb219fc2baff237b2e6587221c1f0dfb93", "75d1e81d2964e64a61163891f057f0f9cd9f825ed13ba5155664bb975fa2c8e7", "bac8cd4a54aaa720038c0a2e1dc7ecb3349d4316b16707db8bc649b275ab714b", "8a35fa08981d6aff50ed71d7f0a9869bbfc46cea3ec77a31694d8cc80c35a716"],
             tracks: [{ id: "75d1e81d2964e64a61163891f057f0f9cd9f825ed13ba5155664bb975fa2c8e7", name: "1 - 4 seasons", short: "4Sea", author: "TD_blox & Xav", env: "Winter", thumb: "tracks/community/thumbnails/week11_3.png", rocket: true }, { id: "8a35fa08981d6aff50ed71d7f0a9869bbfc46cea3ec77a31694d8cc80c35a716", name: "2 - PRECISION MAPPENG", short: "Prec", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week11_5.png", notice: "Respawn after collecting each checkpoint to progress." }, { id: "4ec25597eb1d3fdd83bc463a9a6cf60c85b0792150763487c388c9cde43a6ea0", name: "3 - Launch Control", short: "Lnch", author: "BonnieBeans", env: "Summer", thumb: "tracks/community/thumbnails/week11_1.png", rocket: true }, { id: "cbe44e38c0e7c7db1360dc80cf1aebeb219fc2baff237b2e6587221c1f0dfb93", name: "4 - Solaris", short: "Solar", author: "HummusHere & cheesebob", env: "Desert", thumb: "tracks/community/thumbnails/week11_2.png", rocket: true }, { id: "bac8cd4a54aaa720038c0a2e1dc7ecb3349d4316b16707db8bc649b275ab714b", name: "5 - Flying Dreams", short: "Dream", author: "Forty, Shovelfish, Hero", env: "Summer", thumb: "tracks/community/thumbnails/week11_4.png", rocket: true }]
+        },
+        {
+            week: 1031,
+            label: "Halloween",
+            event: { from: Date.UTC(2026, 9, 31, 0, 0), until: Date.UTC(2026, 10, 3, 3, 41) },
+            chunks: ["f72ff7f02283fa41", "cad90286ee96c22c", "0a62654196c8936b", "168d9f13ca628d03"],
+            masks: ["e63acc39cb92438d", "a72d939c6c7f4f06", "91e349be745e2949", "edffdaba0c64910e"],
+            file: "tracks/community/halloween.track",
+            tracks: [{ id: "b145eb72b1699e086776e43e1d07f95d4c13f7bd1a0c9240ec9d1cbc53f547a8", name: "1 - Haunted - Bloodbourne", short: "Haunt", author: "davadice", env: "Desert", thumb: "tracks/community/thumbnails/halloween_1.png", noMedals: true }, { id: "fff0f88c24a69f3919b7bea7ea6686a37414fdfb3dee6211f55cfb9792131279", name: "2 - Dead Man's Line", short: "DML", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/halloween_2.png", noMedals: true }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
@@ -58563,7 +58586,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         };
 
         const entries = [];
-        const __nswsMaxWeek = Math.max(...__nswsWeeks.map(w => w.week));
+        const __nswsMaxWeek = Math.max(...__nswsWeeks.filter(w => !w.event).map(w => w.week));
         window.__nswsTrackWeekMap = window.__nswsTrackWeekMap || {};
         window.__nswsMaxWeek = __nswsMaxWeek;
         window.__nswsCurrentWeek = __nswsMaxWeek;
@@ -58599,6 +58622,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             panel.appendChild(d);
         };
         window.__nswsRocketTrack = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && !!(w.rocket || p.rocket || t.rocket))));
+        window.__nswsNoMedals = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noMedals)));
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
             if (!w) return [];
@@ -58618,7 +58642,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             return null;
         };
-        [...__nswsWeeks].sort((a, b) => b.week - a.week).forEach((w) => {
+        // An event week sits on top while its event runs and leaves the menu (and cup pools) when it ends.
+        const __nswsEventLive = (w) => Date.now() >= w.event.from && Date.now() < w.event.until;
+        [...__nswsWeeks].sort((a, b) => (b.event ? Infinity : b.week) - (a.event ? Infinity : a.week)).forEach((w) => {
             const parts = [...__nswsPartsOf(w)].reverse();
             parts.forEach((p, pIdx) => {
                 const groupLabel = p.label || w.label || ("Week " + w.week);
@@ -58637,6 +58663,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 p.tracks.forEach((t) => {
                     window.__nswsTrackWeekMap[t.id] = w.week;
+                    if (w.event && !__nswsEventLive(w)) return;
                     entries.push({
                         id: t.id,
                         group: groupLabel,
@@ -63702,7 +63729,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
     // Medals exist only on NSWS tracks; on Kodub's tracks the Author Time scan would page through huge boards.
     function hasMedals(trackId) {
-        return trackId != null && window.__nswsTrackWeek?.(trackId) != null;
+        return trackId != null && window.__nswsTrackWeek?.(trackId) != null && !window.__nswsNoMedals?.(trackId);
     }
 
     function renderMedalBadge(container, trackId, pbSeconds) {

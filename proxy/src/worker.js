@@ -7,6 +7,7 @@ import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
+import { HALLOWEEN } from "./halloween.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
 import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
@@ -340,7 +341,7 @@ async function trackContext(cfg, trackId, weekParam) {
     return {
         trackId,
         week,
-        secret: week != null && cfg.currentWeek != null && week >= cfg.currentWeek,
+        secret: week != null && cfg.currentWeek != null && week >= cfg.currentWeek && week !== HALLOWEEN.week,
         hiddenId: week != null && cfg.trackSalt && cfg.hiddenFromWeek != null && week >= cfg.hiddenFromWeek
             ? await hiddenTrackId(cfg.trackSalt, week, trackId)
             : null,
@@ -674,7 +675,7 @@ const wrSeen = new Map();
 
 function noteWr(env, ctx, track, entry) {
     const stub = accounts(env);
-    if (!stub || doLimited()) return;
+    if (!stub || doLimited() || track.week === HALLOWEEN.week) return;
     const holder = HEX64.test(entry?.userId ?? "") ? entry : null;
     const key = holder ? holder.userId + "|" + holder.frames + "|" + holder.nickname : "";
     if (wrSeen.get(track.trackId) === key) return;
@@ -1079,6 +1080,10 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             flags: await inputFlags(check.recording, frames, check.effort).catch(() => null),
         });
         if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
+        if (track.week === HALLOWEEN.week && trackId === HALLOWEEN.horsemanTrack && check.state === "valid"
+            && HALLOWEEN.horsemanFrames != null && frames <= HALLOWEEN.horsemanFrames) {
+            ctx.waitUntil(accounts(env)?.beatHorseman(hash).catch(() => {}));
+        }
     } else if (check?.hold != null) {
         await anti.lobbyDiscard(check.hold);
     }

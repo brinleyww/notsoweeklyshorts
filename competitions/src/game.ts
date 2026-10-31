@@ -243,6 +243,7 @@ export const site = window as unknown as {
   __nswsCupHostOptions?: unknown;
   __nswsCupPool?: { shorts: boolean; weeks?: number[]; main: string[]; community: string[] };
   __nswsTrackWeekMap?: Record<string, number>;
+  __nswsWeeks?: { week: number; label?: string; event?: unknown }[];
   __nswsMessageBox?: { show(text: string, button: string, callback: null): void };
   __nswsOwner?: { check(): Promise<boolean>; token(): Promise<string | null> };
   __nswsUIClick?: () => void;

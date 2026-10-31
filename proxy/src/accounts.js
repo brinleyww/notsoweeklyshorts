@@ -4,6 +4,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { censor, findSlurs } from "./chatfilter.js";
+import { HALLOWEEN, halloweenLive } from "./halloween.js";
 
 const MAX_NICK = 100;
 const MAX_CLIP_NAME = 100;
@@ -63,7 +64,8 @@ const TOP_TTL_MS = 60_000;
 // who redeemed a code, "milestone" to anyone with that many confirmed referrals, "hours" to anyone
 // who has played that long, "bingo" to anyone with that many bingos in all, "blackout" to anyone who
 // marked a whole card, "king" to the one player holding the most WRs, "shop" is bought with referral
-// points, and "grant" only the owner hands out.
+// points, and "grant" only the owner hands out. "haunted" belongs to anyone with a bingo on the Halloween
+// card, "pumpkin" to both sides of a referral made during the event.
 export const TAGS = {
     king: { kind: "king" },
     bingo: { kind: "bingo", bingos: 1 },
@@ -100,6 +102,9 @@ export const TAGS = {
     author: { kind: "grant" },
     og: { kind: "grant" },
     cupchamp: { kind: "grant" },
+    haunted: { kind: "haunted" },
+    pumpkin: { kind: "pumpkin" },
+    horseman: { kind: "grant" },
 };
 
 const GRIND_BATCH = /^[0-9a-f]{16}$/;
@@ -435,6 +440,7 @@ export class Accounts extends DurableObject {
 
     bingoOpen(week) {
         const live = liveWeek(this.env);
+        if (week === HALLOWEEN.week) return halloweenLive();
         return live != null && week >= live && week <= live + 1;
     }
 
@@ -534,9 +540,11 @@ export class Accounts extends DurableObject {
 
     referralCounts(userId) {
         const row = this.sql.exec(
-            "SELECT COUNT(confirmed) AS confirmed, COUNT(*) - COUNT(confirmed) AS pending FROM referrals WHERE referrer = ?", userId,
+            `SELECT COUNT(confirmed) AS confirmed, COUNT(*) - COUNT(confirmed) AS pending,
+                COUNT(CASE WHEN confirmed IS NOT NULL AND at >= ? AND at < ? THEN 1 END) AS pumpkin FROM referrals WHERE referrer = ?`,
+            HALLOWEEN.from, HALLOWEEN.until, userId,
         ).one();
-        return { confirmed: row.confirmed, pending: row.pending };
+        return { confirmed: row.confirmed, pending: row.pending, pumpkin: row.pumpkin };
     }
 
     tagProfile(userId) {
@@ -546,7 +554,8 @@ export class Accounts extends DurableObject {
     // Every tag this account may wear right now.
     ownedTags(userId, counts = this.referralCounts(userId), hours = this.hoursOf(userId), bingo = this.bingoOf(userId)) {
         const owned = new Set();
-        if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ?", userId).toArray().length) owned.add("referred");
+        const joined = this.sql.exec("SELECT at, confirmed FROM referrals WHERE referred = ?", userId).toArray()[0];
+        if (joined) owned.add("referred");
         for (const [id, tag] of Object.entries(TAGS)) {
             if (tag.kind === "milestone" && counts.confirmed >= tag.referrals) owned.add(id);
             if (tag.kind === "hours" && hours >= tag.hours) owned.add(id);
@@ -554,6 +563,9 @@ export class Accounts extends DurableObject {
             if (tag.kind === "blackout" && bingo.blackouts > 0) owned.add(id);
         }
         if (this.kingId() === userId) owned.add("king");
+        const card = bingo.cards.find((c) => c.week === HALLOWEEN.week);
+        if (card && card.banked + bingoLines(card.marks) > 0) owned.add("haunted");
+        if (counts.pumpkin > 0 || (joined?.confirmed != null && joined.at >= HALLOWEEN.from && joined.at < HALLOWEEN.until)) owned.add("pumpkin");
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         return owned;
@@ -740,6 +752,12 @@ export class Accounts extends DurableObject {
         if (on) this.sql.exec("INSERT OR IGNORE INTO tag_grants (user_id, tag, at) VALUES (?, ?, ?)", userId, tag, Date.now());
         else this.sql.exec("DELETE FROM tag_grants WHERE user_id = ? AND tag = ?", userId, tag);
         return { ...this.changed(userId), granted: this.grantsOf(userId) };
+    }
+
+    // Only the Worker calls this, for a run the anti-cheat passed.
+    beatHorseman(userId) {
+        if (!HEX64.test(userId ?? "") || !halloweenLive()) return;
+        this.sql.exec("INSERT OR IGNORE INTO tag_grants (user_id, tag, at) VALUES (?, 'horseman', ?)", userId, Date.now());
     }
 
     addBonus(userId, amount) {

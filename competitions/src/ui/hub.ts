@@ -90,8 +90,11 @@ export function cupCode(text: string) {
 export function poolLabel(pool: MapPool) {
   const parts: string[] = [];
   if (pool.shorts) {
-    const weeks = [...(pool.weeks ?? [])].sort((a, b) => a - b);
-    parts.push(weeks.length ? `Not So Weekly Shorts week${weeks.length > 1 ? 's' : ''} ${weeks.join(', ')}` : 'Not So Weekly Shorts');
+    const all = pool.weeks ?? [];
+    const events = site.__nswsWeeks?.filter((w) => w.event && all.includes(w.week)) ?? [];
+    const weeks = all.filter((w) => !events.some((e) => e.week === w)).sort((a, b) => a - b);
+    if (weeks.length || !events.length) parts.push(weeks.length ? `Not So Weekly Shorts week${weeks.length > 1 ? 's' : ''} ${weeks.join(', ')}` : 'Not So Weekly Shorts');
+    for (const e of events) parts.push(e.label ?? `Week ${e.week}`);
   }
   if (pool.main.length) parts.push(pool.main.join(', ') + ' main tracks');
   if (pool.community.length) parts.push('Community ' + pool.community.join(', '));
@@ -331,7 +334,7 @@ export class Hub {
           ? h(
               'div',
               { class: 'versions' },
-              weeks.map((w) => chip(`Week ${w} · ${weekCounts.get(w)}`, weekOn(w), () => flipWeek(w))),
+              weeks.map((w) => chip(`${site.__nswsWeeks?.find((x) => x.week === w)?.label ?? `Week ${w}`} · ${weekCounts.get(w)}`, weekOn(w), () => flipWeek(w))),
               h('button', { class: 'mapchip ghost', onclick: click(() => (setWeeks(pool.shorts && !pool.weeks!.length ? [] : weeks), paint())) }, pool.shorts && !pool.weeks!.length ? 'None' : 'All'),
             )
           : null,

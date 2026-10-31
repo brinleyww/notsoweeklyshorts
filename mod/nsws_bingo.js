@@ -21,6 +21,7 @@
     const MARK_RETRY_MS = 60000;
     const MEDAL_RANK = { bronze: 1, silver: 2, gold: 3, author: 4 };
     const ENV_COLORS = { Winter: "#bed8f7", Desert: "#ede2af" };
+    const HALLOWEEN = () => window.__nswsHalloween;
 
     // once: judged from the leaderboard or saved medals rather than runs, so only on a week's first card.
     const TASKS = {
@@ -45,6 +46,25 @@
             { id: "top3", text: (n) => "Top 3 on " + n, once: true },
         ],
     };
+    // The Halloween tracks have no Author Time, so they never need a medal.
+    const NO_MEDAL_TASKS = {
+        easy: [{ id: "finish3", text: (n) => "Finish " + n + " 3 times" }],
+        medium: [{ id: "finish10", text: (n) => "Finish " + n + " 10 times" }],
+        hard: [{ id: "finish25", text: (n) => "Finish " + n + " 25 times" }],
+    };
+    NO_MEDAL_TASKS.epic = NO_MEDAL_TASKS.hard;
+    const HALLOWEEN_ACTIVITIES = [
+        { id: "finish25", text: "Finish 25 runs on the haunted tracks", hint: "Any of the tracks on this card. Only finished runs count." },
+        { id: "drive15", text: "Drive 15 minutes in the dark", hint: "Adds up the times of your finished runs, on any track." },
+        { id: "bronzeall", text: "Bronze time on every medal track", hint: "A run inside the bronze time on each older track on this card." },
+        { id: "gold2", text: "Gold time on 2 tracks", hint: "Two different older tracks on this card." },
+        { id: "silver5", text: "5 silver-time runs", hint: "Runs inside the silver time on the older tracks on this card." },
+        { id: "clean5", text: "Finish 5 runs in a row without restarting", hint: "Same track, every run to the finish line. A restart before the finish starts the count again." },
+        { id: "cup", text: "Finish a race in a cup", hint: "Competitions on the main menu." },
+        { id: "share", text: "Share a PB image", hint: "Press Share PB on the banner after a new personal best." },
+        { id: "gothic3", text: "Visit 3 haunted places", hint: "Finish 3 of The Eldritch Estate, Lenore, Arx Lucida, Grimspyre and Apostle. Play menu, top right: Official & Community." },
+        { id: "horseman", text: "Beat the Headless Horseman", hint: "Beat his time on Haunted - Bloodbourne. Open Halloween on the main menu to see it." },
+    ];
     const ACTIVITIES = [
         { id: "finish25", text: "Finish 25 runs on this week's tracks", hint: "Any of this week's tracks. Only finished runs count." },
         { id: "drive15", text: "Drive 15 minutes of finished runs", hint: "Adds up the times of your finished runs, on any track." },
@@ -199,15 +219,17 @@
     function cardFor(week, round = roundOf(week)) {
         const key = week + ":" + round;
         if (cards.has(key)) return cards.get(key);
-        const listed = window.__nswsTracksForWeek?.(week) ?? [];
-        const order = (window.__nswsWeeks || []).find((w) => w.week === week)?.bingoOrder;
+        const weeks = window.__nswsWeeks || [];
+        const eventCard = HALLOWEEN()?.week === week;
+        const listed = eventCard ? weeks.flatMap((w) => window.__nswsTracksForWeek(w.week)) : window.__nswsTracksForWeek?.(week) ?? [];
+        const order = eventCard ? HALLOWEEN().bingoTracks() : weeks.find((w) => w.week === week)?.bingoOrder;
         const tracks = order ? order.map((id) => listed.find((t) => t.id === id)).filter(Boolean) : listed;
         if (!tracks.length) return null;
         const rnd = random(hash("nsws-bingo2|" + week + "|" + round + "|" + tracks.map((t) => t.id).join(",")));
         const columns = tracks.length >= SIZE
             ? shuffle(tracks.map((_, i) => i), rnd).slice(0, SIZE).sort((a, b) => a - b).map((i) => tracks[i])
             : Array.from({ length: SIZE }, (_, i) => tracks[i % tracks.length]);
-        const activities = shuffle(ACTIVITIES, rnd);
+        const activities = shuffle(eventCard ? HALLOWEEN_ACTIVITIES : ACTIVITIES, rnd);
         const epicColumn = Math.floor(rnd() * SIZE);
         const used = new Set();
         const squares = new Array(SIZE * SIZE);
@@ -216,7 +238,7 @@
             const track = columns[c];
             const cells = [];
             for (const tier of ["easy", "medium", c === epicColumn ? "epic" : "hard"]) {
-                const options = shuffle(TASKS[tier].filter((t) => round === 0 || !t.once), rnd);
+                const options = shuffle((track.noMedals ? NO_MEDAL_TASKS : TASKS)[tier].filter((t) => (round === 0 && !eventCard) || !t.once), rnd);
                 const task = options.find((t) => !used.has(t.id + "|" + track.id)) ?? options[0];
                 used.add(task.id + "|" + track.id);
                 cells.push({ kind: "track", task: task.id, track: { id: track.id, name: trackName(track) }, text: task.text(trackName(track)) });
@@ -253,6 +275,13 @@
         return window.__nswsCurrentWeek ?? null;
     }
 
+    // The cards that count runs right now: the week's, and during the Halloween event its card too.
+    function liveWeeks() {
+        const weeks = liveWeek() != null ? [liveWeek()] : [];
+        if (HALLOWEEN()?.active()) weeks.unshift(HALLOWEEN().week);
+        return weeks;
+    }
+
     function serverCard(week) {
         return state?.bingo?.cards?.find((c) => c.week === week) ?? null;
     }
@@ -276,7 +305,7 @@
     // best medal time per track, the best leaderboard place seen, finished seconds, older and Kodub
     // tracks finished, the longest run of finishes without a restart, and one-off activities.
     function blank() {
-        return { finishes: {}, runs: {}, best: {}, ranks: {}, acts: {}, driven: 0, past: {}, pastBest: 0, kodub: {}, clean: 0 };
+        return { finishes: {}, runs: {}, best: {}, ranks: {}, acts: {}, driven: 0, past: {}, pastBest: 0, kodub: {}, clean: 0, gothic: {} };
     }
 
     function progress(week, round = roundOf(week)) {
@@ -297,12 +326,12 @@
     function pruneProgress() {
         const live = liveWeek();
         if (live == null) return;
-        const keep = PROGRESS_KEY + live + ":" + roundOf(live);
+        const keep = new Set(liveWeeks().map((w) => PROGRESS_KEY + w + ":" + roundOf(w)));
         try {
             for (let i = localStorage.length - 1; i >= 0; i--) {
                 const k = localStorage.key(i);
                 if (!k) continue;
-                if (k.startsWith("_nswsBingo:") || (k.startsWith(PROGRESS_KEY) && k !== keep && !k.startsWith(PROGRESS_KEY + (live + 1) + ":"))) {
+                if (k.startsWith("_nswsBingo:") || (k.startsWith(PROGRESS_KEY) && !keep.has(k) && !k.startsWith(PROGRESS_KEY + (live + 1) + ":"))) {
                     localStorage.removeItem(k);
                 }
             }
@@ -316,7 +345,7 @@
     // Best medal time on a track for this card. A week's first card also takes medals already saved,
     // which were earned on this week's tracks.
     function bestTier(id, card, p) {
-        return Math.max(p.best[id] ?? 0, card.round === 0 ? tier(id) : 0);
+        return Math.max(p.best[id] ?? 0, card.round === 0 && card.week !== HALLOWEEN()?.week ? tier(id) : 0);
     }
 
     function sum(values) {
@@ -327,17 +356,23 @@
         return [...new Set(card.tracks.map((t) => t.id))];
     }
 
+    function medalTracks(card) {
+        return [...new Set(card.tracks.filter((t) => !t.noMedals).map((t) => t.id))];
+    }
+
     // How far a square is: { have, need } plus, for counted squares, a label for the cell.
     function measure(square, card, p) {
         if (square.kind === "free") return { have: 1, need: 1 };
         if (square.kind === "act") {
             const ids = uniqueTracks(card);
+            const medals = medalTracks(card);
             switch (square.act) {
+                case "gothic3": return { have: Object.keys(p.gothic).length, need: 3, count: true };
                 case "finish25": return { have: sum(ids.map((id) => p.finishes[id] ?? 0)), need: 25, count: true };
                 case "drive15": return { have: Math.floor(p.driven / 60), need: 15, count: true, unit: " min" };
-                case "bronzeall": return { have: ids.filter((id) => bestTier(id, card, p) >= 1).length, need: ids.length, count: true };
-                case "gold2": return { have: ids.filter((id) => bestTier(id, card, p) >= 3).length, need: Math.min(2, ids.length), count: true };
-                case "silver5": return { have: sum(ids.map((id) => p.runs[id]?.[1] ?? 0)), need: 5, count: true };
+                case "bronzeall": return { have: medals.filter((id) => bestTier(id, card, p) >= 1).length, need: medals.length, count: true };
+                case "gold2": return { have: medals.filter((id) => bestTier(id, card, p) >= 3).length, need: Math.min(2, medals.length), count: true };
+                case "silver5": return { have: sum(medals.map((id) => p.runs[id]?.[1] ?? 0)), need: 5, count: true };
                 case "clean5": return { have: p.clean, need: 5, count: true };
                 case "past3": return { have: Object.keys(p.past).length, need: 3, count: true };
                 case "pastsilver": return { have: p.pastBest >= 2 ? 1 : 0, need: 1 };
@@ -351,6 +386,7 @@
         switch (square.task) {
             case "finish3": return { have: p.finishes[id] ?? 0, need: 3, count: true };
             case "finish10": return { have: p.finishes[id] ?? 0, need: 10, count: true };
+            case "finish25": return { have: p.finishes[id] ?? 0, need: 25, count: true };
             case "bronze3": return { have: runs[0] ?? 0, need: 3, count: true };
             case "silver3": return { have: runs[1] ?? 0, need: 3, count: true };
             case "gold3": return { have: runs[2] ?? 0, need: 3, count: true };
@@ -368,7 +404,7 @@
 
     // Squares done on this device that the Worker hasn't marked yet go out in one request.
     // The same squares aren't sent again for a while if the Worker didn't take them.
-    let lastMark = { key: "", at: 0 };
+    const sent = new Map();
 
     function scheduleMark() {
         clearTimeout(markTimer);
@@ -377,43 +413,51 @@
 
     function canMark(week) {
         const live = state?.bingo?.live;
+        if (week === HALLOWEEN()?.week) return HALLOWEEN().active();
         return live == null || (week >= live && week <= live + 1);
     }
 
+    // One card per request; the reply comes back through onAccount, which schedules the next.
     async function sendMarks() {
-        const week = liveWeek();
-        const card = week != null && cardFor(week);
         const tags = window.__nswsTags;
         const token = tags?.profileToken?.();
-        if (!card || !state?.bingo || !token || marking || !canMark(week) || window.__nswsBusy?.active()) return;
-        const p = progress(week, card.round);
-        const marks = marksOf(week);
-        const fresh = card.squares.map((sq, i) => (!(marks & (1 << i)) && isDone(sq, card, p) ? i : -1)).filter((i) => i >= 0);
-        if (!fresh.length) return;
-        const key = week + "|" + card.round + "|" + fresh.join(",");
-        if (key === lastMark.key && Date.now() - lastMark.at < RESEND_MS) return;
-        lastMark = { key, at: Date.now() };
-        marking = true;
-        try {
-            const { status, data } = await tags.api("bingo/mark", { userToken: token, week, round: card.round, squares: fresh });
-            if (status === 200) tags.apply(data);
-            // Not stored: try again in a minute rather than after RESEND_MS.
-            else lastMark.at = Date.now() - RESEND_MS + MARK_RETRY_MS;
-        } catch {} finally {
-            marking = false;
+        if (!state?.bingo || !token || marking || window.__nswsBusy?.active()) return;
+        for (const week of liveWeeks()) {
+            const card = cardFor(week);
+            if (!card || !canMark(week)) continue;
+            const p = progress(week, card.round);
+            const marks = marksOf(week);
+            const fresh = card.squares.map((sq, i) => (!(marks & (1 << i)) && isDone(sq, card, p) ? i : -1)).filter((i) => i >= 0);
+            if (!fresh.length) continue;
+            const key = week + "|" + card.round + "|" + fresh.join(",");
+            if (sent.get(week)?.key === key && Date.now() - sent.get(week).at < RESEND_MS) continue;
+            sent.set(week, { key, at: Date.now() });
+            marking = true;
+            try {
+                const { status, data } = await tags.api("bingo/mark", { userToken: token, week, round: card.round, squares: fresh });
+                if (status === 200) tags.apply(data);
+                // Not stored: try again in a minute rather than after RESEND_MS.
+                else sent.get(week).at = Date.now() - RESEND_MS + MARK_RETRY_MS;
+            } catch {} finally {
+                marking = false;
+            }
+            return;
         }
     }
 
-    // Counts go on the live week's current card.
-    function bump(update) {
-        const week = liveWeek();
-        const card = week != null && cardFor(week);
+    function bumpWeek(week, update) {
+        const card = cardFor(week);
         if (!card) return;
         const p = progress(week, card.round);
         if (update(p, card) === false) return;
         saveProgress(week, card.round, p);
         scheduleMark();
         if (view && view.week === week) render();
+    }
+
+    // Counts go on each live card's current round.
+    function bump(update) {
+        for (const week of liveWeeks()) bumpWeek(week, update);
     }
 
     function isKodubTrack(id) {
@@ -440,10 +484,8 @@
     function onFinish(e) {
         const { track, seconds } = e.detail || {};
         if (typeof track !== "string" || !(seconds > 0)) return;
-        const week = liveWeek();
-        const card = week != null && cardFor(week);
-        if (!card) return;
-        const own = card.tracks.some((t) => t.id === track);
+        const weeks = liveWeeks();
+        if (!weeks.length) return;
         const trackWeek = window.__nswsTrackWeek?.(track) ?? null;
         if (run.track === track && !run.finished) run.streak++;
         else run.streak = 1;
@@ -451,30 +493,39 @@
         run.finished = true;
         const streak = run.streak;
         const inCup = !!window.__nswsCupApp?.inCup?.();
-        bump((p) => {
-            if (own) p.finishes[track] = (p.finishes[track] ?? 0) + 1;
-            p.driven += seconds;
-            p.clean = Math.max(p.clean, streak);
-            if (trackWeek != null && trackWeek < week) p.past[track] = 1;
-            if (trackWeek == null && isKodubTrack(track)) p.kodub[track] = 1;
-            if (inCup) p.acts.cup = 1;
-        });
-        if (own || (trackWeek != null && trackWeek < week)) judgeRun(track, seconds, own, card.round, 0);
+        const event = HALLOWEEN();
+        for (const week of weeks) {
+            const card = cardFor(week);
+            if (!card) continue;
+            const own = card.tracks.some((t) => t.id === track);
+            const older = trackWeek != null && trackWeek < week;
+            bumpWeek(week, (p) => {
+                if (own) p.finishes[track] = (p.finishes[track] ?? 0) + 1;
+                p.driven += seconds;
+                p.clean = Math.max(p.clean, streak);
+                if (older) p.past[track] = 1;
+                if (trackWeek == null && isKodubTrack(track)) p.kodub[track] = 1;
+                if (inCup) p.acts.cup = 1;
+                if (event?.week === week && event.gothic.includes(track)) p.gothic[track] = 1;
+                if (event?.week === week && event.beatsHorseman(track, seconds)) p.acts.horseman = 1;
+            });
+            if (own || older) judgeRun(track, seconds, own, week, card.round, 0);
+        }
     }
 
     // The medal this run's own time earns. The Author Time comes from the leaderboard, so a failed
     // fetch is tried again a few times.
-    function judgeRun(track, seconds, own, round, tries) {
+    function judgeRun(track, seconds, own, week, round, tries) {
         const check = window.__nswsMedalForTime;
         if (!check) return;
         check(track, seconds).then((result) => {
             if (result === "failed") {
-                if (tries < 3) setTimeout(() => judgeRun(track, seconds, own, round, tries + 1), MEDAL_RETRY_MS);
+                if (tries < 3) setTimeout(() => judgeRun(track, seconds, own, week, round, tries + 1), MEDAL_RETRY_MS);
                 return;
             }
             const rank = MEDAL_RANK[result] ?? 0;
             if (!rank) return;
-            bump((p, card) => {
+            bumpWeek(week, (p, card) => {
                 if (card.round !== round) return false;
                 if (!own) {
                     p.pastBest = Math.max(p.pastBest, rank);
@@ -509,7 +560,10 @@
 
     // Celebrates squares the Worker has just marked: a toast for squares, a banner for a bingo.
     function celebrate(before, after) {
-        const week = liveWeek();
+        for (const week of liveWeeks()) celebrateWeek(week, before, after);
+    }
+
+    function celebrateWeek(week, before, after) {
         const was = before?.bingo?.cards?.find((c) => c.week === week);
         const now = after?.bingo?.cards?.find((c) => c.week === week);
         if (!now || !before?.bingo || (was?.round ?? 0) !== (now.round ?? 0)) return;
@@ -593,7 +647,7 @@
             line.addEventListener("click", (e) => {
                 e.stopPropagation();
                 window.__nswsUIClick?.();
-                open();
+                open(liveWeek());
             });
             title.appendChild(line);
         }
@@ -630,7 +684,7 @@
         view = null;
     }
 
-    function open(week = liveWeek()) {
+    function open(week = liveWeeks()[0]) {
         if (view) return;
         const overlay = el("div");
         overlay.id = "nsws-bingo";
@@ -660,7 +714,7 @@
     // Weeks with a card to look at: the live one and any the player has marks on.
     function weeksToShow() {
         const weeks = new Set((state?.bingo?.cards ?? []).map((c) => c.week));
-        if (liveWeek() != null) weeks.add(liveWeek());
+        for (const w of liveWeeks()) weeks.add(w);
         return [...weeks].filter((w) => cardFor(w)).sort((a, b) => a - b);
     }
 
@@ -732,7 +786,6 @@
     function render() {
         if (!view) return;
         const { top, body } = view;
-        const live = liveWeek();
         const week = view.week;
         const weeks = weeksToShow();
         const at = weeks.indexOf(week);
@@ -771,7 +824,7 @@
             body.appendChild(msg);
             return;
         }
-        const isLive = week === live;
+        const isLive = liveWeeks().includes(week);
         const marks = marksOf(week);
         const lines = linesOf(marks);
         const p = isLive ? progress(week, round) : null;
@@ -844,7 +897,7 @@
         const canReset = isLive && lines.length > 0 && canMark(week);
         const confirming = canReset && Date.now() - view.confirmAt < RESET_CONFIRM_MS;
         // A note set by a click stays; otherwise the note follows the card.
-        const note = view.note || (!isLive ? "This week is over, so its card can't change any more."
+        const note = view.note || (!isLive ? (week === HALLOWEEN()?.week ? "The Halloween event is over, so this card can't change any more." : "This week is over, so its card can't change any more.")
             : countMarks(marks) === 25 ? "Blackout! Start a new card whenever you like. Every bingo you've made stays counted."
             : lines.length ? "Nice! Keep going for more bingos on this card, or start a new card. Every bingo you've made stays counted."
             : "Squares mark themselves as you finish runs. Click a track square to go race it.");
@@ -883,9 +936,9 @@
         how.appendChild(el("h2", null, "How it works"));
         const steps = el("ol");
         for (const step of [
-            "Every week has a new card, the same for everyone. Each column is one of the week's tracks.",
+            week === HALLOWEEN()?.week ? "This card is only for the Halloween event, the same for everyone. Each column is one track." : "Every week has a new card, the same for everyone. Each column is one of the week's tracks.",
             "Squares mark themselves as you finish runs, on any device with this profile. Restarts and unfinished runs never count.",
-            "Medal squares need one run inside that medal's time on this card. Medals from before only count on a week's first card.",
+            week === HALLOWEEN()?.week ? "Medal squares need one run inside that medal's time on this card. Medals from before don't count here." : "Medal squares need one run inside that medal's time on this card. Medals from before only count on a week's first card.",
             "A full row, column or diagonal is a bingo, struck out in red. The free square in the middle counts for you.",
             "Once you have a bingo you can start a new card for the same week. Bingos from every card add up to bingo tags for the chat.",
         ]) steps.appendChild(el("li", null, step));
@@ -901,12 +954,13 @@
     function onAccount(e) {
         const before = state;
         state = e.detail;
-        const week = liveWeek();
-        const card = week != null ? serverCard(week) : null;
-        if (card && Number.isSafeInteger(card.round)) {
-            try {
-                localStorage.setItem(ROUND_KEY + week, String(card.round));
-            } catch {}
+        for (const week of liveWeeks()) {
+            const card = serverCard(week);
+            if (card && Number.isSafeInteger(card.round)) {
+                try {
+                    localStorage.setItem(ROUND_KEY + week, String(card.round));
+                } catch {}
+            }
         }
         celebrate(before, state);
         for (const b of buttons) {

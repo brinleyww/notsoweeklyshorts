@@ -260,7 +260,8 @@
         ctx.globalAlpha = 1;
         ctx.fillStyle = "rgba(25, 32, 66, 0.9)";
         ctx.fillRect(0, top, w, bar);
-        ctx.fillStyle = "#ffc94a";
+        const haunted = !!window.__nswsHalloween?.active();
+        ctx.fillStyle = haunted ? "#ff8a1e" : "#ffc94a";
         ctx.fillRect(0, top, w, Math.max(2, Math.round(bar * 0.05)));
         const pad = Math.round(bar * 0.3);
         let x = pad;
@@ -272,7 +273,7 @@
             x += lw + pad;
         }
         const week = window.__nswsTrackWeek?.(trackId);
-        const who = [nickname(), week != null ? weekName(week) : null].filter(Boolean).join(" · ");
+        const who = [nickname(), week != null ? weekName(week) : null, haunted && week !== window.__nswsHalloween.week ? "Halloween" : null].filter(Boolean).join(" · ");
         ctx.textBaseline = "middle";
         ctx.font = "italic " + Math.round(bar * 0.4) + "px ForcedSquare, Arial, sans-serif";
         ctx.fillStyle = "#fff";
