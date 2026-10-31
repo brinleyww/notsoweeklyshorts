@@ -3563,6 +3563,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const multi = runs.length > 1;
             const rows = multi ? this.standings(runs) : null;
             const bar = this.enabled ? Math.round(H * 0.065) : 0;
+            const inputs = this.inputsShown();
+            const rocket = inputs ? car.getCarState()?.rocket : null;
+            // The panel, keys and meter share one bottom line. Without the black bars the corner credit needs room under the meter.
+            const edge = H - bar - (bar ? 10 : rocket ? 42 : 18) * u;
             g.save();
             g.textBaseline = "middle";
             if (this.enabled) {
@@ -3597,7 +3601,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 parts.push({ text: formatTime(null != fin ? fin.numberOfFrames : frame), size: 22, bg: pal.surface3, l: 14, r: 14, min: g.measureText("0").width / u * 7.2, right: true });
                 parts.push({ text: Math.round(Math.abs(car.getSpeedKmh())) + " km/h", size: 16, bg: pal.surface3, l: 14, r: 18, alpha: 0.7 });
                 const rh = 36 * u;
-                let y = H - bar - (this.enabled ? 10 : 18) * u - rh;
+                let y = edge - rh;
                 const rw = rowWidth(g, parts, u, pal);
                 drawRow(g, parts, (W - rw) / 2, y, rh, 8 * u, u, pal, pal.surface);
                 const boxAbove = (text, size, bg, color, alpha, padY) => {
@@ -3633,7 +3637,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
             if (null != finAt && t >= finAt) this.paintCard(g, runs, focus, run, fin.numberOfFrames, t - finAt, W, H, bar, u, pal);
             if (multi) this.paintFeed(g, runs, focus, t, W, H, bar, u, pal);
-            if (!document.body.classList.contains("nsws-hide-inputs")) this.paintInputs(g, H - bar - 18 * u, u);
+            if (inputs) this.paintInputs(g, edge, u, t, pal);
+            if (rocket) this.paintRocketHud(g, W - 24 * u, edge, u, t, pal, rocket);
             if (this.enabled && t < 0.7) {
                 g.globalAlpha = 1 - t / 0.7;
                 g.fillStyle = "#000";
@@ -3756,12 +3761,19 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             g.restore();
         }
 
-        paintInputs(g, bottom, u) {
+        // Clips have their own input switch (`applyHudState` in main.bundle.js).
+        inputsShown() {
+            const body = document.body.classList;
+            return body.contains("clip-watching-hud") ? body.contains("clip-inputs") : !body.contains("nsws-hide-inputs");
+        }
+
+        paintInputs(g, bottom, u, t, pal) {
             const c = this.o.getControls?.();
             if (!c) return;
-            const k = 34 * u, gap = 4 * u, x = 24 * u;
+            const rocket = c.rocket;
+            const k = (null != rocket ? 42 : 34) * u, gap = 4 * u, x = 24 * u;
             const key = (kx, ky, on, rot) => {
-                g.fillStyle = on ? "rgba(255, 255, 255, 0.92)" : "rgba(25, 32, 66, 0.6)";
+                g.fillStyle = on ? "rgba(255, 255, 255, 0.92)" : "rgba(25, 32, 66, 0.78)";
                 g.fillRect(kx, ky, k, k);
                 g.save();
                 g.translate(kx + k / 2, ky + k / 2);
@@ -3780,6 +3792,100 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             key(x, y1, c.left, -Math.PI / 2);
             key(x + k + gap, y1, c.down, Math.PI);
             key(x + 2 * (k + gap), y1, c.right, Math.PI / 2);
+            if (null == rocket) return;
+            const lit = this.rocketLit ??= new Map();
+            const label = (text, bit, lx, ly, h, rot) => {
+                if (rocket & bit) lit.set(bit, t);
+                const on = t >= lit.get(bit) && t - lit.get(bit) < 0.1;
+                g.fillStyle = on ? "rgba(255, 255, 255, 0.92)" : "rgba(25, 32, 66, 0.78)";
+                g.fillRect(lx, ly, k, h);
+                g.fillStyle = on ? "#192042" : "#fff";
+                g.font = pal.style + " " + (10 * u).toFixed(1) + "px " + pal.font;
+                g.textAlign = "left";
+                const a = 6 * u, tw = g.measureText(text).width, arrow = null != rot;
+                const left = lx + (k - tw - (arrow ? a + 3 * u : 0)) / 2, cy = ly + h / 2;
+                const before = rot === -Math.PI / 2;
+                g.fillText(text, before ? left + a + 3 * u : left, cy + u);
+                if (!arrow) return;
+                g.save();
+                g.translate(before ? left + a / 2 : left + tw + 3 * u + a / 2, cy);
+                g.rotate(rot);
+                g.beginPath();
+                g.moveTo(0, -a / 2);
+                g.lineTo(a / 2, a / 2);
+                g.lineTo(-a / 2, a / 2);
+                g.closePath();
+                g.fill();
+                g.restore();
+            };
+            label("JUMP", 1, x, y0, k);
+            label("BOOST", 2, x + 2 * (k + gap), y0, k);
+            const sh = 20 * u, sy = y0 - gap - sh;
+            label("ROLL", 4, x, sy, sh);
+            label("ROLL", 8, x + k + gap, sy, sh, -Math.PI / 2);
+            label("ROLL", 16, x + 2 * (k + gap), sy, sh, Math.PI / 2);
+            label("NOSE", 64, x + 3 * (k + gap), y0, k, 0);
+            label("NOSE", 32, x + 3 * (k + gap), y1, k, Math.PI);
+        }
+
+        // The Rocket League boost meter and jump pips, laid out like .nsws-rocket-hud.
+        paintRocketHud(g, right, bottom, u, t, pal, rocket) {
+            const view = window.__nswsRocket?.hudView(rocket.status);
+            if (!view) return;
+            const shape = (x, y, w, h, left, rightIn) => {
+                g.beginPath();
+                g.moveTo(x + left, y);
+                g.lineTo(x + w, y);
+                g.lineTo(x + w - rightIn, y + h);
+                g.lineTo(x, y + h);
+                g.closePath();
+                g.fill();
+            };
+            const flash = this.rocketFlash ??= { boost: rocket.boost, at: -Infinity, t };
+            if (t < flash.t) flash.at = -Infinity;
+            else if (rocket.boost > flash.boost + 5) flash.at = t;
+            flash.boost = rocket.boost;
+            flash.t = t;
+            const w = 164 * u, h = 42 * u, x = right - w, y = bottom - h;
+            g.save();
+            g.globalAlpha = 0.9;
+            g.fillStyle = pal.surface;
+            shape(x, y, w, h, 8 * u, 0);
+            g.fillStyle = pal.surface3;
+            shape(x + 10 * u, y + 6 * u, w - 20 * u, h - 12 * u, 6 * u, 0);
+            const bx = x + 24 * u, bw = 70 * u, bh = 10 * u, by = y + (h - bh) / 2;
+            g.fillStyle = "rgba(255, 255, 255, 0.12)";
+            g.fillRect(bx, by, bw, bh);
+            const fill = bw * clamp(rocket.boost / 100, 0, 1);
+            g.fillStyle = view.boosting ? "#ffc25e" : "#ff9a2e";
+            g.fillRect(bx, by, fill, bh);
+            const glow = 1 - (t - flash.at) / 0.7;
+            if (glow > 0) {
+                g.globalAlpha = 0.9 * glow;
+                g.fillStyle = "#fff";
+                g.fillRect(bx, by, fill, bh);
+            }
+            const boost = Math.round(rocket.boost);
+            g.globalAlpha = boost ? 0.9 : 0.4;
+            g.fillStyle = "#fff";
+            g.textBaseline = "middle";
+            g.textAlign = "right";
+            g.font = pal.style + " " + (24 * u).toFixed(1) + "px " + pal.font;
+            g.fillText(String(boost), x + w - 16 * u, y + h / 2 + u);
+            const pw = 22 * u, ph = 8 * u, py = y - 4 * u - ph;
+            for (const [i, on, flip] of [[0, view.first, false], [1, view.second, view.flip]]) {
+                g.globalAlpha = 0.85;
+                g.fillStyle = on ? flip ? "#ff9a2e" : "#fff" : pal.surface3;
+                shape(bx + i * (pw + 6 * u), py, pw, ph, 4 * u, 4 * u);
+            }
+            if (view.kind) {
+                g.globalAlpha = 0.9;
+                g.fillStyle = "#fff";
+                g.textAlign = "right";
+                g.font = pal.style + " " + (12 * u).toFixed(1) + "px " + pal.font;
+                g.fillText(view.kind, x + w - 16 * u, py + ph / 2);
+            }
+            g.restore();
         }
 
         pathOf(run) {

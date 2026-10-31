@@ -283,6 +283,19 @@
 
     // ---- Boost meter -------------------------------------------------------------------------------------
 
+    // First pip: the jump from the ground. Second: the double jump or flip in the air, orange while a direction would
+    // make it a flip; in the air the label says which it is.
+    const hudView = st => {
+        const second = !!(st & (CAN_FIRST | CAN_SECOND));
+        return {
+            first: !!(st & CAN_FIRST),
+            second,
+            flip: second && !(st & PLAIN_SECOND),
+            kind: st & ON_GROUND || !(st & CAN_SECOND) ? "" : st & PLAIN_SECOND ? "JUMP" : "FLIP",
+            boosting: !!(st & BOOSTING)
+        };
+    };
+
     const hud = (() => {
         let root = null, fill = null, num = null, pips = null, kind = null, shown = -1, status = -1, flashTimer = 0, watching = false;
         function build() {
@@ -302,7 +315,9 @@
                 const ui = gameUi();
                 if (!ui) return;
                 const speedo = ui.querySelector(".speedometer-ui");
-                if (speedo && !speedo.classList.contains("hidden")) {
+                // Clip playback hides the speedometer, so a clip's meter can't live inside it.
+                const inClip = watch && document.body.classList.contains("clip-watching-hud");
+                if (speedo && !speedo.classList.contains("hidden") && !inClip) {
                     root.classList.remove("alone");
                     root.parentElement !== speedo && speedo.insertBefore(root, speedo.firstChild);
                 } else {
@@ -330,13 +345,12 @@
                 }
                 if (st !== status) {
                     status = st;
-                    // First pip: the jump from the ground. Second: the double jump or flip in the air, orange while a
-                    // direction would make it a flip; in the air the label says which it is.
-                    pips[0].classList.toggle("on", !!(st & CAN_FIRST));
-                    pips[1].classList.toggle("on", !!(st & (CAN_FIRST | CAN_SECOND)));
-                    pips[1].classList.toggle("flip", !!(st & (CAN_FIRST | CAN_SECOND)) && !(st & PLAIN_SECOND));
-                    kind.textContent = st & ON_GROUND || !(st & CAN_SECOND) ? "" : st & PLAIN_SECOND ? "JUMP" : "FLIP";
-                    root.classList.toggle("boosting", !!(st & BOOSTING));
+                    const v = hudView(st);
+                    pips[0].classList.toggle("on", v.first);
+                    pips[1].classList.toggle("on", v.second);
+                    pips[1].classList.toggle("flip", v.flip);
+                    kind.textContent = v.kind;
+                    root.classList.toggle("boosting", v.boosting);
                 }
             },
             flash() {
@@ -390,6 +404,7 @@
         sync();
     }, 200);
 
+    let watchInClip = false;
     window.__nswsRocket = {
         // A race opened; whether its week is marked rocket: true. The car's first state also switches it on.
         track(isRocket) {
@@ -440,9 +455,13 @@
         watch(r) {
             if (controls) return;
             if (!r) return void (hud.mounted() && hud.unmount());
-            hud.mounted() || hud.mount(true);
+            // The clip class can arrive a frame after the watch starts.
+            const inClip = document.body.classList.contains("clip-watching-hud");
+            (!hud.mounted() || inClip !== watchInClip) && hud.mount(true);
+            watchInClip = inClip;
             hud.set(r.boost, r.status);
         },
+        hudView,
         settings: buildSettings,
         allKeys: () => ACTIONS.flatMap(([id]) => keys[id]).filter(k => k && !k.startsWith("Mouse")),
         get active() {
@@ -1273,6 +1292,7 @@
 .nsws-rocket-hud > .jumps > span.on { background-color: #fff; }
 .nsws-rocket-hud > .jumps > span.on.flip { background-color: #ff9a2e; }
 .clip-watching-hud:not(.clip-inputs) .nsws-rocket-hud { display: none !important; }
+.clip-watching-hud .nsws-rocket-hud.alone { bottom: 58px; }
 .nsws-rocket-hud > .jumps > .kind { min-width: 3em; font-size: 12px; line-height: 8px; font-weight: normal; color: var(--text-color); }
 .nsws-rocket-hud > .box { padding: 6px 10px; min-width: 140px; box-sizing: border-box; opacity: 0.9; background-color: var(--surface-color); clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%); }
 .nsws-rocket-hud > .box > .container { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 14px; background-color: var(--surface-tertiary-color); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%); }
