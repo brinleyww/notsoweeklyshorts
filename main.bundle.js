@@ -3803,7 +3803,7 @@ window.__nswsAutoGhostNote = function(trackId) {
               , r = __webpack_require__.n(i)
               , a = __webpack_require__(6314)
               , s = __webpack_require__.n(a)()(r());
-            s.push([module.id, ".input-visualizer-ui {\n    position: absolute;\n    left: var(--safe-area-horizontal);\n    bottom: 106px;\n    margin: 20px;\n    padding: 0;\n    --size: 96px;\n    width: calc(var(--size) * 3);\n    height: calc(var(--size) * 2);\n    opacity: 0.9;\n}\n\n.input-visualizer-ui > div {\n    position: absolute;\n    margin: 0;\n    padding: 0;\n    width: var(--size);\n    height: var(--size);\n    background-color: var(--surface-color);\n}\n\n.input-visualizer-ui > .arrow-up {\n    left: var(--size);\n    top: 0;\n}\n\n.input-visualizer-ui > .arrow-right {\n    left: calc(var(--size) * 2);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-down {\n    left: var(--size);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-left {\n    left: 0;\n    top: var(--size);\n}\n\n.input-visualizer-ui > div.active {\n    background-color: var(--surface-tertiary-color);\n}\n\n.input-visualizer-ui > div > img {\n    margin: 0;\n    padding: 20px;\n    width: 100%;\n    height: 100%;\n    box-sizing: border-box;\n}\n.input-visualizer-ui > div.active > img {\n    padding: 25px;\n}\n.input-visualizer-ui > .rk {\n    display: none;\n    box-sizing: border-box;\n    align-items: center;\n    justify-content: center;\n    color: var(--text-color);\n    font-size: 22px;\n    white-space: nowrap;\n}\n.input-visualizer-ui.rocket > .rk {\n    display: flex;\n}\n.input-visualizer-ui > .rk-jump { left: 0; top: 0; }\n.input-visualizer-ui > .rk-boost { left: calc(var(--size) * 2); top: 0; }\n.input-visualizer-ui > .rk-roll, .input-visualizer-ui > .rk-roll-left, .input-visualizer-ui > .rk-roll-right, .input-visualizer-ui > .rk-nose-down, .input-visualizer-ui > .rk-nose-up {\n    top: calc(var(--size) * -0.42);\n    width: calc(var(--size) * 0.6 - 4px);\n    height: calc(var(--size) * 0.36);\n    font-size: 12px;\n}\n.input-visualizer-ui > .rk-roll { left: 0; }\n.input-visualizer-ui > .rk-roll-left { left: calc(var(--size) * 0.6); }\n.input-visualizer-ui > .rk-roll-right { left: calc(var(--size) * 1.2); }\n.input-visualizer-ui > .rk-nose-down { left: calc(var(--size) * 1.8); }\n.input-visualizer-ui > .rk-nose-up { left: calc(var(--size) * 2.4); }", ""]);
+            s.push([module.id, ".input-visualizer-ui {\n    position: absolute;\n    left: var(--safe-area-horizontal);\n    bottom: 106px;\n    margin: 20px;\n    padding: 0;\n    --size: 96px;\n    width: calc(var(--size) * 3);\n    height: calc(var(--size) * 2);\n    opacity: 0.9;\n}\n\n.input-visualizer-ui > div {\n    position: absolute;\n    margin: 0;\n    padding: 0;\n    width: var(--size);\n    height: var(--size);\n    background-color: var(--surface-color);\n}\n\n.input-visualizer-ui > .arrow-up {\n    left: var(--size);\n    top: 0;\n}\n\n.input-visualizer-ui > .arrow-right {\n    left: calc(var(--size) * 2);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-down {\n    left: var(--size);\n    top: var(--size);\n}\n\n.input-visualizer-ui > .arrow-left {\n    left: 0;\n    top: var(--size);\n}\n\n.input-visualizer-ui > div.active {\n    background-color: var(--surface-tertiary-color);\n}\n\n.input-visualizer-ui > div > img {\n    margin: 0;\n    padding: 20px;\n    width: 100%;\n    height: 100%;\n    box-sizing: border-box;\n}\n.input-visualizer-ui > div.active > img {\n    padding: 25px;\n}\n.input-visualizer-ui > .rk {\n    display: none;\n    box-sizing: border-box;\n    align-items: center;\n    justify-content: center;\n    color: var(--text-color);\n    font-size: 22px;\n    white-space: nowrap;\n}\n.input-visualizer-ui.rocket > .rk {\n    display: flex;\n}\n.input-visualizer-ui > .rk-jump { left: 0; top: 0; }\n.input-visualizer-ui > .rk-boost { left: calc(var(--size) * 2); top: 0; }\n.input-visualizer-ui > .rk-roll, .input-visualizer-ui > .rk-roll-left, .input-visualizer-ui > .rk-roll-right, .input-visualizer-ui > .rk-nose-down, .input-visualizer-ui > .rk-nose-up {\n    top: calc(var(--size) * -0.42);\n    width: calc(var(--size) * 0.6 - 4px);\n    height: calc(var(--size) * 0.36);\n    font-size: 12px;\n}\n.input-visualizer-ui > .rk-roll { left: 0; }\n.input-visualizer-ui > .rk-roll-left { left: calc(var(--size) * 0.6); }\n.input-visualizer-ui > .rk-roll-right { left: calc(var(--size) * 1.2); }\n.input-visualizer-ui > .rk-nose-down { left: calc(var(--size) * 1.8); }\n.input-visualizer-ui > .rk-nose-up { left: calc(var(--size) * 2.4); }\n.input-visualizer-ui.live {\n    bottom: 50px;\n    --size: 64px;\n}\n.input-visualizer-ui.live > div > img {\n    padding: 13px;\n}\n.input-visualizer-ui.live > div.active > img {\n    padding: 16px;\n}\n.input-visualizer-ui.live > .rk {\n    font-size: 15px;\n}\n.input-visualizer-ui.live > .rk-roll, .input-visualizer-ui.live > .rk-roll-left, .input-visualizer-ui.live > .rk-roll-right, .input-visualizer-ui.live > .rk-nose-down, .input-visualizer-ui.live > .rk-nose-up {\n    font-size: 9px;\n}\nbody.nsws-touch .input-visualizer-ui.live {\n    left: 50%;\n    bottom: auto;\n    top: 125px;\n    margin: 0;\n    transform: translateX(-50%);\n}", ""]);
             const o = s
         }
         ,
@@ -9903,7 +9903,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.GrindBackground = 35] = "GrindBackground",
                 e[e.GrindColor = 36] = "GrindColor",
                 e[e.GrindPosition = 37] = "GrindPosition",
-                e[e.GrindSize = 38] = "GrindSize"
+                e[e.GrindSize = 38] = "GrindSize",
+                e[e.LiveInputs = 39] = "LiveInputs"
             }(i || (i = {}));
             const r = i
         }
@@ -46105,6 +46106,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 null != C.get(this, Sa, "f") ? C.set(this, ia, new ur(C.get(this, ea, "f").element,C.get(this, Gr, "f")), "f") : C.set(this, na, new fi(C.get(this, ea, "f").element,C.get(this, Ur, "f"),C.get(this, Gr, "f")), "f"),
                 C.set(this, ra, new CheckpointUI(C.get(this, ea, "f").element,C.get(this, Pr, "f").getTotalNumberOfCheckpointIndices(),C.get(this, Gr, "f")), "f"),
                 C.set(this, aa, new We(C.get(this, ea, "f").element,C.get(this, Gr, "f")), "f"),
+                C.get(this, Gr, "f").getSettingBoolean(R.A.LiveInputs) && this.startLiveInputs(),
                 C.set(this, sa, new Ve.A(C.get(this, ea, "f").element,C.get(this, Ur, "f"),C.get(this, Gr, "f")), "f"),
                 C.set(this, la, new ti(C.get(this, ea, "f").element,C.get(this, Nr, "f"),C.get(this, Ur, "f"),C.get(this, Gr, "f"),C.get(this, Wr, "f"),C.get(this, Xr, "f"),C.get(this, Sa, "f"),( () => {
                     C.get(this, _r, "m", Va).call(this)
@@ -46346,6 +46348,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         C.get(this, ra, "f").dispose(),
                         C.get(this, sa, "f").dispose(),
                         C.get(this, aa, "f").dispose(),
+                        this.stopLiveInputs(),
                         C.get(this, oa, "f")?.dispose(),
                         C.set(this, oa, null, "f"),
                         C.set(this, fa, new Er, "f"),
@@ -46547,6 +46550,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Fr, "f").setCursorHiddenWhenInactive(!1),
                 C.get(this, Or, "f").hide(),
                 C.get(this, ma, "f").dispose(),
+                this.stopLiveInputs(),
                 C.get(this, Wr, "f").removeChangeListener(C.get(this, Aa, "f")),
                 C.get(this, ea, "f").dispose(),
                 C.get(this, ta, "f").dispose(),
@@ -46594,6 +46598,40 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Ba, "f").dispose(),
                 C.get(this, Ga, "f")?.dispose(),
                 C.get(this, Fa, "f")?.dispose()
+            }
+            // A tap can start and end between two frames, so presses are collected as they happen and each shows for at least a frame.
+            startLiveInputs() {
+                this.nswsLiveInputs = new Wu(C.get(this, ea, "f").element, !0);
+                this.nswsLiveTaps = { up: !1, right: !1, down: !1, left: !1, rocket: 0 };
+                C.get(this, ya, "f").addChangeCallback(this.nswsLiveTap = e => {
+                    if (C.get(this, wa, "f")?.isControlsDisabled) return;
+                    const t = this.nswsLiveTaps;
+                    t.up ||= e.up;
+                    t.right ||= e.right;
+                    t.down ||= e.down;
+                    t.left ||= e.left;
+                    t.rocket |= e.rocket;
+                });
+            }
+            updateLiveInputs() {
+                if (!this.nswsLiveInputs) return;
+                const e = C.get(this, wa, "f").getControls(), t = this.nswsLiveTaps;
+                // The controller's rocket is 0 on ordinary tracks, and null is what hides the Rocket League buttons.
+                this.nswsLiveInputs.update({
+                    up: e.up || t.up,
+                    right: e.right || t.right,
+                    down: e.down || t.down,
+                    left: e.left || t.left,
+                    rocket: window.__nswsRocket?.active ? C.get(this, ya, "f").rocket | t.rocket : null
+                });
+                t.up = t.right = t.down = t.left = !1;
+                t.rocket = 0;
+            }
+            stopLiveInputs() {
+                if (!this.nswsLiveInputs) return;
+                C.get(this, ya, "f").removeChangeCallback(this.nswsLiveTap);
+                this.nswsLiveInputs.dispose();
+                this.nswsLiveInputs = null;
             }
             update(e) {
                 const t = !P.ip() && null == C.get(this, ca, "f") && !C.get(this, Pa, "f");
@@ -46812,6 +46850,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, ta, "f").update(C.get(this, wa, "f"), e, t && null == C.get(this, ha, "f") && null == C.get(this, da, "f")),
                 C.get(this, na, "f")?.update(a),
                 C.get(this, aa, "f").update(C.get(this, wa, "f")),
+                this.updateLiveInputs(),
                 C.get(this, sa, "f").update(C.get(this, wa, "f")),
                 C.get(this, ra, "f").update(C.get(this, wa, "f")),
                 C.get(this, ma, "f").setResetCheckpointAvailable(C.get(this, _r, "m", ja).call(this)),
@@ -52974,6 +53013,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Top"),
                 value: "top"
             }], R.A.Speedometer),
+            C.get(this, ms, "m", Gs).call(this, "Live inputs", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.LiveInputs),
             // The in-race panel of mod/nsws_grind.js; the counts keep going while it's off.
             C.get(this, ms, "m", Bs).call(this, "Grinding stats"),
             [["In-race panel", R.A.GrindPanel, [["Off", "false"], ["On", "true"]]],
@@ -61272,7 +61318,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -61343,7 +61389,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Fu = new WeakMap,
         Ou = new WeakMap;
         const Wu = class {
-            constructor(e) {
+            constructor(e, live) {
                 Nu.set(this, void 0),
                 Du.set(this, void 0),
                 Bu.set(this, void 0),
@@ -61352,7 +61398,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 Ou.set(this, void 0),
                 C.set(this, Nu, e, "f"),
                 C.set(this, Du, document.createElement("div"), "f"),
-                C.get(this, Du, "f").className = "input-visualizer-ui",
+                C.get(this, Du, "f").className = live ? "input-visualizer-ui live" : "input-visualizer-ui",
                 C.get(this, Nu, "f").appendChild(C.get(this, Du, "f")),
                 C.set(this, Bu, document.createElement("div"), "f"),
                 C.get(this, Bu, "f").className = "arrow-up",
