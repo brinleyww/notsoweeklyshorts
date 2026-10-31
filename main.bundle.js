@@ -304,7 +304,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
     }
     function isKeyBindingInUse(binding) {
-        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)), window.__nswsRocket?.allKeys() ?? []);
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)), window.__nswsRocket?.allKeys() ?? [], window.__nswsAto?.key());
         return all.some(b => null != b && sameKeyBinding(b, binding));
     }
     // What each key last went down as, so its release matches the same bindings
@@ -332,6 +332,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         matches: keyBindingMatches,
         record: recordKeyBinding,
         format: formatClipKeyName,
+        bind: bindKeyBindingButton,
         settings: () => keyBindSettings
     };
     // Records a key binding from the keys pressed next: one key, or one key with
@@ -53426,6 +53427,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 _container.appendChild(_row);
             }
             )(),
+            C.get(this, ms, "m", Ds).call(this, "Auto tab out (experimental)"),
+            window.__nswsAto?.settings(C.get(this, ks, "f"), ( () => C.get(this, vs, "f").playUIClick())),
             C.get(this, ms, "m", Ds).call(this, "PolyFX"),
             ( () => {
                 const _options = [
