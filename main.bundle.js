@@ -42999,7 +42999,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ), "f")),
                 window.__nswsRocket?.controls(this),
-                window.__nswsGamepad?.controls(this)
+                window.__nswsGamepad?.controls(this),
+                window.__nswsMacro?.controls(this)
             }
             get up() {
                 return C.get(this, Rt, "f")
@@ -43071,6 +43072,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             dispose() {
                 window.__nswsRocket?.controlsGone(this),
                 window.__nswsGamepad?.controlsGone(this),
+                window.__nswsMacro?.controlsGone(this),
                 window.removeEventListener("keydown", C.get(this, zt, "f")),
                 window.removeEventListener("keyup", C.get(this, Nt, "f"))
             }
@@ -60830,7 +60832,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             submitLeaderboard(e, t, n, i, r, a, s, o) {
                 return new Promise(( (l, c) => {
-                    if (this.determinismState != Js.Ok)
+                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked())
                         c(new Error("Submit not allowed"));
                     else {
                         const h = o.serialize();
@@ -60897,6 +60899,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                         } catch (e) {
                                             c(new Error("Unknown error: " + String(e)))
                                         }
+                                    else if (423 == u.status)
+                                        window.__nswsMacro?.refused(u.responseText),
+                                        c(new Error("Macro lockout"));
                                     else if (422 == u.status)
                                         window.__nswsRunRejected?.(),
                                         c(new Error("Run failed the anti-cheat check"));

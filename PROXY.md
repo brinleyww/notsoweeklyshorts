@@ -274,6 +274,38 @@ reply carries `flagged` (ids on that page) only when the caller holds the owner 
 show its "Only you can see this" notice and red Flagged rows. Everyone else's reply has neither, so it can't be
 read from the network panel.
 
+## Macro lockout
+
+A keyboard macro or auto clicker gets an alert and 5 minutes without playing. No browser API says whether input was
+injected, so this judges timing only: a macro with human-looking random timing passes, and so does a run made elsewhere with
+believable inputs. Only the owner is exempt.
+
+| Check | Page (`mod/nsws_macro.js`) | Upload (`proxy/src/macro.js`) | Most extreme real player |
+| --- | --- | --- | --- |
+| Mean gap between presses of one key, over 20 | under 40 ms | under 30 ms | 68 ms |
+| Holds of 5 ms or less, in a row | 8 | 8 | 2 |
+| Gaps within 1.5 ms of each other | 90% of 30 | 90% of 40 | 37% of 30, 25% of 40 |
+| Trimmed spread of 40 gaps | 1.5 ms or less | - | 6.5 ms |
+| Clicks averaging under 10 ms apart, over 60 | yes | - | - |
+| Same toggles as an earlier attempt: median off by 4 ms or less, 90% by 12 ms or less, over 30+ | yes | - | 35 ms median, between different players |
+| 8 script-sent presses of a driving key in a race | yes | - | - |
+
+The real-player column comes from 2,200 runs on finished weeks; a further 3,552 runs kept out of the tuning flagged nothing.
+Do not tighten these without testing: spreads around 3 ms over 24 taps are real (fast wrist-tremor tapping), a 125 Hz
+keyboard snaps taps to an 8 ms grid, and recordings can sit on a ~16.7 ms frame grid, so a steady person can look identical.
+That is why the upload check needs a longer streak than the page.
+
+- **Page:** the keyboard is judged only in a race, outside text boxes, and clicks and taps everywhere. Key repeats, a release
+  and press at the same instant, late events and frame stalls of over 250 ms don't count. A flag restarts the race, freezes the
+  race's controls (keyboard, touch, controller, scripts) and covers the page. The end time lives in localStorage, so it survives
+  a reload and reaches other tabs. On a local copy it only logs to the console; set localStorage `_nswsMacroTest` to `"1"` for a
+  real lockout there or as the owner.
+- **Worker:** the page reports a flag to `POST /nsws/macro` (`userToken`, `reason`, `nickname`), and uploads are checked from the
+  run's own inputs. Either one sets `macro_locks` in the AntiCheat object, and the player's uploads get `423` with `{left, reason}`
+  until it ends, which also brings up the page's lockout if storage was cleared. The upload check reads only the four driving
+  channels, so Rocket League's own inputs aren't judged.
+- Flags appear under **Rejected uploads** on the Anti-cheat tab as "Macro: ...". A page report has no track or time.
+
 ## Chat
 
 `mod/nsws_chat.js` is the universal chat window. It is off until a player turns on

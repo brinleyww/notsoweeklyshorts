@@ -3,6 +3,7 @@
 
 import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
+import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
@@ -896,6 +897,20 @@ function forgetBoards(...trackIds) {
     for (const id of trackIds) verdicts.delete(id);
 }
 
+function macroLocked(left, reason, origin) {
+    return json({ left, reason }, origin, 423);
+}
+
+async function handleMacroReport(request, env, cfg, origin) {
+    const body = await request.json().catch(() => null);
+    const token = body?.userToken ?? "";
+    if (!HEX64.test(token) || !MACRO_REASONS.has(body?.reason)) return plain(400, "Bad request", origin);
+    const anti = antiCheat(env);
+    if (!anti || await isOwner(token, cfg)) return json({ left: 0 }, origin);
+    const nickname = typeof body.nickname === "string" ? body.nickname.slice(0, 64) : "";
+    return json(await anti.macroReport(await sha256Hex(token), nickname, body.reason), origin);
+}
+
 function antiCheatRejected(origin) {
     return plain(422, "Run failed the anti-cheat check", origin);
 }
@@ -936,8 +951,14 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         const recording = form.get("recording") ?? "";
         const nickname = (form.get("nickname") ?? "").slice(0, 64);
         const key = await sha256Hex(trackId + "|" + frames + "|" + recording);
-        const prep = await anti.prepareSubmit(trackId, key);
+        const prep = await anti.prepareSubmit(trackId, key, hash);
         if (prep.rejected) return antiCheatRejected(origin);
+        if (prep.macroLeft) return macroLocked(prep.macroLeft, null, origin);
+        const macro = await macroReason(recording);
+        if (macro) {
+            const left = await anti.macroUpload({ key, track: trackId, week: track.week, userId: hash, nickname, frames, reason: "macro-" + macro, recording });
+            return macroLocked(left, macro, origin);
+        }
         let state = "pending";
         if (prep.payload) {
             const result = await runChecker(env).check(prep.payload, recording, frames);
@@ -1765,6 +1786,17 @@ export default {
                     noteDoError(err);
                     console.error("cup error:", err && err.message);
                     return doLimited() ? busy(requestOrigin) : plain(500, "Competitions failed", requestOrigin);
+                }
+            }
+            if (url.pathname === "/nsws/macro" && request.method === "POST") {
+                if (!fromSite) return plain(403, "Forbidden", requestOrigin);
+                if (doLimited()) return busy(requestOrigin);
+                try {
+                    return await handleMacroReport(request, env, cfg, requestOrigin);
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("macro error:", err && err.message);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Macro report failed", requestOrigin);
                 }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind)\//.test(url.pathname)) {

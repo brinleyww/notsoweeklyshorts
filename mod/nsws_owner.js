@@ -37,6 +37,12 @@
         "unreadable": "Recording unreadable",
         "bad-time": "Impossible time",
         "owner-hidden": "You hid it (lobby PB review)",
+        "macro-speed": "Macro: presses faster than a finger",
+        "macro-click": "Macro: clicks faster than a finger",
+        "macro-hold": "Macro: presses too short for a finger",
+        "macro-metronome": "Macro: machine-perfect timing",
+        "macro-replay": "Macro: repeated an attempt to the ms",
+        "macro-script": "Macro: keys sent by a script",
     };
 
     const CSS = `

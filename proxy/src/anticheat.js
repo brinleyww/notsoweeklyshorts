@@ -9,6 +9,7 @@ import physicsModule from "./sim/physics.wasm";
 import mathModule from "./sim/math.wasm";
 import initData from "./sim/init.bin";
 import { Simulator, readInit } from "./sim/run-check.js";
+import { MACRO_LOCK_MS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 
 const CHECK_BATCH = 8;
@@ -47,6 +48,7 @@ export class AntiCheat extends DurableObject {
     }
 
     migrate() {
+        this.sql.exec("CREATE TABLE IF NOT EXISTS macro_locks (user_id TEXT PRIMARY KEY, until INTEGER NOT NULL) WITHOUT ROWID");
         this.sql.exec(`CREATE TABLE IF NOT EXISTS tracks (
             id TEXT PRIMARY KEY, week INTEGER, payload TEXT NOT NULL, updated INTEGER NOT NULL)`);
         this.sql.exec(`CREATE TABLE IF NOT EXISTS boards (
@@ -312,13 +314,40 @@ export class AntiCheat extends DurableObject {
     }
 
     // Before a submission is checked: a run already rejected is refused without replaying it.
-    async prepareSubmit(track, key) {
+    async prepareSubmit(track, key, userId) {
         const rejected = this.sql.exec("SELECT 1 FROM rejects WHERE key = ?", key).toArray().length > 0;
         if (rejected) {
             this.sql.exec("UPDATE rejects SET attempts = attempts + 1, last = ? WHERE key = ?", Date.now(), key);
             return { rejected: true, payload: null };
         }
-        return { rejected: false, payload: this.payload(track) };
+        return { rejected: false, payload: this.payload(track), macroLeft: this.macroLeft(userId) };
+    }
+
+    macroLeft(userId) {
+        const until = this.sql.exec("SELECT until FROM macro_locks WHERE user_id = ?", userId ?? "").toArray()[0]?.until ?? 0;
+        return Math.max(0, until - Date.now());
+    }
+
+    startMacroLock(userId) {
+        const now = Date.now();
+        this.sql.exec("DELETE FROM macro_locks WHERE until <= ?", now);
+        this.sql.exec("INSERT OR REPLACE INTO macro_locks (user_id, until) VALUES (?, ?)", userId, now + MACRO_LOCK_MS);
+        return MACRO_LOCK_MS;
+    }
+
+    // The page's detector said so. Only the player's own token gets here, so this can only lock themselves out. A new flag
+    // late in a lockout starts it again, or the page would wait 5 minutes while uploads opened in seconds.
+    async macroReport(userId, nickname, reason) {
+        const left = this.macroLeft(userId);
+        if (left > MACRO_LOCK_MS - 60_000) return { left };
+        if (!left) await this.reject({ key: "macro|" + userId + "|" + Date.now(), track: null, week: null, userId, nickname, frames: null, reason: "macro-" + reason });
+        return { left: this.startMacroLock(userId) };
+    }
+
+    // The upload check said so, from the run's own inputs.
+    async macroUpload(r) {
+        await this.reject(r);
+        return this.macroLeft(r.userId) || this.startMacroLock(r.userId);
     }
 
     async reject(r) {
