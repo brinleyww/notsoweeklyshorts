@@ -899,9 +899,11 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 ## Grinding stats
 
 `mod/nsws_grind.js` counts time, attempts, finishes, resets, respawns and PBs per track, after the
-Openplanet plugin for Trackmania. It shows them in a panel during the race (Settings → Gameplay) and
-in a Stats window on the main menu, and the Share PB image says how long the player grinded for that
-PB. Only solo runs count: not cups, multiplayer or editor test drives.
+Openplanet plugin for Trackmania. It shows them in a Stats window on the main menu and, if the player
+turns it on, in a panel during the race (Settings → Gameplay → Grinding stats, off by default, with
+layout, background, colour, position and size). Both show the time since the last PB. The Share PB
+image says how long the player grinded for that PB. Only solo runs count: not cups, multiplayer or
+editor test drives.
 
 `POST /nsws/grind/sync` takes `{userToken, id, add}` and answers with the account's totals.
 

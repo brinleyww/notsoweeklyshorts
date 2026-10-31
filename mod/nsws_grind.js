@@ -32,16 +32,38 @@
         { id: "r", text: "Resets", value: (e) => e.r, wide: true },
         { id: "s", text: "Respawns", value: (e) => e.s, wide: true },
         { id: "b", text: "PB", value: (e) => e.b ?? Infinity, show: (e) => (e.b ? runTime(e.b) : "-"), low: true },
+        { id: "h", text: "Last PB", value: (e) => lastPbAt(e), show: (e) => (lastPbAt(e) ? shortAgo(Date.now() - lastPbAt(e)) : e.o ? "Older" : "-"), wide: true },
     ];
 
     const CSS = `
-#nsws-grind-hud{position:fixed;left:14px;top:19vh;z-index:5;display:none;grid-template-columns:auto auto auto;column-gap:16px;padding:8px 24px 8px 14px;background:rgba(33,43,88,.82);color:#fff;font-family:ForcedSquare,Arial,sans-serif;font-size:18px;font-style:italic;line-height:1.35;pointer-events:none;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);font-variant-numeric:tabular-nums;}
-#nsws-grind-hud.show{display:grid;}
-#nsws-grind-hud>span{text-align:right;white-space:nowrap;}
-#nsws-grind-hud>.k{text-align:left;color:#b3c1ff;}
-#nsws-grind-hud>.h{font-size:14px;color:rgba(255,255,255,.7);}
-#nsws-grind-hud>.since{grid-column:1/-1;margin-top:3px;padding-top:3px;border-top:1px solid rgba(255,255,255,.3);font-size:15px;color:rgba(255,255,255,.85);text-align:left;}
-@media (max-width:700px),(max-height:480px){#nsws-grind-hud{font-size:12px;column-gap:8px;padding:5px 16px 5px 8px;}#nsws-grind-hud>.h{font-size:11px;}#nsws-grind-hud>.since{font-size:11px;}}
+.nsws-grind-panel{--c:#b3c1ff;--k:1;--screen:1;display:grid;grid-template-columns:auto auto auto;column-gap:1em;width:max-content;padding:.45em 1.35em .45em .8em;background:rgba(33,43,88,.82);color:#fff;font-family:ForcedSquare,Arial,sans-serif;font-size:calc(18px * var(--k) * var(--screen));font-style:italic;line-height:1.35;pointer-events:none;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);font-variant-numeric:tabular-nums;}
+.nsws-grind-panel>span{text-align:right;white-space:nowrap;}
+.nsws-grind-panel>.k{text-align:left;color:var(--c);}
+.nsws-grind-panel>.h{font-size:.78em;color:rgba(255,255,255,.7);}
+.nsws-grind-panel>.wide{grid-column:1/-1;text-align:left;font-size:.84em;color:rgba(255,255,255,.85);}
+.nsws-grind-panel>.first{margin-top:.2em;padding-top:.2em;border-top:1px solid rgba(255,255,255,.3);}
+.nsws-grind-panel>.rule{grid-column:1/-1;height:1px;margin:.2em 0;background:rgba(255,255,255,.3);}
+.nsws-grind-panel[data-layout="compact"]{grid-template-columns:auto auto;}
+.nsws-grind-panel[data-layout="line"]{display:block;max-width:92vw;}
+.nsws-grind-panel[data-layout="line"]>span{white-space:normal;text-align:left;}
+.nsws-grind-panel[data-background="clear"]{background:rgba(25,32,66,.38);}
+.nsws-grind-panel[data-background="none"]{background:none;clip-path:none;text-shadow:1px 1px 2px #000,0 0 3px #000;}
+.nsws-grind-panel[data-color="white"]{--c:#fff;}
+.nsws-grind-panel[data-color="green"]{--c:#96ff96;}
+.nsws-grind-panel[data-color="orange"]{--c:#ffb86b;}
+.nsws-grind-panel[data-size="small"]{--k:.78;}
+.nsws-grind-panel[data-size="large"]{--k:1.25;}
+.nsws-grind-panel[data-position="right"]{clip-path:polygon(0 0,100% 0,100% 100%,10px 100%);padding:.45em .8em .45em 1.35em;}
+.nsws-grind-panel[data-position="right"][data-background="none"]{clip-path:none;}
+#nsws-grind-hud{position:fixed;left:14px;top:19vh;z-index:5;}
+#nsws-grind-hud[data-position="right"]{left:auto;right:14px;}
+#nsws-grind-hud:not(.show){display:none;}
+@media (max-width:700px),(max-height:480px){#nsws-grind-hud{--screen:.68;}}
+.setting.nsws-grind-preview{align-items:center;min-height:0;}
+.setting.nsws-grind-preview .nsws-grind-panel{--screen:.82;margin:6px 0;}
+.setting.nsws-grind-preview .stage{position:relative;display:flex;justify-content:flex-end;flex:1 1 auto;min-width:0;padding:8px 10px;background:linear-gradient(#3a7bd5,#6ea8e8 55%,#4d8a5f 55%);}
+.setting.nsws-grind-preview .stage>.nsws-grind-panel[data-position="left"]{margin-right:auto;}
+.setting.nsws-grind-preview.off .stage{opacity:.5;}
 #nsws-grind{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7);}
 #nsws-grind *{box-sizing:border-box;}
 #nsws-grind>.box{position:relative;display:flex;flex-direction:column;width:min(900px,96vw);max-height:94vh;background:var(--surface-color);color:var(--text-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);outline:none;}
@@ -92,6 +114,7 @@
     let run = null;
     let session = null;
     let hud = null;
+    let preview = null;
     let view = null;
     let lastPb = null;
     let lastSave = 0;
@@ -334,6 +357,7 @@
             older: !!before.o,
             sinceTime: previous ? (before.t ?? 0) - previous[3] : null,
             sinceAttempts: previous ? (before.a ?? 0) - previous[2] : null,
+            sinceAgo: previous ? Date.now() - previous[0] * 1000 : null,
         };
         save();
     }
@@ -431,46 +455,156 @@
         return new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
     }
 
+    function shortAgo(ms) {
+        const minutes = Math.floor(ms / 60000);
+        if (minutes < 1) return "Now";
+        if (minutes < 60) return minutes + " m ago";
+        if (minutes < 1440) return Math.floor(minutes / 60) + " h ago";
+        return Math.floor(minutes / 1440) + " d ago";
+    }
+
+    function ago(ms) {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        if (s < 5) return "just now";
+        if (s < 60) return s + " s ago";
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + " m ago";
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + " h " + (m % 60) + " m ago";
+        return Math.floor(h / 24) + " d " + (h % 24) + " h ago";
+    }
+
+    function lastPbAt(entry) {
+        return entry.h?.length ? Math.max(...entry.h.map((pb) => pb[0])) * 1000 : 0;
+    }
+
+    // What's happened since the track's last PB. A PB from before these stats began has no date, and
+    // everything counted so far came after it, so the numbers are a floor.
+    function sincePb(total) {
+        const pb = total.h?.length ? total.h.reduce((a, b) => (b[0] >= a[0] ? b : a)) : null;
+        if (pb) return { time: (total.t ?? 0) - pb[3], attempts: (total.a ?? 0) - pb[2], at: pb[0] * 1000, floor: false };
+        return total.o ? { time: total.t ?? 0, attempts: total.a ?? 0, at: null, floor: true } : null;
+    }
+
+    function agoText(since) {
+        return since.at ? ago(Date.now() - since.at) : "before stats";
+    }
+
+    function setting(name, fallback) {
+        return window.__nswsSetting?.(name) ?? fallback;
+    }
+
+    function setText(cell, text) {
+        if (cell && cell.textContent !== text) cell.textContent = text;
+    }
+
+    function buildPanel(panel, layout) {
+        panel.textContent = "";
+        panel.dataset.layout = layout;
+        const cells = {};
+        const add = (className, text) => {
+            const cell = el("span", className, text);
+            panel.appendChild(cell);
+            return cell;
+        };
+        if (layout === "line") {
+            cells.line = add();
+        } else {
+            const full = layout === "full";
+            if (full) {
+                add("h k", "");
+                add("h", "Session");
+                add("h", "Total");
+            }
+            for (const [field, label] of full
+                ? [["t", "Time"], ["a", "Attempts"], ["f", "Finishes"], ["r", "Resets"], ["s", "Respawns"]]
+                : [["t", "Time"], ["a", "Attempts"], ["f", "Finishes"]]) {
+                add("k", label);
+                cells[field] = [full ? add() : null, add()];
+            }
+            if (full) {
+                cells.since = add("wide first");
+                cells.ago = add("wide");
+            } else {
+                cells.rule = add("rule");
+                cells.sinceKey = add("k", "Since PB");
+                cells.since = add();
+                cells.agoKey = add("k", "Last PB");
+                cells.ago = add();
+            }
+        }
+        panel.cells = cells;
+    }
+
+    function paintPanel(panel, session, total, since) {
+        const layout = setting("GrindLayout", "full");
+        if (panel.dataset.layout !== layout) buildPanel(panel, layout);
+        panel.dataset.background = setting("GrindBackground", "solid");
+        panel.dataset.color = setting("GrindColor", "blue");
+        panel.dataset.position = setting("GrindPosition", "left");
+        panel.dataset.size = setting("GrindSize", "medium");
+        const { cells } = panel;
+        const more = since?.floor ? "+" : "";
+        if (layout === "line") {
+            const parts = [clock(total.t ?? 0), plural(total.a ?? 0, "attempt"), plural(total.f ?? 0, "finish", "es")];
+            if (since) parts.push("Last PB " + agoText(since));
+            setText(cells.line, parts.join(" \u00b7 "));
+            return;
+        }
+        for (const field of ["t", "a", "f", "r", "s"]) {
+            if (!cells[field]) continue;
+            const [now, all] = cells[field];
+            setText(now, field === "t" ? clock(session?.t ?? 0) : count(session?.[field]));
+            setText(all, field === "t" ? clock(total.t ?? 0) : count(total[field]));
+        }
+        if (layout === "full") {
+            setText(cells.since, since ? "Since PB: " + clock(since.time) + more + ", " + plural(since.attempts, "attempt") + more : "");
+            setText(cells.ago, since ? "Last PB: " + agoText(since) : "");
+        } else {
+            setText(cells.since, since ? clock(since.time) + more : "");
+            setText(cells.ago, since ? agoText(since) : "");
+            cells.rule.style.display = cells.sinceKey.style.display = cells.agoKey.style.display = since ? "" : "none";
+        }
+        cells.since.style.display = cells.ago.style.display = since ? "" : "none";
+    }
+
+    function paintPreview() {
+        if (!preview?.isConnected) return;
+        preview.row.classList.toggle("off", !window.__nswsSettingBoolean?.("GrindPanel"));
+        const total = { t: 11564, a: 412, f: 97, r: 315, s: 60 };
+        paintPanel(preview, { t: 724, a: 18, f: 6, r: 12, s: 3 }, total, { time: 1084, attempts: 42, at: Date.now() - 187200000, floor: false });
+    }
+
+    // A sample panel at the end of the Settings rows, showing the options as they're picked.
+    function mountPreview(host) {
+        const row = el("div", "setting nsws-grind-preview");
+        row.appendChild(el("p", null, "Preview"));
+        const stage = el("div", "stage");
+        preview = el("div", "nsws-grind-panel");
+        preview.row = row;
+        stage.appendChild(preview);
+        row.appendChild(stage);
+        host.appendChild(row);
+        paintPreview();
+    }
+
     function hudVisible() {
-        return !!run && window.__nswsSettingBoolean?.("GrindStats") !== false && !inCup()
+        return !!run && window.__nswsSettingBoolean?.("GrindPanel") === true && !inCup()
             && !!document.querySelector(".game-ui:not(.hidden)") && !document.querySelector(".preview-toolbar-ui");
     }
 
     function paintHud() {
         if (!hud) {
             if (!run) return;
-            hud = el("div");
+            hud = el("div", "nsws-grind-panel");
             hud.id = "nsws-grind-hud";
-            const add = (className, text) => {
-                const cell = el("span", className, text);
-                hud.appendChild(cell);
-                return cell;
-            };
-            add("h k", "");
-            add("h", "Session");
-            add("h", "Total");
-            hud.cells = {};
-            for (const [field, label] of [["t", "Time"], ["a", "Attempts"], ["f", "Finishes"], ["r", "Resets"], ["s", "Respawns"]]) {
-                add("k", label);
-                hud.cells[field] = [add(), add()];
-            }
-            hud.since = add("since");
             document.body.appendChild(hud);
         }
         const show = hudVisible();
         hud.classList.toggle("show", show);
         if (!show) return;
         const total = totals(run.track);
-        const set = (cell, text) => {
-            if (cell.textContent !== text) cell.textContent = text;
-        };
-        for (const [field, [now, all]] of Object.entries(hud.cells)) {
-            set(now, field === "t" ? clock(session?.t ?? 0) : count(session?.[field]));
-            set(all, field === "t" ? clock(total.t ?? 0) : count(total[field]));
-        }
-        const pb = total.h?.[total.h.length - 1];
-        set(hud.since, pb ? "Since PB: " + clock((total.t ?? 0) - pb[3]) + ", " + plural((total.a ?? 0) - pb[2], "attempt") : "");
-        hud.since.style.display = pb ? "" : "none";
+        paintPanel(hud, session, total, sincePb(total));
     }
 
     function tick() {
@@ -662,6 +796,8 @@
             line("Respawns", count(total.s)),
             line("New PBs", count(total.p)),
         );
+        const newest = tracks.reduce((best, item) => (lastPbAt(item[1]) > lastPbAt(best[1]) ? item : best));
+        if (lastPbAt(newest[1])) body.appendChild(line("Last PB", ago(Date.now() - lastPbAt(newest[1])) + " on " + trackName(newest[0], newest[1])));
         if (view.scope === "all") {
             body.append(el("div", "sec", "Time per day"), dayChart(stats));
         }
@@ -701,7 +837,8 @@
         }
         body.appendChild(table);
         const since = stats.since ?? Math.min(...Object.values(stats.t).map((e) => e.h?.[0]?.[0] * 1000 || e.l || Date.now()));
-        body.appendChild(el("p", "note", "Counting since " + dateText(since) + ". Solo runs only, so cups and editor test drives add nothing. Time stops when you pause, or after 30 seconds without input."));
+        body.appendChild(el("p", "note", "Counting since " + dateText(since) + ". Solo runs only, so cups and editor test drives add nothing. Time stops when you pause, or after 30 seconds without input."
+            + (window.__nswsSettingBoolean?.("GrindPanel") ? "" : " To see these while you race, turn on the in-race panel in Settings, under Gameplay.")));
         const row = el("div", "row");
         row.appendChild(button("Copy stats", () => {
             const text = "NSWS grind · " + scopeName(view.scope) + ": " + longTime(total.t) + " · " + count(total.a) + " attempts · "
@@ -722,7 +859,8 @@
             renderList(body, stats);
             return;
         }
-        const pb = entry.h?.[entry.h.length - 1];
+        const since = sincePb(entry);
+        const more = since?.floor ? "+" : "";
         const best = window.__nswsPersonalBest?.(view.track);
         const shownBest = Math.min(entry.b ?? Infinity, best ?? Infinity);
         body.append(
@@ -735,10 +873,10 @@
             line("Average finish", entry.f ? runTime(Math.round((entry.fs / entry.f) * 1000)) : "-"),
             line("Personal best", Number.isFinite(shownBest) ? runTime(shownBest) : "-"),
         );
-        if (pb) {
+        if (since) {
             body.append(
-                line("Since your last PB", longTime((entry.t ?? 0) - pb[3]) + ", " + plural((entry.a ?? 0) - pb[2], "attempt")),
-                line("Last PB", dateText(pb[0] * 1000)),
+                line("Driven since your last PB", longTime(since.time) + more + ", " + plural(since.attempts, "attempt") + more),
+                line("Last PB", since.at ? ago(Date.now() - since.at) + " (" + dateText(since.at) + ")" : "Before these stats began"),
             );
         }
         if (entry.l) body.appendChild(line("Last played", dateText(entry.l)));
@@ -865,7 +1003,7 @@
         if (!pb || !pb.attempts) return null;
         const more = pb.older ? "+" : "";
         const parts = ["Grinded " + longTime(pb.time) + more + " for this PB", plural(pb.attempts, "attempt") + more, plural(pb.finishes, "finish", "es") + more];
-        return { main: parts.join(" · "), since: pb.sinceTime != null ? longTime(pb.sinceTime) + " and " + plural(pb.sinceAttempts, "attempt") + " since the last PB" : null };
+        return { main: parts.join(" · "), since: pb.sinceTime != null ? longTime(pb.sinceTime) + " driven and " + plural(pb.sinceAttempts, "attempt") + " since the last PB, set " + ago(pb.sinceAgo) : null };
     }
 
     if (!document.getElementById("nsws-grind-style")) {
@@ -899,5 +1037,5 @@
         if (hasUnsent()) sync();
     }, 10000);
 
-    window.__nswsGrind = { newCar, respawn, leave, open, close, pbSummary, pbLine, stats: allStats, flush: sync };
+    window.__nswsGrind = { newCar, respawn, leave, open, close, pbSummary, pbLine, mountPreview, paintPreview, stats: allStats, flush: sync };
 })();
