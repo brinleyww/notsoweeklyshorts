@@ -102,6 +102,76 @@ export const TAGS = {
     cupchamp: { kind: "grant" },
 };
 
+const GRIND_BATCH = /^[0-9a-f]{16}$/;
+const GRIND_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const GRIND_IDS = 32;
+const GRIND_TRACKS = 500;
+const GRIND_DAYS = 60;
+const GRIND_PBS = 24;
+const GRIND_MAX = 1e8;
+const GRIND_SECONDS = ["t", "fs"];
+const GRIND_COUNTS = ["a", "f", "r", "s", "p"];
+
+function grindNumber(value) {
+    return typeof value === "number" && value >= 0 && value <= GRIND_MAX;
+}
+
+// A track's h is its PBs: [unix seconds, frames, attempts by then, seconds driven by then]. The first
+// PB stays when the list is cut, so the whole climb can still be drawn.
+function mergeGrindPbs(row, pbs) {
+    if (!Array.isArray(pbs) || pbs.length > GRIND_PBS) return false;
+    if (!pbs.every((pb) => Array.isArray(pb) && pb.length === 4 && grindNumber(pb[0] / 100) && grindNumber(pb[1]) && grindNumber(pb[2]) && grindNumber(pb[3]))) return false;
+    const all = [...(row.h ?? []), ...pbs].sort((a, b) => a[0] - b[0]);
+    row.h = all.length > GRIND_PBS ? [all[0], ...all.slice(1 - GRIND_PBS)] : all;
+    return true;
+}
+
+// False leaves grind half changed, so the caller must not save it. Returns whether add was valid.
+function mergeGrind(grind, add) {
+    if (typeof add !== "object" || Array.isArray(add)) return false;
+    const tracks = Object.entries(add.t ?? {});
+    const days = Object.entries(add.d ?? {});
+    if (tracks.length > GRIND_TRACKS || days.length > GRIND_DAYS) return false;
+    const latest = Date.now() + 86_400_000;
+    for (const [id, e] of tracks) {
+        if (!HEX64.test(id) || typeof e !== "object" || e === null) return false;
+        const row = grind.t[id] ?? (grind.t[id] = {});
+        for (const key of GRIND_SECONDS) {
+            const value = e[key] ?? 0;
+            if (!grindNumber(value)) return false;
+            if (value) row[key] = Math.round(((row[key] ?? 0) + value) * 10) / 10;
+        }
+        for (const key of GRIND_COUNTS) {
+            const value = e[key] ?? 0;
+            if (!grindNumber(value) || !Number.isSafeInteger(value)) return false;
+            if (value) row[key] = (row[key] ?? 0) + value;
+        }
+        if (e.b != null) {
+            if (!Number.isSafeInteger(e.b) || e.b <= 0) return false;
+            row.b = Math.min(row.b ?? Infinity, e.b);
+        }
+        if (e.l != null) {
+            if (!grindNumber(e.l / 1e5) || e.l > latest) return false;
+            row.l = Math.max(row.l ?? 0, e.l);
+        }
+        if (e.o === true) row.o = true;
+        if (typeof e.n === "string") row.n = e.n.replace(/[\p{Cc}\p{Cf}]/gu, "").slice(0, 60);
+        if (e.h != null && !mergeGrindPbs(row, e.h)) return false;
+    }
+    for (const [day, seconds] of days) {
+        if (!GRIND_DAY.test(day) || !grindNumber(seconds)) return false;
+        grind.d[day] = Math.round(((grind.d[day] ?? 0) + seconds) * 10) / 10;
+    }
+    const kept = Object.keys(grind.d).sort().slice(-GRIND_DAYS);
+    grind.d = Object.fromEntries(kept.map((day) => [day, grind.d[day]]));
+    const ids = Object.keys(grind.t);
+    if (ids.length > GRIND_TRACKS) {
+        ids.sort((a, b) => (grind.t[a].l ?? 0) - (grind.t[b].l ?? 0));
+        for (const id of ids.slice(0, ids.length - GRIND_TRACKS)) delete grind.t[id];
+    }
+    return true;
+}
+
 function isTag(id) {
     return typeof id === "string" && Object.hasOwn(TAGS, id);
 }
@@ -201,9 +271,27 @@ export class Accounts extends DurableObject {
         // on for them; they get it back when they lose the crown.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wr_king (
             id INTEGER PRIMARY KEY CHECK (id = 0), user_id TEXT NOT NULL, since INTEGER NOT NULL, before TEXT)`);
+        // Grinding stats, one JSON row per account so a sync costs one row however many tracks it has.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS grind (user_id TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID");
         this.top = null;
         this.wrs = null;
         this.king = null;
+    }
+
+    // add: counts the page hasn't sent yet, under a batch id; a batch resent after a lost reply counts once.
+    // No add is a plain read.
+    syncGrind(userId, id, add) {
+        const text = this.sql.exec("SELECT data FROM grind WHERE user_id = ?", userId).toArray()[0]?.data;
+        const grind = text ? JSON.parse(text) : { since: null, t: {}, d: {}, ids: [] };
+        if (add != null && !grind.ids.includes(id)) {
+            if (!GRIND_BATCH.test(id ?? "") || !mergeGrind(grind, add)) return { error: "bad" };
+            grind.since ??= Date.now();
+            grind.ids = [...grind.ids, id].slice(-GRIND_IDS);
+            this.sql.exec(`INSERT INTO grind (user_id, data) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET data = excluded.data`, userId, JSON.stringify(grind));
+        }
+        const { ids, ...stats } = grind;
+        return { grind: stats };
     }
 
     // Every WR row, kept in memory: boards are read all the time and almost never change their leader.

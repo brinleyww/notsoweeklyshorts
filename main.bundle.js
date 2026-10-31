@@ -9817,7 +9817,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.FogStart = 29] = "FogStart",
                 e[e.FogStrength = 30] = "FogStrength",
                 e[e.FogColor = 31] = "FogColor",
-                e[e.AutoGhost = 32] = "AutoGhost"
+                e[e.AutoGhost = 32] = "AutoGhost",
+                e[e.GrindStats = 33] = "GrindStats"
             }(i || (i = {}));
             const r = i
         }
@@ -45221,8 +45222,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             recordingClass = s;
             const __nswsTrackId = C.get(this, Yr, "f").getId();
             window.__nswsTraffic?.event("attempts", __nswsTrackId);
+            // Only solo runs count: test drives have records off, and multiplayer has a session.
+            window.__nswsGrind?.newCar(s, __nswsTrackId, C.get(this, Xr, "f").name, C.get(this, jr, "f") && null == C.get(this, Sa, "f"));
             return s.notificationAudioEnabled = !0,
             s.addResetCallback(( () => {
+                window.__nswsGrind?.respawn(s),
                 C.get(this, ya, "f").reset = !1,
                 C.set(this, va, s.getControls().up || s.getControls().down, "f"),
                 C.get(this, va, "f") && C.set(this, ba, new Date, "f")
@@ -46485,6 +46489,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     e.car.dispose();
                 cupBotCars.set(this, null),
                 C.get(this, Ra, "f").clear(),
+                window.__nswsGrind?.leave(),
                 window.removeEventListener("keydown", C.get(this, Na, "f")),
                 window.removeEventListener("keyup", C.get(this, Da, "f")),
                 C.get(this, Ba, "f").dispose(),
@@ -52825,6 +52830,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
             }], R.A.AutoGhost),
+            // The in-race panel of mod/nsws_grind.js; the counts keep going either way.
+            C.get(this, ms, "m", Gs).call(this, "Grinding stats in race", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.GrindStats),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Default camera"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Default"),
                 value: "false"
@@ -57152,6 +57165,19 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bc, "f").appendChild(refBtn);
                 C.get(this, Gc, "f").push(refBtn);
             }
+            if (window.__nswsGrind) {
+                const grindBtn = document.createElement("button");
+                grindBtn.className = "button";
+                grindBtn.innerHTML = '<img src="images/grind.svg"> ';
+                grindBtn.append("Stats");
+                grindBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsGrind.open();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(grindBtn);
+                C.get(this, Gc, "f").push(grindBtn);
+            }
             if (window.__nswsBingo) {
                 const bingoBtn = document.createElement("button");
                 bingoBtn.className = "button";
@@ -61088,7 +61114,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsSettingBoolean = (name) => name in R.A && this.getSettingBoolean(R.A[name]);
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindStats, "true"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])

@@ -1111,7 +1111,7 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 }
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
-    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset"]);
+    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync"]);
 const HEX32 = /^[0-9a-f]{32}$/;
 
 // The chat only learns about a tag change here, so its players' next messages show the new tag.
@@ -1180,6 +1180,7 @@ async function handleAccounts(request, url, env, fromSite, origin) {
             result = marked.error ? marked : marked.state;
             break;
         }
+        case "grind/sync": result = await stub.syncGrind(userId, body.id, body.add); break;
         case "tags/buy":
         case "tags/equip": {
             const changed = path === "tags/buy" ? await stub.buyTag(userId, body.tag) : await stub.equipTag(userId, body.tag ?? null);
@@ -1766,7 +1767,7 @@ export default {
                     return doLimited() ? busy(requestOrigin) : plain(500, "Competitions failed", requestOrigin);
                 }
             }
-            if (/^\/nsws\/(names|clips|share|refer|tags|bingo)\//.test(url.pathname)) {
+            if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind)\//.test(url.pathname)) {
                 if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin);

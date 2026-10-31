@@ -34,6 +34,7 @@
 #nsws-share .note{min-height:20px;margin:8px 0 0;font-size:15px;line-height:1.35;color:rgba(255,255,255,.7);}
 #nsws-share .note.good{color:#96ff96;}
 #nsws-share .note.bad{color:#ff9a9a;}
+#nsws-share .grind{margin:10px 0 0;font-size:17px;line-height:1.35;color:#b3c1ff;}
 #nsws-share .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
 #nsws-share .row>.button{margin:0;font-size:20px;padding:7px 16px;}
 #nsws-share .card{margin-top:16px;padding:12px 16px;background:var(--surface-secondary-color);clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);}
@@ -228,9 +229,34 @@
         ctx.globalAlpha = 1;
     }
 
+    // A strip above the footer: the grind behind this PB (mod/nsws_grind.js). It says nothing about times,
+    // so it shows on a live week too.
+    function drawGrind(ctx, w, bottom, grind) {
+        const lines = [grind.main, grind.since].filter(Boolean);
+        const size = Math.round(bottom * 0.036);
+        const pad = Math.round(size * 0.5);
+        const height = lines.length * size * 1.25 + pad * 1.2;
+        const top = bottom - height;
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "rgba(25, 32, 66, 0.72)";
+        ctx.fillRect(0, top, w, height);
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "center";
+        lines.forEach((text, i) => {
+            ctx.font = "italic " + (i ? Math.round(size * 0.8) : size) + "px ForcedSquare, Arial, sans-serif";
+            const shrink = Math.min(1, (w - pad * 2) / ctx.measureText(text).width);
+            if (shrink < 1) ctx.font = "italic " + Math.floor((i ? size * 0.8 : size) * shrink) + "px ForcedSquare, Arial, sans-serif";
+            ctx.fillStyle = i ? "rgba(255, 255, 255, 0.75)" : "#fff";
+            ctx.fillText(text, w / 2, top + pad * 0.6 + size * 1.25 * (i + 0.5));
+        });
+        ctx.textAlign = "left";
+    }
+
     async function drawFooter(ctx, w, h, trackId) {
         const bar = Math.round(h * 0.075);
         const top = h - bar;
+        const grind = window.__nswsGrind?.pbLine(trackId);
+        if (grind) drawGrind(ctx, w, top, grind);
         ctx.globalAlpha = 1;
         ctx.fillStyle = "rgba(25, 32, 66, 0.9)";
         ctx.fillRect(0, top, w, bar);
@@ -367,6 +393,8 @@
         body.appendChild(frame);
         const note = el("p", "note", secret ? weekName(week) + " is still live, so your time shows as SECRET. Your improvement still shows." : "");
         const row = el("div", "row");
+        const grind = window.__nswsGrind?.pbLine(trackId);
+        if (grind) body.appendChild(el("p", "grind", grind.main + (grind.since ? " (" + grind.since + ")" : "")));
         body.append(row, note);
         view = { overlay, note, url: null, blob: null };
 

@@ -820,6 +820,31 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 - **Not covered:** a cup socket that is already open keeps running until it drops (only new ones are refused). A VPN
   or a new address from the ISP gets past any IP ban, and everyone sharing a banned address is blocked with the player.
 
+## Grinding stats
+
+`mod/nsws_grind.js` counts time, attempts, finishes, resets, respawns and PBs per track, after the
+Openplanet plugin for Trackmania. It shows them in a panel during the race (Settings → Gameplay) and
+in a Stats window on the main menu, and the Share PB image says how long the player grinded for that
+PB. Only solo runs count: not cups, multiplayer or editor test drives.
+
+`POST /nsws/grind/sync` takes `{userToken, id, add}` and answers with the account's totals.
+
+- **Storage:** `Accounts` keeps one JSON row per account in the `grind` table, so a sync reads one row
+  and writes one row however many tracks it holds.
+- **Batches:** the page saves counts in localStorage and sends them as a batch with a random `id`. The
+  row remembers the last 32 ids, so a batch resent after a lost reply counts once. With no `add` the
+  call is a plain read and writes nothing.
+- **Limits:** 500 tracks (the least recently played go first), 24 PBs per track (the first is always
+  kept) and 60 days. A batch that fails validation gets a 400 and nothing from it is saved. The page
+  retries it three times, then drops it so it can't block later batches.
+- **Requests:** a tab sends every 5 minutes at most while there are new counts, stretching to every
+  30 minutes when many players are online, plus once on leaving a race and once on closing the page.
+  Hidden tabs send nothing after that.
+- **Trust:** the numbers come from the page and only their owner can read them, so nothing here feeds
+  a tag or a leaderboard. Check them on the server first if they ever do.
+- **Older PBs:** a track that already had a PB when its stats began is marked `o`, and the share image
+  shows its numbers with a `+`.
+
 ## Bad days (free-plan limits)
 
 On the free plan the Durable Objects have daily limits (100,000 requests, 5M rows read, 100,000
