@@ -6,9 +6,18 @@
 import { DurableObject } from "cloudflare:workers";
 
 // The Worker reads this list on every request, so it lives in KV: { <address hash>: until, or 0 for good }.
+// A ban with a message is [until, message] instead.
 export const IP_BANS_KEY = "ip-bans";
 // 0 = for good.
 export const IP_BAN_DAYS = [1, 7, 30, 0];
+
+export function readBanReason(value) {
+    return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
+}
+
+export function ipBanEntry(until, reason) {
+    return reason ? [until ?? 0, reason] : until ?? 0;
+}
 
 // Everything is summed into 10-minute buckets: `t` is epoch seconds / BUCKET_S.
 const BUCKET_S = 600;
@@ -232,6 +241,8 @@ export class TrafficStats extends DurableObject {
         // `nickname` would cost one per beat, since every beat's UPDATE sets that column.
         this.sql.exec("CREATE INDEX IF NOT EXISTS sessions_ip ON sessions(ip) WHERE ip IS NOT NULL");
         this.sql.exec("CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER, who TEXT)");
+        if (!this.sql.exec("PRAGMA table_info(ip_bans)").toArray().some((c) => c.name === "reason"))
+            this.sql.exec("ALTER TABLE ip_bans ADD COLUMN reason TEXT");
     }
 
     // Every address this nickname opened the site from, newest first. Runs through every session that has
@@ -248,17 +259,17 @@ export class TrafficStats extends DurableObject {
 
     ipBans() {
         this.sql.exec("DELETE FROM ip_bans WHERE until IS NOT NULL AND until <= ?", Date.now());
-        return { bans: this.sql.exec("SELECT ip AS hash, at, until, who FROM ip_bans ORDER BY at DESC").toArray() };
+        return { bans: this.sql.exec("SELECT ip AS hash, at, until, who, reason FROM ip_bans ORDER BY at DESC").toArray() };
     }
 
     async publishIpBans() {
         const { bans } = this.ipBans();
-        if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(bans.map((b) => [b.hash, b.until ?? 0]))));
+        if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(bans.map((b) => [b.hash, ipBanEntry(b.until, b.reason)]))));
         return { bans };
     }
 
-    async banIp(hash, until, who) {
-        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who) VALUES (?, ?, ?, ?)", hash, Date.now(), until, who);
+    async banIp(hash, until, who, reason) {
+        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who, reason) VALUES (?, ?, ?, ?, ?)", hash, Date.now(), until, who, reason);
         return this.publishIpBans();
     }
 

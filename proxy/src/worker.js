@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, readBanReason, ipBanEntry } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY, REVERT_ID_BASE } from "./anticheat.js";
 import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
@@ -312,14 +312,16 @@ async function currentIpBans(env) {
     return ipBanList.bans;
 }
 
-// { until } (null = for good) if this request's address is banned, otherwise null.
+// { until, reason } (until null = for good) if this request's address is banned, otherwise null.
 async function ipBanOf(request, env) {
     const bans = await currentIpBans(env);
     const ip = request.headers.get("CF-Connecting-IP");
     if (!ip || !Object.keys(bans).length) return null;
-    const until = bans[await ipHash(ip)];
-    if (until === undefined || (until && until <= Date.now())) return null;
-    return { until: until || null };
+    const entry = bans[await ipHash(ip)];
+    if (entry === undefined) return null;
+    const [until, reason = null] = Array.isArray(entry) ? entry : [entry];
+    if (until && until <= Date.now()) return null;
+    return { until: until || null, reason };
 }
 
 // Same shape as a real track id, but nobody without TRACK_SALT can work it out.
@@ -1509,9 +1511,10 @@ async function handleIpBans(request, url, env, stub, body, origin) {
         if (hash === await ipHash(request.headers.get("CF-Connecting-IP"))) return json({ error: "self" }, origin);
         const until = body.days ? Date.now() + body.days * 86_400_000 : null;
         const who = typed ? "Typed address" : typeof body.who === "string" ? body.who.slice(0, 64) : null;
-        const result = await stub.banIp(hash, until, who);
+        const reason = readBanReason(body.reason);
+        const result = await stub.banIp(hash, until, who, reason);
         await chat?.blockIp(hash, until);
-        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: until ?? 0 };
+        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason) };
         return json(result, origin);
     }
     if (sub === "/unban") {
@@ -1884,7 +1887,7 @@ export default {
         if (request.method !== "OPTIONS" && !OWNER_ROUTE.test(url.pathname)) {
             const ban = await ipBanOf(request, env);
             if (ban && !(await carriesOwnerKey(request, url, cfg))) {
-                return json({ banned: true, until: ban.until }, request.headers.get("Origin") || "*", 403);
+                return json({ banned: true, until: ban.until, reason: ban.reason }, request.headers.get("Origin") || "*", 403);
             }
         }
 

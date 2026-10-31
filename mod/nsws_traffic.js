@@ -151,7 +151,7 @@
         }).then((response) => {
             if (response.status === 403) {
                 response.json().then((data) => {
-                    if (data?.banned) showBanned(data.until);
+                    if (data?.banned) showBanned(data.until, data.reason);
                 }, () => {});
             }
             if (!response.ok) return;
@@ -178,7 +178,7 @@
     }
 
     // The Worker is what actually refuses a banned address; this only tells them why nothing loads.
-    async function showBanned(until) {
+    async function showBanned(until, reason) {
         if (document.getElementById("nsws-banned") || await ownerToken()) return;
         const box = document.createElement("div");
         box.id = "nsws-banned";
@@ -186,11 +186,18 @@
         const title = document.createElement("div");
         title.style.fontSize = "34px";
         title.textContent = "You're banned from Not So Weekly Shorts";
+        box.appendChild(title);
+        if (reason) {
+            const message = document.createElement("div");
+            message.style.cssText = "font-size:24px;max-width:640px;overflow-wrap:anywhere;";
+            message.textContent = reason;
+            box.appendChild(message);
+        }
         const line = document.createElement("div");
         line.style.cssText = "font-size:20px;max-width:640px;";
         line.textContent = (until ? "This network's address is banned until " + new Date(until).toLocaleString() + "." : "This network's address is banned.")
             + " Everyone on it is blocked, so if you share it (a school or a workplace), the ban may not be about you.";
-        box.append(title, line);
+        box.appendChild(line);
         document.body.appendChild(box);
         for (const type of ["keydown", "keyup", "keypress"]) window.addEventListener(type, (e) => e.stopImmediatePropagation(), true);
     }

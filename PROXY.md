@@ -887,7 +887,7 @@ raw name.
 ## IP bans
 
 `BANNED_NICKNAMES` hides a name from the boards. An IP ban refuses an address everything the Worker serves:
-leaderboards, uploads, chat, cups, accounts and beats get `403 {"banned": true, "until": <ms or null>}`. The site
+leaderboards, uploads, chat, cups, accounts and beats get `403 {"banned": true, "until": <ms or null>, "reason": <text or null>}`. The site
 itself is static files on GitHub Pages, which the Worker can't block, so a banned player can still load the page and
 drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_traffic.js`), which is only there to say why.
 
@@ -906,6 +906,9 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 - **Cost:** `sessions_ip` indexes only `ip`, one row written per visit. Don't add `nickname` to it: every beat's
   UPDATE sets that column, which would rewrite the index entry per beat. A lookup walks the index, so it reads
   every session with a hash; only the owner's click pays for that.
+- **Ban message:** optional, up to 200 characters, from the Bans tab or the Moderate menu. It is saved with the ban
+  and copied into the KV list (`[until, message]`), so a banned player sees it on the ban screen, within a few
+  minutes like the ban itself. To change one, unban and ban again.
 - **The owner:** can't ban their own address or their own message. A request with the owner's key passes, and
   `OWNER_ROUTE` skips the check on Race Control's routes, so the owner can lift a ban from a banned network.
 - **Not covered:** a cup socket that is already open keeps running until it drops (only new ones are refused). A VPN

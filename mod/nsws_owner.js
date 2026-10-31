@@ -2733,6 +2733,7 @@
                 ui.bans = data;
                 cachePut("bans", data);
                 ui.bansNote = done;
+                if (path === "ipban/ban") ui.bansReason.value = "";
             }
         } catch (err) {
             ui.bansNote = err.status === 400 ? "That isn't an IP address." : "Couldn't save that. Try again in a moment.";
@@ -2757,7 +2758,7 @@
             b.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
             b.addEventListener("click", () => {
                 const extra = target();
-                if (extra) changeBans("ipban/ban", { ...extra, days }, "Banned. Other server copies pick it up within a few minutes.");
+                if (extra) changeBans("ipban/ban", { ...extra, days, reason: ui.bansReason.value }, "Banned. Other server copies pick it up within a few minutes.");
             });
             box.appendChild(b);
         }
@@ -2766,6 +2767,14 @@
 
     function buildBans() {
         const root = el("div");
+        const message = card("Ban message", "list", "Optional. Goes with the next ban you press, and they see it on their ban screen.");
+        const messageRow = el("div", "nrc-find");
+        ui.bansReason = banInput("Ban message");
+        ui.bansReason.maxLength = 200;
+        ui.bansReason.spellcheck = true;
+        messageRow.appendChild(ui.bansReason);
+        message.appendChild(messageRow);
+
         const find = card("Find a player", "list", "Their exact name. This lists the addresses they opened the site from. Only visits made after IP bans went live have one.");
         const row = el("div", "nrc-find");
         const input = banInput("Nickname");
@@ -2805,7 +2814,7 @@
 
         ui.bansNoteBox = el("div", "nrc-sub");
         ui.bansListBox = el("div");
-        root.append(find, typed, ui.bansNoteBox, ui.bansListBox);
+        root.append(message, find, typed, ui.bansNoteBox, ui.bansListBox);
         return root;
     }
 
@@ -2836,11 +2845,13 @@
         if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));
-        else c.appendChild(table([["Address"], ["Player", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
+        else c.appendChild(table([["Address"], ["Player", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
             const lift = el("button", "button", "Unban");
             lift.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
             lift.addEventListener("click", () => changeBans("ipban/unban", { hash: b.hash }, "Unbanned. Other server copies pick it up within a few minutes."));
-            return [b.hash.slice(0, 8), b.who || "", fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
+            const reason = el("div", null, b.reason || "");
+            reason.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
+            return [b.hash.slice(0, 8), b.who || "", reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
         })));
         list.appendChild(c);
     }

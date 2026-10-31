@@ -8,7 +8,7 @@ import { DurableObject } from "cloudflare:workers";
 import { censor, cleanText } from "./chatfilter.js";
 import { sniffImage, moderate } from "./chatmedia.js";
 import { checkFile, MAX_FILE_NAME } from "./chatfiles.js";
-import { IP_BAN_DAYS } from "./traffic.js";
+import { IP_BAN_DAYS, readBanReason } from "./traffic.js";
 
 const HISTORY = 60;
 const MAX_TEXT = 200;
@@ -912,7 +912,7 @@ export class ChatRoom extends DurableObject {
             if (!ip) return reply({ t: "err", text: "No address saved for that message. Try Race Control -> Bans." });
             const until = msg.days ? Date.now() + msg.days * 86400_000 : null;
             try {
-                await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).banIp(ip, until, row.nick);
+                await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).banIp(ip, until, row.nick, readBanReason(msg.reason));
             } catch (err) {
                 console.error("ip ban failed:", err && err.message);
                 return reply({ t: "err", text: "Couldn't ban that address. Try again in a moment." });

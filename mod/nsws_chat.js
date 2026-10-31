@@ -156,6 +156,7 @@
 #nsws-chat>.log>.tools{display:flex;flex-wrap:wrap;gap:4px;padding:3px 10px 6px 24px;}
 #nsws-chat>.log>.tools>button,#nsws-chat>form>button{border:0;background:var(--button-color,#112052);color:inherit;font:inherit;font-size:14px;padding:3px 8px;cursor:pointer;}
 #nsws-chat>.log>.tools>button:hover,#nsws-chat>form>button:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat>.log>.tools>input{flex:1 0 100%;min-width:0;box-sizing:border-box;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;font-size:14px;padding:3px 8px;user-select:text;}
 #nsws-chat>.status{flex-shrink:0;padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color,#192042);opacity:.8;}
 #nsws-chat>.status:empty{display:none;}
 #nsws-chat .m.reply::before{top:22px;}
@@ -1805,7 +1806,7 @@
             const b = document.createElement("button");
             b.textContent = label;
             b.addEventListener("click", () => {
-                send(data);
+                send(typeof data === "function" ? data() : data);
                 closeTools();
             });
             tools.appendChild(b);
@@ -1821,10 +1822,16 @@
             ipBan.textContent = "IP ban…";
             ipBan.addEventListener("click", () => {
                 ipBan.remove();
-                add("IP ban 1d", { t: "ipban", id: m.id, days: 1 });
-                add("IP ban 7d", { t: "ipban", id: m.id, days: 7 });
-                add("IP ban 30d", { t: "ipban", id: m.id, days: 30 });
-                add("IP ban for good", { t: "ipban", id: m.id, days: 0 });
+                const reason = document.createElement("input");
+                reason.placeholder = "Ban message (optional)";
+                reason.maxLength = 200;
+                tools.appendChild(reason);
+                const banFor = (label, days) => add(label, () => ({ t: "ipban", id: m.id, days, reason: reason.value }));
+                banFor("IP ban 1d", 1);
+                banFor("IP ban 7d", 7);
+                banFor("IP ban 30d", 30);
+                banFor("IP ban for good", 0);
+                reason.focus();
             });
             tools.appendChild(ipBan);
         }
