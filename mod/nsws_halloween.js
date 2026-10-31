@@ -5,13 +5,15 @@
     const FROM = Date.UTC(2026, 9, 31);
     const UNTIL = Date.UTC(2026, 10, 3, 3, 41);
     const WEEK = 1031;
-    const TRACK = "b145eb72b1699e086776e43e1d07f95d4c13f7bd1a0c9240ec9d1cbc53f547a8";
-    const ROUTE = "fff0f88c24a69f3919b7bea7ea6686a37414fdfb3dee6211f55cfb9792131279";
-    const LABEL = "Halloween";
-    const HORSEMAN_FRAMES = 16800;
+    const TRACK = "c6f92a36ad919acc18e680d1ac3c244fab63e6882f90807af315dd8a24930ee5";
+        const LABEL = "Halloween";
+    const HORSEMAN_FRAMES = 12600;
+    // The card's layout stays seeded from the tracks it was dealt with, so marks already made stay on their squares.
+    const BINGO_SEED = "b145eb72b1699e086776e43e1d07f95d4c13f7bd1a0c9240ec9d1cbc53f547a8,fff0f88c24a69f3919b7bea7ea6686a37414fdfb3dee6211f55cfb9792131279,4b742980c7970ecc3e3419c2935bc8272a6cc8c0fedb40552b0a2fbeb19b5f2d,934290e7f5d95eb0f0915ed8f9ce6503851b4b87d1ea5926a0c8a3e6ea9dbd8d,fb895534b1f4450b67e4287b7b69531be21364c561879daf3e015dcf410f2185";
+    const FINISH_ONLY = "5fe3869b99a5f45a5cce18a677420ff028589f926ea6cd0cb0510ea7899751e7";
     const BINGO_TRACKS = [
         TRACK,
-        ROUTE,
+        FINISH_ONLY,
         "4b742980c7970ecc3e3419c2935bc8272a6cc8c0fedb40552b0a2fbeb19b5f2d",
         "934290e7f5d95eb0f0915ed8f9ce6503851b4b87d1ea5926a0c8a3e6ea9dbd8d",
         "fb895534b1f4450b67e4287b7b69531be21364c561879daf3e015dcf410f2185",
@@ -126,9 +128,8 @@
             close();
             window.__nswsOpenTrack?.(id);
         }, className);
-        body.appendChild(line("Haunted - Bloodbourne", "Limited tracks with boards of their own and times shown live.", play(TRACK, "main")));
-        body.appendChild(line("Dead Man's Line", "Tight and flat out, from one transition to the next.", play(ROUTE)));
-        body.appendChild(line("Beat the Headless Horseman", HORSEMAN_FRAMES != null ? "His time on Haunted - Bloodbourne: " + timeText(HORSEMAN_FRAMES) : null,
+        body.appendChild(line("Haunted - Fall to Hell", "The one limited map, with a board of its own and times shown live.", play(TRACK, "main")));
+        body.appendChild(line("Beat the Headless Horseman", HORSEMAN_FRAMES != null ? "His time on Haunted - Fall to Hell: " + timeText(HORSEMAN_FRAMES) : null,
             el("span", ownedTags().includes("horseman") ? "yes" : "no", ownedTags().includes("horseman") ? "Beaten" : "Not yet")));
         body.appendChild(line("Halloween bingo", "A second card just for this event. Your weekly card keeps counting too.", button("Open card", () => {
             close();
@@ -267,5 +268,7 @@
         mountButton,
         beatsHorseman,
         bingoTracks: () => BINGO_TRACKS,
+        bingoSeed: BINGO_SEED,
+        finishOnly: FINISH_ONLY,
     };
 })();

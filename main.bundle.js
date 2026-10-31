@@ -58600,7 +58600,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             chunks: ["f72ff7f02283fa41", "cad90286ee96c22c", "0a62654196c8936b", "168d9f13ca628d03"],
             masks: ["e63acc39cb92438d", "a72d939c6c7f4f06", "91e349be745e2949", "edffdaba0c64910e"],
             file: "tracks/community/halloween.track",
-            tracks: [{ id: "b145eb72b1699e086776e43e1d07f95d4c13f7bd1a0c9240ec9d1cbc53f547a8", name: "1 - Haunted - Bloodbourne", short: "Haunt", author: "davadice", env: "Desert", thumb: "tracks/community/thumbnails/halloween_1.png", noMedals: true }, { id: "fff0f88c24a69f3919b7bea7ea6686a37414fdfb3dee6211f55cfb9792131279", name: "2 - Dead Man's Line", short: "DML", author: "Not So Weekly Shorts", env: "Summer", thumb: "tracks/community/thumbnails/halloween_2.png", noMedals: true }]
+            tracks: [{ id: "c6f92a36ad919acc18e680d1ac3c244fab63e6882f90807af315dd8a24930ee5", name: "1 - Haunted - Fall to Hell", short: "Hell", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/halloween_1.png", noMedals: true }]
         }
         ];
         window.__nswsWeeks = __nswsWeeks;

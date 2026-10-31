@@ -4,8 +4,8 @@ export const HALLOWEEN = {
     week: 1031,
     from: Date.UTC(2026, 9, 31),
     until: Date.UTC(2026, 10, 3, 3, 41),
-    horsemanTrack: "b145eb72b1699e086776e43e1d07f95d4c13f7bd1a0c9240ec9d1cbc53f547a8",
-    horsemanFrames: 16800,
+    horsemanTrack: "c6f92a36ad919acc18e680d1ac3c244fab63e6882f90807af315dd8a24930ee5",
+    horsemanFrames: 12600,
 };
 
 export function halloweenLive(now = Date.now()) {

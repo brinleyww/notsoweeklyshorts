@@ -63,7 +63,7 @@
         { id: "cup", text: "Finish a race in a cup", hint: "Competitions on the main menu." },
         { id: "share", text: "Share a PB image", hint: "Press Share PB on the banner after a new personal best." },
         { id: "gothic3", text: "Visit 3 haunted places", hint: "Finish 3 of The Eldritch Estate, Lenore, Arx Lucida, Grimspyre and Apostle. Play menu, top right: Official & Community." },
-        { id: "horseman", text: "Beat the Headless Horseman", hint: "Beat his time on Haunted - Bloodbourne. Open Halloween on the main menu to see it." },
+        { id: "horseman", text: "Beat the Headless Horseman", hint: "Beat his time on Haunted - Fall to Hell. Open Halloween on the main menu to see it." },
     ];
     const ACTIVITIES = [
         { id: "finish25", text: "Finish 25 runs on this week's tracks", hint: "Any of this week's tracks. Only finished runs count." },
@@ -223,9 +223,10 @@
         const eventCard = HALLOWEEN()?.week === week;
         const listed = eventCard ? weeks.flatMap((w) => window.__nswsTracksForWeek(w.week)) : window.__nswsTracksForWeek?.(week) ?? [];
         const order = eventCard ? HALLOWEEN().bingoTracks() : weeks.find((w) => w.week === week)?.bingoOrder;
-        const tracks = order ? order.map((id) => listed.find((t) => t.id === id)).filter(Boolean) : listed;
+        const tracks = (order ? order.map((id) => listed.find((t) => t.id === id)).filter(Boolean) : listed)
+            .map((t) => (eventCard && t.id === HALLOWEEN().finishOnly ? { ...t, noMedals: true } : t));
         if (!tracks.length) return null;
-        const rnd = random(hash("nsws-bingo2|" + week + "|" + round + "|" + tracks.map((t) => t.id).join(",")));
+        const rnd = random(hash("nsws-bingo2|" + week + "|" + round + "|" + (eventCard ? HALLOWEEN().bingoSeed : tracks.map((t) => t.id).join(","))));
         const columns = tracks.length >= SIZE
             ? shuffle(tracks.map((_, i) => i), rnd).slice(0, SIZE).sort((a, b) => a - b).map((i) => tracks[i])
             : Array.from({ length: SIZE }, (_, i) => tracks[i % tracks.length]);

@@ -53,7 +53,7 @@
         { id: "author", label: "AUTHOR TIME", group: "discord", need: "Set the Author Time medals for a week." },
         { id: "og", label: "OG", group: "discord", need: "Have played NSWS since the early weeks." },
         { id: "cupchamp", label: "CUP CHAMPION", group: "discord", need: "Given by the owner to cup winners." },
-        { id: "horseman", label: "HORSEMAN SLAYER", group: "halloween", need: "Beat the Headless Horseman's time on Haunted - Bloodbourne, Halloween 2026." },
+        { id: "horseman", label: "HORSEMAN SLAYER", group: "halloween", need: "Beat the Headless Horseman's time on Haunted - Fall to Hell, Halloween 2026." },
         { id: "haunted", label: "HAUNTED", group: "halloween", haunted: true, need: "Get a bingo on the Halloween card, Halloween 2026." },
         { id: "pumpkin", label: "PUMPKIN", group: "halloween", pumpkin: true, need: "Refer a friend or join with a code during the Halloween event, 2026. Both of you get it once the new player uploads a run." },
     ];

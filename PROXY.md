@@ -1035,5 +1035,5 @@ any real week and is never renumbered, since runs are stored under ids derived f
   site as owner straight after a deploy that adds a track. Race Control can still grant it by hand.
 - When the window ends the page drops the group from the Play menu and cup pools, and the theme and button go away.
   Tags stay. Nothing has to ship to end it. Boards still accept uploads after the end, but no page offers the tracks.
-- The tracks are locked once players are on them: the card is seeded from the track ids and a board from the track's
-  id, so changing a track's parts moves every mark to the wrong square and starts an empty board.
+- Changing a track's parts starts it on an empty board. The Halloween card's layout is pinned to `BINGO_SEED` in
+  `mod/nsws_halloween.js` (the first tracks it was dealt with), so swapping a track keeps marks on their squares.
