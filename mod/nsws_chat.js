@@ -2945,12 +2945,6 @@
             else if (replyTo) cancelReply();
             else input.blur();
         });
-        input.addEventListener("paste", (e) => {
-            const file = e.clipboardData?.files?.[0];
-            if (!file) return;
-            e.preventDefault();
-            attachFile(file);
-        });
         const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
         root.addEventListener("dragover", (e) => {
             if (!hasFiles(e) || layout.min) return;
@@ -3004,9 +2998,21 @@
         setFullscreen(false);
     }
 
+    // Works wherever the focus is while the window is open, except in another text box or the editor,
+    // which pastes parts on the same key.
+    function onPaste(e) {
+        if (!root || layout.min || tucked || document.querySelector(".editor-ui")) return;
+        const file = e.clipboardData?.files?.[0];
+        if (!file) return;
+        if (e.composedPath().some((t) => t !== input && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return;
+        e.preventDefault();
+        attachFile(file);
+    }
+
     function enable() {
         if (root) return;
         build();
+        document.addEventListener("paste", onPaste);
         window.addEventListener("keydown", onKey, true);
         window.addEventListener("keydown", quickKey, true);
         window.addEventListener("resize", applyLayout);
@@ -3023,6 +3029,7 @@
         closeLightbox();
         setAttachment(null);
         lastAttachment = queuedGif = null;
+        document.removeEventListener("paste", onPaste);
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("keydown", quickKey, true);
         window.removeEventListener("resize", applyLayout);
