@@ -11859,6 +11859,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 this.modeButton.title = kodub ? "Play the Not So Weekly Shorts tracks" : "Play Kodub's official and community tracks";
                 const tab = kodub ? ("official" == $ || "kodub" == $ ? $ : "official") : "community";
                 i.get(this, v, "m", Q).call(this, tab),
+                i.get(this, v, "m", J).call(this),
                 "official" == tab ? i.get(this, I, "f").scrollTop = ee : "kodub" == tab ? this.kodubContainer.scrollTop = kodubScroll : i.get(this, L, "f").scrollTop = te
             }
             ,
@@ -11886,7 +11887,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 if ($ ?? ($ = i.get(this, T, "f").loadTrackSelectionTab()),
                 i.get(this, B, "f").filter((e => e.category == $)).every((e => "none" == e.buttonContainer.style.display)))
-                    for (const e of ["official", "community", "custom"])
+                    for (const e of "kodub" == trackMode ? ["official", "kodub"] : ["community"])
                         if (i.get(this, B, "f").some((t => t.category == e && "none" != t.buttonContainer.style.display))) {
                             i.get(this, v, "m", Q).call(this, e);
                             break
@@ -12088,7 +12089,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                     }
                     )),
                     g.appendChild(this.modeButton);
-                    i.set(this, G, document.createElement("input"), "f");
+                    const searchBar = document.createElement("div");
+                    searchBar.className = "search-bar-container",
+                    searchBar.innerHTML = '<img src="images/search.svg">',
+                    g.insertBefore(searchBar, this.modeButton),
+                    i.set(this, G, document.createElement("input"), "f"),
+                    i.get(this, G, "f").type = "text",
+                    i.get(this, G, "f").placeholder = i.get(this, b, "f").get("Search by track or author..."),
+                    i.get(this, G, "f").addEventListener("input", ( () => {
+                        i.get(this, v, "m", J).call(this)
+                    }
+                    )),
+                    searchBar.appendChild(i.get(this, G, "f"));
                     window.addEventListener("keydown", i.set(this, V, (e => {
                         i.get(this, O, "f") && "Escape" == e.code && (d(),
                         e.preventDefault()),
@@ -62407,6 +62419,22 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     ...e.getControls()
                 }
                   , i = e.getTime().numberOfFrames - 1;
+                if (window.__nswsShortPresses) {
+                    // A tap can fall between two screen frames. A gap over 250 ms is a seek, not playback.
+                    const s = this.shortPressFrame;
+                    if (s?.run === t && s.frame === i)
+                        return s.controls;
+                    if (s?.run === t && i > s.frame && i - s.frame <= 250)
+                        for (const r of ["up", "right", "down", "left"])
+                            for (let a = s.frame + 1; !n[r] && a < i; a++)
+                                n[r] = t.recording.getPressLength(r, a) > 0;
+                    this.shortPressFrame = {
+                        run: t,
+                        frame: i,
+                        controls: n
+                    };
+                    return n
+                }
                 for (const r of ["up", "right", "down", "left"])
                     n[r] && t.recording.getPressLength(r, i) < 50 && (n[r] = !1);
                 return n

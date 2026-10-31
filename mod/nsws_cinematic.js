@@ -16,7 +16,7 @@ body.nsws-cine-on .time-bar-ui > .nsws-cine-bright { display: flex; }
 .nsws-cine-bright > input::-webkit-slider-thumb { width: 14px; height: 22px; margin: -8px 0 0 0; border: 3px solid var(--button-color); }
 .nsws-cine-bright > input::-moz-range-thumb { width: 8px; height: 16px; border: 3px solid var(--button-color); }
 .time-bar-ui > button > svg { margin: 0 0 2px 0; vertical-align: middle; width: 28px; height: 28px; pointer-events: none; }
-.time-bar-ui > .button.nsws-watch-inputs.off > svg { opacity: 0.35; }
+.time-bar-ui > .button.nsws-watch-inputs.off > svg, .time-bar-ui > .button.nsws-watch-short.off > svg { opacity: 0.35; }
 .time-bar-ui > .button.nsws-watch-save.on { background-color: #8a2a3a; }
 body.nsws-hide-inputs .input-visualizer-ui { display: none !important; }
 .nsws-save-menu { position: fixed; z-index: 10000; display: flex; align-items: stretch; padding: 6px; background: var(--surface-color); color: #fff; pointer-events: auto; }
@@ -1936,6 +1936,32 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 applyInputs();
             });
 
+            // Owner only: light up presses under 50 ms too (getDisplayedControls in main.bundle.js).
+            this.shortBtn = document.createElement("button");
+            this.shortBtn.className = "button nsws-watch-short";
+            this.shortBtn.title = "Show inputs under 50 ms";
+            this.shortBtn.style.display = "none";
+            this.shortBtn.innerHTML = '<svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2" fill="none" stroke="#fff" stroke-width="2"/><text x="12" y="16.5" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">50</text></svg>';
+            const applyShort = () => this.shortBtn.classList.toggle("off", !window.__nswsShortPresses);
+            window.__nswsShortPresses = false;
+            applyShort();
+            window.__nswsOwner?.check().then((owner) => {
+                if (!owner) return;
+                try {
+                    window.__nswsShortPresses = localStorage.getItem("nsws_watch_short") === "1";
+                } catch (e) {}
+                applyShort();
+                this.shortBtn.style.removeProperty("display");
+            }, () => {});
+            this.shortBtn.addEventListener("click", () => {
+                o.playClick?.();
+                window.__nswsShortPresses = !window.__nswsShortPresses;
+                try {
+                    localStorage.setItem("nsws_watch_short", window.__nswsShortPresses ? "1" : "0");
+                } catch (e) {}
+                applyShort();
+            });
+
             this.saveBtn = document.createElement("button");
             this.saveBtn.className = "button nsws-watch-save";
             this.saveBtn.title = "Save video";
@@ -1973,7 +1999,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
 
             const bar = o.uiElement.querySelector(".time-bar-ui");
             const seek = bar?.querySelector(":scope > .bar");
-            for (const b of [this.button, this.droneBtn, this.inputsBtn, this.saveBtn, this.bright]) {
+            for (const b of [this.button, this.droneBtn, this.inputsBtn, this.shortBtn, this.saveBtn, this.bright]) {
                 if (seek) bar.insertBefore(b, seek);
                 else bar?.appendChild(b);
             }
@@ -2055,6 +2081,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             this.droneBtn.remove();
             this.bright.remove();
             this.inputsBtn.remove();
+            this.shortBtn.remove();
             this.saveBtn.remove();
             document.body.classList.remove("nsws-hide-inputs");
             window.removeEventListener("keydown", this.onRecKey, true);
