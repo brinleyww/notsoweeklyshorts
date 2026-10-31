@@ -258,6 +258,59 @@
         },
     };
 
+    // Driving time and attempts on each track since the player's last PB there, sent with the next PB for the
+    // owner's Check run sheet. The page's word, so a cheat can fake it; most won't think to.
+    const DRIVE_KEY = "_nswsDrive";
+    const DRIVE_FLUSH_MS = 5000;
+    const DRIVE_MAX_GAP_MS = 250;
+    let drives = null;
+    let driveLast = 0;
+    let driveSaved = 0;
+    const drivePending = new Map();
+
+    function driveOf(track) {
+        if (!drives) {
+            try {
+                drives = JSON.parse(localStorage.getItem(DRIVE_KEY)) || {};
+            } catch {
+                drives = {};
+            }
+        }
+        return (drives[track] ??= { ms: 0, tries: 0 });
+    }
+
+    function driveSave() {
+        driveSaved = performance.now();
+        try {
+            if (drives) localStorage.setItem(DRIVE_KEY, JSON.stringify(drives));
+        } catch {}
+    }
+
+    window.addEventListener("pagehide", driveSave);
+    window.addEventListener("nsws-traffic", (e) => {
+        if (e.detail?.name === "attempts" && e.detail.track) driveOf(e.detail.track).tries++;
+    });
+
+    Object.assign(window.__nswsTraffic, {
+        drive(track) {
+            const now = performance.now();
+            const gap = now - driveLast;
+            driveLast = now;
+            if (gap < DRIVE_MAX_GAP_MS) driveOf(track).ms += gap;
+            if (now - driveSaved > DRIVE_FLUSH_MS) driveSave();
+        },
+        drivePb(track) {
+            const d = driveOf(track);
+            drivePending.set(track, { ms: Math.round(d.ms), tries: d.tries });
+            delete drives[track];
+            driveSave();
+        },
+        driveTag(track) {
+            const d = drivePending.get(track);
+            return d ? "&nswsDriven=" + d.ms + "&nswsTries=" + d.tries : "";
+        },
+    });
+
     async function ownerToken() {
         const token = readProfile()?.token;
         if (typeof token !== "string" || !TRACK_ID.test(token) || !crypto.subtle) return null;
@@ -337,8 +390,8 @@
         syncTracks,
         token: ownerToken,
         api: API,
-        async open() {
-            if (!(await ownerToken())) return;
+        async loadPanel() {
+            if (!(await ownerToken())) return false;
             if (!panelScript) {
                 panelScript = new Promise((resolve, reject) => {
                     const script = document.createElement("script");
@@ -352,7 +405,13 @@
                 });
             }
             await panelScript;
-            window.__nswsOwnerPanel.open();
+            return true;
+        },
+        async open() {
+            if (await window.__nswsOwner.loadPanel()) window.__nswsOwnerPanel.open();
+        },
+        checkRun(run) {
+            window.__nswsOwner.loadPanel().then((ok) => ok && window.__nswsOwnerPanel.checkRun(run)).catch(() => {});
         },
     };
 

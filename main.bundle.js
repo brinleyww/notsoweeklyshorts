@@ -62,7 +62,7 @@ window.__nswsAutoGhost = async function(trackId, own, total, fetchPage) {
     if (!Number.isSafeInteger(position) || position < 1) return null;
     const entry = (await fetchPage(position - 1, 1))?.entries?.[0];
     // On the live week the proxy hands out -position in place of a recording id, even for the Author Time run.
-    if (!entry || entry.hidden || entry.isSelf || !(entry.id > 0)) return null;
+    if (!entry || entry.hidden || entry.noReplay || entry.isSelf || !(entry.id > 0)) return null;
     return {
         nickname: entry.nickname,
         recordingId: entry.id,
@@ -3615,6 +3615,27 @@ window.__nswsAutoGhostNote = function(trackId) {
                 // Whether any Rocket League input (jump, boost, air roll, roll left/right, pitch) was ever pressed.
                 hasRocketInputs() {
                     return this.rocket.some((e => e.length))
+                }
+                // The TAS tool's text: one "frame,keys" line per change of keys, in competitions/src/bots/inputs.ts's
+                // order. The Rocket League channels, which that tool doesn't know, follow as j b x q e n u.
+                inputsText() {
+                    const e = [[f.get(this, a, "f"), "w"], [f.get(this, l, "f"), "a"], [f.get(this, o, "f"), "s"], [f.get(this, s, "f"), "d"], [f.get(this, c, "f"), "r"]];
+                    this.rocket.forEach(( (t, n) => e.push([t, "jbxqenu"[n]])));
+                    const t = e.map(( () => 0))
+                      , n = [...new Set(e.flatMap(( ([e]) => e)))].sort(( (e, t) => e - t))
+                      , i = [];
+                    let r = "";
+                    for (const a of n) {
+                        let n = "";
+                        e.forEach(( ([e, i], s) => {
+                            for (; t[s] < e.length && e[t[s]] <= a; )
+                                t[s]++;
+                            t[s] % 2 && (n += i)
+                        })),
+                        n != r && (i.push(a + "," + n),
+                        r = n)
+                    }
+                    return i.join("\n") + "\n"
                 }
                 // How many frames the press of key e ("up", "right", "down", "left" or
                 // "reset") that covers frame t lasts: 0 if the key isn't held at t,
@@ -46773,6 +46794,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, ma, "f").setResetCheckpointAvailable(C.get(this, _r, "m", ja).call(this)),
                 C.get(this, Ga, "f")?.update(),
                 cupFrameHook?.(this, n),
+                n > 0 && C.get(this, wa, "f").hasStarted() && !C.get(this, wa, "f").hasFinished() && window.__nswsTraffic?.drive?.(C.get(this, Yr, "f").getId()),
                 C.get(this, Ir, "f").update(C.get(this, Pr, "f")),
                 C.get(this, Lr, "f").update(n, C.get(this, zr, "f").camera, C.get(this, Pr, "f").sunDirection),
                 C.get(this, Nr, "f").update(e, !1, C.get(this, zr, "f")),
@@ -54362,8 +54384,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                       , r = C.get(this, Ao, "f") * i;
                     // The proxy has already taken banned players out and counted ranks and the
                     // total without them, so a row's rank is just its place in the list.
-                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, owner: __nswsOwner, flagged: __nswsFlagged}) => {
+                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, owner: __nswsOwner, flagged: __nswsFlagged, cleared: __nswsCleared}) => {
                         if (!n.isCancelled) {
+                            __nswsCleared && null != C.get(this, no, "f").getRecord(C.get(this, to, "f").profileSlot, C.get(this, Ys, "f")) && C.get(this, no, "f").clearRecord(C.get(this, to, "f").profileSlot, C.get(this, Ys, "f")),
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
                             C.get(this, oo, "f").textContent = C.get(this, Zs, "f").get("{0} players", [Mo(a)]),
@@ -54379,7 +54402,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             for (let e = 0; e < s.length; e++) {
                                 const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, hidden: v} = s[e]
                                   , d = r + e + 1;
-                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsOwner, !!__nswsFlagged?.includes(t))
+                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsOwner, s[e], !!__nswsFlagged?.includes(t))
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
                             C.get(this, ho, "f").disabled = !1,
@@ -54421,7 +54444,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             ), 500)
         }
         ,
-        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsOwner, __nswsFlag) {
+        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsOwner, __nswsEntry, __nswsFlag) {
             // __nswsHidden: the proxy withheld this run's time and recording (someone else's run
             // on a week still in progress). __nswsOwner: the proxy sent the owner every run in full.
             const __nswsSecret = !s && (!!__nswsHidden || !__nswsOwner && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
@@ -54431,7 +54454,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             s && (C.set(this, bo, c, "f"),
             c.classList.add("self")),
             c.addEventListener("click", ( () => {
-                if (__nswsSecret) return;
+                if (__nswsSecret || __nswsEntry?.noReplay) return;
                 C.get(this, eo, "f").playUIClick(),
                 C.get(this, wo, "f").some((e => e.recordingId == o)) ? (C.set(this, wo, C.get(this, wo, "f").filter((e => e.recordingId != o)), "f"),
                 c.classList.remove("selected"),
@@ -54515,6 +54538,21 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 c.style.position = "relative",
                 c.appendChild(__nswsMark)
             }
+            // A span, since this row is itself a button. The sheet is in mod/nsws_owner.js.
+            o > 0 && !__nswsHidden && window.__nswsOwner?.check().then((ok => {
+                if (!ok) return;
+                const __nswsCheck = document.createElement("span");
+                __nswsCheck.className = "nsws-check-run",
+                __nswsCheck.textContent = "Check",
+                __nswsCheck.style.cssText = "position:absolute;right:6px;top:50%;transform:translateY(-50%);padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color);cursor:pointer;",
+                c.style.position = "relative",
+                __nswsCheck.addEventListener("click", (ev => {
+                    ev.stopPropagation(),
+                    C.get(this, eo, "f").playUIClick(),
+                    window.__nswsOwner.checkRun({ id: o, track: C.get(this, Ys, "f"), userId: __nswsEntry?.userId, nickname: t, frames: i.numberOfFrames, position: e })
+                })),
+                c.appendChild(__nswsCheck)
+            }))
         }
         ,
         Eo = function e() {
@@ -54754,7 +54792,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     C.get(this, Uo, "m", $o).call(this)
                 }
                 ),( (e, t) => {
-                    null == e || null != v && !e.time.lessOrEqual(v.time) ? C.get(this, Uo, "m", Zo).call(this, v?.time ?? null, null) : C.get(this, Uo, "m", Zo).call(this, e.time, {
+                    // Read again: the owner hiding this player's run can have changed it since the panel opened.
+                    const __nswsPb = r.getRecord(i.profileSlot, h);
+                    null == e || !e.reverted && null != __nswsPb && !e.time.lessOrEqual(__nswsPb.time) ? C.get(this, Uo, "m", Zo).call(this, __nswsPb?.time ?? null, null) : C.get(this, Uo, "m", Zo).call(this, e.time, {
                         position: e.position,
                         total: t
                     })
@@ -58032,7 +58072,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             c
         }
         ,
-        jh = async function(e, t, n) {
+        jh = async function(e, t, n, __nswsForce) {
             if (C.get(this, Fh, "f").determinismState != Js.Ok)
                 return;
             const i = C.get(this, Oh, "f").getUserProfile(e);
@@ -58047,7 +58087,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             const o = s[0];
             if (C.get(this, Wh, "f").get(r) == a && C.get(this, Oh, "f").getUserProfile(e)?.token == i.token) {
                 const r = this.getRecordTime(e, t);
-                if (null == r || o.time.lessThan(r)) {
+                if (null == r || o.time.lessThan(r) || __nswsForce) {
                     C.get(this, Bh, "f").saveRecord(e, i.tokenHash, t, n, o.time, o.recording, C.get(this, Fh, "f").determinismState);
                     for (const e of C.get(this, Vh, "f"))
                         e()
@@ -58082,6 +58122,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , a = C.get(this, Oh, "f").getUserProfile(e);
                 if (null == a)
                     return null;
+                window.__nswsTraffic?.drivePb?.(t);
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
                 const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
                 __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
@@ -58094,9 +58135,22 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (C.get(this, Fh, "f").determinismState != Js.Ok)
                     return null;
                 const i = this.getRecord(e, t);
+                // The owner took the player's newer run down: what the board shows wins over this device's copy.
+                if (n?.reverted) {
+                    if (i?.uploadId == n.id)
+                        return null;
+                    if (n.noReplay)
+                        return null != i && this.clearRecord(e, t), null;
+                    return await C.get(this, Dh, "m", jh).call(this, e, t, n.id, !0), "Download"
+                }
                 return null != i && (null == n || i.uploadId != n.id && i.time.lessThan(n.time)) ? (await C.get(this, Dh, "m", Hh).call(this, e, t, null, i.time, i.recording),
                 "Upload") : null != n && (null == i || i.uploadId != n.id && n.time.lessThan(i.time)) ? (await C.get(this, Dh, "m", jh).call(this, e, t, n.id),
                 "Download") : null
+            }
+            clearRecord(e, t) {
+                C.get(this, Bh, "f").deleteRecord(e, t);
+                for (const e of C.get(this, Vh, "f"))
+                    e()
             }
             cleanUpRecords() {
                 const e = C.get(this, Bh, "f").loadRecordTracks();
@@ -59523,6 +59577,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     console.error(e)
                 }
             }
+            deleteRecord(e, t) {
+                try {
+                    C.get(this, Id, "f").removeItem(C.get(Pd, Pd, "f", Kd) + e.toString() + "_default_" + t),
+                    C.get(this, Id, "f").removeItem(C.get(Pd, Pd, "f", Kd) + e.toString() + "_undeterministic_" + t)
+                } catch (e) {
+                    console.error(e)
+                }
+            }
             deleteAllRecordsForTrack(e) {
                 for (let t = 0; t < su.A.maxNumberOfProfiles; t++)
                     try {
@@ -60655,12 +60717,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                             carStyle: jt.A.deserializeSafe(t.carStyle),
                                             verifiedState: t.verifiedState,
                                             isSelf: t.userId == e,
-                                            hidden: !0 === t.hidden
+                                            hidden: !0 === t.hidden,
+                                            noReplay: !0 === t.noReplay,
+                                            userId: t.userId
                                         })
                                     }
                                     if (!("userEntry"in r))
                                         return void n(new Error("User entry field does not exist"));
-                                    let l = null;
+                                    let l = null
+                                      , __nswsCleared = !1;
                                     if (null != r.userEntry) {
                                         if ("object" != typeof r.userEntry)
                                             return void n(new Error("User entry is not an object"));
@@ -60682,15 +60747,20 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                         l = {
                                             position: e,
                                             time: i,
-                                            id: r.userEntry.id
-                                        }
+                                            id: r.userEntry.id,
+                                            reverted: !0 === r.userEntry.reverted,
+                                            noReplay: !0 === r.userEntry.noReplay
+                                        };
+                                        // The owner hid the player's only run on this track.
+                                        !0 === r.userEntry.cleared && (l = null, __nswsCleared = !0)
                                     }
                                     t({
                                         total: a,
                                         entries: o,
                                         userEntry: l,
                                         owner: !0 === r.owner,
-                                        flagged: Array.isArray(r.flagged) ? r.flagged : null
+                                        flagged: Array.isArray(r.flagged) ? r.flagged : null,
+                                        cleared: __nswsCleared
                                     })
                                 } catch (e) {
                                     n(new Error("Unknown error: " + String(e)))
@@ -60740,10 +60810,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                     if (!Number.isSafeInteger(i.id))
                                         return void t(new Error("Record id is not a safe integer"));
                                     const o = i.id;
+                                    if (!0 === i.cleared)
+                                        return void e(null);
                                     e({
                                         position: r,
                                         time: s,
-                                        id: o
+                                        id: o,
+                                        reverted: !0 === i.reverted,
+                                        noReplay: !0 === i.noReplay
                                     })
                                 } catch (e) {
                                     t(new Error("Unknown error: " + String(e)))
@@ -60841,7 +60915,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         else {
                             window.__nswsTraffic?.event("uploads", r);
                             const __nswsWeek = window.__nswsTrackWeek(r)
-                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? "") + (window.__nswsUploadQueue?.achievedTag?.(r, s.numberOfFrames) ?? ""));
+                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? "") + (window.__nswsUploadQueue?.achievedTag?.(r, s.numberOfFrames) ?? "") + (window.__nswsTraffic?.driveTag?.(r) ?? ""));
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;

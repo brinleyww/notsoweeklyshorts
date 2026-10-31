@@ -37,6 +37,7 @@
         "unreadable": "Recording unreadable",
         "bad-time": "Impossible time",
         "owner-hidden": "You hid it (lobby PB review)",
+        "owner-picked": "You hid it",
         "macro-speed": "Macro: presses faster than a finger",
         "macro-click": "Macro: clicks faster than a finger",
         "macro-hold": "Macro: presses too short for a finger",
@@ -44,6 +45,14 @@
         "macro-replay": "Macro: repeated an attempt to the ms",
         "macro-script": "Macro: keys sent by a script",
     };
+    const BAD = "#ff6b6b";
+    // From the top 40 runs on 11 boards (PROXY.md "Check run"): one of ~400 ordinary runs set one off, every TAS or AI run did.
+    const FLAG_FAST_PRESS_MS = 10;
+    const FLAG_FAST_PRESSES = 3;
+    const FLAG_KEYS_PER_SECOND = 15;
+    const FLAG_SAME_LENGTH_SHARE = 0.4;
+    const FLAG_MIN_PRESSES = 20;
+    const FINDER_PAGE = 25;
 
     const CSS = `
 #nrc-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
@@ -154,6 +163,14 @@
 .nrc-find{display:flex;gap:8px;}
 .nrc-find input{flex:1;min-width:0;margin:0;padding:8px 14px;border:none;outline:none;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);background:var(--surface-tertiary-color);color:var(--text-color);font-size:20px;user-select:text;}
 .nrc-find input.small{flex:0 0 110px;}
+.nrc-find select{flex:1;min-width:0;margin:0;padding:8px 14px;border:none;outline:none;background:var(--surface-tertiary-color);color:var(--text-color);font-size:18px;}
+#nrc-check{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.75);}
+#nrc-check *{box-sizing:border-box;}
+.nrc-sheet{width:min(880px,96vw);max-height:94vh;overflow-y:auto;padding:18px 20px;background:var(--surface-color);color:var(--text-color);}
+.nrc-sheet h1{margin:0;font-size:28px;font-weight:normal;overflow-wrap:anywhere;}
+.nrc-smell{padding:6px 12px;margin-bottom:4px;font-size:15px;background:var(--surface-secondary-color);border-left:4px solid var(--c);}
+.nrc-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+.nrc-acts .button{font-size:18px;padding:6px 16px;}
 .nrc-opts{display:flex;flex-direction:column;gap:6px;}
 .nrc-opts .button{font-size:16px;padding:6px 14px;}
 .nrc-annline .nrc-bars{margin-top:10px;font-style:normal;}
@@ -1271,15 +1288,16 @@
         }
         sync.style.marginBottom = "14px";
         body.appendChild(sync);
-
+        body.appendChild(buildRunFinder());
         body.appendChild(buildFlagged(a));
 
-        const rej = card("Rejected uploads", "cancel", "Runs refused at upload because the replay didn't match. They never reached Kodub.");
+        const rej = card("Rejected uploads", "cancel", "Runs refused at upload because the replay didn't match. They never reached Kodub. Inputs are kept for the newest 60 refused after this feature shipped.");
         if (!a.rejects.length) rej.appendChild(el("div", "nrc-empty", "No rejected uploads."));
         else {
             rej.appendChild(table(
-                [["Last try", "num"], ["Player", "name"], ["Track", "name"], ["Claimed", "num"], ["Why"], ["Tries", "num"]],
-                a.rejects.map((r) => [fmt.dateTime(r.last), r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason, num(r.attempts)])));
+                [["Last try", "num"], ["Player", "name"], ["Track", "name"], ["Claimed", "num"], ["Why"], ["Tries", "num"], [""]],
+                a.rejects.map((r) => [fmt.dateTime(r.last), r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason, num(r.attempts),
+                    r.has_recording ? inputsButton(() => post("anticheat/reject/run", { key: r.key }), r) : ""])));
         }
         rej.style.marginBottom = "14px";
         body.appendChild(rej);
@@ -1299,10 +1317,37 @@
                         } catch {}
                         loadAnti();
                     });
-                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason || "", fmt.dateTime(r.at), allow];
+                    const check = el("button", "button", "Check");
+                    check.style.cssText = "font-size:13px;padding:4px 12px;margin-right:4px;";
+                    check.addEventListener("click", () => checkRun({ id: r.id, track: r.track, userId: r.user_id, nickname: r.nickname, frames: r.frames, hidden: true }));
+                    const actions = el("span");
+                    actions.style.whiteSpace = "nowrap";
+                    actions.append(check, allow);
+                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), REASONS[r.reason] || r.reason || "", fmt.dateTime(r.at), actions];
                 })));
         }
         body.appendChild(blocked);
+        const bans = card("Banned from a track", "cancel", "Their runs on that track stay off its board, new ones too, under any name. Ban someone from Check run on a leaderboard row or in Find a run above.");
+        bans.style.marginTop = "14px";
+        const banned = a.trackBans || [];
+        if (!banned.length) bans.appendChild(el("div", "nrc-empty", "Nobody is banned from a track."));
+        else {
+            bans.appendChild(table(
+                [["Player", "name"], ["Track", "name"], ["Since", "num"], [""]],
+                banned.map((r) => {
+                    const lift = el("button", "button", "Lift ban");
+                    lift.style.cssText = "font-size:13px;padding:4px 12px;";
+                    lift.addEventListener("click", async () => {
+                        lift.disabled = true;
+                        try {
+                            await post("anticheat/ban", { track: r.track, userId: r.user_id, on: false });
+                        } catch {}
+                        loadAnti();
+                    });
+                    return [r.nickname || "Unnamed", trackName(r.track), fmt.dateTime(r.at), lift];
+                })));
+        }
+        body.appendChild(bans);
         body.appendChild(el("div", "nrc-foot", "Owner only. Press Refresh for new numbers."));
         renderLobbyRuns(body, a, blocked);
     }
@@ -1319,6 +1364,8 @@
         if (f.fast != null) why.push(num(f.fast) + " presses under 10 ms");
         if (f.rate != null) why.push(f.rate + " key changes a second");
         if (f.same != null) why.push(f.same + "% of presses exactly " + f.len + " ms");
+        if (f.driven != null) why.push("page drove only " + spell(f.driven) + " since the last PB");
+        if (f.tries != null) why.push("page counted no attempts since the last PB");
         return why.join(", ");
     }
 
@@ -1331,6 +1378,9 @@
             box.appendChild(table(
                 [["Player", "name"], ["Track", "name"], ["Time", "num"], ["Why"], [""]],
                 flagged.map((r) => {
+                    const check = el("button", "button", "Check");
+                    check.style.cssText = "font-size:13px;padding:4px 12px;margin-right:4px;";
+                    check.addEventListener("click", () => checkRun({ id: r.id, track: r.track, userId: r.user_id, nickname: r.nickname, frames: r.frames }));
                     const clear = el("button", "button", "Clear");
                     clear.style.cssText = "font-size:13px;padding:4px 12px;";
                     clear.addEventListener("click", async () => {
@@ -1340,7 +1390,10 @@
                         } catch {}
                         loadAnti();
                     });
-                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), flagReasons(r.flags), clear];
+                    const actions = el("span");
+                    actions.style.whiteSpace = "nowrap";
+                    actions.append(check, clear);
+                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), flagReasons(r.flags), actions];
                 })));
         }
         const scan = el("button", "button", "Scan older runs");
@@ -1425,12 +1478,342 @@
                     const actions = el("span");
                     actions.style.whiteSpace = "nowrap";
                     actions.appendChild(small("Watch", (b) => watchLobbyRun(r, b)));
+                    actions.appendChild(inputsButton(() => post("anticheat/lobby/run", { id: r.id }), r));
                     actions.appendChild(small("Verify", (b) => decide(r, "verified", b)));
                     actions.appendChild(small("Hide", (b) => decide(r, "hidden", b)));
                     return [fmt.dateTime(r.at), r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), r.lobby || "", actions];
                 })));
         }
         body.insertBefore(box, before);
+    }
+
+    function saveInputs(recording, trackId, nickname, frames) {
+        const text = window.__clipRecordingClass?.deserialize(recording)?.inputsText();
+        if (!text) return false;
+        const total = String(Math.floor(frames / 60000)).padStart(2, "0") + "." + String(Math.floor(frames / 1000) % 60).padStart(2, "0") + "." + String(frames % 1000).padStart(3, "0");
+        const name = `${trackName(trackId).replace(/^Week \d+ · /, "")} - ${nickname || "Unnamed"} - ${total}.txt`.replace(/[\\/:*?"<>|]+/g, "_");
+        const a = el("a");
+        a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+        return true;
+    }
+
+    function inputsButton(fetchRun, r) {
+        const b = el("button", "button", "Inputs");
+        b.style.cssText = "font-size:13px;padding:4px 12px;margin-left:4px;";
+        b.addEventListener("click", async () => {
+            b.disabled = true;
+            let run = null;
+            try {
+                run = await fetchRun();
+            } catch {}
+            b.disabled = false;
+            if (!run?.recording || !saveInputs(run.recording, r.track, r.nickname, r.frames)) b.textContent = "No recording";
+        });
+        return b;
+    }
+
+    // The input habits Check run shows, from the export's "frame,keys" lines.
+    function inputHabits(text, frames) {
+        const down = new Map();
+        const lengths = [];
+        const changes = [];
+        let keys = "";
+        for (const line of text.trim().split("\n")) {
+            const [at, now = ""] = line.split(",");
+            const frame = Number(at);
+            for (const k of new Set(keys + now)) {
+                // Royale tracks press reset for a few ms on every run.
+                if (k === "r" || now.includes(k) === keys.includes(k)) continue;
+                changes.push(frame);
+                if (now.includes(k)) down.set(k, frame);
+                else lengths.push(frame - down.get(k));
+            }
+            keys = now;
+        }
+        const counts = new Map();
+        for (const n of lengths) counts.set(n, (counts.get(n) || 0) + 1);
+        const [topLength, topCount] = [...counts].sort((x, y) => y[1] - x[1])[0] ?? [0, 0];
+        let busiest = 0;
+        for (let i = 0, j = 0; i < changes.length; i++) {
+            while (changes[i] - changes[j] >= 1000) j++;
+            busiest = Math.max(busiest, i - j + 1);
+        }
+        return {
+            presses: lengths.length,
+            perSecond: changes.length / Math.max(frames / 1000, 0.001),
+            busiest,
+            shortest: lengths.length ? Math.min(...lengths) : null,
+            fast: lengths.filter((n) => n < FLAG_FAST_PRESS_MS).length,
+            topLength,
+            topShare: lengths.length ? topCount / lengths.length : 0,
+        };
+    }
+
+    function spell(ms) {
+        if (ms == null) return "–";
+        const s = Math.round(ms / 1000);
+        if (s < 60) return s + " s";
+        if (s < 3600) return Math.floor(s / 60) + " min " + (s % 60) + " s";
+        if (s < 86400) return Math.floor(s / 3600) + " h " + Math.floor(s / 60) % 60 + " min";
+        return Math.floor(s / 86400) + " d " + Math.floor(s / 3600) % 24 + " h";
+    }
+
+    let sheet = null;
+    function closeCheck() {
+        sheet?.remove();
+        sheet = null;
+        window.removeEventListener("keydown", checkKeys, true);
+    }
+
+    function checkKeys(e) {
+        if (e.key !== "Escape") return;
+        e.stopImmediatePropagation();
+        closeCheck();
+    }
+
+    async function boardAround(run, token) {
+        const week = window.__nswsTrackWeek?.(run.track);
+        const tag = week == null ? "" : "&nswsWeek=" + week + "&userToken=" + encodeURIComponent(token);
+        const amount = Math.min(500, (run.position || 0) + 1);
+        const response = await fetch(window.__nswsOwner.api + "v6/leaderboard?version=0.6.2&trackId=" + run.track + "&skip=0&amount=" + amount + "&onlyVerified=false" + tag, { credentials: "omit", cache: "no-store" });
+        return response.ok ? response.json() : null;
+    }
+
+    function checkFlags(run, info, habits) {
+        const flags = [];
+        const add = (level, text) => flags.push({ level, text });
+        if (habits) {
+            if (habits.fast >= FLAG_FAST_PRESSES) add(BAD, num(habits.fast) + " key presses under " + FLAG_FAST_PRESS_MS + " ms. Top runs almost never have more than one.");
+            if (habits.perSecond > FLAG_KEYS_PER_SECOND) add(BAD, habits.perSecond.toFixed(1) + " key changes a second. Top runs stay under 10.");
+            if (habits.presses >= FLAG_MIN_PRESSES && habits.topShare >= FLAG_SAME_LENGTH_SHARE) add(BAD, Math.round(habits.topShare * 100) + "% of presses last exactly " + habits.topLength + " ms. Top runs stay at 25% or less.");
+        }
+        const self = info.run;
+        if (self?.driven_ms != null && self.driven_ms < run.frames) add(BAD, "Their page drove " + spell(self.driven_ms) + " since the last PB, less than this run takes.");
+        else if (self?.tries === 0) add(BAD, "Their page counted no attempts on this track since the last PB.");
+        if (info.rejects.runs) add(GOLD, num(info.rejects.runs) + " rejected upload" + (info.rejects.runs === 1 ? "" : "s") + " from this player, " + num(info.rejects.total) + " tries.");
+        if (info.hidden) add(GOLD, num(info.hidden) + " hidden run" + (info.hidden === 1 ? "" : "s") + " from this player.");
+        if (info.player && info.player.hours < 1 && run.position && run.position <= 10) add(GOLD, "Top 10 with under an hour on the site.");
+        return flags;
+    }
+
+    async function checkRun(run) {
+        closeCheck();
+        ensureStyle();
+        const overlay = el("div");
+        overlay.id = "nrc-check";
+        overlay.addEventListener("click", (e) => {
+            if (e.target === overlay) closeCheck();
+        });
+        const box = el("div", "nrc-sheet");
+        box.appendChild(el("h1", null, run.nickname || "Unnamed"));
+        const sub = (run.position ? "#" + num(run.position) + " · " : "") + raceTime(run.frames) + " · " + trackName(run.track);
+        box.appendChild(el("p", "nrc-sub", sub));
+        const content = el("div", "nrc-status", "Checking…");
+        box.appendChild(content);
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        sheet = overlay;
+        window.addEventListener("keydown", checkKeys, true);
+
+        const token = await window.__nswsOwner.token();
+        const [info, kept, board] = await Promise.all([
+            post("anticheat/inspect", { id: run.id, track: run.track, userId: run.userId }).catch(() => null),
+            post("anticheat/run", { id: run.id }).catch(() => null),
+            run.position ? boardAround(run, token).catch(() => null) : null,
+        ]);
+        if (sheet !== overlay) return;
+        if (!info) {
+            content.textContent = "Couldn't load this run.";
+            return;
+        }
+        content.className = "";
+        content.textContent = "";
+        const text = kept?.recording ? window.__clipRecordingClass?.deserialize(kept.recording)?.inputsText() : null;
+        const habits = text ? inputHabits(text, run.frames) : null;
+
+        const flags = checkFlags(run, info, habits);
+        if (!flags.length) {
+            const quiet = el("div", "nrc-smell", "Nothing stands out.");
+            quiet.style.setProperty("--c", GOOD);
+            content.appendChild(quiet);
+        }
+        for (const f of flags) {
+            const row = el("div", "nrc-smell", f.text);
+            row.style.setProperty("--c", f.level);
+            content.appendChild(row);
+        }
+
+        const self = info.run;
+        const older = info.history.filter((h) => h.frames > run.frames && h.state !== "invalid").sort((x, y) => x.frames - y.frames)[0];
+        const tiles = el("div", "nrc-tiles");
+        tiles.style.marginTop = "12px";
+        tiles.appendChild(tile("Driving since last PB", self?.driven_ms != null ? spell(self.driven_ms) : "Not recorded",
+            self?.driven_ms != null ? num(self.tries ?? 0) + " attempts, from their page" : "Only runs uploaded after this update"));
+        tiles.appendChild(tile("Time since last PB", older?.uploaded && self?.uploaded ? spell(self.uploaded - older.uploaded) : "–",
+            older ? (older.frames - run.frames) / 1000 + " s faster than " + raceTime(older.frames) : "No earlier PB on record"));
+        if (older?.played_s != null && self?.played_s != null) tiles.appendChild(tile("Site time between PBs", spell((self.played_s - older.played_s) * 1000), "from the server, all tracks"));
+        tiles.appendChild(tile("Total site time", info.player ? spell(info.player.hours * 3600000) : "–", info.player ? num(info.player.wrs ?? 0) + " WRs" : "No account found"));
+        const entries = board?.entries ?? [];
+        const at = entries.findIndex((e) => e.id === run.id);
+        if (at >= 0) {
+            const next = entries[at + 1];
+            const first = entries[0];
+            tiles.appendChild(tile("Lead over next place", next ? ((next.frames - run.frames) / 1000).toFixed(3) + " s" : "–", next ? next.nickname : ""));
+            tiles.appendChild(tile("Behind first place", at ? ((run.frames - first.frames) / 1000).toFixed(3) + " s" : "It is first", at ? first.nickname : ""));
+        }
+        if (habits) {
+            tiles.appendChild(tile("Key changes a second", habits.perSecond.toFixed(1), "busiest second: " + num(habits.busiest)));
+            tiles.appendChild(tile("Shortest press", habits.shortest != null ? habits.shortest + " ms" : "–", num(habits.fast) + " under " + FLAG_FAST_PRESS_MS + " ms"));
+            tiles.appendChild(tile("Commonest press", habits.topLength + " ms", Math.round(habits.topShare * 100) + "% of " + num(habits.presses)));
+        } else {
+            tiles.appendChild(tile("Inputs", "No recording", "Kodub drops a run once it's beaten"));
+        }
+        tiles.appendChild(tile("Anti-cheat", self ? self.state : "Not seen", self ? self.source + (info.lobby ? ", lobby " + info.lobby.lobby : "") : "Not an NSWS board, or never read"));
+        tiles.appendChild(tile("Rejected uploads", num(info.rejects.runs), num(info.rejects.thisTrack) + " on this track"));
+        content.appendChild(tiles);
+
+        const names = (info.player?.names ?? []).filter((n) => n !== run.nickname);
+        if (names.length) content.appendChild(el("p", "nrc-sub", "Also seen as: " + names.join(", ")));
+        if (info.history.length) {
+            const past = card("Their runs on this track", "list");
+            past.appendChild(table(
+                [["Time", "num"], ["State"], ["Uploaded", "num"], ["Driving", "num"], ["Attempts", "num"]],
+                info.history.map((h) => [raceTime(h.frames), h.state === "invalid" ? "Hidden" : h.source === "held" ? "Kept here" : "Shown or replaced",
+                    h.uploaded ? fmt.dateTime(h.uploaded) : "–", spell(h.driven_ms), h.tries ?? "–"])));
+            content.appendChild(past);
+        }
+
+        const acts = el("div", "nrc-acts");
+        const say = el("p", "nrc-sub");
+        say.style.margin = "10px 0 0";
+        if (text) {
+            const save = el("button", "button", "Export inputs");
+            save.addEventListener("click", () => saveInputs(kept.recording, run.track, run.nickname, run.frames));
+            acts.appendChild(save);
+        }
+        const week = window.__nswsTrackWeek?.(run.track);
+        if (week != null && !info.owner) {
+            if (!run.hidden) {
+                const hide = el("button", "button", "Hide run");
+                hide.addEventListener("click", async () => {
+                    hide.disabled = true;
+                    const done = await post("anticheat/hide", { id: run.id, track: run.track, week, userId: run.userId, nickname: run.nickname, frames: run.frames }).catch(() => null);
+                    if (!done?.ok) {
+                        hide.disabled = false;
+                        say.textContent = "Couldn't hide it. Try again in a moment.";
+                        return;
+                    }
+                    hide.textContent = "Hidden";
+                    document.querySelector('[data-rec="' + run.id + '"]')?.remove();
+                    say.textContent = older ? "Hidden. They're back on " + raceTime(older.frames) + ". Everyone sees it within 5 minutes; Allow on Race Control's Anti-cheat tab undoes it." : "Hidden. No earlier PB on record, so they're off this board until they set a new time. Allow on Race Control's Anti-cheat tab undoes it.";
+                    if (ui.tab === "anticheat" && ui.overlay) loadAnti();
+                });
+                acts.appendChild(hide);
+            }
+            if (run.userId) {
+                let banned = info.banned;
+                const ban = el("button", "button", banned ? "Lift track ban" : "Ban from track");
+                ban.addEventListener("click", async () => {
+                    ban.disabled = true;
+                    const done = await post("anticheat/ban", { track: run.track, userId: run.userId, nickname: run.nickname, on: !banned }).catch(() => null);
+                    ban.disabled = false;
+                    if (!done?.ok) {
+                        say.textContent = "That didn't work. Try again in a moment.";
+                        return;
+                    }
+                    banned = !banned;
+                    ban.textContent = banned ? "Lift track ban" : "Ban from track";
+                    say.textContent = banned ? "Banned from this track under any name. Everyone sees it within 5 minutes." : "Track ban lifted.";
+                    if (ui.tab === "anticheat" && ui.overlay) loadAnti();
+                });
+                acts.appendChild(ban);
+            }
+        } else if (info.owner) {
+            say.textContent = "This is your own run: the anti-cheat skips it, and it sets the medal times, so it can't be hidden here.";
+        }
+        const shut = el("button", "button", "Close");
+        shut.addEventListener("click", closeCheck);
+        acts.appendChild(shut);
+        content.append(acts, say);
+    }
+
+    function buildRunFinder() {
+        const f = (ui.finder ??= { track: "", query: "", entries: null, status: "", shown: FINDER_PAGE });
+        const box = card("Find a run", "list", "Pick a track to check, export, hide or ban from any run on its board. Every leaderboard row has the same Check button.");
+        box.style.marginBottom = "14px";
+        const row = el("div", "nrc-find");
+        const select = el("select");
+        select.appendChild(new Option("Pick a track", ""));
+        for (const w of [...(window.__nswsWeeks || [])].reverse()) {
+            for (const t of window.__nswsTracksForWeek ? window.__nswsTracksForWeek(w.week) : []) select.appendChild(new Option(trackName(t.id), t.id));
+        }
+        select.value = f.track;
+        const input = el("input");
+        input.placeholder = "Player name";
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        input.value = f.query;
+        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+        row.append(select, input);
+        box.appendChild(row);
+        const list = el("div");
+        list.style.marginTop = "10px";
+        box.appendChild(list);
+
+        const draw = () => {
+            list.textContent = "";
+            if (f.status) list.appendChild(el("div", "nrc-empty", f.status));
+            if (!f.entries) return;
+            const needle = f.query.trim().toLowerCase();
+            const hits = f.entries.map((e, i) => ({ e, position: i + 1 })).filter(({ e }) => e.id > 0 && !e.hidden && (e.nickname || "").toLowerCase().includes(needle));
+            if (!hits.length) {
+                list.appendChild(el("div", "nrc-empty", "No runs match."));
+                return;
+            }
+            list.appendChild(table(
+                [["#", "num"], ["Player", "name"], ["Time", "num"], [""]],
+                hits.slice(0, f.shown).map(({ e, position }) => {
+                    const check = el("button", "button", "Check");
+                    check.style.cssText = "font-size:13px;padding:4px 12px;";
+                    check.addEventListener("click", () => checkRun({ id: e.id, track: f.track, userId: e.userId, nickname: e.nickname, frames: e.frames, position }));
+                    return [num(position), e.nickname || "Unnamed", raceTime(e.frames), check];
+                })));
+            if (hits.length > f.shown) {
+                const more = el("button", "button", "Show more");
+                more.style.cssText = "font-size:14px;padding:4px 14px;margin-top:8px;";
+                more.addEventListener("click", () => {
+                    f.shown += FINDER_PAGE;
+                    draw();
+                });
+                list.appendChild(more);
+            }
+        };
+        select.addEventListener("change", async () => {
+            f.track = select.value;
+            f.entries = null;
+            f.shown = FINDER_PAGE;
+            f.status = f.track ? "Loading the board…" : "";
+            draw();
+            if (!f.track) return;
+            const picked = f.track;
+            const data = await boardAround({ track: picked, position: 499 }, await window.__nswsOwner.token()).catch(() => null);
+            if (f.track !== picked) return;
+            f.entries = data?.entries ?? null;
+            f.status = data ? "" : "Couldn't load the board.";
+            draw();
+        });
+        input.addEventListener("input", () => {
+            f.query = input.value;
+            f.shown = FINDER_PAGE;
+            draw();
+        });
+        draw();
+        return box;
     }
 
     async function watchLobbyRun(r, b) {
@@ -2368,14 +2751,17 @@
         window.removeEventListener("resize", onResize);
     }
 
+    function ensureStyle() {
+        if (document.getElementById("nrc-style")) return;
+        const style = el("style");
+        style.id = "nrc-style";
+        style.textContent = CSS;
+        document.head.appendChild(style);
+    }
+
     function open() {
         if (ui.overlay) return;
-        if (!document.getElementById("nrc-style")) {
-            const style = el("style");
-            style.id = "nrc-style";
-            style.textContent = CSS;
-            document.head.appendChild(style);
-        }
+        ensureStyle();
         const overlay = el("div");
         overlay.id = "nrc-overlay";
         const panel = el("div", "nrc-panel");
@@ -2449,5 +2835,5 @@
         ensureTab();
     }
 
-    window.__nswsOwnerPanel = { open, close };
+    window.__nswsOwnerPanel = { open, close, checkRun };
 })();

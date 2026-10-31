@@ -277,6 +277,46 @@ A leaderboard reply carries `flagged` (ids on that page) only when the caller ho
 show its "Only you can see this" notice and red Flagged rows. Everyone else's reply has neither, so it can't be
 read from the network panel.
 
+**Check run.** Owner only: a Check button on every leaderboard row (it only appears once `__nswsOwner.check()` passes)
+and in Race Control's Anti-cheat tab (Find a run, Hidden from the boards). It opens one sheet (`checkRun` in
+`mod/nsws_owner.js`, `POST /nsws/anticheat/inspect`): driving time and attempts since the player's last PB on that
+track, time and site time between PBs, total site time and WRs, gaps to the next place and first place, input habits
+from the recording, rejected and hidden counts, other names, and their runs on the track. Flags point things out and
+do nothing by themselves. Hide, Ban from track and Export inputs are on the sheet.
+
+- **Driving time** is the page's word (`__nswsTraffic.drive`, `drivePb`, `driveTag`, sent as `nswsDriven` + `nswsTries` with a
+  PB), so a cheat could fake it; `runs.played_s` (the server's total site time at upload) is the cross-check. Only runs
+  uploaded after this shipped have them. The counter only runs while a race timer is running.
+- **The flag limits** come from the top 40 runs on 11 boards: ordinary runs had at most 9.8 key changes a second and
+  25% of presses one length, TAS and AI runs 22-360 a second and 51-92%. One ordinary run of ~400 had 3+ presses under 10 ms.
+
+**Hiding a run.** Kodub keeps only a player's best and deletes the recording of a run they beat (checked on the live
+Arx Lucida board: both beaten runs came back null). So a hidden run stays on Kodub as their best, and the proxy shows
+their earlier PB in its place:
+
+- `run_recordings` keeps the last 6 uploads per player per track; `runs` has the times of everything since v7.15.
+- `reverts` (track, player) holds `hidden_id`, the run Kodub still has, and `run_id`, their best run left. `applyReverts`
+  swaps the board entry, with `reverted: true` and id `REVERT_ID_BASE` (2^48) + run id; `/v6/recordings` answers those
+  ids from `run_recordings`. Only runs standing in on a board are served, since the rest of the table has the live week's runs.
+- **Recordings before this shipped are gone**, so an older PB comes back as a time with `noReplay: true`: the row can't be picked
+  as a ghost, and the player's device drops its copy of the hidden run.
+- **No earlier PB:** `run_id` is NULL, the run is simply off the board, and the player's entry says `cleared`.
+- **Their device** follows: `syncRecord` replaces the local PB with the reverted one (`reverted`), or forgets it (`noReplay`,
+  `cleared`), so it stops re-uploading the hidden run and a slower new time counts as a PB.
+- **A run that doesn't beat the hidden one** would be dropped by Kodub, so `heldRun` keeps it here (id from `HELD_RUN_BASE`) if it beats
+  their current time, and it never reaches Kodub. Beating the hidden run is a normal upload and ends the revert.
+- **Allow** undoes a hide. `/nsws/anticheat/hide` and `/approve` save the KV snapshot at once; other Worker instances catch up
+  within `SNAPSHOT_TTL_MS` (5 minutes). The owner's own runs can't be hidden: they skip the anti-cheat and set medal times.
+- An ended week's locked standings come from `tracks/community/standings/week<N>.json`, which this doesn't change. Edit the file by hand.
+
+**Track bans.** `track_bans` (track, player id, not name), `/nsws/anticheat/ban`: all their runs on that track stay off its board
+under any nickname, new ones too. Uploads are still accepted, like other hidden runs. Race Control lists them with Lift ban.
+
+**Input export.** `Recording.inputsText()` in `main.bundle.js` gives the TAS tool's text, one `frame,keys` line per change
+(w a s d r). Rocket League channels follow as j b x q e n u, which that tool doesn't read. Saved from the sheet, or from
+Inputs on Rejected uploads (newest 60 keep their recording, `rejects.recording`) and Lobby PBs. `/nsws/anticheat/run` reads the
+kept copy first, then Kodub, so a beaten run with no kept copy has nothing to export.
+
 ## Macro lockout
 
 A keyboard macro or auto clicker gets an alert and 5 minutes without playing. No browser API says whether input was

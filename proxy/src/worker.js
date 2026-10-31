@@ -2,7 +2,7 @@
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
 import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS } from "./traffic.js";
-import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
+import { AntiCheat, RunChecker, SNAPSHOT_KEY, REVERT_ID_BASE } from "./anticheat.js";
 import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 import { ChatRoom } from "./chat.js";
@@ -498,10 +498,14 @@ function filteredTotal(view, cfg) {
 }
 
 async function ownEntry(cfg, request, track, read, view, hash) {
+    if (view.cleared?.has(hash)) return { position: 1, frames: 1, verifiedState: 0, id: 1, cleared: true };
     const rank = rankOf(view, hash, cfg);
     if (rank) {
         const { entry, position } = rank;
-        return { position, frames: entry.frames, verifiedState: entry.verifiedState, id: entry.id };
+        const own = { position, frames: entry.frames, verifiedState: entry.verifiedState, id: entry.id };
+        if (entry.reverted) own.reverted = true;
+        if (entry.noReplay) own.noReplay = true;
+        return own;
     }
     if (view.complete || track.hiddenId) return null;
     // Further down a big board than was read: ask upstream, then take off the
@@ -717,9 +721,12 @@ async function fallbackBlocked(env, cfg, track, view) {
     const owners = new Set(cfg.ownerUserIds);
     const blocked = new Set([...(hit?.blocked ?? []), ...(saved?.blocked ?? [])]);
     const holds = new Set(saved?.holds ?? []);
+    const bans = new Set(saved?.bans ?? []);
     const ok = new Set(saved?.ok ?? []);
     const top = saved?.top ?? 0;
+    cfg.reverts = saved?.reverts ?? hit?.reverts ?? null;
     for (const e of view.entries) {
+        if (bans.has(e.userId) && !owners.has(e.userId)) blocked.add(e.id);
         if (!Number.isSafeInteger(e.id) || e.id <= 0 || owners.has(e.userId) || hit?.known.has(e.id)) continue;
         if (holds.has(e.userId + "|" + e.frames) || holds.has("#" + e.id)) blocked.add(e.id);
         else if (e.id > top && !ok.has(e.id)) blocked.add(e.id);
@@ -736,14 +743,34 @@ async function snapshotBlocked(env, cfg, track, view) {
     const owners = new Set(cfg.ownerUserIds);
     const hidden = new Set(saved.blocked);
     const holds = new Set(saved.holds);
+    const bans = new Set(saved.bans ?? []);
     const ok = new Set(saved.ok);
     const blocked = new Set();
     for (const e of view.entries) {
         if (!Number.isSafeInteger(e.id) || e.id <= 0 || owners.has(e.userId)) continue;
         if (e.id > saved.top && !ok.has(e.id)) return null;
-        if (hidden.has(e.id) || holds.has(e.userId + "|" + e.frames) || holds.has("#" + e.id)) blocked.add(e.id);
+        if (hidden.has(e.id) || bans.has(e.userId) || holds.has(e.userId + "|" + e.frames) || holds.has("#" + e.id)) blocked.add(e.id);
     }
+    cfg.reverts = saved.reverts ?? null;
     return blocked;
+}
+
+// A hidden run stays on Kodub as the player's best, so the board shows their previous PB in its place,
+// or nothing when they have none (view.cleared: the page then forgets its copy of the hidden run).
+function applyReverts(view, reverts) {
+    if (!reverts?.length) return view;
+    const byHidden = new Map(reverts.map((r) => [r[0], r]));
+    if (!view.entries.some((e) => byHidden.has(e.id))) return view;
+    const cleared = new Set();
+    const entries = [];
+    for (const e of view.entries) {
+        const r = byHidden.get(e.id);
+        if (!r) entries.push(e);
+        else if (r[1] == null) cleared.add(e.userId);
+        else entries.push({ ...e, id: r[1], frames: r[2], reverted: true, ...(r[3] ? {} : { noReplay: true }) });
+    }
+    entries.sort((a, b) => a.frames - b.frames);
+    return { ...view, entries, cleared, total: view.total - cleared.size };
 }
 
 // Equal times go to whoever set theirs first. Upstream already orders them by upload; a run set during an
@@ -797,14 +824,19 @@ async function blockedRuns(env, cfg, track, view) {
     if (!anti || track.week == null) return null;
     const hit = verdicts.get(track.trackId);
     const known = hit && view.entries.every((e) => hit.known.has(e.id));
-    if (known && (Date.now() - hit.at < ANTICHEAT_TTL_MS || doLimited())) return hit.blocked;
+    if (known && (Date.now() - hit.at < ANTICHEAT_TTL_MS || doLimited())) {
+        cfg.reverts = hit.reverts;
+        return hit.blocked;
+    }
     if (doLimited()) return fallbackBlocked(env, cfg, track, view);
     const saved = await snapshotBlocked(env, cfg, track, view);
     if (saved) return saved;
     const entries = view.entries.map((e) => ({ id: e.id, userId: e.userId, frames: e.frames, nickname: e.nickname }));
-    const blocked = new Set(await anti.classify(track.trackId, track.week, entries, cfg.ownerUserIds));
+    const verdict = await anti.classify(track.trackId, track.week, entries, cfg.ownerUserIds);
+    const blocked = new Set(verdict.blocked);
+    cfg.reverts = verdict.reverts;
     verdicts.delete(track.trackId);
-    verdicts.set(track.trackId, { at: Date.now(), known: new Set(view.entries.map((e) => e.id)), blocked });
+    verdicts.set(track.trackId, { at: Date.now(), known: new Set(view.entries.map((e) => e.id)), blocked, reverts: verdict.reverts });
     if (verdicts.size > BOARD_CACHE_MAX) verdicts.delete(verdicts.keys().next().value);
     return blocked;
 }
@@ -818,14 +850,15 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
     const hash = await callerHash(params, track);
     const owner = cfg.owner || await isOwner(params.get("userToken"), cfg);
 
-    const view = await orderTies(env, track, await loadView(cfg, request, track, read));
-    if (track.week != null) observeNames(env, ctx, await unseenRuns(env, track, view.entries));
+    const stored = await orderTies(env, track, await loadView(cfg, request, track, read));
+    if (track.week != null) observeNames(env, ctx, await unseenRuns(env, track, stored.entries));
     // If the anti-cheat is unreachable the board still loads, filtered by its last verdicts.
-    cfg.blocked = await blockedRuns(env, cfg, track, view).catch((err) => {
+    cfg.blocked = await blockedRuns(env, cfg, track, stored).catch((err) => {
         noteDoError(err);
         console.error("anti-cheat unavailable:", err && err.message);
-        return fallbackBlocked(env, cfg, track, view);
+        return fallbackBlocked(env, cfg, track, stored);
     });
+    const view = applyReverts(stored, cfg.reverts);
     const ranked = view.entries.filter((e) => !isBanned(e, cfg));
     if (skip === 0 && cfg.blocked && !cfg.blockedFallback && read.version === DEFAULT_VERSION && read.onlyVerified === "false") noteWr(env, ctx, track, ranked[0]);
     let page = ranked.slice(skip, skip + amount);
@@ -855,8 +888,9 @@ async function handleUserEntry(request, url, env, cfg, origin) {
     const hash = await callerHash(params, track);
     if (!hash) return json(null, origin);
     const read = readOptions(params);
-    const view = await orderTies(env, track, await loadView(cfg, request, track, read));
-    return json(censorNames(await ownEntry(cfg, request, track, read, view, hash)), origin);
+    const stored = await orderTies(env, track, await loadView(cfg, request, track, read));
+    const reverts = track.week != null ? (await verdictSnapshot(env))?.tracks?.[track.trackId]?.reverts : null;
+    return json(censorNames(await ownEntry(cfg, request, track, read, applyReverts(stored, reverts), hash)), origin);
 }
 
 function postUpstream(request, cfg, path, body) {
@@ -915,6 +949,35 @@ function antiCheatRejected(origin) {
     return plain(422, "Run failed the anti-cheat check", origin);
 }
 
+function effortParam(value) {
+    return /^[0-9]{1,12}$/.test(value ?? "") ? Number(value) : null;
+}
+
+// A reverted player's run that doesn't beat the hidden one. Kodub would drop it, so it stays here.
+async function revertedUpload(request, env, cfg, origin, track, read, anti, run) {
+    let shown = await loadView(cfg, request, track, read).catch(() => null);
+    if (shown) {
+        cfg.blocked = await blockedRuns(env, cfg, track, shown).catch(() => null);
+        shown = applyReverts(shown, cfg.reverts);
+    }
+    const id = await anti.heldRun(run);
+    if (id != null) await refreshVerdicts(env, anti, track.trackId);
+    const rank = shown ? rankOf(shown, run.userId, cfg) : null;
+    const newPosition = shown?.complete ? recountPositions(shown, run.userId, run.frames, 0, cfg).newPosition : rank?.position ?? 1;
+    return json({ uploadId: id ?? rank?.entry.id ?? null, previousPosition: rank?.position ?? 0, newPosition }, origin);
+}
+
+async function handleRevertRecordings(request, url, env, cfg, origin) {
+    const ids = (url.searchParams.get("ids") ?? "").split(",").map(Number);
+    const others = ids.filter((id) => !(id >= REVERT_ID_BASE));
+    const upstream = others.length
+        ? await fetchUpstreamJson(cfg, request, "/v6/recordings", { version: url.searchParams.get("version") ?? DEFAULT_VERSION, ids: others.join(",") })
+        : [];
+    const kept = await antiCheat(env)?.revertRecordings(ids.filter((id) => id >= REVERT_ID_BASE).map((id) => id - REVERT_ID_BASE)) ?? {};
+    let next = 0;
+    return json(ids.map((id) => (id >= REVERT_ID_BASE ? kept[id - REVERT_ID_BASE] ?? null : upstream?.[next++] ?? null)), origin);
+}
+
 async function handleSubmit(request, url, env, cfg, origin, ctx) {
     const raw = await request.text();
     const form = new URLSearchParams(raw);
@@ -963,14 +1026,21 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         if (prep.payload) {
             const result = await runChecker(env).check(prep.payload, recording, frames);
             if (!result.valid) {
-                await anti.reject({ key, track: trackId, week: track.week, userId: hash, nickname, frames, reason: result.reason });
+                await anti.reject({ key, track: trackId, week: track.week, userId: hash, nickname, frames, reason: result.reason, recording });
                 return antiCheatRejected(origin);
             }
             state = "valid";
         }
-        await anti.expect({ track: trackId, userId: hash, frames, state });
-        check = { recording, nickname, state, hold: null };
+        const carStyle = (form.get("carStyle") ?? "").slice(0, 256);
+        const effort = { drivenMs: effortParam(url.searchParams.get("nswsDriven")), tries: effortParam(url.searchParams.get("nswsTries")) };
         const lobby = (url.searchParams.get("nswsLobby") || "").toUpperCase();
+        if (prep.revert && state === "valid" && frames >= prep.revert.hidden_frames) {
+            const run = { track: trackId, week: track.week, userId: hash, nickname, frames, keep: recording, carStyle, ...effort };
+            // A lobby PB waits for the owner's review, which only runs that reach Kodub get.
+            return revertedUpload(request, env, cfg, origin, track, read, anti, LOBBY_CODE.test(lobby) ? { ...run, frames: prep.revert.hidden_frames } : run);
+        }
+        await anti.expect({ track: trackId, userId: hash, frames, state });
+        check = { recording, nickname, state, hold: null, carStyle, effort };
         if (LOBBY_CODE.test(lobby)) {
             check.hold = await anti.lobbyHold({
                 track: trackId, week: track.week, userId: hash, nickname, frames, lobby,
@@ -979,8 +1049,11 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         }
     }
 
-    const before = await loadView(cfg, request, track, read).catch(() => null);
-    if (before) cfg.blocked = await blockedRuns(env, cfg, track, before).catch(() => null);
+    let before = await loadView(cfg, request, track, read).catch(() => null);
+    if (before) {
+        cfg.blocked = await blockedRuns(env, cfg, track, before).catch(() => null);
+        before = applyReverts(before, cfg.reverts);
+    }
     const response = await postUpstream(request, cfg, url.pathname, body);
     forgetBoards(track.trackId, track.hiddenId);
     const text = await response.text();
@@ -991,9 +1064,10 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         /* not JSON - handed back untouched below */
     }
     // A referred player's first upload to an NSWS board is what earns their referrer the point.
+    let played = null;
     if (response.ok && track.week != null) {
-        const stub = accounts(env);
-        if (stub) ctx.waitUntil(stub.uploaded(hash).catch(() => {}));
+        played = accounts(env)?.uploaded(hash).catch(() => null) ?? null;
+        if (played) ctx.waitUntil(played);
     }
     if (check && response.ok) {
         const uploadId = typeof result === "number" ? result : result?.uploadId;
@@ -1001,7 +1075,8 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
             state: check.state, recording: check.state === "pending" ? check.recording : null,
             achieved: await achievedAt(env, url.searchParams.get("nswsAchievedAt")),
-            flags: await inputFlags(check.recording, frames).catch(() => null),
+            keep: check.recording, carStyle: check.carStyle, ...check.effort, played: await played,
+            flags: await inputFlags(check.recording, frames, check.effort).catch(() => null),
         });
         if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
     } else if (check?.hold != null) {
@@ -1367,7 +1442,46 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/scanflags") return json(await anti.scanFlags(), origin);
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
-        return json(await anti.approve(body.id), origin);
+        const result = await anti.approve(body.id);
+        await refreshVerdicts(env, anti, result.track);
+        return json(result, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/hide") {
+        const week = Number.isSafeInteger(body.week) ? body.week : null;
+        if (!Number.isSafeInteger(body.id) || body.id <= 0 || !Number.isSafeInteger(body.frames) || !HEX64.test(body.track ?? "") || week == null) {
+            return plain(400, "Bad request", origin);
+        }
+        if (cfg.ownerUserIds.includes(body.userId)) return json({ ok: false, reason: "owner" }, origin);
+        const nickname = typeof body.nickname === "string" ? body.nickname.slice(0, 64) : null;
+        const userId = HEX64.test(body.userId ?? "") ? body.userId : null;
+        const result = await anti.hide(body.track, week, { id: body.id, userId, nickname, frames: body.frames });
+        await refreshVerdicts(env, anti, body.track);
+        return json(result, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/ban") {
+        if (!HEX64.test(body.track ?? "") || !HEX64.test(body.userId ?? "")) return plain(400, "Bad request", origin);
+        if (cfg.ownerUserIds.includes(body.userId)) return json({ ok: false, reason: "owner" }, origin);
+        const nickname = typeof body.nickname === "string" ? body.nickname.slice(0, 64) : null;
+        const result = await anti.banFromTrack(body.track, body.userId, nickname, body.on === true);
+        await refreshVerdicts(env, anti, body.track);
+        return json(result, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/inspect") {
+        if (!Number.isSafeInteger(body.id) || !HEX64.test(body.track ?? "")) return plain(400, "Bad request", origin);
+        const userId = HEX64.test(body.userId ?? "") ? body.userId : null;
+        const [run, player] = await Promise.all([
+            anti.inspect(body.id, body.track, userId),
+            userId ? accounts(env)?.playerFacts(userId).catch(() => null) ?? null : null,
+        ]);
+        return json({ ...run, player, owner: cfg.ownerUserIds.includes(userId) }, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/run") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        return json({ recording: await anti.runRecording(body.id) }, origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/reject/run") {
+        if (typeof body.key !== "string") return plain(400, "Bad request", origin);
+        return json({ recording: await anti.rejectRecording(body.key) }, origin);
     }
     return plain(404, "Not found", origin);
 }
@@ -1406,6 +1520,14 @@ async function handleIpBans(request, url, env, stub, body, origin) {
         return json(result, origin);
     }
     return plain(404, "Not found", origin);
+}
+
+// The owner changed a verdict: save it now rather than at the next cron. Other instances still read their
+// copy of the snapshot until it expires (SNAPSHOT_TTL_MS).
+async function refreshVerdicts(env, anti, trackId) {
+    if (trackId) verdicts.delete(trackId);
+    await anti.saveSnapshot().catch((err) => console.error("anti-cheat snapshot failed:", err && err.message));
+    snapshot = null;
 }
 
 // Players with the chat open hear about announcements straight away; everyone else on their next beat.
@@ -1851,6 +1973,8 @@ export default {
                 if (request.method === "POST") return await handleSubmit(request, url, env, cfg, origin, ctx);
             } else if (url.pathname === "/v6/leaderboardUserEntry" && request.method === "GET") {
                 return await handleUserEntry(request, url, env, cfg, origin);
+            } else if (url.pathname === "/v6/recordings" && request.method === "GET" && /(^|,)[0-9]{15}/.test(url.searchParams.get("ids") ?? "")) {
+                return await handleRevertRecordings(request, url, env, cfg, origin);
             } else if (url.pathname === "/v6/user") {
                 if (request.method === "GET") return await handleUserRead(request, url, env, cfg, origin, ctx);
                 if (request.method === "POST") return await handleUserUpdate(request, url, env, cfg, origin);

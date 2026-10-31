@@ -22,6 +22,13 @@ const LOG_LIMIT = 60;
 // shortly before the limit still shows.
 export const SNAPSHOT_KEY = "anticheat-verdicts";
 const SNAPSHOT_OK_WINDOW_MS = 2 * 86_400_000;
+// Kodub deletes a player's run when they beat it, so a reverted PB only exists here. Boards show one as
+// this plus its run id, which /v6/recordings answers from here.
+export const REVERT_ID_BASE = 2 ** 48;
+// Runs stored here and never on Kodub: set by a reverted player, slower than the hidden run Kodub still holds.
+const HELD_RUN_BASE = 1e12;
+const RECORDINGS_PER_PLAYER = 6;
+const REJECT_RECORDINGS = 60;
 
 function hex(buffer) {
     return Array.from(new Uint8Array(buffer), (b) => b.toString(16).padStart(2, "0")).join("");
@@ -55,7 +62,7 @@ export class AntiCheat extends DurableObject {
             id TEXT PRIMARY KEY, week INTEGER, payload TEXT NOT NULL, updated INTEGER NOT NULL)`);
         this.sql.exec(`CREATE TABLE IF NOT EXISTS boards (
             track TEXT PRIMARY KEY, week INTEGER, cutoff INTEGER NOT NULL, seen INTEGER NOT NULL)`);
-        // state: valid | invalid | pending. source: proxy | legacy | outside | approved.
+        // state: valid | invalid | pending. source: proxy | legacy | outside | approved | lobby | owner.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY, track TEXT NOT NULL, week INTEGER, user_id TEXT, nickname TEXT,
             frames INTEGER, state TEXT NOT NULL, source TEXT NOT NULL, reason TEXT, at INTEGER NOT NULL)`);
@@ -99,6 +106,15 @@ export class AntiCheat extends DurableObject {
             /* already added */
         }
         this.sql.exec("CREATE INDEX IF NOT EXISTS runs_achieved ON runs(achieved) WHERE achieved IS NOT NULL");
+        // driven_ms, tries: what the player's page says it took since their last PB on the track.
+        // played_s: their total time on the site when the run was uploaded.
+        try {
+            this.sql.exec("ALTER TABLE runs ADD COLUMN driven_ms INTEGER");
+            this.sql.exec("ALTER TABLE runs ADD COLUMN tries INTEGER");
+            this.sql.exec("ALTER TABLE runs ADD COLUMN played_s INTEGER");
+        } catch {
+            /* already added */
+        }
         // flags: why inputflags.js flagged the run. NULL = not flagged, "" = the owner cleared it.
         try {
             this.sql.exec("ALTER TABLE runs ADD COLUMN flags TEXT");
@@ -106,6 +122,22 @@ export class AntiCheat extends DurableObject {
             /* already added */
         }
         this.sql.exec("CREATE INDEX IF NOT EXISTS runs_flagged ON runs(track) WHERE flags != ''");
+        try {
+            this.sql.exec("ALTER TABLE rejects ADD COLUMN recording TEXT");
+        } catch {
+            /* already added */
+        }
+        this.sql.exec("CREATE INDEX IF NOT EXISTS rejects_kept ON rejects(last) WHERE recording IS NOT NULL");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS rejects_user ON rejects(user_id)");
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS run_recordings (
+            track TEXT NOT NULL, user_id TEXT NOT NULL, id INTEGER NOT NULL, recording TEXT NOT NULL, car_style TEXT,
+            PRIMARY KEY (track, user_id, id)) WITHOUT ROWID`);
+        // hidden_id: the run Kodub still holds as the player's best. run_id: what shows in its place; NULL = no earlier PB.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS reverts (
+            track TEXT NOT NULL, user_id TEXT NOT NULL, hidden_id INTEGER NOT NULL, hidden_frames INTEGER NOT NULL,
+            run_id INTEGER, frames INTEGER, has_recording INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (track, user_id)) WITHOUT ROWID`);
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS track_bans (
+            track TEXT NOT NULL, user_id TEXT NOT NULL, nickname TEXT, at INTEGER NOT NULL, PRIMARY KEY (track, user_id)) WITHOUT ROWID`);
         this.migrateTallies();
         // Each board's part of the KV snapshot, rebuilt only when that board changes ("" in snap_dirty =
         // the track weeks). Rebuilding all of them on every cron read the whole runs table each time.
@@ -180,7 +212,8 @@ export class AntiCheat extends DurableObject {
             this.sql.exec("INSERT OR IGNORE INTO boards (track, week, cutoff, seen) VALUES (?, ?, ?, ?)", track, week, cutoff, Date.now());
             row = this.sql.exec("SELECT cutoff, top FROM boards WHERE track = ?", track).one();
         }
-        board = { cutoff: row.cutoff, top: Math.max(row.cutoff, row.top ?? 0), runs: new Map(), passes: new Map(), holds: new Set() };
+        board = { cutoff: row.cutoff, top: Math.max(row.cutoff, row.top ?? 0), runs: new Map(), passes: new Map(), holds: new Set(), bans: new Set(), reverts: this.revertRows(track) };
+        for (const b of this.sql.exec("SELECT user_id FROM track_bans WHERE track = ?", track)) board.bans.add(b.user_id);
         for (const r of this.sql.exec("SELECT id, state, source FROM runs WHERE track = ?", track)) {
             board.runs.set(r.id, { state: r.state, source: r.source });
         }
@@ -192,6 +225,13 @@ export class AntiCheat extends DurableObject {
         }
         this.boards.set(track, board);
         return board;
+    }
+
+    // [hidden run id, id to show or null, frames, has a recording], leaving out players banned from the track.
+    revertRows(track) {
+        return this.sql.exec(`SELECT hidden_id, run_id, frames, has_recording FROM reverts WHERE track = ?
+            AND user_id NOT IN (SELECT user_id FROM track_bans WHERE track = ?)`, track, track).toArray()
+            .map((r) => [r.hidden_id, r.run_id == null ? null : REVERT_ID_BASE + r.run_id, r.frames, r.has_recording]);
     }
 
     saveRun(track, week, entry, state, source, reason, uploaded = null) {
@@ -214,7 +254,7 @@ export class AntiCheat extends DurableObject {
             runId, track, week, entry.userId ?? null, entry.nickname ?? null, entry.frames, recording ?? null, Date.now());
     }
 
-    // Ids of the entries on this board that must not be shown.
+    // Ids of the entries on this board that must not be shown, and the reverted PBs to show in their place.
     async classify(track, week, entries, ownerUserIds) {
         const owners = new Set(ownerUserIds);
         const board = this.board(track, week, entries);
@@ -236,7 +276,7 @@ export class AntiCheat extends DurableObject {
                 }
             }
             const held = board.holds.has(e.userId + "|" + e.frames) || board.holds.has("#" + e.id);
-            if (held || run.state === "invalid" || (run.state === "pending" && run.source !== "legacy")) blocked.push(e.id);
+            if (held || board.bans.has(e.userId) || run.state === "invalid" || (run.state === "pending" && run.source !== "legacy")) blocked.push(e.id);
         }
         const top = entries.reduce((max, e) => (Number.isSafeInteger(e.id) && e.id > max ? e.id : max), board.top);
         if (top > board.top) {
@@ -245,7 +285,7 @@ export class AntiCheat extends DurableObject {
             this.touch(track);
         }
         if (queued) await this.kick();
-        return blocked;
+        return { blocked, reverts: board.reverts };
     }
 
     // Saved to KV when it has changed: per board, the newest run seen, the runs to hide, the lobby holds,
@@ -302,7 +342,11 @@ export class AntiCheat extends DurableObject {
         for (const r of this.sql.exec("SELECT user_id, frames, upload_id FROM lobby_runs WHERE track = ? AND state IN ('review', 'hidden')", track)) {
             part.holds.push(...this.holdKeys(r));
         }
-        const empty = !board && !part.blocked.length && !part.ok.length && !part.holds.length && !part.late;
+        const reverts = this.revertRows(track);
+        if (reverts.length) part.reverts = reverts;
+        const bans = this.sql.exec("SELECT user_id FROM track_bans WHERE track = ?", track).toArray().map((r) => r.user_id);
+        if (bans.length) part.bans = bans;
+        const empty = !board && !part.blocked.length && !part.ok.length && !part.holds.length && !part.late && !bans.length;
         if (empty) this.sql.exec("DELETE FROM snap_tracks WHERE track = ?", track);
         else this.sql.exec("INSERT INTO snap_tracks (track, part) VALUES (?, ?) ON CONFLICT(track) DO UPDATE SET part = excluded.part", track, JSON.stringify(part));
     }
@@ -322,7 +366,8 @@ export class AntiCheat extends DurableObject {
             this.sql.exec("UPDATE rejects SET attempts = attempts + 1, last = ? WHERE key = ?", Date.now(), key);
             return { rejected: true, payload: null };
         }
-        return { rejected: false, payload: this.payload(track), macroLeft: this.macroLeft(userId) };
+        const revert = this.sql.exec("SELECT hidden_frames, frames FROM reverts WHERE track = ? AND user_id = ?", track, userId ?? "").toArray()[0] ?? null;
+        return { rejected: false, payload: this.payload(track), revert, macroLeft: this.macroLeft(userId) };
     }
 
     macroLeft(userId) {
@@ -354,10 +399,26 @@ export class AntiCheat extends DurableObject {
 
     async reject(r) {
         const now = Date.now();
-        this.sql.exec(`INSERT INTO rejects (key, track, week, user_id, nickname, frames, reason, first, last, attempts)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        this.sql.exec(`INSERT INTO rejects (key, track, week, user_id, nickname, frames, reason, first, last, attempts, recording)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(key) DO UPDATE SET attempts = attempts + 1, last = excluded.last`,
-            r.key, r.track, r.week, r.userId, r.nickname, r.frames, r.reason, now, now);
+            r.key, r.track, r.week, r.userId, r.nickname, r.frames, r.reason, now, now, r.recording ?? null);
+        this.sql.exec(`UPDATE rejects SET recording = NULL WHERE recording IS NOT NULL AND key NOT IN
+            (SELECT key FROM rejects WHERE recording IS NOT NULL ORDER BY last DESC LIMIT ?)`, REJECT_RECORDINGS);
+    }
+
+    keepRecording(track, userId, id, recording, carStyle) {
+        if (!userId || !recording) return;
+        this.sql.exec(`INSERT INTO run_recordings (track, user_id, id, recording, car_style) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(track, user_id, id) DO UPDATE SET recording = excluded.recording, car_style = excluded.car_style`,
+            track, userId, id, recording, carStyle ?? null);
+        this.sql.exec(`DELETE FROM run_recordings WHERE track = ? AND user_id = ? AND id NOT IN
+            (SELECT id FROM run_recordings WHERE track = ? AND user_id = ? ORDER BY id DESC LIMIT ?)`,
+            track, userId, track, userId, RECORDINGS_PER_PLAYER);
+    }
+
+    noteEffort(id, r) {
+        this.sql.exec("UPDATE runs SET driven_ms = ?, tries = ?, played_s = ? WHERE id = ?", r.drivenMs ?? null, r.tries ?? null, r.played ?? null, id);
     }
 
     // Called before the run is sent upstream. state is "valid", or "pending" when the track
@@ -371,10 +432,20 @@ export class AntiCheat extends DurableObject {
 
     async confirm(r) {
         const entry = { id: r.uploadId, userId: r.userId, nickname: r.nickname, frames: r.frames };
+        // Upstream can answer an upload with a run it already has, which must not put a hidden run back up.
+        if (this.sql.exec("SELECT 1 FROM runs WHERE id = ? AND source = 'owner'", r.uploadId ?? 0).toArray().length) return;
         if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) {
             const now = Date.now();
             this.saveRun(r.track, r.week, entry, r.state, "proxy", null, now);
+            this.noteEffort(r.uploadId, r);
             if (r.flags) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
+            this.keepRecording(r.track, r.userId, r.uploadId, r.keep, r.carStyle);
+            // Beat the hidden run: Kodub dropped it, so there is nothing left to stand in for.
+            const gone = this.sql.exec("DELETE FROM reverts WHERE track = ? AND user_id = ? AND hidden_id != ?", r.track, r.userId ?? "", r.uploadId);
+            if (gone.rowsWritten > 0) {
+                this.boards.delete(r.track);
+                this.touch(r.track);
+            }
             if (Number.isSafeInteger(r.achieved) && r.achieved < now) this.backdate(r, now);
         }
         if (r.state === "pending") {
@@ -554,6 +625,104 @@ export class AntiCheat extends DurableObject {
         return { verified: rows.length };
     }
 
+    // Any run on a board, whatever its checks said; Allow undoes it. The player drops back to their best
+    // run left. A run still waiting for its replay is taken out of the queue, or a pass would put it back up.
+    async hide(track, week, entry) {
+        const shown = entry.id >= REVERT_ID_BASE;
+        const id = shown ? entry.id - REVERT_ID_BASE : entry.id;
+        this.saveRun(track, week, { ...entry, id }, "invalid", "owner", "owner-picked");
+        this.sql.exec("DELETE FROM queue WHERE run_id = ?", id);
+        if (entry.userId) {
+            this.sql.exec("DELETE FROM passes WHERE track = ? AND user_id = ? AND frames = ?", track, entry.userId, entry.frames);
+            const held = this.sql.exec("SELECT hidden_id, hidden_frames FROM reverts WHERE track = ? AND user_id = ?", track, entry.userId).toArray()[0];
+            if (shown && held) this.reseat(track, entry.userId, held.hidden_id, held.hidden_frames);
+            else if (!shown) this.reseat(track, entry.userId, id, entry.frames);
+        }
+        this.boards.delete(track);
+        return { ok: true };
+    }
+
+    reseat(track, userId, hiddenId, hiddenFrames) {
+        const best = this.sql.exec(`SELECT id, frames FROM runs WHERE track = ? AND user_id = ? AND id != ? AND frames > ?
+            AND (state = 'valid' OR (state = 'pending' AND source = 'legacy')) ORDER BY frames, id LIMIT 1`, track, userId, hiddenId, hiddenFrames).toArray()[0];
+        const kept = best && this.sql.exec("SELECT 1 FROM run_recordings WHERE track = ? AND user_id = ? AND id = ?", track, userId, best.id).toArray().length ? 1 : 0;
+        this.sql.exec(`INSERT INTO reverts (track, user_id, hidden_id, hidden_frames, run_id, frames, has_recording) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(track, user_id) DO UPDATE SET hidden_id = excluded.hidden_id, hidden_frames = excluded.hidden_frames,
+                run_id = excluded.run_id, frames = excluded.frames, has_recording = excluded.has_recording`,
+            track, userId, hiddenId, hiddenFrames, best?.id ?? null, best?.frames ?? null, kept);
+        this.touch(track);
+    }
+
+    // A reverted player's run slower than the hidden one: Kodub would keep the hidden run and drop this, so it
+    // is stored here. Answers null for anything that isn't a new best.
+    async heldRun(r) {
+        const revert = this.sql.exec("SELECT * FROM reverts WHERE track = ? AND user_id = ?", r.track, r.userId).toArray()[0];
+        if (!revert || r.frames <= revert.hidden_frames || (revert.frames != null && r.frames >= revert.frames)) return null;
+        const last = this.sql.exec("SELECT MAX(id) AS id FROM runs WHERE id >= ?", HELD_RUN_BASE).one().id;
+        const id = (last ?? HELD_RUN_BASE) + 1;
+        this.saveRun(r.track, r.week, { id, userId: r.userId, nickname: r.nickname, frames: r.frames }, "valid", "held", null, Date.now());
+        this.noteEffort(id, r);
+        this.keepRecording(r.track, r.userId, id, r.keep, r.carStyle);
+        this.reseat(r.track, r.userId, revert.hidden_id, revert.hidden_frames);
+        this.boards.delete(r.track);
+        return REVERT_ID_BASE + id;
+    }
+
+    // A reverted PB's replay, for /v6/recordings. Only runs standing in on a board: the rest of the table
+    // includes the live week's runs, which stay secret.
+    async revertRecordings(ids) {
+        const found = {};
+        for (const id of ids) {
+            const row = this.sql.exec(`SELECT k.recording, k.car_style, v.frames FROM reverts v JOIN run_recordings k
+                ON k.track = v.track AND k.user_id = v.user_id AND k.id = v.run_id WHERE v.run_id = ?`, id).toArray()[0];
+            if (row) found[id] = { recording: row.recording, frames: row.frames, verifiedState: 0, carStyle: row.car_style ?? "" };
+        }
+        return found;
+    }
+
+    // The owner's input export: a run kept here, else whatever Kodub still has.
+    async runRecording(id) {
+        const runId = id >= REVERT_ID_BASE ? id - REVERT_ID_BASE : id;
+        const run = this.sql.exec("SELECT track, user_id FROM runs WHERE id = ?", runId).toArray()[0];
+        const kept = run && this.sql.exec("SELECT recording FROM run_recordings WHERE track = ? AND user_id = ? AND id = ?", run.track, run.user_id ?? "", runId).toArray()[0];
+        if (kept) return kept.recording;
+        if (runId >= HELD_RUN_BASE) return null;
+        return (await this.fetchRecordings([runId])).get(runId) ?? null;
+    }
+
+    async rejectRecording(key) {
+        return this.sql.exec("SELECT recording FROM rejects WHERE key = ?", key).toArray()[0]?.recording ?? null;
+    }
+
+    async banFromTrack(track, userId, nickname, on) {
+        if (on) {
+            this.sql.exec(`INSERT INTO track_bans (track, user_id, nickname, at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(track, user_id) DO UPDATE SET nickname = excluded.nickname, at = excluded.at`, track, userId, nickname, Date.now());
+        } else {
+            this.sql.exec("DELETE FROM track_bans WHERE track = ? AND user_id = ?", track, userId);
+        }
+        this.boards.delete(track);
+        this.touch(track);
+        return { ok: true };
+    }
+
+    // What the owner's Check run sheet shows about one run and its player.
+    async inspect(id, track, userId) {
+        const runId = id >= REVERT_ID_BASE ? id - REVERT_ID_BASE : id;
+        const history = userId ? this.sql.exec(`SELECT id, frames, state, source, reason, at, uploaded, driven_ms, tries, played_s
+            FROM runs WHERE track = ? AND user_id = ? ORDER BY frames, id LIMIT 40`, track, userId).toArray() : [];
+        const rejects = userId ? this.sql.exec("SELECT track, frames, reason, last, attempts FROM rejects WHERE user_id = ? ORDER BY last DESC LIMIT 200", userId).toArray() : [];
+        const hidden = userId ? this.sql.exec("SELECT COUNT(*) AS n FROM runs WHERE state = 'invalid' AND user_id = ?", userId).one().n : 0;
+        const lobby = this.sql.exec("SELECT lobby, state FROM lobby_runs WHERE upload_id = ?", runId).toArray()[0] ?? null;
+        const banned = userId ? this.sql.exec("SELECT 1 FROM track_bans WHERE track = ? AND user_id = ?", track, userId).toArray().length > 0 : false;
+        const kept = userId ? this.sql.exec("SELECT 1 FROM run_recordings WHERE track = ? AND user_id = ? AND id = ?", track, userId, runId).toArray().length > 0 : false;
+        return {
+            runId, history, hidden, lobby, banned, kept,
+            run: this.sql.exec("SELECT * FROM runs WHERE id = ?", runId).toArray()[0] ?? null,
+            rejects: { total: rejects.reduce((n, r) => n + r.attempts, 0), runs: rejects.length, thisTrack: rejects.filter((r) => r.track === track).length, latest: rejects[0] ?? null },
+        };
+    }
+
     flaggedOn(track) {
         return this.sql.exec("SELECT id FROM runs WHERE track = ? AND flags != ''", track).toArray().map((r) => r.id);
     }
@@ -568,15 +737,15 @@ export class AntiCheat extends DurableObject {
     // a write, and the place is kept in one key, so a scan writes about one row a step however clean the runs are.
     async scanFlags() {
         const after = (await this.ctx.storage.get("flag-scan")) ?? 0;
-        const rows = this.sql.exec("SELECT id, frames, flags, source, state FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, SCAN_RUNS).toArray();
-        const todo = rows.filter((r) => r.flags == null && r.source !== "owner" && r.state !== "invalid");
+        const rows = this.sql.exec("SELECT id, frames, flags, source, state, driven_ms, tries FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, SCAN_RUNS).toArray();
+        const todo = rows.filter((r) => r.flags == null && r.source !== "owner" && r.state !== "invalid" && r.id < HELD_RUN_BASE);
         const reads = [];
         for (let i = 0; i < todo.length; i += CHECK_BATCH) reads.push(this.fetchRecordings(todo.slice(i, i + CHECK_BATCH).map((r) => r.id)));
         const found = new Map((await Promise.all(reads)).flatMap((part) => [...part]));
         let flagged = 0;
         for (const r of todo) {
             const recording = found.get(r.id);
-            const flags = recording ? await inputFlags(recording, r.frames).catch(() => "") : "";
+            const flags = recording ? await inputFlags(recording, r.frames, { drivenMs: r.driven_ms, tries: r.tries }).catch(() => "") : "";
             if (!flags) continue;
             this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", flags, r.id);
             flagged++;
@@ -586,7 +755,7 @@ export class AntiCheat extends DurableObject {
     }
 
     async approve(id) {
-        const row = this.sql.exec("SELECT track FROM runs WHERE id = ?", id).toArray()[0];
+        const row = this.sql.exec("SELECT track, user_id FROM runs WHERE id = ?", id).toArray()[0];
         if (!row) return { ok: false };
         this.sql.exec("UPDATE runs SET state = 'valid', source = 'approved', reason = NULL, at = ? WHERE id = ?", Date.now(), id);
         this.touch(row.track);
@@ -595,7 +764,11 @@ export class AntiCheat extends DurableObject {
         this.sql.exec("UPDATE lobby_runs SET state = 'verified', recording = NULL WHERE upload_id = ?", id);
         const run = this.boards.get(row.track)?.runs.get(id);
         if (run) Object.assign(run, { state: "valid", source: "approved" });
-        return { ok: true };
+        const revert = this.sql.exec("SELECT hidden_id, hidden_frames FROM reverts WHERE track = ? AND user_id = ?", row.track, row.user_id ?? "").toArray()[0];
+        if (revert?.hidden_id === id) this.sql.exec("DELETE FROM reverts WHERE track = ? AND user_id = ?", row.track, row.user_id);
+        else if (revert) this.reseat(row.track, row.user_id, revert.hidden_id, revert.hidden_frames);
+        this.boards.delete(row.track);
+        return { ok: true, track: row.track };
     }
 
     async summary() {
@@ -611,7 +784,9 @@ export class AntiCheat extends DurableObject {
         const queue = this.sql.exec(`SELECT COUNT(*) AS n,
                 COALESCE(SUM(CASE WHEN track IN (SELECT id FROM tracks) THEN 0 ELSE 1 END), 0) AS waiting
             FROM queue`).one();
-        const rejects = this.sql.exec("SELECT * FROM rejects ORDER BY last DESC LIMIT ?", LOG_LIMIT).toArray();
+        const rejects = this.sql.exec(`SELECT key, track, week, user_id, nickname, frames, reason, first, last, attempts,
+            recording IS NOT NULL AS has_recording FROM rejects ORDER BY last DESC LIMIT ?`, LOG_LIMIT).toArray();
+        const trackBans = this.sql.exec("SELECT track, user_id, nickname, at FROM track_bans ORDER BY at DESC LIMIT ?", LOG_LIMIT).toArray();
         const rejectTotals = { runs: tallies.get("rejects") ?? 0, attempts: tallies.get("reject_attempts") ?? 0 };
         const blocked = this.sql.exec(`SELECT id, track, week, user_id, nickname, frames, source, reason, at FROM runs
             WHERE state = 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
@@ -620,6 +795,6 @@ export class AntiCheat extends DurableObject {
             WHERE flags != '' AND state != 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
         const lobby = this.sql.exec(`SELECT id, upload_id, track, week, user_id, nickname, frames, lobby, at FROM lobby_runs
             WHERE state = 'review' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
-        return { tracks, counts, queue, rejects, rejectTotals, blocked, flagged, boards, lobby, lobbyCounts };
+        return { tracks, counts, queue, rejects, rejectTotals, blocked, flagged, boards, lobby, lobbyCounts, trackBans };
     }
 }

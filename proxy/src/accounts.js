@@ -637,6 +637,17 @@ export class Accounts extends DurableObject {
     uploaded(userId) {
         const cursor = this.sql.exec("UPDATE referrals SET confirmed = ? WHERE referred = ? AND confirmed IS NULL", Date.now(), userId);
         if (cursor.rowsWritten > 0) this.top = null;
+        return Math.round(this.hoursOf(userId) * 3600);
+    }
+
+    // For the owner's Check run sheet.
+    playerFacts(userId) {
+        return {
+            nickname: this.nicknameOf(userId),
+            hours: this.hoursOf(userId),
+            wrs: this.wrCount(userId),
+            names: this.sql.exec("SELECT nickname FROM names WHERE user_id = ? ORDER BY at DESC LIMIT 10", userId).toArray().map((r) => r.nickname),
+        };
     }
 
     setEquipped(userId, tag) {
