@@ -63027,15 +63027,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         return pending;
     }
 
-    function tierForTime(finishSeconds, at) {
+    function tierForTime(trackId, finishSeconds, at) {
         if (at == null || finishSeconds == null) return null;
         // The local PB and the leaderboard's time for the same run can differ by
         // rounding, and a tie with the AT must still earn the Author tier.
         var EPS = 0.001;
         if (finishSeconds <= at + EPS) return AUTHOR_TIER;
-        if (finishSeconds <= Math.round(at * GOLD_MULTIPLIER)) return TIERS[0];
-        if (finishSeconds <= Math.round(at * SILVER_MULTIPLIER)) return TIERS[1];
-        if (finishSeconds <= Math.round(at * BRONZE_MULTIPLIER)) return TIERS[2];
+        // Whole-second cutoffs break on short tracks: a 4.078 AT put Gold and Silver at 4 s, under the AT.
+        // Weeks before 11 keep them so medals already earned there don't change.
+        var cutoff = window.__nswsTrackWeek(trackId) >= 11 ? function (t) { return t; } : Math.round;
+        if (finishSeconds <= cutoff(at * GOLD_MULTIPLIER)) return TIERS[0];
+        if (finishSeconds <= cutoff(at * SILVER_MULTIPLIER)) return TIERS[1];
+        if (finishSeconds <= cutoff(at * BRONZE_MULTIPLIER)) return TIERS[2];
         return null;
     }
 
@@ -63044,7 +63047,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             if (at === FETCH_FAILED) {
                 return { tier: null, at: null, fetchFailed: true };
             }
-            return { tier: tierForTime(finishSeconds, at), at: at, fetchFailed: false };
+            return { tier: tierForTime(trackId, finishSeconds, at), at: at, fetchFailed: false };
         });
     }
 
