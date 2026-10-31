@@ -27,6 +27,8 @@ const OPENS_PER_IP_HOUR = 120;
 
 const EVENT_NAMES = ["attempts", "finishes", "uploads", "replays", "clips", "editor", "garage", "standings"];
 const STATES = new Set(["menu", "race", "editor", "watch", "garage"]);
+const DRIVER_STATS = ["runtime", "driving", "opens", "attempts", "finishes", "lastSeen"];
+const DRIVER_TOP = 25;
 
 // The free plan allows 5M SQLite rows read a day, and every stats query scans its whole range, so
 // Race Control keeps what it fetched in the owner's browser and only asks again on Refresh.
@@ -105,6 +107,16 @@ function tally(map, key, runtime) {
     row.opens++;
     row.runtime += runtime;
     map.set(k, row);
+}
+
+// Race Control sorts the Drivers table by any of these, so the reply holds each one's top rows.
+function topPlayers(players) {
+    const byTime = [...players].sort((a, b) => b.runtime - a.runtime);
+    const keep = new Set();
+    for (const stat of DRIVER_STATS) {
+        for (const p of [...byTime].sort((a, b) => b[stat] - a[stat]).slice(0, DRIVER_TOP)) keep.add(p);
+    }
+    return byTime.filter((p) => keep.has(p));
 }
 
 function topRows(map, limit) {
@@ -854,7 +866,8 @@ export class TrafficStats extends DurableObject {
             browsers: topRows(browsers, 8),
             referrers: topRows(referrers, 12),
             sites: topRows(sites, 6),
-            players: [...players.values()].sort((a, b) => b.runtime - a.runtime).slice(0, 25),
+            players: topPlayers(players.values()),
+            playersTop: DRIVER_TOP,
             tracks,
             records: {
                 firstSeen: firstBucket == null ? null : firstBucket * BUCKET_S * 1000,

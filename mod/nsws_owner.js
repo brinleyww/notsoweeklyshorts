@@ -10,6 +10,14 @@
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
     const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"]];
+    const DRIVER_SORTS = {
+        runtime: ["Most time on the site", "combined runtime across all their visits"],
+        driving: ["Most time driving", "time racing with the game in focus"],
+        opens: ["Most visits", "how many times they opened the site"],
+        attempts: ["Most races", "races started, restarts included"],
+        finishes: ["Most finishes", "races finished"],
+        lastSeen: ["Seen most recently", "when their latest visit started"],
+    };
     const ANN_SHOW = [[6, "6s"], [10, "10s"], [15, "15s"], [30, "30s"]];
     const ANN_REACH = [[5, "Online now"], [60, "+ next hour"], [1440, "+ next day"]];
     const ANN_MAX = 160;
@@ -98,6 +106,11 @@
 .nrc-table td{padding:8px;border-bottom:1px solid rgba(255,255,255,.05);white-space:nowrap;font-variant-numeric:tabular-nums;}
 .nrc-table tr:hover td{background:rgba(255,255,255,.03);}
 .nrc-table .num{text-align:right;}
+.nrc-sort{margin:0;padding:4px 0;border:0;background:none;color:inherit;font:inherit;white-space:nowrap;cursor:pointer;}
+.nrc-sort:hover{color:#fff;}
+.nrc-sort.on{color:${ACCENT};}
+.nrc-sort::after{content:"";display:inline-block;margin-left:5px;vertical-align:middle;border:4px solid transparent;border-bottom:0;border-top-color:currentColor;opacity:.35;}
+.nrc-sort.on::after{opacity:1;}
 .nrc-table .name{max-width:260px;overflow:hidden;text-overflow:ellipsis;}
 .nrc-table .rank{color:rgba(255,255,255,.45);width:32px;}
 .nrc-table .p1 .rank{color:${GOLD};}.nrc-table .p2 .rank{color:#d7dce8;}.nrc-table .p3 .rank{color:#e0a36b;}
@@ -452,12 +465,22 @@
         return list;
     }
 
-    function table(headers, rows) {
+    function table(headers, rows, sort) {
         const wrap = el("div", "nrc-scroll");
         const t = el("table", "nrc-table");
         const thead = el("thead");
         const hr = el("tr");
-        for (const [text, cls] of headers) hr.appendChild(el("th", cls || "", text));
+        for (const [text, cls, sortKey] of headers) {
+            const th = el("th", cls || "", sortKey ? null : text);
+            if (sortKey) {
+                const on = sortKey === sort.key;
+                const b = el("button", "nrc-sort" + (on ? " on" : ""), text);
+                b.addEventListener("click", () => sort.pick(sortKey));
+                th.appendChild(b);
+                if (on) th.setAttribute("aria-sort", "descending");
+            }
+            hr.appendChild(th);
+        }
         thead.appendChild(hr);
         t.appendChild(thead);
         const tbody = el("tbody");
@@ -503,6 +526,7 @@
         charts: [],
         runtimeMode: "total",
         opensMode: "rate",
+        driverSort: "runtime",
         loading: 0,
         anti: null,
         antiError: null,
@@ -1017,13 +1041,26 @@
         tiles.appendChild(tile("Avg session", duration(t.sessions ? t.runtime / t.sessions : 0), "per open"));
         body.appendChild(tiles);
 
-        const top = card("Most time on the site", "trophy", "Top drivers " + rangeLabel() + ", by combined runtime across all their visits");
+        const sortKey = ui.driverSort;
+        const [sortTitle, sortBy] = DRIVER_SORTS[sortKey];
+        // A reply saved before playersTop holds only the top 25 by time, so another column's real leaders may be missing.
+        const partial = !s.playersTop && sortKey !== "runtime";
+        const top = card(sortTitle, "trophy", "Top drivers " + rangeLabel() + ", by " + sortBy + ". " +
+            (partial ? "These numbers only hold the top 25 by time on site; press Refresh for this column's real top 25." : "Click a column to sort by it."));
         if (!s.players.length) top.appendChild(el("div", "nrc-empty", "No visitors in this range yet."));
         else {
+            const rows = [...s.players].sort((a, b) => b[sortKey] - a[sortKey] || b.runtime - a.runtime).slice(0, s.playersTop || 25);
             top.appendChild(table(
-                [["#", "rank"], ["Driver", "name"], ["Time on site", "num"], ["Driving", "num"], ["Visits", "num"], ["Races", "num"], ["Finishes", "num"], ["Last seen", "num"]],
-                s.players.map((p, i) => [String(i + 1), withFlag(p.country, p.nickname || "Unnamed"), duration(p.runtime), duration(p.driving),
-                    num(p.opens), num(p.attempts), num(p.finishes), fmt.dateTime(p.lastSeen)])));
+                [["#", "rank"], ["Driver", "name"], ["Time on site", "num", "runtime"], ["Driving", "num", "driving"], ["Visits", "num", "opens"], ["Races", "num", "attempts"], ["Finishes", "num", "finishes"], ["Last seen", "num", "lastSeen"]],
+                rows.map((p, i) => [String(i + 1), withFlag(p.country, p.nickname || "Unnamed"), duration(p.runtime), duration(p.driving),
+                    num(p.opens), num(p.attempts), num(p.finishes), fmt.dateTime(p.lastSeen)]),
+                {
+                    key: sortKey,
+                    pick(key) {
+                        ui.driverSort = key;
+                        render();
+                    },
+                }));
         }
         body.appendChild(top);
 
