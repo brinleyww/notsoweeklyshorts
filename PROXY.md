@@ -173,16 +173,21 @@ chat window shows "n online".
 - **What a wake costs.** Production drops this object from memory after about 10 idle
   seconds, so at a few beats a minute nearly every beat wakes it. A wake reads one row:
   the newest announcement, the only one that can be live, since a new one stops the one
-  before. The first call that needs the counts then reads the sessions that haven't said
-  goodbye, opened in the last 3 hours (`restoreLive`, through the partial index
-  `sessions_open`), and the odometer's row; alarms and votes never ask. A beat reads one
-  more row for the newest minute, and the last-3-hours chart is read only when Race
+  before. The first call that needs the counts then reads the newest bucket, one row
+  (`restoreLive`); alarms and votes never ask. Every beat leaves the live list on that
+  row as JSON (`buckets.live`), since it writes the row anyway, and the first beat in a
+  new bucket clears the old bucket's list. That is about 190 characters per session
+  (11 KB at 60 sessions, 56 KB at 300). Over 500,000 characters (about 3,200 sessions),
+  or if the list is missing or older than the row's `credit_at`, a wake reads the
+  sessions through the partial index `sessions_open` instead, one row each. A beat reads
+  one more row for the newest minute, and the last-3-hours chart is read only when Race
   Control asks (up to 180 rows per load). `ended` is only set when it changes, because
   setting it rewrites the index entry, which would be one more row written per beat.
-  Measured in `workerd` (`cursor.rowsRead`) on the same simulated traffic: 131 -> 20 rows
-  read per beat at 2-3 tabs, 95 -> 18 at about 8 tabs, 18 -> 7 at 60 tabs. A beat itself
-  still writes the same rows. Opens and goodbyes write one index row more, and the first
-  beat in a new bucket can write the previous bucket's row (at most 144 a day).
+  Measured in `workerd` (`cursor.rowsRead`) on simulated traffic, wakes included, before
+  any of this -> now: 131 -> 7 rows read per beat at 2-3 tabs, 95 -> 4 at about 8 tabs,
+  18 -> 3 at 60 tabs. A beat itself still writes the same rows. Opens and goodbyes write
+  one index row more, and the first beat in a new bucket writes up to two extra rows
+  (at most 288 a day).
 
 `/nsws/stats`, `/nsws/live` and `/nsws/anticheat*` answer only the owner: the request
 body must hold the owner key (see "Owner access"). The page checks the same hash

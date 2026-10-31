@@ -43,6 +43,10 @@ const RESTORE_MS = 3 * 60 * 60_000;
 // The sessions_open index starts here: indexing every session ever would write a row per dead tab.
 // Must stay older than RESTORE_MS before the deploy that created the index.
 const OPEN_INDEX_FROM = Date.UTC(2026, 9, 30);
+// What each live session keeps in `buckets.live`, in order, and the longest list stored there. A row
+// holds at most 2 MB; past this the list is left out and a wake reads the sessions instead.
+const LIVE_FIELDS = ["id", "visitor", "account", "start", "last", "nickname", "country", "device", "os", "browser", "site"];
+const LIVE_MAX_CHARS = 500_000;
 
 const SESSION_LENGTHS = [60, 300, 900, 1800, 3600, 7200];
 
@@ -115,6 +119,8 @@ export class TrafficStats extends DurableObject {
         this.online = null;
         // The newest row of `minutes`, or null until a beat needs it.
         this.minute = null;
+        // The bucket holding the live list, set by restoreLive. Only the newest one keeps it.
+        this.liveBucket = null;
         // IP -> { hour, opens }, only in memory; addresses are never written to storage.
         this.opensByIp = new Map();
         this.ann = null;
@@ -198,6 +204,8 @@ export class TrafficStats extends DurableObject {
             this.sql.exec("ALTER TABLE buckets ADD COLUMN credit_at INTEGER");
             this.sql.exec("ALTER TABLE buckets ADD COLUMN credit_people INTEGER");
         }
+        if (!this.sql.exec("PRAGMA table_info(buckets)").toArray().some((c) => c.name === "live"))
+            this.sql.exec("ALTER TABLE buckets ADD COLUMN live TEXT");
         if (!this.sql.exec("PRAGMA table_info(sessions)").toArray().some((c) => c.name === "account"))
             this.sql.exec("ALTER TABLE sessions ADD COLUMN account TEXT");
     }
@@ -247,25 +255,32 @@ export class TrafficStats extends DurableObject {
     }
 
     // The in-memory list of who is online is lost when the object is evicted, which in production is
-    // between nearly every two calls. Each wake that needs it pays one read per row here, so alarms and
-    // votes skip it, and the partial index leaves out sessions that said goodbye.
+    // between nearly every two calls, so alarms and votes skip this. Every beat leaves the list on the
+    // bucket row it writes anyway, which makes it one row to read and none to write. If the row has no
+    // list, or one older than its last beat (a Worker version without this wrote since), the sessions
+    // are read instead, at one row each.
     restoreLive() {
         if (this.online) return;
         this.online = new Map();
         const now = this.onlineCredit.at;
-        const rows = this.sql.exec(
-            `SELECT * FROM sessions INDEXED BY sessions_open WHERE ended = 0 AND start > ${OPEN_INDEX_FROM} AND start > ?`, now - RESTORE_MS).toArray();
+        const last = this.sql.exec("SELECT t, credit_at, credit_people, live FROM buckets ORDER BY t DESC LIMIT 1").toArray()[0];
+        this.liveBucket = last?.t ?? null;
+        const saved = last?.live ? JSON.parse(last.live) : null;
+        const rows = saved && saved.at === last.credit_at
+            ? saved.list.map((entry) => Object.fromEntries(LIVE_FIELDS.map((field, i) => [field, entry[i]])))
+                .filter((row) => row.start > now - RESTORE_MS).sort((a, b) => a.start - b.start)
+            : this.sql.exec(`SELECT * FROM sessions INDEXED BY sessions_open WHERE ended = 0 AND start > ${OPEN_INDEX_FROM} AND start > ?`,
+                now - RESTORE_MS).toArray();
         for (const row of rows) {
             this.online.set(row.id, {
                 id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last,
-                expires: row.last + RESTORE_LIVE_S * 1000, runtime: row.runtime, ended: false,
+                expires: row.last + RESTORE_LIVE_S * 1000, ended: false,
                 nickname: row.nickname, country: row.country, device: row.device, os: row.os,
                 browser: row.browser, site: row.site, state: "menu", track: null,
             });
         }
         // People only change on a beat, so the time since the last one counts for the people it reported.
         // Nobody stays online longer than RESTORE_MS without a beat, which also limits what an outage adds.
-        const last = this.sql.exec("SELECT credit_at, credit_people FROM buckets ORDER BY t DESC LIMIT 1").toArray()[0];
         if (last?.credit_at != null) {
             this.onlineCredit.at = Math.max(last.credit_at, now - RESTORE_MS);
             this.onlineCredit.people = last.credit_people;
@@ -379,7 +394,7 @@ export class TrafficStats extends DurableObject {
             b.s, b.v, b.a, start, start, isNew ? 0 : 1, b.nick, meta.country, meta.device, meta.os, meta.browser, b.ref, meta.site);
         return {
             session: {
-                id: b.s, visitor: b.v, account: b.a, start, last: start, expires: 0, runtime: 0, ended: false,
+                id: b.s, visitor: b.v, account: b.a, start, last: start, expires: 0, ended: false,
                 nickname: b.nick, country: meta.country, device: meta.device, os: meta.os,
                 browser: meta.browser, site: meta.site, state: "menu", track: null,
             },
@@ -416,7 +431,7 @@ export class TrafficStats extends DurableObject {
                 wasEnded = !!row.ended;
                 s = {
                     id: row.id, visitor: row.visitor, account: row.account, start: row.start, last: row.last, expires: 0,
-                    runtime: row.runtime, ended: false, nickname: row.nickname, country: row.country,
+                    ended: false, nickname: row.nickname, country: row.country,
                     device: row.device, os: row.os, browser: row.browser, site: row.site, state: "menu", track: null,
                 };
             } else {
@@ -436,7 +451,6 @@ export class TrafficStats extends DurableObject {
         this.notePlay(b.v, focus);
 
         s.last = now;
-        s.runtime += runtime;
         s.ended = !!b.end;
         s.expires = now + b.nx * 1000 + LIVE_GRACE_MS;
         if (b.nick) s.nickname = b.nick;
@@ -473,12 +487,21 @@ export class TrafficStats extends DurableObject {
             if (isNew) this.totals.visitors++;
             if (!this.totals.peak || online > this.totals.peak.online) this.totals.peak = { online, t };
         }
+        if (this.liveBucket !== t) {
+            if (this.liveBucket != null) this.sql.exec("UPDATE buckets SET live = NULL WHERE t = ?", this.liveBucket);
+            this.liveBucket = t;
+        }
+        let live = JSON.stringify({
+            at: now,
+            list: [...this.online.values()].filter((o) => !o.ended).map((o) => LIVE_FIELDS.map((field) => o[field])),
+        });
+        if (live.length > LIVE_MAX_CHARS) live = null;
         this.sql.exec(`INSERT INTO buckets (t, runtime, focus, driving, opens, new_visitors, peak,
-                attempts, finishes, uploads, replays, clips, editor, garage, standings, online_s, credit_at, credit_people)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attempts, finishes, uploads, replays, clips, editor, garage, standings, online_s, credit_at, credit_people, live)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(t) DO UPDATE SET runtime = runtime + excluded.runtime, focus = focus + excluded.focus,
                 online_s = COALESCE(online_s, runtime) + excluded.online_s,
-                credit_at = excluded.credit_at, credit_people = excluded.credit_people,
+                credit_at = excluded.credit_at, credit_people = excluded.credit_people, live = excluded.live,
                 driving = driving + excluded.driving, opens = opens + excluded.opens,
                 new_visitors = new_visitors + excluded.new_visitors, peak = MAX(peak, excluded.peak),
                 attempts = attempts + excluded.attempts, finishes = finishes + excluded.finishes,
@@ -486,7 +509,7 @@ export class TrafficStats extends DurableObject {
                 clips = clips + excluded.clips, editor = editor + excluded.editor,
                 garage = garage + excluded.garage, standings = standings + excluded.standings`,
             t, runtime, focus, driving, opened ? 1 : 0, isNew ? 1 : 0, online,
-            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings, onlineNow, now, online);
+            ev.attempts, ev.finishes, ev.uploads, ev.replays, ev.clips, ev.editor, ev.garage, ev.standings, onlineNow, now, online, live);
 
         const day = Math.floor(now / DAY_MS);
         for (const [track, [attempts, finishes, uploads]] of b.tr) {
