@@ -93,7 +93,7 @@ window.__nswsAutoGhostNote = function(trackId) {
     let watchClipFunction = () => {};
     let replayLoaderClass;
     let watchingClip;
-    // Set by __nswsWatchRun: where the replay hands back to instead of the clips menu.
+    // Where a replay hands back to instead of the clips menu.
     let afterClipWatch = null;
     let openClipsMenuOnLoad = false;
     let runHasClip = false;
@@ -1471,7 +1471,13 @@ window.__nswsAutoGhostNote = function(trackId) {
     function _clipFailed(message) {
         alert(message);
         hideClipSkyOverlay();
-        openClipsMenu();
+        _afterClipPlayback();
+    }
+    function _afterClipPlayback() {
+        const done = afterClipWatch;
+        afterClipWatch = null;
+        if (done) done();
+        else openClipsMenu();
     }
     // Clips played together must be on the same track: the Watch view drives one track.
     function _playClipsNow(clips) {
@@ -1718,7 +1724,8 @@ window.__nswsAutoGhostNote = function(trackId) {
         ta.focus();
         if (!inputCallback) ta.select();
     }
-    function showClipConfirm(message, confirmLabel, onConfirm) {
+    // With onCancel the player has to pick a button: Escape does nothing.
+    function showClipConfirm(message, confirmLabel, onConfirm, cancelLabel, onCancel) {
         injectClipCSS();
         var boxBg = document.createElement("div");
         boxBg.className = "clip-box-bg";
@@ -1729,18 +1736,22 @@ window.__nswsAutoGhostNote = function(trackId) {
         msg.textContent = message;
         box.appendChild(msg);
         function closeBox() {
-            popClipEscape(closeBox);
+            popClipEscape(onEscape);
             boxBg.remove();
         }
-        pushClipEscape(closeBox);
+        function onEscape() {
+            if (!onCancel) closeBox();
+        }
+        pushClipEscape(onEscape);
         var btnRow = document.createElement("div");
         btnRow.className = "clip-box-buttons";
         var cancel = document.createElement("button");
         cancel.className = "button";
-        cancel.innerHTML = '<img class="button-icon" src="images/back.svg"> ';
-        cancel.append("Cancel");
+        cancel.innerHTML = '<img class="button-icon" src="images/' + (onCancel ? "cancel" : "back") + '.svg"> ';
+        cancel.append(cancelLabel || "Cancel");
         cancel.addEventListener("click", function() {
             closeBox();
+            if (onCancel) onCancel();
         });
         var confirm = document.createElement("button");
         confirm.className = "button";
@@ -2177,7 +2188,8 @@ window.__nswsAutoGhostNote = function(trackId) {
         refresh();
         if (autoWatch && selectedClips().length) watchButton.click();
     }
-    // A clip link is ?clip=<id>[,<id>...]. Opening one adds those clips to the visitor's clips and plays them together.
+    // A clip link is ?clip=<id>[,<id>...]. Opening one plays those clips together, and leaving asks whether to save
+    // the ones the visitor doesn't have yet.
     let clipLinkIds = null;
     try {
         const ids = (new URLSearchParams(location.search).get("clip") || "").split(",");
@@ -2187,6 +2199,57 @@ window.__nswsAutoGhostNote = function(trackId) {
         const box = window.__nswsMessageBox;
         if (box && !box.isOpen) box.show(text, "Ok", null);
         else alert(text);
+    }
+    function _clipMenuReady() {
+        const menuButtons = document.querySelector(".menu-ui > .main-buttons-container");
+        return !!menuButtons && !menuButtons.classList.contains("hidden") && !document.querySelector(".clip-menu-bg");
+    }
+    function _openClipsMenuWith(select, autoWatch) {
+        if (!_clipMenuReady()) return;
+        clipMenuSelect = select;
+        clipMenuAutoWatch = !!autoWatch;
+        window.__nswsOpenClipsMenu?.();
+        clipMenuSelect = null;
+        clipMenuAutoWatch = false;
+    }
+    // Leaving a replay rebuilds the menu a moment later.
+    function _clipMenuSettled() {
+        return new Promise(resolve => {
+            const start = performance.now();
+            (function poll() {
+                if (_clipMenuReady() || performance.now() - start >= 3000) resolve();
+                else setTimeout(poll, 50);
+            })();
+        });
+    }
+    async function _offerSharedClips(clips, select) {
+        await _clipMenuSettled();
+        // Checked again here: the clip key saves the run being watched.
+        const unsaved = new Map();
+        for (const clip of clips) {
+            const duplicate = await _findDuplicateClip(clip);
+            if (duplicate) select.push({ id: duplicate.id, key: duplicate.key });
+            else unsaved.set(await _clipKey(clip), clip);
+        }
+        if (!unsaved.size) {
+            _openClipsMenuWith(select);
+            return;
+        }
+        const many = unsaved.size > 1;
+        showClipConfirm("Save " + (many ? "these " + unsaved.size + " clips" : "this clip") + " to your clips?", "Save", function() {
+            for (const [key, clip] of unsaved) {
+                const now = Date.now();
+                clip.id = "clip_" + now;
+                clip.createdAt = now;
+                if (!localAddClip(clip)) {
+                    alert("Failed to save the clip: storage is full. Try deleting some old clips, then open the link again.");
+                    return;
+                }
+                select.push({ id: clip.id, key: key });
+            }
+            _openClipsMenuWith(select);
+            showClipSavedNotification(many ? "📹 " + unsaved.size + " clips added to your clips!" : "📹 Clip added to your clips!");
+        }, "Discard", function() {});
     }
     async function _receiveClipLink(ids) {
         let missing = 0;
@@ -2208,34 +2271,24 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         await syncClips().catch(() => {});
         const select = [];
-        let added = 0;
+        const fresh = [];
         for (const clip of clips) {
-            const duplicate = await _findDuplicateClip(clip);
-            if (duplicate) {
-                select.push({ id: duplicate.id, key: duplicate.key });
-                continue;
-            }
-            const now = Date.now();
-            clip.id = "clip_" + now;
-            clip.createdAt = now;
             clip.name = clip.name || "Shared clip";
-            if (!localAddClip(clip)) {
-                alert("Failed to save the clip: storage is full. Try deleting some old clips, then open the link again.");
-                return;
-            }
-            added++;
-            select.push({ id: clip.id, key: await _clipKey(clip) });
+            const duplicate = await _findDuplicateClip(clip);
+            if (duplicate) select.push({ id: duplicate.id, key: duplicate.key });
+            else fresh.push(clip);
         }
-        clipMenuSelect = select;
-        const menuButtons = document.querySelector(".menu-ui > .main-buttons-container");
-        if (menuButtons && !menuButtons.classList.contains("hidden") && !document.querySelector(".clip-menu-bg")) {
-            clipMenuAutoWatch = true;
-            window.__nswsOpenClipsMenu?.();
+        if (!fresh.length) {
+            _openClipsMenuWith(select, true);
+            showClipSavedNotification(clips.length > 1 ? "📹 You already have these clips" : "📹 You already have this clip");
+        } else if (_clipMenuReady()) {
+            afterClipWatch = () => _offerSharedClips(fresh, select);
+            showClipSkyOverlay();
+            watchClips(clips);
+            clips.forEach(clip => _recordClipView(null, clip));
+        } else {
+            _offerSharedClips(fresh, select);
         }
-        clipMenuSelect = null;
-        clipMenuAutoWatch = false;
-        const many = clips.length > 1;
-        showClipSavedNotification(added === 0 ? (many ? "📹 You already have these clips" : "📹 You already have this clip") : many ? "📹 " + added + (added === 1 ? " clip" : " clips") + " added to your clips!" : "📹 Clip added to your clips!");
         if (clips.length < ids.length) _showClipMessage("Only " + clips.length + " of the " + ids.length + " clips in this link could be loaded.");
     }
     // Called once the main menu first appears. True when it opened a clip link, so the
@@ -2284,7 +2337,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             } catch (err) {
                 console.error("[BW-Clip] Failed to return to menu on Escape:", err);
             }
-            openClipsMenu();
+            _afterClipPlayback();
             setTimeout(hideClipSkyOverlay, 400);
             return;
         }
@@ -62776,7 +62829,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             showClipSkyOverlay(),
                             watchingClip = false,
                             M(!1, null),
-                            afterClipWatch ? (afterClipWatch(), afterClipWatch = null) : openClipsMenu(),
+                            _afterClipPlayback(),
                             setTimeout(hideClipSkyOverlay, 400)
                         } else
                             W(e, t, n, i, null)
