@@ -54294,16 +54294,24 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                       , r = C.get(this, Ao, "f") * i;
                     // The proxy has already taken banned players out and counted ranks and the
                     // total without them, so a row's rank is just its place in the list.
-                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, owner: __nswsOwner}) => {
+                    C.get(this, $s, "f").getLeaderboard(C.get(this, to, "f").getCurrentUserProfile().tokenHash, C.get(this, Ys, "f"), r, i, false).then(( ({total: a, entries: s, userEntry: o, owner: __nswsOwner, flagged: __nswsFlagged}) => {
                         if (!n.isCancelled) {
                             C.set(this, vo, Math.ceil(a / i), "f"),
                             C.get(this, Xs, "m", Eo).call(this),
                             C.get(this, oo, "f").textContent = C.get(this, Zs, "f").get("{0} players", [Mo(a)]),
                             C.get(this, oo, "f").classList.add("fade-in");
+                            // The proxy only sends flagged to the owner.
+                            if (__nswsFlagged) {
+                                const __nswsNote = document.createElement("p");
+                                __nswsNote.className = "nsws-owner-note",
+                                __nswsNote.style.cssText = "margin:0 0 6px;padding:6px 10px;font-size:15px;color:var(--text-color);background:var(--surface-tertiary-color);",
+                                __nswsNote.textContent = "Only you can see this. " + (__nswsFlagged.length ? __nswsFlagged.length + (1 == __nswsFlagged.length ? " run" : " runs") + " on this page flagged for machine-like inputs. A flag isn't proof." : "No runs on this page are flagged."),
+                                C.get(this, lo, "f").appendChild(__nswsNote)
+                            }
                             for (let e = 0; e < s.length; e++) {
                                 const {id: t, nickname: i, countryCode: a, time: o, carStyle: l, verifiedState: c, isSelf: h, hidden: v} = s[e]
                                   , d = r + e + 1;
-                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsOwner)
+                                C.get(this, Xs, "m", ko).call(this, d, i, a, o, l, c, h, t, n, v, __nswsOwner, !!__nswsFlagged?.includes(t))
                             }
                             C.get(this, $s, "f").determinismState == Js.Ok && (null != o ? (C.set(this, yo, Math.floor((o.position - 1) / i), "f"),
                             C.get(this, ho, "f").disabled = !1,
@@ -54345,7 +54353,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             ), 500)
         }
         ,
-        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsOwner) {
+        ko = function(e, t, n, i, r, a, s, o, l, __nswsHidden, __nswsOwner, __nswsFlag) {
             // __nswsHidden: the proxy withheld this run's time and recording (someone else's run
             // on a week still in progress). __nswsOwner: the proxy sent the owner every run in full.
             const __nswsSecret = !s && (!!__nswsHidden || !__nswsOwner && window.__nswsIsCurrentWeek(C.get(this, Ys, "f")));
@@ -54429,6 +54437,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 e.className = "self",
                 e.textContent = "(" + C.get(this, Zs, "f").get("You") + ")",
                 y.appendChild(e)
+            }
+            // The proxy only sends flagged to the owner.
+            if (__nswsFlag) {
+                const __nswsMark = document.createElement("span");
+                __nswsMark.className = "nsws-flag-mark",
+                __nswsMark.textContent = "Flagged",
+                __nswsMark.style.cssText = "position:absolute;right:6px;bottom:6px;padding:2px 10px;font-size:14px;background:#ff6b6b;color:#1b1f3a;",
+                c.style.position = "relative",
+                c.appendChild(__nswsMark)
             }
         }
         ,
@@ -60591,7 +60608,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                         total: a,
                                         entries: o,
                                         userEntry: l,
-                                        owner: !0 === r.owner
+                                        owner: !0 === r.owner,
+                                        flagged: Array.isArray(r.flagged) ? r.flagged : null
                                     })
                                 } catch (e) {
                                     n(new Error("Unknown error: " + String(e)))

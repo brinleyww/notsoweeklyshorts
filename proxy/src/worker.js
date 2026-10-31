@@ -3,6 +3,7 @@
 
 import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY } from "./anticheat.js";
+import { inputFlags } from "./inputflags.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
 import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
@@ -839,6 +840,11 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
         userEntry: hash ? censorNames(await ownEntry(cfg, request, track, read, view, hash)) : null,
     };
     if (owner && track.secret) body.owner = true;
+    // Only the owner's reply says which runs are flagged, so no one else can read it from the network panel.
+    if (owner && track.week != null) {
+        const flagged = await antiCheat(env)?.flaggedOn(track.trackId).catch(() => null);
+        if (flagged) body.flagged = page.map((e) => e.id).filter((id) => flagged.includes(id));
+    }
     return json(body, origin);
 }
 
@@ -974,6 +980,7 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             track: trackId, week: track.week, uploadId, userId: hash, nickname: check.nickname, frames,
             state: check.state, recording: check.state === "pending" ? check.recording : null,
             achieved: await achievedAt(env, url.searchParams.get("nswsAchievedAt")),
+            flags: await inputFlags(check.recording, frames).catch(() => null),
         });
         if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
     } else if (check?.hold != null) {
@@ -1330,6 +1337,14 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
         const run = await anti.lobbyRecording(body.id);
         return run ? json(run, origin) : plain(404, "Not found", origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/unflag") {
+        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
+        return json(await anti.unflag(body.id), origin);
+    }
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/scanflags") {
+        if (!Number.isSafeInteger(body.after)) return plain(400, "Bad request", origin);
+        return json(await anti.scanFlags(body.after), origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/approve") {
         if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);

@@ -1220,7 +1220,7 @@
             "Every run is replayed with the game's own physics. It must pass every checkpoint and cross the finish on exactly the time it claims.",
             "Runs must be uploaded through this site. Runs sent to Kodub any other way are hidden.",
             "Your owner key skips every check: your runs always show, and your uploads are never replayed.",
-            "The proxy only answers the game on brinleyww.github.io and notweeklyshorts.github.io.",
+            "Browsers on any site but brinleyww.github.io and notweeklyshorts.github.io are refused. A script outside a browser can fake this, and TAS runs replay fine, so check Suspicious runs below.",
             "Runs already on a board when anti-cheat started stay up while they're replayed once in the background.",
         ]) {
             const row = el("span");
@@ -1266,6 +1266,8 @@
         sync.style.marginBottom = "14px";
         body.appendChild(sync);
 
+        body.appendChild(buildFlagged(a));
+
         const rej = card("Rejected uploads", "cancel", "Runs refused at upload because the replay didn't match. They never reached Kodub.");
         if (!a.rejects.length) rej.appendChild(el("div", "nrc-empty", "No rejected uploads."));
         else {
@@ -1297,6 +1299,66 @@
         body.appendChild(blocked);
         body.appendChild(el("div", "nrc-foot", "Owner only. Press Refresh for new numbers."));
         renderLobbyRuns(body, a, blocked);
+    }
+
+    function flagReasons(raw) {
+        let f = {};
+        try {
+            f = JSON.parse(raw);
+        } catch {}
+        const why = [];
+        if (f.fast != null) why.push(num(f.fast) + " presses under 10 ms");
+        if (f.rate != null) why.push(f.rate + " key changes a second");
+        if (f.same != null) why.push(f.same + "% of presses exactly " + f.len + " ms");
+        return why.join(", ");
+    }
+
+    // Older runs have no verdict until scanned; new uploads get theirs at upload.
+    function buildFlagged(a) {
+        const box = card("Suspicious runs", "state_invalid", "Runs whose inputs look machine-made. They stay on the boards until you decide. A flag isn't proof. Clear removes the flag.");
+        const flagged = a.flagged || [];
+        if (!flagged.length) box.appendChild(el("div", "nrc-empty", "No runs flagged."));
+        else {
+            box.appendChild(table(
+                [["Player", "name"], ["Track", "name"], ["Time", "num"], ["Why"], [""]],
+                flagged.map((r) => {
+                    const clear = el("button", "button", "Clear");
+                    clear.style.cssText = "font-size:13px;padding:4px 12px;";
+                    clear.addEventListener("click", async () => {
+                        clear.disabled = true;
+                        try {
+                            await post("anticheat/unflag", { id: r.id });
+                        } catch {}
+                        loadAnti();
+                    });
+                    return [r.nickname || "Unnamed", trackName(r.track), raceTime(r.frames), flagReasons(r.flags), clear];
+                })));
+        }
+        const scan = el("button", "button", "Scan older runs");
+        scan.style.marginTop = "10px";
+        const note = el("p", "nrc-sub", "");
+        note.style.margin = "10px 0 0";
+        scan.addEventListener("click", async () => {
+            scan.disabled = true;
+            let after = 0, found = 0, pages = 0;
+            try {
+                for (;;) {
+                    const step = await post("anticheat/scanflags", { after });
+                    found += step.flagged;
+                    after = step.next;
+                    note.textContent = "Scanned " + num(++pages * 8) + " runs, " + num(found) + " flagged…";
+                    if (step.done) break;
+                }
+                note.textContent = "Done. " + num(found) + " newly flagged.";
+                loadAnti();
+            } catch {
+                note.textContent = "Scan stopped. Press it again to carry on; scanned runs are skipped.";
+                scan.disabled = false;
+            }
+        });
+        box.append(scan, note);
+        box.style.marginBottom = "14px";
+        return box;
     }
 
     // Personal bests set in multiplayer lobbies, held off the boards until verified here. Watch plays

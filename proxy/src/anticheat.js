@@ -9,6 +9,7 @@ import physicsModule from "./sim/physics.wasm";
 import mathModule from "./sim/math.wasm";
 import initData from "./sim/init.bin";
 import { Simulator, readInit } from "./sim/run-check.js";
+import { inputFlags } from "./inputflags.js";
 
 const CHECK_BATCH = 8;
 const RETRY_MS = 60_000;
@@ -94,6 +95,13 @@ export class AntiCheat extends DurableObject {
             /* already added */
         }
         this.sql.exec("CREATE INDEX IF NOT EXISTS runs_achieved ON runs(achieved) WHERE achieved IS NOT NULL");
+        // flags: inputflags.js's verdict. NULL = not looked at yet, "" = nothing stands out.
+        try {
+            this.sql.exec("ALTER TABLE runs ADD COLUMN flags TEXT");
+        } catch {
+            /* already added */
+        }
+        this.sql.exec("CREATE INDEX IF NOT EXISTS runs_flagged ON runs(track) WHERE flags != ''");
         this.migrateTallies();
         // Each board's part of the KV snapshot, rebuilt only when that board changes ("" in snap_dirty =
         // the track weeks). Rebuilding all of them on every cron read the whole runs table each time.
@@ -335,6 +343,7 @@ export class AntiCheat extends DurableObject {
         if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) {
             const now = Date.now();
             this.saveRun(r.track, r.week, entry, r.state, "proxy", null, now);
+            if (r.flags != null) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
             if (Number.isSafeInteger(r.achieved) && r.achieved < now) this.backdate(r, now);
         }
         if (r.state === "pending") {
@@ -514,6 +523,31 @@ export class AntiCheat extends DurableObject {
         return { verified: rows.length };
     }
 
+    flaggedOn(track) {
+        return this.sql.exec("SELECT id FROM runs WHERE track = ? AND flags != ''", track).toArray().map((r) => r.id);
+    }
+
+    // The owner looked and it's fine. A run is only flagged once, so this stays.
+    unflag(id) {
+        this.sql.exec("UPDATE runs SET flags = '' WHERE id = ?", id);
+        return { ok: true };
+    }
+
+    // Looks at the next few runs from before flags existed. The page calls this until done, passing back next.
+    async scanFlags(after) {
+        const rows = this.sql.exec("SELECT id, frames, flags, source, state FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, CHECK_BATCH).toArray();
+        const todo = rows.filter((r) => r.flags == null && r.source !== "owner" && r.state !== "invalid");
+        const found = await this.fetchRecordings(todo.map((r) => r.id));
+        let flagged = 0;
+        for (const r of todo) {
+            const recording = found.get(r.id);
+            const flags = recording ? await inputFlags(recording, r.frames).catch(() => "") : "";
+            this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", flags, r.id);
+            if (flags) flagged++;
+        }
+        return { done: rows.length < CHECK_BATCH, next: rows.length ? rows[rows.length - 1].id : after, flagged };
+    }
+
     async approve(id) {
         const row = this.sql.exec("SELECT track FROM runs WHERE id = ?", id).toArray()[0];
         if (!row) return { ok: false };
@@ -545,8 +579,10 @@ export class AntiCheat extends DurableObject {
         const blocked = this.sql.exec(`SELECT id, track, week, user_id, nickname, frames, source, reason, at FROM runs
             WHERE state = 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
         const boards = tallies.get("boards") ?? 0;
+        const flagged = this.sql.exec(`SELECT id, track, week, user_id, nickname, frames, flags, uploaded, at FROM runs
+            WHERE flags != '' AND state != 'invalid' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
         const lobby = this.sql.exec(`SELECT id, upload_id, track, week, user_id, nickname, frames, lobby, at FROM lobby_runs
             WHERE state = 'review' ORDER BY at DESC LIMIT ?`, LOG_LIMIT).toArray();
-        return { tracks, counts, queue, rejects, rejectTotals, blocked, boards, lobby, lobbyCounts };
+        return { tracks, counts, queue, rejects, rejectTotals, blocked, flagged, boards, lobby, lobbyCounts };
     }
 }
