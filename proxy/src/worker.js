@@ -1475,9 +1475,9 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         ]);
         return json({ ...run, player, owner: cfg.ownerUserIds.includes(userId) }, origin);
     }
-    if (url.pathname === TRAFFIC_PREFIX + "anticheat/run") {
-        if (!Number.isSafeInteger(body.id)) return plain(400, "Bad request", origin);
-        return json({ recording: await anti.runRecording(body.id) }, origin);
+    if (url.pathname === TRAFFIC_PREFIX + "anticheat/runs") {
+        if (!HEX64.test(body.track ?? "") || !HEX64.test(body.userId ?? "")) return plain(400, "Bad request", origin);
+        return json(await anti.playerRuns(body.track, body.userId), origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "anticheat/reject/run") {
         if (typeof body.key !== "string") return plain(400, "Bad request", origin);

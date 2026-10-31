@@ -1570,24 +1570,30 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         _playClipsNow(clips);
     }
-    // Plays an uploaded run (Race Control's lobby PB review), then calls `done`.
-    window.__nswsWatchRun = async function(run, done) {
+    // Plays uploaded runs of one track together (Race Control's lobby PB review, the owner's ghost compare), then calls `done`.
+    window.__nswsWatchRun = (run, done) => window.__nswsWatchRuns([run], done);
+    window.__nswsWatchRuns = async function(runs, done) {
         const RecordingClass = window.__clipRecordingClass;
         const TimeClass = window.__clipTimeClass;
-        const recording = RecordingClass && TimeClass ? RecordingClass.deserialize(run.recording) : null;
-        if (!recording) return false;
-        let carStyle = null;
-        try {
-            carStyle = window.__clipCarStyleClass?.deserializeSafe(run.carStyle) ?? null;
-        } catch (e) {}
-        if (_currentTrackId() !== run.trackId) {
+        if (!RecordingClass || !TimeClass || !runs.length) return false;
+        const clips = [];
+        for (const run of runs) {
+            const recording = RecordingClass.deserialize(run.recording);
+            if (!recording) return false;
+            let carStyle = null;
+            try {
+                carStyle = window.__clipCarStyleClass?.deserializeSafe(run.carStyle) ?? null;
+            } catch (e) {}
+            clips.push({ recording, carStyle, nickname: run.nickname, time: new TimeClass(run.frames), isSelf: false });
+        }
+        if (_currentTrackId() !== runs[0].trackId) {
             const previous = watchClipFunction;
-            if (!window.__bw_selectTrackById?.(run.trackId)) return false;
+            if (!window.__bw_selectTrackById?.(runs[0].trackId)) return false;
             if (!await _waitForWatchFunctionRebind(previous, 5000)) return false;
         }
         watchingClip = true;
         afterClipWatch = done;
-        watchClipFunction([{ recording, carStyle, nickname: run.nickname, time: new TimeClass(run.frames), isSelf: false }]);
+        watchClipFunction(clips);
         return true;
     };
     function framesToTime(frames) {

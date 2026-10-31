@@ -4,6 +4,10 @@ const FAST_PRESSES = 3;
 const KEYS_PER_SECOND = 15;
 const SAME_LENGTH_SHARE = 0.4;
 const MIN_PRESSES = 20;
+// Most presses in any one second, and how many times a usual second's. The highest of 2,759 ordinary runs was 16.
+const BURST_PRESSES = 20;
+const BURST_RATIO = 2;
+const DRIVING_CHANNELS = 4;
 // up, right, down, left, reset, then the seven Rocket League keys. The physics version channel comes after.
 const KEY_CHANNELS = 12;
 // Royale tracks press reset for a few ms on every run, so it says nothing about the player.
@@ -35,6 +39,21 @@ function readKeys(raw) {
     return keys;
 }
 
+// [most presses in any one second, the median of the seconds that have any].
+function pressRates(keys) {
+    const starts = keys.slice(0, DRIVING_CHANNELS).flatMap((toggles) => toggles.filter((_, i) => i % 2 === 0)).sort((a, b) => a - b);
+    let peak = 0;
+    const seconds = new Map();
+    for (let i = 0, j = 0; i < starts.length; i++) {
+        while (starts[i] - starts[j] >= 1000) j++;
+        peak = Math.max(peak, i - j + 1);
+        const second = Math.floor(starts[i] / 1000);
+        seconds.set(second, (seconds.get(second) || 0) + 1);
+    }
+    const sorted = [...seconds.values()].sort((a, b) => a - b);
+    return [peak, sorted[sorted.length >> 1] ?? 0];
+}
+
 export function flagsFromKeys(keys, frames, effort = {}) {
     const lengths = [];
     let changes = 0;
@@ -63,6 +82,11 @@ export function flagsFromKeys(keys, frames, effort = {}) {
     if (lengths.length >= MIN_PRESSES && top / lengths.length >= SAME_LENGTH_SHARE) {
         flags.same = Math.round(top / lengths.length * 100);
         flags.len = topLength;
+    }
+    const [peak, usual] = pressRates(keys);
+    if (peak >= BURST_PRESSES && peak >= BURST_RATIO * usual) {
+        flags.burst = peak;
+        flags.usual = usual;
     }
     if (effort.drivenMs != null && effort.drivenMs < frames) flags.driven = effort.drivenMs;
     else if (effort.tries === 0) flags.tries = 0;

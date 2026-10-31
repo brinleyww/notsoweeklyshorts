@@ -294,7 +294,7 @@ do nothing by themselves. Hide, Ban from track and Export inputs are on the shee
 Arx Lucida board: both beaten runs came back null). So a hidden run stays on Kodub as their best, and the proxy shows
 their earlier PB in its place:
 
-- `run_recordings` keeps the last 6 uploads per player per track; `runs` has the times of everything since v7.15.
+- `run_recordings` keeps the last 50 uploads per player per track; `runs` has the times of everything since v7.15.
 - `reverts` (track, player) holds `hidden_id`, the run Kodub still has, and `run_id`, their best run left. `applyReverts`
   swaps the board entry, with `reverted: true` and id `REVERT_ID_BASE` (2^48) + run id; `/v6/recordings` answers those
   ids from `run_recordings`. Only runs standing in on a board are served, since the rest of the table has the live week's runs.
@@ -314,8 +314,23 @@ under any nickname, new ones too. Uploads are still accepted, like other hidden 
 
 **Input export.** `Recording.inputsText()` in `main.bundle.js` gives the TAS tool's text, one `frame,keys` line per change
 (w a s d r). Rocket League channels follow as j b x q e n u, which that tool doesn't read. Saved from the sheet, or from
-Inputs on Rejected uploads (newest 60 keep their recording, `rejects.recording`) and Lobby PBs. `/nsws/anticheat/run` reads the
-kept copy first, then Kodub, so a beaten run with no kept copy has nothing to export.
+Inputs on Rejected uploads (newest 60 keep their recording, `rejects.recording`) and Lobby PBs. `/nsws/anticheat/inspect` carries the
+run's recording, the kept copy first, then Kodub, so a beaten run with no kept copy has nothing to export.
+
+**Press bursts.** A run is flagged for 20+ presses of the four driving keys in any one second when that is at least double its usual
+second (the median of the seconds with any presses). Of 2,759 ordinary runs at ranks 1-40, 61-120 and 151-210 on weeks 1-10, the highest was 16, and all 5
+known TAS or AI runs on Arx Lucida set it off. A run that is fast throughout has no swing, and the key-rate flag covers it. 50 a second on one key
+usually gets the macro lockout first. The flag covers new uploads at once and older runs on the next "Scan older runs" (`FLAG_SCAN_KEY` is new, so the scan
+starts over; rename it whenever a rule is added).
+
+**Compare runs.** On the Check run sheet: every run on record for that player and track (PBs, plus refused uploads whose recording is still kept),
+fastest first. Ticked runs get a W/A/S/D timeline with a strip where they differ from the fastest one ticked, and Watch as ghosts plays them together
+(`window.__nswsWatchRuns`). "Same inputs" is how far a run presses the same keys on the same ms as the fastest one, red from 10 key changes: people can't
+repeat that, an edited run does. Only uploaded PBs exist, so attempts in between were never recorded.
+
+**What this costs on the free plan.** Everything on the sheet is worked out in the owner's browser. A Check is one `inspect` POST (two Durable Object calls, AntiCheat and
+Accounts) and a board read; Compare runs is one more POST, read only when pressed; both are kept in the page until the owner changes something, so reopening a run sends
+nothing. An upload costs one extra write for its recording, and driving time goes in the same write as the run. Non-owners send nothing new, apart from two numbers on a PB upload.
 
 ## Macro lockout
 

@@ -52,7 +52,12 @@
     const FLAG_KEYS_PER_SECOND = 15;
     const FLAG_SAME_LENGTH_SHARE = 0.4;
     const FLAG_MIN_PRESSES = 20;
+    const FLAG_BURST_PRESSES = 20;
+    const FLAG_BURST_RATIO = 2;
     const FINDER_PAGE = 25;
+    const COMPARE_SHOWN = 6;
+    const COMPARE_MAX_WIDTH = 16000;
+    const SAME_INPUTS_FLAG = 10;
 
     const CSS = `
 #nrc-overlay{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
@@ -169,6 +174,10 @@
 .nrc-sheet{width:min(880px,96vw);max-height:94vh;overflow-y:auto;padding:18px 20px;background:var(--surface-color);color:var(--text-color);}
 .nrc-sheet h1{margin:0;font-size:28px;font-weight:normal;overflow-wrap:anywhere;}
 .nrc-smell{padding:6px 12px;margin-bottom:4px;font-size:15px;background:var(--surface-secondary-color);border-left:4px solid var(--c);}
+.nrc-compare{margin-top:14px;}
+.nrc-compare canvas{display:block;margin-bottom:8px;background:var(--surface-tertiary-color);}
+.nrc-compare .lanes{overflow-x:auto;margin-top:10px;}
+.nrc-compare .lane-name{font-size:12px;color:rgba(255,255,255,.6);margin-bottom:2px;white-space:nowrap;}
 .nrc-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
 .nrc-acts .button{font-size:18px;padding:6px 16px;}
 .nrc-opts{display:flex;flex-direction:column;gap:6px;}
@@ -668,6 +677,8 @@
     }
 
     async function loadAnti() {
+        checkCache.clear();
+        compareCache.clear();
         try {
             ui.anti = await post("anticheat", {});
             cachePut("anti", ui.anti);
@@ -1364,6 +1375,7 @@
         if (f.fast != null) why.push(num(f.fast) + " presses under 10 ms");
         if (f.rate != null) why.push(f.rate + " key changes a second");
         if (f.same != null) why.push(f.same + "% of presses exactly " + f.len + " ms");
+        if (f.burst != null) why.push(f.burst + " presses in one second, " + f.usual + " in a usual one");
         if (f.driven != null) why.push("page drove only " + spell(f.driven) + " since the last PB");
         if (f.tries != null) why.push("page counted no attempts since the last PB");
         return why.join(", ");
@@ -1522,6 +1534,7 @@
         const down = new Map();
         const lengths = [];
         const changes = [];
+        const starts = [];
         let keys = "";
         for (const line of text.trim().split("\n")) {
             const [at, now = ""] = line.split(",");
@@ -1530,8 +1543,12 @@
                 // Royale tracks press reset for a few ms on every run.
                 if (k === "r" || now.includes(k) === keys.includes(k)) continue;
                 changes.push(frame);
-                if (now.includes(k)) down.set(k, frame);
-                else lengths.push(frame - down.get(k));
+                if (now.includes(k)) {
+                    down.set(k, frame);
+                    if ("wasd".includes(k)) starts.push(frame);
+                } else {
+                    lengths.push(frame - down.get(k));
+                }
             }
             keys = now;
         }
@@ -1543,7 +1560,18 @@
             while (changes[i] - changes[j] >= 1000) j++;
             busiest = Math.max(busiest, i - j + 1);
         }
+        let peak = 0;
+        const seconds = new Map();
+        for (let i = 0, j = 0; i < starts.length; i++) {
+            while (starts[i] - starts[j] >= 1000) j++;
+            peak = Math.max(peak, i - j + 1);
+            const second = Math.floor(starts[i] / 1000);
+            seconds.set(second, (seconds.get(second) || 0) + 1);
+        }
+        const perSecond = [...seconds.values()].sort((x, y) => x - y);
         return {
+            peak,
+            usual: perSecond[perSecond.length >> 1] ?? 0,
             presses: lengths.length,
             perSecond: changes.length / Math.max(frames / 1000, 0.001),
             busiest,
@@ -1561,6 +1589,161 @@
         if (s < 3600) return Math.floor(s / 60) + " min " + (s % 60) + " s";
         if (s < 86400) return Math.floor(s / 3600) + " h " + Math.floor(s / 60) % 60 + " min";
         return Math.floor(s / 86400) + " d " + Math.floor(s / 3600) % 24 + " h";
+    }
+
+    // Reopening a run costs no request; anything the owner changes clears these.
+    const checkCache = new Map();
+    const compareCache = new Map();
+
+    function keyChanges(text) {
+        return text.trim().split("\n").map((line) => {
+            const [at, keys = ""] = line.split(",");
+            return [Number(at), keys];
+        });
+    }
+
+    // How far two runs press exactly the same keys on exactly the same ms. People can't repeat that; an edited run does.
+    function sameInputs(a, b) {
+        let i = 0;
+        while (i < a.length && i < b.length && a[i][0] === b[i][0] && a[i][1] === b[i][1]) i++;
+        return { changes: i, until: i ? Math.min(a[i]?.[0] ?? Infinity, b[i]?.[0] ?? Infinity) : 0 };
+    }
+
+    function drawInputs(canvas, run, reference, scale, width) {
+        const LANES = [["w", GOOD], ["a", ACCENT], ["s", BAD], ["d", GOLD]];
+        const laneHeight = 6;
+        canvas.width = width;
+        canvas.height = (LANES.length + 1) * laneHeight;
+        const g = canvas.getContext("2d");
+        const end = (list, i, frames) => list[i + 1]?.[0] ?? frames;
+        run.changes.forEach(([at, keys], i) => {
+            const x = at * scale;
+            const w = Math.max(1, (end(run.changes, i, run.frames) - at) * scale);
+            LANES.forEach(([key, color], lane) => {
+                if (!keys.includes(key)) return;
+                g.fillStyle = color;
+                g.fillRect(x, lane * laneHeight, w, laneHeight - 1);
+            });
+        });
+        if (!reference || reference === run) return;
+        let i = -1;
+        let j = -1;
+        const a = run.changes;
+        const b = reference.changes;
+        g.fillStyle = "#ffffff";
+        for (let at = 0; at < Math.min(run.frames, reference.frames);) {
+            while (a[i + 1]?.[0] <= at) i++;
+            while (b[j + 1]?.[0] <= at) j++;
+            const next = Math.min(a[i + 1]?.[0] ?? Infinity, b[j + 1]?.[0] ?? Infinity, Math.min(run.frames, reference.frames));
+            if ((a[i]?.[1] ?? "") !== (b[j]?.[1] ?? "")) g.fillRect(at * scale, LANES.length * laneHeight, Math.max(1, (next - at) * scale), laneHeight - 1);
+            at = next;
+        }
+    }
+
+    function watchGhosts(run, picked) {
+        const panelOpen = !!ui.overlay;
+        closeCheck();
+        if (panelOpen) close();
+        const back = () => {
+            if (panelOpen) {
+                ui.tab = "anticheat";
+                open();
+            }
+            checkRun(run);
+        };
+        window.__nswsWatchRuns(picked.map((r) => ({
+            trackId: run.track, recording: r.recording, carStyle: r.carStyle, frames: r.frames,
+            nickname: (run.nickname || "Unnamed") + " " + raceTime(r.frames) + (r.rejected ? " rejected" : ""),
+        })), back).then((started) => started || back(), back);
+    }
+
+    async function compareRuns(run, info, box, button) {
+        const key = run.track + "|" + run.userId;
+        let data = compareCache.get(key);
+        if (!data) {
+            button.disabled = true;
+            box.replaceChildren(el("div", "nrc-empty", "Loading their runs…"));
+            data = await post("anticheat/runs", { track: run.track, userId: run.userId }).catch(() => null);
+            button.disabled = false;
+            if (!data) {
+                box.replaceChildren(el("div", "nrc-empty", "Couldn't load their runs."));
+                return;
+            }
+            compareCache.set(key, data);
+        }
+        const kept = new Map(data.kept.map((r) => [r.id, r]));
+        const list = info.history.map((h) => ({
+            frames: h.frames, when: h.uploaded ?? h.at, hidden: h.state === "invalid",
+            recording: kept.get(h.id)?.recording ?? (h.id === info.runId ? info.recording : null), carStyle: kept.get(h.id)?.car_style,
+        }));
+        if (!info.history.length && info.recording) list.push({ frames: run.frames, when: null, recording: info.recording });
+        for (const r of data.rejected) list.push({ frames: r.frames, when: r.last, rejected: true, recording: r.recording });
+        for (const r of list) {
+            const text = r.recording ? window.__clipRecordingClass?.deserialize(r.recording)?.inputsText() : null;
+            if (!text) continue;
+            r.text = text;
+            r.changes = keyChanges(text);
+            r.habits = inputHabits(text, r.frames);
+        }
+        list.filter((r) => r.text).slice(0, COMPARE_SHOWN).forEach((r) => (r.on = true));
+        let zoom = 1;
+
+        const render = () => {
+            box.replaceChildren();
+            const picked = list.filter((r) => r.on);
+            const reference = picked.find((r) => !r.rejected) ?? picked[0];
+            const panel = card("Compare their runs", "list", "Fastest first. Only uploaded PBs exist, and Kodub deletes a beaten run, so ones beaten before v11.42 have no replay. Same inputs: how far a run presses the same keys on the same ms as the fastest one ticked, which people can't do.");
+            panel.appendChild(table(
+                [[""], ["Time", "num"], ["Uploaded", "num"], ["Presses", "num"], ["Keys/s", "num"], ["Fastest s", "num"], ["Shortest", "num"], ["Same inputs", "num"], [""]],
+                list.map((r) => {
+                    const tick = el("input");
+                    tick.type = "checkbox";
+                    tick.checked = !!r.on;
+                    tick.disabled = !r.text;
+                    tick.addEventListener("change", () => {
+                        r.on = tick.checked;
+                        render();
+                    });
+                    const time = raceTime(r.frames) + (r.rejected ? " rejected" : r.hidden ? " hidden" : "");
+                    if (!r.text) return [tick, time, r.when ? fmt.dateTime(r.when) : "–", "No replay", "–", "–", "–", "–", ""];
+                    const same = reference && reference !== r ? sameInputs(r.changes, reference.changes) : null;
+                    const copied = el("span", null, same ? (same.until / 1000).toFixed(1) + " s, " + num(same.changes) + " keys" : "–");
+                    if (same?.changes >= SAME_INPUTS_FLAG) copied.style.color = BAD;
+                    const save = el("button", "button", "Inputs");
+                    save.style.cssText = "font-size:13px;padding:4px 12px;";
+                    save.addEventListener("click", () => saveInputs(r.recording, run.track, run.nickname, r.frames));
+                    return [tick, time, r.when ? fmt.dateTime(r.when) : "–", num(r.habits.presses), r.habits.perSecond.toFixed(1), num(r.habits.peak),
+                        r.habits.shortest != null ? r.habits.shortest + " ms" : "–", copied, save];
+                })));
+            const tools = el("div", "nrc-acts");
+            if (picked.length) {
+                const ghosts = el("button", "button", "Watch as ghosts");
+                ghosts.addEventListener("click", () => watchGhosts(run, picked));
+                tools.appendChild(ghosts);
+                tools.appendChild(toggle([[1, "1x"], [4, "4x"], [16, "16x"]], zoom, (z) => {
+                    zoom = z;
+                    render();
+                }));
+            }
+            panel.appendChild(tools);
+            if (picked.length) {
+                const longest = Math.max(...picked.map((r) => r.frames));
+                const room = Math.max(300, box.clientWidth - 60);
+                const width = Math.min(COMPARE_MAX_WIDTH, Math.ceil(room * zoom));
+                const lanes = el("div", "lanes");
+                lanes.appendChild(el("p", "nrc-sub", "Top to bottom: W green, A blue, S red, D gold. The white strip is where it differs from the fastest one ticked."));
+                for (const r of picked) {
+                    lanes.appendChild(el("div", "lane-name", raceTime(r.frames) + (r.rejected ? " rejected" : "") + (r === reference ? " (fastest ticked)" : "")));
+                    const canvas = el("canvas");
+                    drawInputs(canvas, r, reference, width / longest, width);
+                    lanes.appendChild(canvas);
+                }
+                panel.appendChild(lanes);
+            }
+            box.appendChild(panel);
+        };
+        render();
+        box.scrollIntoView({ block: "nearest" });
     }
 
     let sheet = null;
@@ -1592,6 +1775,9 @@
             if (habits.perSecond > FLAG_KEYS_PER_SECOND) add(BAD, habits.perSecond.toFixed(1) + " key changes a second. Top runs stay under 10.");
             if (habits.presses >= FLAG_MIN_PRESSES && habits.topShare >= FLAG_SAME_LENGTH_SHARE) add(BAD, Math.round(habits.topShare * 100) + "% of presses last exactly " + habits.topLength + " ms. Top runs stay at 25% or less.");
         }
+        if (habits && habits.peak >= FLAG_BURST_PRESSES && habits.peak >= FLAG_BURST_RATIO * habits.usual) {
+            add(BAD, habits.peak + " presses in one second, but " + habits.usual + " in a usual second. No ordinary run checked went above 16.");
+        }
         const self = info.run;
         if (self?.driven_ms != null && self.driven_ms < run.frames) add(BAD, "Their page drove " + spell(self.driven_ms) + " since the last PB, less than this run takes.");
         else if (self?.tries === 0) add(BAD, "Their page counted no attempts on this track since the last PB.");
@@ -1621,11 +1807,11 @@
         window.addEventListener("keydown", checkKeys, true);
 
         const token = await window.__nswsOwner.token();
-        const [info, kept, board] = await Promise.all([
+        const [info, board] = checkCache.get(run.id) ?? await Promise.all([
             post("anticheat/inspect", { id: run.id, track: run.track, userId: run.userId }).catch(() => null),
-            post("anticheat/run", { id: run.id }).catch(() => null),
             run.position ? boardAround(run, token).catch(() => null) : null,
         ]);
+        if (info) checkCache.set(run.id, [info, board]);
         if (sheet !== overlay) return;
         if (!info) {
             content.textContent = "Couldn't load this run.";
@@ -1633,7 +1819,7 @@
         }
         content.className = "";
         content.textContent = "";
-        const text = kept?.recording ? window.__clipRecordingClass?.deserialize(kept.recording)?.inputsText() : null;
+        const text = info.recording ? window.__clipRecordingClass?.deserialize(info.recording)?.inputsText() : null;
         const habits = text ? inputHabits(text, run.frames) : null;
 
         const flags = checkFlags(run, info, habits);
@@ -1668,6 +1854,7 @@
         }
         if (habits) {
             tiles.appendChild(tile("Key changes a second", habits.perSecond.toFixed(1), "busiest second: " + num(habits.busiest)));
+            tiles.appendChild(tile("Fastest second", num(habits.peak) + " presses", "a usual second: " + num(habits.usual)));
             tiles.appendChild(tile("Shortest press", habits.shortest != null ? habits.shortest + " ms" : "–", num(habits.fast) + " under " + FLAG_FAST_PRESS_MS + " ms"));
             tiles.appendChild(tile("Commonest press", habits.topLength + " ms", Math.round(habits.topShare * 100) + "% of " + num(habits.presses)));
         } else {
@@ -1693,8 +1880,14 @@
         say.style.margin = "10px 0 0";
         if (text) {
             const save = el("button", "button", "Export inputs");
-            save.addEventListener("click", () => saveInputs(kept.recording, run.track, run.nickname, run.frames));
+            save.addEventListener("click", () => saveInputs(info.recording, run.track, run.nickname, run.frames));
             acts.appendChild(save);
+        }
+        const compareBox = el("div", "nrc-compare");
+        if (run.userId) {
+            const compare = el("button", "button", "Compare runs");
+            compare.addEventListener("click", () => compareRuns(run, info, compareBox, compare));
+            acts.appendChild(compare);
         }
         const week = window.__nswsTrackWeek?.(run.track);
         if (week != null && !info.owner) {
@@ -1709,6 +1902,8 @@
                         return;
                     }
                     hide.textContent = "Hidden";
+                    checkCache.clear();
+                    compareCache.clear();
                     document.querySelector('[data-rec="' + run.id + '"]')?.remove();
                     say.textContent = older ? "Hidden. They're back on " + raceTime(older.frames) + ". Everyone sees it within 5 minutes; Allow on Race Control's Anti-cheat tab undoes it." : "Hidden. No earlier PB on record, so they're off this board until they set a new time. Allow on Race Control's Anti-cheat tab undoes it.";
                     if (ui.tab === "anticheat" && ui.overlay) loadAnti();
@@ -1727,6 +1922,7 @@
                         return;
                     }
                     banned = !banned;
+                    checkCache.clear();
                     ban.textContent = banned ? "Lift track ban" : "Ban from track";
                     say.textContent = banned ? "Banned from this track under any name. Everyone sees it within 5 minutes." : "Track ban lifted.";
                     if (ui.tab === "anticheat" && ui.overlay) loadAnti();
@@ -1739,7 +1935,7 @@
         const shut = el("button", "button", "Close");
         shut.addEventListener("click", closeCheck);
         acts.appendChild(shut);
-        content.append(acts, say);
+        content.append(acts, say, compareBox);
     }
 
     function buildRunFinder() {
