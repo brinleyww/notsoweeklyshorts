@@ -1287,7 +1287,8 @@ window.__nswsAutoGhostNote = function(trackId) {
             return null;
         }
     }
-    function createClip() {
+    // A clip saved on purpose; auto-clips leave the clipboard alone (one per finish would also use up the hourly link limit).
+    function createClip(copyLink) {
         if (runHasClip) {
             showRunAlreadyClippedNotification();
             return;
@@ -1338,7 +1339,8 @@ window.__nswsAutoGhostNote = function(trackId) {
         if (localAddClip(clip)) {
             runHasClip = true;
             window.__nswsTraffic?.event("clips");
-            showClipSavedNotification();
+            const saved = showClipSavedNotification();
+            if (copyLink) _copyClipLink(clip, saved);
             syncClips().catch(() => {});
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
@@ -1380,7 +1382,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         }
         if (localAddClip(clip)) {
             window.__nswsTraffic?.event("clips");
-            showClipSavedNotification();
+            _copyClipLink(clip, showClipSavedNotification());
             syncClips().catch(() => {});
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
@@ -1407,7 +1409,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         if (await _findDuplicateClip(clip)) return "duplicate";
         if (!localAddClip(clip)) return false;
         window.__nswsTraffic?.event("clips");
-        showClipSavedNotification();
+        _copyClipLink(clip, showClipSavedNotification());
         syncClips().catch(() => {});
         return true;
     };
@@ -1424,6 +1426,33 @@ window.__nswsAutoGhostNote = function(trackId) {
             el.classList.remove("show");
             setTimeout(() => el.remove(), 300);
         }, 1800);
+        return el;
+    }
+    // Safari and Firefox only allow clipboard access during the key press or click, and the link
+    // comes back from the proxy later, so the clipboard is handed a promise of it.
+    function _copyClipLink(clip, notification) {
+        const link = Promise.resolve().then(() => window.__nswsAccounts.call("clips/share", {
+            userToken: _clipToken(),
+            code: toClipExport(clip)
+        })).then(r => _clipLink([r.id]));
+        const blob = link.then(text => new Blob([text], {
+            type: "text/plain"
+        }));
+        // The clipboard may never read it, and an unhandled rejection opens the game's error screen.
+        blob.catch(() => {});
+        let copied;
+        try {
+            copied = navigator.clipboard.write([new ClipboardItem({
+                "text/plain": blob
+            })]);
+        } catch (e) {
+            copied = link.then(text => navigator.clipboard.writeText(text));
+        }
+        const report = text => {
+            notification.remove();
+            showClipSavedNotification(text);
+        };
+        copied.then(() => report("📹 Clip saved, link copied!"), () => report("📹 Clip saved, but its link wasn't copied"));
     }
     function showRunAlreadyClippedNotification() {
         injectClipCSS();
@@ -2263,7 +2292,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             if (watchSession) {
                 if (!e.repeat) clipWatchedRun();
             } else {
-                createClip();
+                createClip(true);
             }
         }
     });
