@@ -57091,6 +57091,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const chat = window.__nswsChat;
                 const chatBtn = document.createElement("button");
                 chatBtn.className = "button";
+                chatBtn.id = "nsws-chat-toggle";
                 const refreshChatBtn = () => {
                     const on = chat.isEnabled();
                     chatBtn.classList.toggle("disabled", !on);
