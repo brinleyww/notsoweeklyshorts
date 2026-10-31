@@ -11626,6 +11626,61 @@ window.__nswsAutoGhostNote = function(trackId) {
               , kodubScroll = 0
               , trackMode = "nsws"
               , applyTrackMode;
+            const SEARCH_NUMBERS = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10" };
+            for (const word of Object.keys(SEARCH_NUMBERS))
+                SEARCH_NUMBERS[SEARCH_NUMBERS[word]] = word;
+            const SEARCH_FILLER = new Set(["by", "the", "of", "track", "tracks", "map", "maps"]);
+            // NFKD also turns styled names like 𝔚𝔦𝔫 into plain letters.
+            const searchWords = e => String(e ?? "").normalize("NFKD").toLowerCase().replace(/\p{M}/gu, "").replace(/['\u2019`]/g, "").split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+            const searchQuery = e => {
+                const labels = []
+                  , words = searchWords(e).join(" ").replace(/(?:^| )(w|wk|week|part) ?(\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?= |$)/g, (_, kind, n) => (labels.push(("part" == kind ? "part " : "week ") + (/\d/.test(n) ? n : SEARCH_NUMBERS[n])), " ")).split(" ").filter(Boolean)
+                  , kept = words.filter(word => !SEARCH_FILLER.has(word));
+                return [...labels, ...(kept.length || labels.length ? kept : words)]
+            };
+            const searchIndex = (name, author, labels) => {
+                const title = searchWords(name.replace(/^\s*\d+\s*-\s*/, ""))
+                  , by = searchWords(author)
+                  , words = [...searchWords(name), ...by, ...labels.flatMap(searchWords)];
+                return {
+                    words: [...words, title.join("")],
+                    text: " " + words.join(" ") + " ",
+                    joined: " " + title.join("") + " " + by.join("") + " ",
+                    initials: title.map(word => word[0]).join("")
+                }
+            };
+            const searchWordHit = (index, word) => /^\d+$| /.test(word) ? index.text.includes(" " + word + " ") : 1 == word.length ? index.text.includes(" " + word) : index.text.includes(word) || index.joined.includes(word);
+            const searchHit = (index, word) => searchWordHit(index, word) || word in SEARCH_NUMBERS && searchWordHit(index, SEARCH_NUMBERS[word]);
+            // Edits between a typed word and the best part of x. Short words must line up with the start of x, or they'd match almost anything.
+            const searchTypos = (word, x) => {
+                let before = []
+                  , last = Array.from({ length: x.length + 1 }, (_, b) => word.length >= 5 ? 0 : b);
+                for (let a = 1; a <= word.length; a++) {
+                    const row = [a];
+                    for (let b = 1; b <= x.length; b++) {
+                        row[b] = Math.min(last[b] + 1, row[b - 1] + 1, last[b - 1] + (word[a - 1] == x[b - 1] ? 0 : 1));
+                        if (a > 1 && b > 1 && word[a - 1] == x[b - 2] && word[a - 2] == x[b - 1])
+                            row[b] = Math.min(row[b], before[b - 2] + 1)
+                    }
+                    before = last,
+                    last = row
+                }
+                return Math.min(...last)
+            };
+            const searchSkips = (word, x) => {
+                let at = 0;
+                for (const letter of x)
+                    letter == word[at] && at++;
+                return at == word.length
+            };
+            const searchClose = (index, word) => {
+                if (/^\d+$/.test(word))
+                    return index.text.includes(word);
+                if (word.length < 2 || word.includes(" "))
+                    return !1;
+                const typos = word.length < 3 ? 0 : word.length < 6 ? 1 : 2;
+                return index.initials.startsWith(word) || index.words.some(x => typos > 0 && searchTypos(word, x) <= typos || word.length >= 4 && word[0] == x[0] && searchSkips(word, x))
+            };
             // Kodub's community tracks use their own tab, but play as "community" so leaderboards work as in the stock game.
             // Opening a track also leaves the list in that track's mode for when the player comes back.
             const playCategory = e => {
@@ -11840,7 +11895,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     trackData: a,
                     trackId: s,
                     thumbnail: o,
-                    buttonContainer: c
+                    buttonContainer: c,
+                    search: searchIndex(n.name, n.author, ["string" == typeof t ? t : "", TrackEnvironment[r], i.get(this, b, "f").get(TrackEnvironment[r]), "official" == e ? "official" : "kodub" == e ? "community" : ""])
                 })
             }
             ,
@@ -11865,9 +11921,15 @@ window.__nswsAutoGhostNote = function(trackId) {
             }
             ,
             J = function() {
-                const e = i.get(this, G, "f").value.trim().toLowerCase();
-                for (const t of i.get(this, B, "f"))
-                    t.trackMetadata.name.toLowerCase().includes(e) || t.trackMetadata.author?.toLowerCase().includes(e) ? t.buttonContainer.style.display = "" : t.buttonContainer.style.display = "none";
+                const query = searchQuery(i.get(this, G, "f").value);
+                // Typo-tolerant matches only show when nothing in that mode matches outright.
+                for (const pool of [["official", "kodub"], ["community"], ["custom"]]) {
+                    const tracks = i.get(this, B, "f").filter((t => pool.includes(t.category)))
+                      , exact = tracks.filter((t => query.every((word => searchHit(t.search, word)))))
+                      , shown = new Set(exact.length ? exact : tracks.filter((t => query.every((word => searchHit(t.search, word) || searchClose(t.search, word))))));
+                    for (const t of tracks)
+                        t.buttonContainer.style.display = shown.has(t) ? "" : "none"
+                }
                 for (const e of ["official", "community", "custom", "kodub"]) {
                     let t;
                     switch (e) {
