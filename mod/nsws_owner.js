@@ -2841,17 +2841,19 @@
         ui.bansNoteBox.textContent = ui.bansNote || "";
         const list = ui.bansListBox;
         list.textContent = "";
-        const c = card("Banned", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops.");
+        const c = card("Banned", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names are off every board and all standings until the ban ends.");
         if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));
-        else c.appendChild(table([["Address"], ["Player", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
+        else c.appendChild(table([["Address"], ["Player", "name"], ["Hidden names", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
             const lift = el("button", "button", "Unban");
             lift.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
             lift.addEventListener("click", () => changeBans("ipban/unban", { hash: b.hash }, "Unbanned. Other server copies pick it up within a few minutes."));
             const reason = el("div", null, b.reason || "");
             reason.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
-            return [b.hash.slice(0, 8), b.who || "", reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
+            const hidden = el("div", null, (b.names ?? []).join(", "));
+            hidden.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
+            return [b.hash.slice(0, 8), b.who || "", hidden, reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
         })));
         list.appendChild(c);
     }

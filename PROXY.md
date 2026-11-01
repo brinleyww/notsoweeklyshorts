@@ -909,6 +909,12 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 - **Ban message:** optional, up to 200 characters, from the Bans tab or the Moderate menu. It is saved with the ban
   and copied into the KV list (`[until, message]`), so a banned player sees it on the ban screen, within a few
   minutes like the ban itself. To change one, unban and ban again.
+- **Their runs:** the ban saves every name its address's sessions used (plus the name it was made on, up to 50) and
+  copies them into the KV list (`[until, message, names]`). While it lasts, the Worker adds those names to
+  `cfg.banned`, so they leave boards, ranks and live standings like `BANNED_NICKNAMES`, and the runs come back when it
+  ends. Locked standings are static files, so `/nsws/late` lists the names and the page takes them out. Boards match on
+  nickname, so a new name from another address isn't caught, and a beat's nickname is only the page's word.
+  `PUBLIC_NICKNAMES` are never hidden this way. Freezing a week during a ban leaves that player out of its file for good.
 - **The owner:** can't ban their own address or their own message. A request with the owner's key passes, and
   `OWNER_ROUTE` skips the check on Race Control's routes, so the owner can lift a ban from a banned network.
 - **Not covered:** a cup socket that is already open keeps running until it drops (only new ones are refused). A VPN

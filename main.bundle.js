@@ -57208,11 +57208,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 .then(r => r.ok ? r.json() : null).catch(() => null);
                             if (stCurrentWeek !== week) return;
                             if (frozen && frozen.boards) {
-                                const late = frozen.runs ? await stFetchLate(week) : null;
+                                const late = await stFetchLate(week);
                                 if (stCurrentWeek !== week) return;
+                                const banned = new Set(late?.banned ?? []);
                                 const maps = LB_TRACKS.map(t => {
                                     const m = {};
-                                    stLockedBoard(frozen, t.id, late).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
+                                    stLockedBoard(frozen, t.id, late).filter(nm => !banned.has((nm || "").trim().toLowerCase())).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
                                     return m;
                                 });
                                 const sorted = stTotals(maps);

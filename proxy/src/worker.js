@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, readBanReason, ipBanEntry } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, TYPED_IP_BAN, readBanReason, ipBanEntry } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY, REVERT_ID_BASE } from "./anticheat.js";
 import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
@@ -322,6 +322,15 @@ async function ipBanOf(request, env) {
     const [until, reason = null] = Array.isArray(entry) ? entry : [entry];
     if (until && until <= Date.now()) return null;
     return { until: until || null, reason };
+}
+
+// Every name seen on a banned address leaves the boards while the ban lasts. PUBLIC_NICKNAMES set the medal
+// times, so they stay even if the owner once played from that address.
+async function hideIpBannedNames(cfg, env) {
+    for (const entry of Object.values(await currentIpBans(env))) {
+        if (!Array.isArray(entry) || (entry[0] && entry[0] <= Date.now())) continue;
+        for (const name of (entry[2] ?? []).map(normalizeNickname)) if (!cfg.publicNicknames.has(name)) cfg.banned.add(name);
+    }
 }
 
 // Same shape as a real track id, but nobody without TRACK_SALT can work it out.
@@ -807,7 +816,9 @@ async function handleLate(url, env, cfg, origin) {
             .map(([, tie, at, nickname, frames]) => ({ nickname: censor(nickname), frames, at, tie }));
         if (runs.length) tracks[id] = runs;
     }
-    return new Response(JSON.stringify({ week, tracks }), {
+    // Locked standings are static files, so the page takes banned names out itself. Names in them were censored.
+    const banned = [...new Set([...cfg.banned].flatMap((name) => [name, normalizeNickname(censor(name))]))];
+    return new Response(JSON.stringify({ week, tracks, banned }), {
         headers: {
             "Content-Type": "application/json; charset=utf-8",
             "Cache-Control": "public, max-age=" + LATE_CACHE_S,
@@ -1510,11 +1521,12 @@ async function handleIpBans(request, url, env, stub, body, origin) {
         if (!/^[0-9a-f]{16}$/.test(hash ?? "")) return plain(400, "Bad request", origin);
         if (hash === await ipHash(request.headers.get("CF-Connecting-IP"))) return json({ error: "self" }, origin);
         const until = body.days ? Date.now() + body.days * 86_400_000 : null;
-        const who = typed ? "Typed address" : typeof body.who === "string" ? body.who.slice(0, 64) : null;
+        const who = typed ? TYPED_IP_BAN : typeof body.who === "string" ? body.who.slice(0, 64) : null;
         const reason = readBanReason(body.reason);
         const result = await stub.banIp(hash, until, who, reason);
         await chat?.blockIp(hash, until);
-        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason) };
+        const names = result.bans.find((b) => b.hash === hash)?.names;
+        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason, names) };
         return json(result, origin);
     }
     if (sub === "/unban") {
@@ -1889,6 +1901,7 @@ export default {
             if (ban && !(await carriesOwnerKey(request, url, cfg))) {
                 return json({ banned: true, until: ban.until, reason: ban.reason }, request.headers.get("Origin") || "*", 403);
             }
+            await hideIpBannedNames(cfg, env);
         }
 
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {

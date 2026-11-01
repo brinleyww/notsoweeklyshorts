@@ -6,17 +6,19 @@
 import { DurableObject } from "cloudflare:workers";
 
 // The Worker reads this list on every request, so it lives in KV: { <address hash>: until, or 0 for good }.
-// A ban with a message is [until, message] instead.
+// A ban with a message or names is [until, message, names] instead.
 export const IP_BANS_KEY = "ip-bans";
 // 0 = for good.
 export const IP_BAN_DAYS = [1, 7, 30, 0];
+export const TYPED_IP_BAN = "Typed address";
+const IP_BAN_NAMES = 50;
 
 export function readBanReason(value) {
     return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
 }
 
-export function ipBanEntry(until, reason) {
-    return reason ? [until ?? 0, reason] : until ?? 0;
+export function ipBanEntry(until, reason, names) {
+    return reason || names?.length ? [until ?? 0, reason ?? null, names ?? []] : until ?? 0;
 }
 
 // Everything is summed into 10-minute buckets: `t` is epoch seconds / BUCKET_S.
@@ -243,6 +245,20 @@ export class TrafficStats extends DurableObject {
         this.sql.exec("CREATE TABLE IF NOT EXISTS ip_bans (ip TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER, who TEXT)");
         if (!this.sql.exec("PRAGMA table_info(ip_bans)").toArray().some((c) => c.name === "reason"))
             this.sql.exec("ALTER TABLE ip_bans ADD COLUMN reason TEXT");
+        if (!this.sql.exec("PRAGMA table_info(ip_bans)").toArray().some((c) => c.name === "names")) {
+            this.sql.exec("ALTER TABLE ip_bans ADD COLUMN names TEXT");
+            const old = this.sql.exec("SELECT ip, who FROM ip_bans").toArray();
+            for (const b of old) this.sql.exec("UPDATE ip_bans SET names = ? WHERE ip = ?", JSON.stringify(this.ipBanNames(b.ip, b.who)), b.ip);
+            if (old.length) this.ctx.waitUntil(this.publishIpBans());
+        }
+    }
+
+    // Kept with the ban rather than looked up later: the address opens no new sessions while banned.
+    ipBanNames(hash, who) {
+        const names = this.sql.exec(`SELECT nickname FROM sessions WHERE ip = ? AND nickname IS NOT NULL
+            GROUP BY nickname COLLATE NOCASE ORDER BY MAX(last) DESC LIMIT ?`, hash, IP_BAN_NAMES).toArray().map((r) => r.nickname);
+        if (who && who !== TYPED_IP_BAN && !names.some((n) => n.toLowerCase() === who.toLowerCase())) names.unshift(who);
+        return names;
     }
 
     // Every address this nickname opened the site from, newest first. Runs through every session that has
@@ -259,17 +275,18 @@ export class TrafficStats extends DurableObject {
 
     ipBans() {
         this.sql.exec("DELETE FROM ip_bans WHERE until IS NOT NULL AND until <= ?", Date.now());
-        return { bans: this.sql.exec("SELECT ip AS hash, at, until, who, reason FROM ip_bans ORDER BY at DESC").toArray() };
+        const bans = this.sql.exec("SELECT ip AS hash, at, until, who, reason, names FROM ip_bans ORDER BY at DESC").toArray();
+        return { bans: bans.map((b) => ({ ...b, names: JSON.parse(b.names ?? "[]") })) };
     }
 
     async publishIpBans() {
         const { bans } = this.ipBans();
-        if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(bans.map((b) => [b.hash, ipBanEntry(b.until, b.reason)]))));
+        if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(bans.map((b) => [b.hash, ipBanEntry(b.until, b.reason, b.names)]))));
         return { bans };
     }
 
     async banIp(hash, until, who, reason) {
-        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who, reason) VALUES (?, ?, ?, ?, ?)", hash, Date.now(), until, who, reason);
+        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who, reason, names) VALUES (?, ?, ?, ?, ?, ?)", hash, Date.now(), until, who, reason, JSON.stringify(this.ipBanNames(hash, who)));
         return this.publishIpBans();
     }
 
