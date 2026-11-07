@@ -10326,7 +10326,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         }
                         ));
                         l.set(this, ne, e.id, "f"),
-                        l.set(this, ie, e.carState, "f")
+                        l.set(this, ie, e.carState, "f"),
+                        self.TM?.water?.track(this, h)
                     } else
                         l.set(this, ie, {
                             frames: 0,
@@ -10428,7 +10429,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.get(this, G, "m", Oe).call(this),
                     l.get(this, Ae, "f").scene.remove(l.get(this, X, "f").camera),
                     l.get(this, Ae, "f").scene.remove(l.get(this, Y, "f").camera),
-                    l.get(this, De, "f")?.dispose();
+                    l.get(this, De, "f")?.dispose(),
+                    self.TM?.water?.dispose(this);
                     for (const e of l.get(this, Le, "f"))
                         e.dispose();
                     l.get(this, Le, "f").length = 0,
@@ -10718,6 +10720,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     if (this.__rocketFx && window.__nswsRocketFx?.update(this, e),
                     this.__audioCulled || l.get(this, G, "m", Xe).call(this),
                     l.get(this, De, "f")?.update(e),
+                    self.TM?.water && self.__nswsTMThree && self.TM.water.update(this, l.get(this, Ae, "f"), e, l.get(this, ie, "f"), self.__nswsTMThree),
                     null != l.get(this, be, "f")) {
                         const e = this.getPosition()
                           , t = new THREE.Vector3(0,1,0).applyQuaternion(this.getQuaternion())
@@ -59524,16 +59527,22 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                       , palettes = new Map(e.colors.map((t => [t.id, t])));
                     n.colors.build = t => {
-                        const {pos: i, col: r} = self.TM.renderArrays(e.id, palettes.get(t).colors, (e => {
+                        const {pos: i, col: r, groups: g} = self.TM.renderArrays(e.id, palettes.get(t).colors, (e => {
                             const t = new THREE.Color(e);
                             return [t.r, t.g, t.b]
                         }
                         ))
                           , a = new THREE.BufferGeometry;
-                        return a.setAttribute("position", new THREE.BufferAttribute(i,3)),
+                        a.setAttribute("position", new THREE.BufferAttribute(i,3)),
                         a.setAttribute("color", new THREE.BufferAttribute(r,3)),
-                        a.computeVertexNormals(),
-                        new THREE.Mesh(BufferGeometryUtils.mergeVertices(a),this.__tmMaterial)
+                        a.computeVertexNormals();
+                        // Water parts come with groups ([first vertex, count, material]) for tm_water.js's see-through material.
+                        const q = BufferGeometryUtils.mergeVertices(a)
+                          , water = g && self.TM.water && self.__nswsTMThree ? self.TM.water.material(self.__nswsTMThree) : null;
+                        if (water)
+                            for (const [s, c, k] of g)
+                                q.addGroup(s, c, k);
+                        return new THREE.Mesh(q, water ? [this.__tmMaterial, water] : this.__tmMaterial)
                     }
                     ,
                     C.get(this, ld, "f").set(e.id, n)
@@ -63134,6 +63143,21 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         throw new Error("Couldn't load " + b + "tm_parts.js");
                     if (!self.TM && (await script(b + "tm_runtime.js"), !self.TM))
                         throw new Error("Couldn't load " + b + "tm_runtime.js");
+                    // tm_water.js only draws (physics is in tm_runtime.js) and reaches three.js by the Better Editor's short export names.
+                    if (!self.TM.water) {
+                        self.__nswsTMThree = {
+                            _4j: THREE.MeshStandardMaterial,
+                            LoY: THREE.BufferGeometry,
+                            THS: THREE.BufferAttribute,
+                            ONl: THREE.Points,
+                            BH$: THREE.PointsMaterial,
+                            bdM: THREE.PlaneGeometry,
+                            eaF: THREE.Mesh,
+                            gPd: THREE.Texture,
+                            V9B: THREE.MeshBasicMaterial
+                        };
+                        await script(b + "tm_water.js").catch((e => console.warn(e)))
+                    }
                     await u;
                     await self.TM.load()
                 };
