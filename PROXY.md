@@ -925,8 +925,10 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
   ban reaches the other instances within a few minutes, and bans keep working on a bad day. If KV can't be read the
   instance keeps its last list. The global `ChatRoom` has its own `ip_blocks` copy, which takes effect at once, so a
   kicked player can't reconnect through an instance that hasn't heard yet.
-- **Finding the address:** Race Control -> Bans looks a nickname up in `sessions.ip` and shows the other names on
-  that address, with a warning past 3 browsers (probably a school or workplace). The chat's Moderate menu uses
+- **Finding the address:** Race Control -> Bans -> "Find a player" searches names like the Tags tab (any part of any
+  name an account was seen with), then looks each of that account's names up in `sessions.ip` and lists the addresses
+  with the other names on them and a warning past 3 browsers (probably a school or workplace). An address shows as the
+  first 8 characters of its hash, never an IP, so it is banned from its row; "Ban an address" is only for a real IP. The chat's Moderate menu uses
   `messages.ip`, or the sender's open socket for older messages. Visits and messages from before this feature have
   no hash. Beats name their own nickname, so a lookup is only as honest as the page that sent it.
 - **Cost:** `sessions_ip` indexes only `ip`, one row written per visit. Don't add `nickname` to it: every beat's
@@ -938,8 +940,14 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 - **Their runs:** the ban saves every name its address's sessions used (plus the name it was made on, up to 50) and
   copies them into the KV list (`[until, message, names]`). While it lasts, the Worker adds those names to
   `cfg.banned`, so they leave boards, ranks and live standings like `BANNED_NICKNAMES`, and the runs come back when it
-  ends. Locked standings are static files, so `/nsws/late` lists the names and the page takes them out. Boards match on
-  nickname, so a new name from another address isn't caught, and a beat's nickname is only the page's word.
+  ends. Locked standings are static files, so `/nsws/late` lists the names and the page takes them out. A beat's
+  nickname is only the page's word.
+- **Renames:** names alone missed a player who renamed (Hiksi came back as Simo_900, 2026-11-07), so each ban also
+  keeps the accounts that hold its names in `Accounts` (`ip_bans.users`, KV `[until, message, names, accounts]`,
+  accounts as `[userId, the name that found it, its other names]`). The Worker hides those userIds under any name, and
+  their other names for locked standings; an account found through a `PUBLIC_NICKNAMES` name, or the owner's, is
+  skipped. Bans from before this get their accounts when `TrafficStats` next wakes (and again on each wake while
+  `Accounts` can't be reached). A name `Accounts` never saw finds no account.
   `PUBLIC_NICKNAMES` are never hidden this way. Freezing a week during a ban leaves that player out of its file for good.
 - **The owner:** can't ban their own address or their own message. A request with the owner's key passes, and
   `OWNER_ROUTE` skips the check on Race Control's routes, so the owner can lift a ban from a banned network.
@@ -953,7 +961,7 @@ standing (live and locked), its uploads get `403 {"banned": true, "account": tru
 and the page puts up the ban screen ("This account is banned"). **Chat ban:** it only can't post, react, edit or send
 files in the chat. Under either, the account can't take another name and the page won't rename or delete the profile.
 
-- **Where:** Race Control -> Bans -> "Ban an account" (exact name, or a 64-character user id), or the chat's Moderate
+- **Where:** Race Control -> Bans -> "Find a player" (any part of any name, or a 64-character user id), or the chat's Moderate
   menu (Chat ban... / Ban account...), which finds the account through `chat_links`, so a chat that was never linked
   to a profile can't be banned this way. Same lengths and optional message as IP bans.
 - **Who holds what:** `TrafficStats.user_bans` is the list, published into the same KV value as IP bans (`ip-bans`),

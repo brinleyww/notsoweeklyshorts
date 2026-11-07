@@ -341,6 +341,12 @@ async function hideIpBannedNames(cfg, env) {
         }
         if (!Array.isArray(entry) || (entry[0] && entry[0] <= Date.now())) continue;
         for (const name of (entry[2] ?? []).map(normalizeNickname)) if (!cfg.publicNicknames.has(name)) cfg.banned.add(name);
+        // The accounts behind those names, so a new name doesn't bring them back.
+        for (const [userId, via, ...names] of entry[3] ?? []) {
+            if (cfg.publicNicknames.has(normalizeNickname(via)) || cfg.ownerUserIds.includes(userId)) continue;
+            cfg.bannedUsers.add(userId);
+            for (const name of names.map(normalizeNickname)) if (!cfg.publicNicknames.has(name)) cfg.banned.add(name);
+        }
     }
 }
 
@@ -1583,22 +1589,24 @@ async function handleIpBans(request, url, env, cfg, stub, body, origin) {
         const reason = readBanReason(body.reason);
         const result = await stub.banIp(hash, until, who, reason);
         await chat?.blockIp(hash, until);
-        const names = result.bans.find((b) => b.hash === hash)?.names;
-        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason, names) };
+        const saved = result.bans.find((b) => b.hash === hash);
+        if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason, saved?.names, saved?.users) };
         return json(result, origin);
     }
     if (sub === "/user/lookup") {
         const accountsStub = accounts(env);
         if (!accountsStub) return plain(503, "Accounts are off", origin);
         let userId = typeof body.userId === "string" ? body.userId.trim().toLowerCase() : null;
+        const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 64) : "";
         if (!HEX64.test(userId ?? "")) {
-            const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 64) : "";
             if (!nickname) return plain(400, "Bad request", origin);
             userId = (await accountsStub.lookupTags(nickname, null))?.userId ?? null;
-            if (!userId) return json({ found: null }, origin);
         }
-        const target = await accountsStub.banTarget(userId);
-        return json({ found: { userId, nickname: target.nickname, names: target.names, chats: target.uids.length } }, origin);
+        // The addresses its names opened the site from, so the same search can IP ban too.
+        const target = userId ? await accountsStub.banTarget(userId) : null;
+        const addresses = await stub.ipLookupNames(target ? [...new Set([...target.names, ...(nickname ? [nickname] : [])])] : [nickname]);
+        const found = target ? { userId, nickname: target.nickname, names: target.names, chats: target.uids.length } : null;
+        return json({ found, addresses }, origin);
     }
     if (sub === "/user/ban") {
         if (!IP_BAN_DAYS.includes(body.days) || !HEX64.test(body.userId ?? "")) return plain(400, "Bad request", origin);

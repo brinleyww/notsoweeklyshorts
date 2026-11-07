@@ -600,11 +600,6 @@
         tagsFound: null,
         tagsNote: "",
         tagsBusy: false,
-        tagsHits: null,
-        tagsHitsNote: "",
-        tagsHit: 0,
-        tagsHitsBox: null,
-        tagsInput: null,
         subs: null,
         subsError: null,
         subsFilter: "new",
@@ -2517,85 +2512,110 @@
         return out;
     }
 
-    let searchTimer = 0;
-    let searchSeq = 0;
-    function searchPlayers() {
-        clearTimeout(searchTimer);
-        const query = ui.tagsQuery.trim();
-        if (!query) {
-            searchSeq++;
-            ui.tagsHits = null;
-            ui.tagsHitsNote = "";
-            renderHits();
-            return;
-        }
-        searchTimer = setTimeout(async () => {
-            const seq = ++searchSeq;
-            try {
-                const data = await post("tagadmin/search", { query });
-                if (seq !== searchSeq || !ui.overlay) return;
-                ui.tagsHits = data.results;
-                ui.tagsHitsNote = data.results.length ? "" : "Nobody's name has those letters.";
-            } catch (err) {
-                if (seq !== searchSeq || !ui.overlay) return;
-                ui.tagsHits = [];
-                ui.tagsHitsNote = err.status === 404 ? "The Worker hasn't been deployed with search yet." : "Couldn't search. Try again in a moment.";
-            }
-            ui.tagsHit = 0;
-            renderHits();
-        }, 150);
-    }
+    // A type-ahead over every name an account has been seen with (tagadmin/search). onPick gets the chosen
+    // result ({ userId, nickname, matched, ... }); onText gets the typed text when nothing matched.
+    function playerSearch({ placeholder, query = "", onInput, onPick, onText }) {
+        const s = { query, hits: null, sel: 0, note: "", seq: 0, timer: 0 };
+        const row = el("div", "nrc-find");
+        const input = el("input");
+        input.placeholder = placeholder;
+        input.autocomplete = "off";
+        input.spellcheck = false;
+        input.value = query;
+        const go = el("button", "button", "Find");
+        const box = el("div", "nrc-hits");
 
-    function pickHit(hit) {
-        searchSeq++;
-        clearTimeout(searchTimer);
-        ui.tagsQuery = hit.nickname;
-        if (ui.tagsInput) ui.tagsInput.value = hit.nickname;
-        ui.tagsHits = null;
-        ui.tagsHitsNote = "";
-        renderHits();
-        findPlayer({ userId: hit.userId });
-    }
-
-    function renderHits() {
-        const box = ui.tagsHitsBox;
-        if (!box) return;
-        box.textContent = "";
-        if (ui.tagsHitsNote) box.appendChild(el("div", "none", ui.tagsHitsNote));
-        (ui.tagsHits || []).forEach((hit, i) => {
-            const b = el("button", "nrc-hit" + (i === ui.tagsHit ? " sel" : ""));
-            const shown = hit.matched && hit.matched !== hit.nickname;
-            b.appendChild(highlighted(hit.nickname, shown ? "" : ui.tagsQuery));
-            if (shown) {
-                const alt = el("span", "alt", "seen as ");
-                alt.appendChild(highlighted(hit.matched, ui.tagsQuery));
-                b.appendChild(alt);
-            }
-            const chips = el("span", "chips");
-            for (const id of new Set([hit.equipped, ...hit.granted].filter(Boolean))) chips.appendChild(tagChip(id));
-            b.appendChild(chips);
-            b.addEventListener("mouseenter", () => {
-                ui.tagsHit = i;
-                for (const other of box.querySelectorAll(".nrc-hit")) other.classList.toggle("sel", other === b);
+        function render() {
+            box.textContent = "";
+            if (s.note) box.appendChild(el("div", "none", s.note));
+            (s.hits || []).forEach((hit, i) => {
+                const b = el("button", "nrc-hit" + (i === s.sel ? " sel" : ""));
+                const shown = hit.matched && hit.matched !== hit.nickname;
+                b.appendChild(highlighted(hit.nickname, shown ? "" : s.query));
+                if (shown) {
+                    const alt = el("span", "alt", "seen as ");
+                    alt.appendChild(highlighted(hit.matched, s.query));
+                    b.appendChild(alt);
+                }
+                const chips = el("span", "chips");
+                for (const id of new Set([hit.equipped, ...(hit.granted ?? [])].filter(Boolean))) chips.appendChild(tagChip(id));
+                b.appendChild(chips);
+                b.addEventListener("mouseenter", () => {
+                    s.sel = i;
+                    for (const other of box.querySelectorAll(".nrc-hit")) other.classList.toggle("sel", other === b);
+                });
+                b.addEventListener("click", () => pick(hit));
+                box.appendChild(b);
             });
-            b.addEventListener("click", () => pickHit(hit));
-            box.appendChild(b);
-        });
-    }
-
-    function searchKeys(e) {
-        const hits = ui.tagsHits || [];
-        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            if (!hits.length) return;
-            e.preventDefault();
-            ui.tagsHit = (ui.tagsHit + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length;
-            renderHits();
-            ui.tagsHitsBox.querySelector(".nrc-hit.sel")?.scrollIntoView({ block: "nearest" });
-        } else if (e.key === "Enter") {
-            e.preventDefault();
-            if (hits.length) pickHit(hits[Math.min(ui.tagsHit, hits.length - 1)]);
-            else if (ui.tagsQuery.trim()) findPlayer({ nickname: ui.tagsQuery.trim() });
         }
+
+        function search() {
+            clearTimeout(s.timer);
+            const q = s.query.trim();
+            if (!q) {
+                s.seq++;
+                s.hits = null;
+                s.note = "";
+                render();
+                return;
+            }
+            s.timer = setTimeout(async () => {
+                const seq = ++s.seq;
+                try {
+                    const data = await post("tagadmin/search", { query: q });
+                    if (seq !== s.seq || !ui.overlay) return;
+                    s.hits = data.results;
+                    s.note = data.results.length ? "" : "Nobody's name has those letters.";
+                } catch (err) {
+                    if (seq !== s.seq || !ui.overlay) return;
+                    s.hits = [];
+                    s.note = err.status === 404 ? "The Worker hasn't been deployed with search yet." : "Couldn't search. Try again in a moment.";
+                }
+                s.sel = 0;
+                render();
+            }, 150);
+        }
+
+        function pick(hit) {
+            s.seq++;
+            clearTimeout(s.timer);
+            s.query = input.value = hit.nickname;
+            onInput?.(s.query);
+            s.hits = null;
+            s.note = "";
+            render();
+            onPick(hit);
+        }
+
+        function choose() {
+            const hits = s.hits || [];
+            if (hits.length) pick(hits[Math.min(s.sel, hits.length - 1)]);
+            else if (s.query.trim()) onText(s.query.trim());
+        }
+
+        input.addEventListener("input", () => {
+            s.query = input.value;
+            onInput?.(s.query);
+            search();
+        });
+        input.addEventListener("keydown", (e) => {
+            const hits = s.hits || [];
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                if (!hits.length) return;
+                e.preventDefault();
+                s.sel = (s.sel + (e.key === "ArrowDown" ? 1 : hits.length - 1)) % hits.length;
+                render();
+                box.querySelector(".nrc-hit.sel")?.scrollIntoView({ block: "nearest" });
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                choose();
+            }
+        });
+        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
+        go.addEventListener("click", choose);
+        row.append(input, go);
+        render();
+        return { row, box };
     }
 
     async function changeTags(path, extra) {
@@ -2618,30 +2638,16 @@
     function buildTags() {
         const root = el("div");
         const find = card("Find a player", "list", "Type any part of a player's name (or a name they used before) to give or take Discord tags, or to add bonus points.");
-        const row = el("div", "nrc-find");
-        const input = el("input");
-        input.placeholder = "A few letters of their name";
-        input.autocomplete = "off";
-        input.spellcheck = false;
-        input.value = ui.tagsQuery;
-        input.addEventListener("input", () => {
-            ui.tagsQuery = input.value;
-            searchPlayers();
+        const search = playerSearch({
+            placeholder: "A few letters of their name",
+            query: ui.tagsQuery,
+            onInput: (q) => {
+                ui.tagsQuery = q;
+            },
+            onPick: (hit) => findPlayer({ userId: hit.userId }),
+            onText: (q) => findPlayer({ nickname: q }),
         });
-        input.addEventListener("keydown", searchKeys);
-        for (const type of ["keydown", "keyup", "keypress"]) input.addEventListener(type, (e) => e.stopPropagation());
-        ui.tagsInput = input;
-        const go = el("button", "button", "Find");
-        go.addEventListener("click", () => {
-            const hits = ui.tagsHits || [];
-            if (hits.length) pickHit(hits[Math.min(ui.tagsHit, hits.length - 1)]);
-            else if (ui.tagsQuery.trim()) findPlayer({ nickname: ui.tagsQuery.trim() });
-        });
-        row.append(input, go);
-        find.appendChild(row);
-        ui.tagsHitsBox = el("div", "nrc-hits");
-        find.appendChild(ui.tagsHitsBox);
-        renderHits();
+        find.append(search.row, search.box);
         ui.tagsWho = el("div", "nrc-who");
         find.appendChild(ui.tagsWho);
         root.appendChild(find);
@@ -2831,33 +2837,7 @@
         messageRow.appendChild(ui.bansReason);
         message.appendChild(messageRow);
 
-        const find = card("Find a player", "list", "Their exact name. This lists the addresses they opened the site from. Only visits made after IP bans went live have one.");
-        const row = el("div", "nrc-find");
-        const input = banInput("Nickname");
-        const go = el("button", "button", "Find");
-        const search = async () => {
-            const nickname = input.value.trim();
-            if (!nickname) return;
-            ui.bansNote = "Looking…";
-            renderBanLists();
-            try {
-                ui.bansFound = { nickname, ...(await post("ipban/lookup", { nickname })) };
-                ui.bansNote = "";
-            } catch {
-                ui.bansNote = "Couldn't look that up. Try again in a moment.";
-            }
-            renderBanLists();
-        };
-        go.addEventListener("click", search);
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") search();
-        });
-        row.append(input, go);
-        find.appendChild(row);
-        ui.bansFoundBox = el("div");
-        find.appendChild(ui.bansFoundBox);
-
-        const typed = card("Ban an address", "list", "Type an IP address if you already know it. The list below never shows it again, only a short id.");
+        const typed = card("Ban an address", "list", "Only for a real IP address you already know. The address ids shown on this tab aren't IPs: ban those with the buttons on their row.");
         const typedInput = banInput("IP address");
         const typedRow = el("div", "nrc-find");
         typedRow.appendChild(typedInput);
@@ -2868,65 +2848,43 @@
             return { ip };
         }));
 
-        const account = card("Ban an account", "list", "Their exact name or their user id. An account ban hides their runs from every board and all standings and stops uploads; a chat ban only stops them posting in the chat. Either way they can't rename or delete the profile while it lasts.");
-        const accountRow = el("div", "nrc-find");
-        const accountInput = banInput("Nickname or user id");
-        const accountGo = el("button", "button", "Find");
-        const findAccount = async () => {
-            const typedAccount = accountInput.value.trim();
-            if (!typedAccount) return;
+        const account = card("Find a player", "list", "Type any part of their name (or a name they used before), or paste their user id. Ban their account, or any address it played from. An account ban hides their runs from every board and all standings and stops uploads; a chat ban only stops them posting in the chat. Either way they can't rename or delete the profile while it lasts.");
+        const findAccount = async (query) => {
             ui.bansNote = "Looking…";
             renderBanLists();
             try {
-                const query = /^[0-9a-f]{64}$/i.test(typedAccount) ? { userId: typedAccount.toLowerCase() } : { nickname: typedAccount };
-                ui.bansAccount = { typed: typedAccount, ...(await post("ipban/user/lookup", query)) };
+                ui.bansAccount = { typed: query.nickname ?? null, ...(await post("ipban/user/lookup", query)) };
                 ui.bansNote = "";
             } catch {
                 ui.bansNote = "Couldn't look that up. Try again in a moment.";
             }
             renderBanLists();
         };
-        accountGo.addEventListener("click", findAccount);
-        accountInput.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") findAccount();
+        const accountSearch = playerSearch({
+            placeholder: "A few letters of their name, or their user id",
+            onPick: (hit) => findAccount({ userId: hit.userId }),
+            onText: (q) => findAccount(/^[0-9a-f]{64}$/i.test(q) ? { userId: q.toLowerCase() } : { nickname: q }),
         });
-        accountRow.append(accountInput, accountGo);
-        account.appendChild(accountRow);
+        account.append(accountSearch.row, accountSearch.box);
         ui.bansAccountBox = el("div");
         account.appendChild(ui.bansAccountBox);
 
         ui.bansNoteBox = el("div", "nrc-sub");
         ui.bansListBox = el("div");
-        root.append(message, account, find, typed, ui.bansNoteBox, ui.bansListBox);
+        root.append(message, account, typed, ui.bansNoteBox, ui.bansListBox);
         return root;
     }
 
     function renderBanLists() {
         if (!ui.bansRoot) return;
         const banned = new Map((ui.bans?.bans ?? []).map((b) => [b.hash, b]));
-        const found = ui.bansFoundBox;
-        found.textContent = "";
-        if (ui.bansFound && !ui.bansFound.matches.length) {
-            found.appendChild(el("div", "nrc-empty", "No address saved for that name."));
-        } else if (ui.bansFound) {
-            found.appendChild(table([["Address"], ["Last seen", "num"], ["Visits", "num"], ["Where"], ["Names on it", "name"], ["Ban"]], ui.bansFound.matches.map((m) => {
-                const names = el("div", null, m.names.join(", "));
-                names.style.whiteSpace = "normal";
-                if (m.people > 3) {
-                    const warn = el("div", null, m.people + " browsers use this address. It may be a school or workplace.");
-                    warn.style.color = GOLD;
-                    names.appendChild(warn);
-                }
-                const action = banned.has(m.hash) ? el("span", null, "Banned") : banButtons(() => ({ hash: m.hash, who: ui.bansFound.nickname }));
-                return [m.hash.slice(0, 8), fmt.dateTime(m.last), num(m.visits), [m.country, m.device, m.browser].filter(Boolean).join(" · "), names, action];
-            })));
-        }
         const users = new Map((ui.bans?.users ?? []).map((b) => [b.userId, b]));
         const accountBox = ui.bansAccountBox;
         accountBox.textContent = "";
         const target = ui.bansAccount?.found;
-        if (ui.bansAccount && !target) {
-            accountBox.appendChild(el("div", "nrc-empty", "No account holds that name."));
+        const addresses = ui.bansAccount?.addresses ?? [];
+        if (ui.bansAccount && !target && !addresses.length) {
+            accountBox.appendChild(el("div", "nrc-empty", "Nobody has that name. Pick one from the list as you type."));
         } else if (target) {
             const names = el("div", null, target.names.join(", "));
             names.style.whiteSpace = "normal";
@@ -2937,6 +2895,26 @@
             action.append(accountBanButtons(target.userId, false), accountBanButtons(target.userId, true));
             accountBox.appendChild(table([["Account"], ["Player", "name"], ["Names", "name"], ["Chats", "num"], [""]],
                 [[target.userId.slice(0, 8), target.nickname || "", names, num(target.chats), action]]));
+        }
+        if (ui.bansAccount && (target || addresses.length)) {
+            const who = target?.nickname || ui.bansAccount.typed;
+            accountBox.appendChild(el("h3", null, "Addresses they played from"));
+            if (!addresses.length) {
+                accountBox.appendChild(el("div", "nrc-empty", "No address saved for their names. Only visits made after IP bans went live have one."));
+            } else {
+                accountBox.appendChild(el("div", "nrc-sub", "The site never keeps real IPs, only a one-way hash, so each address shows as a short id. Ban it with the buttons on its row."));
+                accountBox.appendChild(table([["Address id"], ["Last seen", "num"], ["Visits", "num"], ["Where"], ["Names on it", "name"], ["IP ban"]], addresses.map((m) => {
+                    const names = el("div", null, m.names.join(", "));
+                    names.style.whiteSpace = "normal";
+                    if (m.people > 3) {
+                        const warn = el("div", null, m.people + " browsers use this address. It may be a school or workplace.");
+                        warn.style.color = GOLD;
+                        names.appendChild(warn);
+                    }
+                    const action = banned.has(m.hash) ? el("span", null, "Banned") : banButtons(() => ({ hash: m.hash, who }));
+                    return [m.hash.slice(0, 8), fmt.dateTime(m.last), num(m.visits), [m.country, m.device, m.browser].filter(Boolean).join(" · "), names, action];
+                })));
+            }
         }
         ui.bansNoteBox.textContent = ui.bansNote || "";
         const list = ui.bansListBox;
@@ -2956,17 +2934,17 @@
             return [b.userId.slice(0, 8), b.who || "", b.chat ? "Chat only" : "Banned", hidden, reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
         })));
         list.appendChild(accounts);
-        const c = card("Banned addresses", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names are off every board and all standings until the ban ends.");
+        const c = card("Banned addresses", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names, and the accounts that used them under any later name, are off every board and all standings until the ban ends.");
         if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));
-        else c.appendChild(table([["Address"], ["Player", "name"], ["Hidden names", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
+        else c.appendChild(table([["Address id"], ["Player", "name"], ["Hidden names", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], ui.bans.bans.map((b) => {
             const lift = el("button", "button", "Unban");
             lift.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
             lift.addEventListener("click", () => changeBans("ipban/unban", { hash: b.hash }, "Unbanned. Other server copies pick it up within a few minutes."));
             const reason = el("div", null, b.reason || "");
             reason.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
-            const hidden = el("div", null, (b.names ?? []).join(", "));
+            const hidden = el("div", null, [...new Set([...(b.names ?? []), ...(b.users ?? []).flatMap(([, ...names]) => names)])].join(", "));
             hidden.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
             return [b.hash.slice(0, 8), b.who || "", hidden, reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
         })));
@@ -3411,7 +3389,7 @@
         ui.stats = null;
         ui.charts = [];
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
-        ui.tagsRoot = ui.tagsWho = ui.tagsLists = ui.tagsHitsBox = ui.tagsInput = null;
+        ui.tagsRoot = ui.tagsWho = ui.tagsLists = null;
         ui.bansRoot = null;
         ui.subsRoot = ui.subsNoteBox = ui.subsDetailBox = ui.subsListBox = null;
         ui.subs = ui.subsError = ui.subsLoading = ui.subsPick = ui.subsArm = null;

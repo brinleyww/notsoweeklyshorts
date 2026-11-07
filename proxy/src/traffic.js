@@ -6,7 +6,8 @@
 import { DurableObject } from "cloudflare:workers";
 
 // The Worker reads this list on every request, so it lives in KV: { <address hash>: until, or 0 for good }.
-// A ban with a message or names is [until, message, names] instead. Account bans share the list, keyed by the
+// A ban with a message or names is [until, message, names, accounts] instead, accounts being
+// [userId, the name that found it, its other names] (src/accounts.js accountsNamed). Account bans share the list, keyed by the
 // 64-character userId, as { until, chat, reason, names, nick } (chat = chat only; nick = the name when banned).
 export const IP_BANS_KEY = "ip-bans";
 // 0 = for good.
@@ -18,8 +19,8 @@ export function readBanReason(value) {
     return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 200) || null : null;
 }
 
-export function ipBanEntry(until, reason, names) {
-    return reason || names?.length ? [until ?? 0, reason ?? null, names ?? []] : until ?? 0;
+export function ipBanEntry(until, reason, names, users) {
+    return reason || names?.length || users?.length ? [until ?? 0, reason ?? null, names ?? [], users ?? []] : until ?? 0;
 }
 
 export function userBanEntry(b) {
@@ -256,6 +257,9 @@ export class TrafficStats extends DurableObject {
             for (const b of old) this.sql.exec("UPDATE ip_bans SET names = ? WHERE ip = ?", JSON.stringify(this.ipBanNames(b.ip, b.who)), b.ip);
             if (old.length) this.ctx.waitUntil(this.publishIpBans());
         }
+        if (!this.sql.exec("PRAGMA table_info(ip_bans)").toArray().some((c) => c.name === "users"))
+            this.sql.exec("ALTER TABLE ip_bans ADD COLUMN users TEXT");
+        if (this.sql.exec("SELECT 1 FROM ip_bans WHERE users IS NULL LIMIT 1").toArray().length) this.ctx.waitUntil(this.followIpBanAccounts());
         this.sql.exec(`CREATE TABLE IF NOT EXISTS user_bans (user_id TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER,
             chat INTEGER NOT NULL, who TEXT, reason TEXT, names TEXT)`);
     }
@@ -266,6 +270,25 @@ export class TrafficStats extends DurableObject {
             GROUP BY nickname COLLATE NOCASE ORDER BY MAX(last) DESC LIMIT ?`, hash, IP_BAN_NAMES).toArray().map((r) => r.nickname);
         if (who && who !== TYPED_IP_BAN && !names.some((n) => n.toLowerCase() === who.toLowerCase())) names.unshift(who);
         return names;
+    }
+
+    // null when Accounts can't be reached, so the ban is asked again on the next wake.
+    async ipBanAccounts(names) {
+        if (!this.env.ACCOUNTS || !names.length) return [];
+        try {
+            return await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).accountsNamed(names);
+        } catch (err) {
+            console.error("ban accounts unavailable:", err && err.message);
+            return null;
+        }
+    }
+
+    async followIpBanAccounts() {
+        for (const b of this.sql.exec("SELECT ip, names FROM ip_bans WHERE users IS NULL").toArray()) {
+            const users = await this.ipBanAccounts(JSON.parse(b.names ?? "[]"));
+            if (users) this.sql.exec("UPDATE ip_bans SET users = ? WHERE ip = ?", JSON.stringify(users), b.ip);
+        }
+        return this.publishIpBans();
     }
 
     // Every address this nickname opened the site from, newest first. Runs through every session that has
@@ -280,20 +303,27 @@ export class TrafficStats extends DurableObject {
         return { matches };
     }
 
+    // ipLookup for each of a player's names, one row per address.
+    ipLookupNames(names) {
+        const byHash = new Map();
+        for (const name of names.slice(0, 10)) for (const m of this.ipLookup(name).matches) if (!byHash.has(m.hash)) byHash.set(m.hash, m);
+        return [...byHash.values()].sort((a, b) => b.last - a.last).slice(0, 10);
+    }
+
     ipBans() {
         this.sql.exec("DELETE FROM ip_bans WHERE until IS NOT NULL AND until <= ?", Date.now());
         this.sql.exec("DELETE FROM user_bans WHERE until IS NOT NULL AND until <= ?", Date.now());
-        const bans = this.sql.exec("SELECT ip AS hash, at, until, who, reason, names FROM ip_bans ORDER BY at DESC").toArray();
+        const bans = this.sql.exec("SELECT ip AS hash, at, until, who, reason, names, users FROM ip_bans ORDER BY at DESC").toArray();
         const users = this.sql.exec("SELECT user_id AS userId, at, until, chat, who, reason, names FROM user_bans ORDER BY at DESC").toArray();
         return {
-            bans: bans.map((b) => ({ ...b, names: JSON.parse(b.names ?? "[]") })),
+            bans: bans.map((b) => ({ ...b, names: JSON.parse(b.names ?? "[]"), users: JSON.parse(b.users ?? "[]") })),
             users: users.map((b) => ({ ...b, chat: !!b.chat, names: JSON.parse(b.names ?? "[]") })),
         };
     }
 
     async publishIpBans() {
         const list = this.ipBans();
-        const entries = [...list.bans.map((b) => [b.hash, ipBanEntry(b.until, b.reason, b.names)]), ...list.users.map((b) => [b.userId, userBanEntry(b)])];
+        const entries = [...list.bans.map((b) => [b.hash, ipBanEntry(b.until, b.reason, b.names, b.users)]), ...list.users.map((b) => [b.userId, userBanEntry(b)])];
         if (this.env.FALLBACK) await this.env.FALLBACK.put(IP_BANS_KEY, JSON.stringify(Object.fromEntries(entries)));
         return list;
     }
@@ -311,7 +341,10 @@ export class TrafficStats extends DurableObject {
     }
 
     async banIp(hash, until, who, reason) {
-        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who, reason, names) VALUES (?, ?, ?, ?, ?, ?)", hash, Date.now(), until, who, reason, JSON.stringify(this.ipBanNames(hash, who)));
+        const names = this.ipBanNames(hash, who);
+        const users = await this.ipBanAccounts(names);
+        this.sql.exec("INSERT OR REPLACE INTO ip_bans (ip, at, until, who, reason, names, users) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            hash, Date.now(), until, who, reason, JSON.stringify(names), users && JSON.stringify(users));
         return this.publishIpBans();
     }
 

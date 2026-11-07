@@ -710,6 +710,19 @@ export class Accounts extends DurableObject {
         return { nickname: nickname || names[0] || null, names, uids: this.chatUids(userId) };
     }
 
+    // The accounts seen with these names, as [userId, the name that found it, its other names], so an IP ban
+    // keeps hiding them under a new name.
+    accountsNamed(names) {
+        const found = new Map();
+        for (const name of Array.isArray(names) ? names : []) {
+            const key = nameKey(text(name, MAX_NICK));
+            const userId = SHARED_NAMES.has(key) ? null : this.holder(key);
+            if (!userId || found.has(userId)) continue;
+            found.set(userId, [userId, name, ...this.playerFacts(userId).names.filter((n) => n !== name)]);
+        }
+        return [...found.values()];
+    }
+
     chatUser(uid) {
         if (!CHAT_UID.test(uid ?? "")) return null;
         return this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id ?? null;
