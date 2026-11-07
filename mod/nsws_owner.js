@@ -3063,6 +3063,17 @@
         if (ui.overlay && ui.tab === "subs") renderSubLists();
     }
 
+    // Submissions are NSWS Track codes now (older ones are plain PolyTrack codes): the track's own code and mode.
+    async function subTrack(s) {
+        const code = await subCode(s);
+        if (code.startsWith("NSWSPack1")) {
+            const first = (await window.__nswsTracks?.readPack?.(code))?.tracks?.[0];
+            if (!first) throw "That submission's NSWS Track code couldn't be read.";
+            return { code: first.code, mode: first.mode || s.mode || "normal", nsws: code };
+        }
+        return { code, mode: s.mode || "normal", nsws: null };
+    }
+
     function subTrackLike(s, code) {
         return { id: null, code, kind: code.startsWith("PolyTrackBE") ? "be" : "stock", name: s.name || "", author: s.author || "", trackId: s.trackId || null, env: s.env ?? null, mode: s.mode || "normal", source: "import" };
     }
@@ -3142,28 +3153,34 @@
         act("Play", "Getting the track\u2026", async () => {
             const tracks = window.__nswsTracks;
             if (!tracks?.play) throw "Custom tracks haven't loaded yet. Try again in a moment.";
-            const code = await subCode(s);
+            const t = await subTrack(s);
             close();
-            await tracks.play(code, { mode: s.mode || "normal" });
+            await tracks.play(t.code, { mode: t.mode });
         });
         act("Copy code", "Getting the code\u2026", async () => {
-            const code = await subCode(s);
+            const t = await subTrack(s);
+            const code = t.nsws || t.code;
             if (!(await copyText(code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
-            return "Code copied (" + subSize(code.length) + ")." + ((s.mode || "normal") !== "normal" ? " Mode isn't kept in a plain code: it's " + SUB_MODES[s.mode] + "." : "");
+            return (t.nsws ? "NSWS Track code copied, " + SUB_MODES[t.mode] + " mode included" : "Code copied") + " (" + subSize(code.length) + ")." + (!t.nsws && t.mode !== "normal" ? " Mode isn't kept in a plain code: it's " + SUB_MODES[t.mode] + "." : "");
+        });
+        act("Copy PolyTrack code", "Getting the code\u2026", async () => {
+            const t = await subTrack(s);
+            if (!(await copyText(t.code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
+            return "PolyTrack code copied (" + subSize(t.code.length) + ")." + (t.mode !== "normal" ? " It plays in " + SUB_MODES[t.mode] + ", which a plain code doesn't keep." : "");
         });
         act("Save to My Tracks", "Saving\u2026", async () => {
             const tracks = window.__nswsTracks;
             if (!tracks?.add) throw "Custom tracks haven't loaded yet. Try again in a moment.";
-            const code = await subCode(s);
-            const saved = await tracks.add(code, { mode: s.mode || "normal", source: "import" });
+            const t = await subTrack(s);
+            const saved = await tracks.add(t.code, { mode: t.mode, source: "import" });
             return "Saved \"" + (saved?.name || s.name || "the track") + "\" to My Tracks.";
         });
         act("Open in editor", "Getting the track\u2026", async () => {
             const editor = window.__nswsEditor;
             if (!editor?.open) throw "The track editor hasn't loaded yet. Try again in a moment.";
-            const code = await subCode(s);
+            const t = await subTrack(s);
             close();
-            await editor.open(subTrackLike(s, code));
+            await editor.open({ ...subTrackLike(s, t.code), mode: t.mode });
         });
         c.appendChild(acts);
 

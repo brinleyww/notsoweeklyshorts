@@ -750,7 +750,7 @@
         const answer = await api("nsws/tracks/submit", {
             token: me.token,
             nickname: me.nickname || "",
-            code: info.code,
+            code: await packCode([{ code: info.code, mode: track.mode }], info.name || track.name || ""),
             mode: normMode(track.mode),
             name: info.name || track.name || "",
             author: info.author || "",
@@ -974,7 +974,15 @@
     }
 
     async function play(trackOrCode, opts = {}) {
-        const item = typeof trackOrCode === "string" ? { code: trackOrCode } : trackOrCode || {};
+        let item = typeof trackOrCode === "string" ? { code: trackOrCode } : trackOrCode || {};
+        if (typeof item.code === "string" && clean(item.code).startsWith(PACK_PREFIX)) {
+            const first = (await readPack(item.code))?.tracks?.[0];
+            if (!first) {
+                await ui.alert("That NSWS Track code is damaged or cut short.", "Can't play this track");
+                return false;
+            }
+            item = { ...item, code: first.code, mode: opts.mode ?? first.mode };
+        }
         const mode = normMode(opts.mode ?? item.mode);
         let info = await parseAsync(item.code);
         if (!info.ok) {
@@ -1513,12 +1521,12 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         return box;
     }
 
-    function metaNode(info, extra) {
+    function metaNode(info, extra, allModes) {
         const meta = el("div", "nt-meta");
         meta.appendChild(el("span", null, info.author ? "by " + info.author : "no author"));
         if (info.env) meta.appendChild(el("span", null, info.env));
         if (info.kind === "be") meta.appendChild(el("span", "nt-chip be", "Better Editor"));
-        if (normMode(info.mode) !== "normal") meta.appendChild(el("span", "nt-chip mode", MODE_LABEL[info.mode]));
+        if (allModes || normMode(info.mode) !== "normal") meta.appendChild(el("span", "nt-chip mode", MODE_LABEL[normMode(info.mode)]));
         if (extra) meta.appendChild(el("span", null, extra));
         return meta;
     }
@@ -2189,7 +2197,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 const info = el("div", "nt-info");
                 if (item.info.ok) {
                     r.appendChild(check(item.on, (v) => { item.on = v; setActions(); }));
-                    info.append(el("div", "nt-name", item.info.name), metaNode({ ...item.info, mode: item.mode }, item.existing ? "already in My Tracks, will be updated" : null));
+                    info.append(el("div", "nt-name", item.info.name), metaNode({ ...item.info, mode: item.mode }, item.existing ? "already in My Tracks, will be updated" : null, true));
                     r.appendChild(info);
                 } else {
                     info.append(el("div", "nt-name", item.info.code ? item.info.code.slice(0, 32) + (item.info.code.length > 32 ? "..." : "") : "Couldn't read"), el("div", "nt-text bad", item.info.error));
@@ -2257,7 +2265,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         if (!single) {
             const nameInput = input({ value: packName, placeholder: "Pack name (optional)", maxLength: 64, onInput: (v) => { packName = v; resetOutputs(); } });
             body.appendChild(field("Pack name", nameInput, "Shown to whoever opens the link."));
-            const names = el("p", "nt-text dim", tracks.slice(0, 8).map((t) => t.name).join(", ") + (tracks.length > 8 ? " and " + (tracks.length - 8) + " more" : ""));
+            const names = el("p", "nt-text dim", tracks.slice(0, 8).map((t) => t.name + " (" + MODE_LABEL[t.mode] + ")").join(", ") + (tracks.length > 8 ? " and " + (tracks.length - 8) + " more" : ""));
             body.appendChild(names);
         }
 
@@ -2284,7 +2292,12 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         body.appendChild(linkLine);
 
         body.appendChild(section("NSWS Track code"));
-        body.appendChild(el("p", "nt-text dim", "Text that holds " + (single ? "the track" : "every track") + (anyMode ? " and its mode" : "") + ". Works offline: paste it into Import on NSWS."));
+        body.appendChild(el("p", "nt-text dim", (single ? "Text that holds the track, exported in " + MODE_LABEL[tracks[0].mode] + " mode" : "Text that holds every track, each in the mode shown above") + ". Works offline: paste it into Import on NSWS, which shows the mode too."));
+        if (single) {
+            const modeLine = el("div", "nt-meta");
+            modeLine.append(el("span", null, "Mode"), el("span", "nt-chip mode", MODE_LABEL[tracks[0].mode]));
+            body.appendChild(modeLine);
+        }
         const packBox = el("div");
         body.appendChild(packBox);
         let packText = "";

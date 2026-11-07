@@ -886,7 +886,7 @@
                     answer = await T.api("nsws/tracks/submit", {
                         token: user.token,
                         nickname: user.nickname || "",
-                        code: t.code,
+                        code: await T.packCode([{ code: t.code, mode }], info.name || t.name),
                         mode,
                         name: info.name || t.name,
                         author: info.author || "",

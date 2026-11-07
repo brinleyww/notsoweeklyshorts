@@ -49,6 +49,7 @@ const SUBMITS_WAITING = 10;
 const MY_SUBMISSIONS = 50;
 const ADMIN_LIST = 200;
 const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
 // Storage is counted in bytes too: what one address may store a day (links, campaigns, submissions),
 // what all of a club's campaigns may hold, and how long a link nobody opens is kept.
 const BYTES_PER_DAY = 30_000_000;
@@ -485,19 +486,30 @@ export class TrackHub extends DurableObject {
 
     submit({ userId, ipKey, nickname, code, mode, name, author, trackId, env, note }) {
         const text = typeof code === "string" ? code.trim() : "";
-        if (!text.startsWith("PolyTrack")) return fail(400, "That isn't a PolyTrack track code.");
+        // Submissions are NSWS Track codes (they keep the mode); plain PolyTrack codes still work.
+        if (!text.startsWith("NSWSPack1") && !text.startsWith("PolyTrack")) return fail(400, "That isn't a track code.");
         if (text.length > MAX_SUBMISSION) return fail(413, "That track is too big to send (2 MB at most).");
         const waiting = this.first("SELECT COUNT(*) AS n FROM submissions WHERE user_id = ? AND status = 'new'", userId).n;
         if (waiting >= SUBMITS_WAITING) return fail(409, `You have ${SUBMITS_WAITING} tracks waiting for Race Control already. Wait until some are looked at.`);
         const keys = ["sub:ip:" + ipKey, "sub:u:" + userId];
         if (this.overLimit(keys, SUBMITS_PER_DAY) || this.overBytes(ipKey, text.length)) return fail(429, `You can send ${SUBMITS_PER_DAY} tracks a day. Try again tomorrow.`);
+        // One an hour: per account from its last submission, per address per clock hour.
+        const now = Date.now(),
+            hour = Math.floor(now / HOUR_MS),
+            hourKey = "subh:ip:" + ipKey + ":" + hour,
+            last = this.first("SELECT MAX(created) AS t FROM submissions WHERE user_id = ?", userId)?.t ?? 0,
+            wait = Math.max(last + HOUR_MS - now, this.overLimit([hourKey], 1) ? (hour + 1) * HOUR_MS - now : 0);
+        if (wait > 0) {
+            const mins = Math.ceil(wait / 60_000);
+            return fail(429, `You can submit one track an hour. Try again in ${mins} minute${mins === 1 ? "" : "s"}.`);
+        }
         const id = this.freshId("submissions", "id", 12, ID_ALPHABET);
         this.ctx.storage.transactionSync(() => {
             this.sql.exec(`INSERT INTO submissions (id, user_id, nickname, name, author, track_id, env, mode, note, created, status, week, owner_note, size)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', NULL, '', ?)`, id, userId, nick(nickname), moderate(name, MAX_TRACK_NAME) || "Untitled",
                 moderate(author, MAX_AUTHOR), trackIdOf(trackId), moderate(env, MAX_ENV), modeOf(mode), cleanLines(note, MAX_NOTE), Date.now(), text.length);
             this.putBlob("s", id, text);
-            this.countHit(keys);
+            this.countHit([...keys, hourKey]);
             this.countHit(["bytes:ip:" + ipKey], text.length);
         });
         return { ok: true, id };
