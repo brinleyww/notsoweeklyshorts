@@ -59,7 +59,8 @@ const LIB_TRACKS = 500;
 const LIB_BYTES = 30_000_000;
 const LIB_CODE_MAX = 2_000_000;
 const LIB_BATCH = 20;
-const LIB_META_MAX = 4_000;
+// Room for a track's own picture (mod/nsws_tracks.js keeps it under 20 KB).
+const LIB_META_MAX = 26_000;
 
 const fail = (status, error) => ({ status, error });
 

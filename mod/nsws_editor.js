@@ -21,6 +21,9 @@
     const MANUAL = "\u0000pasted";
     const NEW = "\u0000new";
     const LAST_KEY = "nswsEditorLast";
+    // Set when github.io didn't load here, so the editor comes through the NSWS Worker for a week.
+    const MIRROR_KEY = "nswsEditorMirror";
+    const MIRROR_FOR_MS = 7 * 86400000;
     const COPIED_KEY = "nswsEditorCopied";
     const COPY_MAX_CODE = 400000;
     const MODES = [
@@ -62,6 +65,14 @@
 #nsws-editor .nse-fallback>textarea{flex:1 1 260px;height:34px;min-height:34px;resize:vertical;padding:5px 7px;font-size:13px;}
 #nsws-editor .nse-frame{position:relative;flex:1 1 auto;min-height:0;background:#192042;}
 #nsws-editor .nse-frame>iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;}
+#nsws-editor .nse-load{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:#192042;}
+#nsws-editor .nse-load.hidden{display:none;}
+#nsws-editor .nse-load h2{margin:0;font-size:34px;font-weight:normal;font-style:italic;}
+#nsws-editor .nse-lbar{position:relative;width:min(440px,72vw);height:6px;overflow:hidden;background:rgba(255,255,255,.15);}
+#nsws-editor .nse-lbar>div{position:absolute;top:0;bottom:0;left:0;width:0;background:#7272c2;transition:width .2s;}
+#nsws-editor .nse-load.busy .nse-lbar>div{width:35%;transition:none;animation:nseLoad 1.1s linear infinite;}
+@keyframes nseLoad{from{transform:translateX(-100%);}to{transform:translateX(320%);}}
+#nsws-editor .nse-load p{margin:0;font-size:16px;font-style:italic;color:rgba(255,255,255,.65);}
 #nsws-editor .nse-dim{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.7);}
 #nsws-editor .nse-box{display:flex;flex-direction:column;width:min(640px,100%);max-height:100%;background:#28346a;clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);outline:none;}
 #nsws-editor .nse-box>h1{flex-shrink:0;margin:0;padding:10px 18px;font-size:26px;font-weight:normal;background:#212b58;}
@@ -129,9 +140,29 @@
                 if (own && /^https?:\/\//.test(own)) url = own;
             } catch {}
         }
+        if (url === DEFAULT_URL && window.__nswsApiBase && mirrorOn()) url = window.__nswsApiBase + "be/";
         if (!/[?&]nsws=1/.test(url)) url += (url.includes("?") ? "&" : "?") + "nsws=1";
         return url;
     }
+
+    function mirrorOn() {
+        try {
+            return Date.now() - Number(localStorage.getItem(MIRROR_KEY) || 0) < MIRROR_FOR_MS;
+        } catch {
+            return false;
+        }
+    }
+
+    const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
+    // Covers the frame until the editor is open; the bar follows the block download the bridge reports.
+    function loading(text, frac) {
+        if (!ui) return;
+        ui.loader.classList.remove("hidden");
+        ui.loaderText.textContent = text;
+        ui.loader.classList.toggle("busy", frac == null);
+        ui.loaderFill.style.width = frac == null ? "" : Math.min(100, frac * 100).toFixed(1) + "%";
+    }
+    const loaded = () => ui?.loader.classList.add("hidden");
 
     function lib() {
         return window.__nswsTracks || null;
@@ -345,9 +376,16 @@
         fallback.append(fbText, fbBox, fbUse, fbCopy, fbReload);
 
         const frameBox = el("div", "nse-frame");
+        const loader = el("div", "nse-load busy hidden");
+        const loaderBar = el("div", "nse-lbar");
+        const loaderFill = el("div");
+        loaderBar.appendChild(loaderFill);
+        const loaderText = el("p");
+        loader.append(el("h2", null, "Better Editor"), loaderBar, loaderText);
+        frameBox.appendChild(loader);
         host.append(bar, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn };
+        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderText, loaderFill };
         renderPicker();
         renderMode();
         renderAutosave();
@@ -421,6 +459,12 @@
             if (!ready) onReady();
             return;
         }
+        if (m.type === "progress" && !m.reqId) {
+            const got = Number(m.loaded) || 0;
+            const total = Number(m.total) || 0;
+            if (!editorOpen) loading(total && got >= total ? "Starting the editor..." : "Downloading blocks: " + mb(got) + (total ? " of " + mb(total) : "") + " MB", total ? got / total : null);
+            return;
+        }
         if (m.type === "exit" && !m.reqId) {
             close();
             return;
@@ -461,11 +505,12 @@
             post({ type: "hello", version: 1 });
             if (!ready) {
                 clearTimeout(fallbackTimer);
-                fallbackTimer = setTimeout(showFallback, FALLBACK_AFTER_LOAD_MS);
+                fallbackTimer = setTimeout(() => showFallback(true), FALLBACK_AFTER_LOAD_MS);
             }
         });
         fallbackTimer = setTimeout(showFallback, FALLBACK_HARD_MS);
         ui.frameBox.appendChild(frame);
+        if (!editorOpen) loading("Loading the editor...", null);
         renderPicker();
     }
 
@@ -480,10 +525,22 @@
         ready = false;
         tracks = [];
         newestSave = 0;
+        loaded();
     }
 
-    function showFallback() {
+    // blocked: the page loaded but no editor answered, which is what a network that blocks github.io looks like.
+    function showFallback(blocked) {
         if (ready || !ui) return;
+        if (blocked === true && window.__nswsApiBase && !frame?.src.startsWith(window.__nswsApiBase)) {
+            try {
+                localStorage.setItem(MIRROR_KEY, String(Date.now()));
+            } catch {}
+            unloadFrame();
+            createFrame();
+            loading("Trying another way in...", null);
+            return;
+        }
+        loaded();
         ui.fallback.classList.remove("hidden");
         ui.fbCopy.style.display = pendingImport ? "" : "none";
         renderPicker();
@@ -608,11 +665,13 @@
             return false;
         }
         if (!reply.ok) {
+            loaded();
             note(reply.error || "The editor couldn't open that track.", "bad");
             revert(opts.before);
             return false;
         }
         editorOpen = true;
+        loaded();
         try {
             name ? localStorage.setItem(LAST_KEY, name) : localStorage.removeItem(LAST_KEY);
         } catch {}

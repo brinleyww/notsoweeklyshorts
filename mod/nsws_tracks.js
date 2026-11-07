@@ -9,6 +9,7 @@
     const PACK_PREFIX = "NSWSPack1";
     const BE_PREFIX = "PolyTrackBE1";
     const MAX_PACK_TRACKS = 50;
+    const IMAGE_MAX = 20000;
     const MAX_PACK_BYTES = 4 * 1024 * 1024;
     const MAX_IMPORT = 200;
     const CLUB_CODE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
@@ -236,26 +237,72 @@
 
     // Loads Better Editor's blocks (about 60 MB the first time, then from the browser's cache) with a dialog
     // while it takes. False when the player cancelled; throws when they couldn't load.
+    const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
+    // Counts the bytes of the block file while TM.load() downloads it, for a real loading bar.
+    function watchBlocks(onProgress) {
+        const real = window.fetch;
+        const mine = function (input, init) {
+            const url = typeof input === "string" ? input : input?.url || "";
+            const p = real.apply(window, arguments);
+            if (!/tm_blocks\.bin(\?|$)/.test(url)) return p;
+            return p.then((r) => {
+                if (!r.ok || !r.body) return r;
+                const total = Number(self.TM_DATA?.binBytes) || Number(r.headers.get("content-length")) || 0;
+                const reader = r.body.getReader();
+                let got = 0;
+                onProgress(0, total);
+                const stream = new ReadableStream({
+                    async pull(c) {
+                        const { done, value } = await reader.read();
+                        if (done) return c.close();
+                        got += value.byteLength;
+                        onProgress(got, total);
+                        c.enqueue(value);
+                    },
+                    cancel: (e) => reader.cancel(e),
+                });
+                return new Response(stream, { status: r.status, statusText: r.statusText, headers: r.headers });
+            });
+        };
+        window.fetch = mine;
+        return () => {
+            if (window.fetch === mine) window.fetch = real;
+        };
+    }
+
     async function ensureBE() {
         const tm = window.__nswsTM;
         if (!tm) throw new Error("This copy of the site can't load Better Editor blocks.");
         if (tm.ready()) return true;
         let done = false;
         let cancelled = false;
+        const body = el("div");
+        const bar = el("div", "nt-pbar busy");
+        const fill = el("div");
+        bar.appendChild(fill);
+        const sub = el("p", "nt-text dim", "Starting...");
+        body.append(el("p", "nt-text", "Loading Better Editor blocks. The first time this downloads about 60 MB."), bar, sub);
         const close = dialog({
             title: "Better Editor track",
-            body: "Loading Better Editor blocks... The first time this downloads about 60 MB.",
+            body,
             actions: [{ label: "Cancel" }],
             onClose: () => {
                 if (!done) cancelled = true;
             },
         });
+        const unwatch = watchBlocks((got, total) => {
+            bar.classList.toggle("busy", !total);
+            if (total) fill.style.width = Math.min(100, (got / total) * 100).toFixed(1) + "%";
+            sub.textContent = total && got >= total ? "Building the blocks..." : mb(got) + (total ? " of " + mb(total) : "") + " MB";
+        });
         try {
             await tm.ensure();
         } finally {
+            unwatch();
             done = true;
             close();
         }
+        setTimeout(() => refreshThumbs().catch(() => {}), 0);
         return !cancelled;
     }
 
@@ -292,18 +339,24 @@
         }
     }
 
+    const THUMB_V = 2;
+    function pixelScale(src, size) {
+        const fit = Math.min(size / src.width, size / src.height);
+        const scale = fit >= 1 ? Math.floor(fit) : fit;
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(src.width * scale));
+        c.height = Math.max(1, Math.round(src.height * scale));
+        const g = c.getContext("2d");
+        g.imageSmoothingEnabled = scale < 1;
+        g.drawImage(src, 0, 0, c.width, c.height);
+        return c.toDataURL("image/png");
+    }
+
     function thumbOf(data) {
         try {
             const src = data.createThumbnail();
             if (!src?.width || !src?.height) return null;
-            const scale = Math.min(64 / src.width, 64 / src.height);
-            const c = document.createElement("canvas");
-            c.width = Math.max(1, Math.round(src.width * scale));
-            c.height = Math.max(1, Math.round(src.height * scale));
-            const g = c.getContext("2d");
-            g.imageSmoothingEnabled = scale < 1;
-            g.drawImage(src, 0, 0, c.width, c.height);
-            return c.toDataURL("image/png");
+            return pixelScale(src, 160);
         } catch {
             return null;
         }
@@ -369,7 +422,30 @@
         cache = new Map(rows.map((t) => [t.id, t]));
         cacheKey = key;
         setTimeout(() => sync().catch(() => {}), 0);
+        setTimeout(() => refreshThumbs().catch(() => {}), 400);
         return cache;
+    }
+
+    // Redraws thumbnails made by older versions (blurry 64 px ones); Better Editor ones once its blocks are loaded.
+    let thumbsBusy = false;
+    async function refreshThumbs() {
+        if (thumbsBusy) return;
+        thumbsBusy = true;
+        try {
+            const changed = [];
+            for (const t of [...(await loadAll()).values()]) {
+                if (t.thumbV === THUMB_V || typeof t.code !== "string" || (t.kind === "be" && !beReady())) continue;
+                const loaded = stockParse(t.code, true);
+                const now = (await loadAll()).get(t.id);
+                if (!now) continue;
+                await putTrack({ ...now, thumb: (loaded.data && thumbOf(loaded.data)) || now.thumb || null, thumbV: THUMB_V });
+                changed.push(t.id);
+                await new Promise((r) => setTimeout(r, 0));
+            }
+            if (changed.length) emit({ type: "update", ids: changed });
+        } finally {
+            thumbsBusy = false;
+        }
     }
 
     async function putTrack(track) {
@@ -408,7 +484,7 @@
     }
 
     const remoteMeta = (t) => {
-        const { code, thumb, sync: _s, id, updated, ...meta } = t;
+        const { code, thumb, thumbV: _v, sync: _s, id, updated, ...meta } = t;
         return meta;
     };
 
@@ -639,6 +715,7 @@
         if (typeof patch.name === "string" && patch.name.trim()) next.name = patch.name.trim().slice(0, 80);
         if ("folder" in patch) next.folder = patch.folder ? String(patch.folder).slice(0, 40) : null;
         if ("favourite" in patch) next.favourite = !!patch.favourite;
+        if ("image" in patch) next.image = typeof patch.image === "string" && /^data:image\/(jpeg|png|webp);base64,/.test(patch.image) && patch.image.length <= IMAGE_MAX ? patch.image : null;
         if ("submitted" in patch) next.submitted = patch.submitted ? { id: String(patch.submitted.id || "").slice(0, 32), at: Number(patch.submitted.at) || Date.now() } : null;
         next.updated = Date.now();
         if (next.sync === "ok") next.sync = "meta";
@@ -862,19 +939,25 @@
         const hasBody = body !== undefined && body !== null;
         const method = opts.method || (hasBody ? "POST" : "GET");
         let response;
+        const ctrl = typeof AbortController === "function" ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), opts.timeout || (/library\/put|pack$|submit$/.test(path) ? 90000 : 25000)) : 0;
+        let data = null;
         try {
             response = await fetch(base + String(path).replace(/^\/+/, ""), {
                 method,
                 headers: hasBody ? { "Content-Type": "text/plain" } : undefined,
                 body: hasBody ? JSON.stringify(body) : undefined,
+                signal: ctrl?.signal,
             });
+            try {
+                data = JSON.parse(await response.clone().text());
+            } catch {}
         } catch {
-            throw Object.assign(new Error("Couldn't reach the NSWS server. Check your connection and try again."), { status: 0 });
+            const stalled = ctrl?.signal.aborted;
+            throw Object.assign(new Error(stalled ? "The NSWS server didn't answer in time. Your network may be blocking or slowing it; try again, or try another network." : "Couldn't reach the NSWS server. Check your connection and try again."), { status: 0 });
+        } finally {
+            clearTimeout(timer);
         }
-        let data = null;
-        try {
-            data = JSON.parse(await response.clone().text());
-        } catch {}
         if (!response.ok) {
             try {
                 await window.__nswsBusy?.fromResponse(response);
@@ -940,7 +1023,7 @@
         let ok = false;
         if (opts.start && window.__nswsRaceTrack) {
             try {
-                ok = !!window.__nswsRaceTrack(loaded.meta, loaded.data, opts.onExit);
+                ok = !!window.__nswsRaceTrack(loaded.meta, loaded.data, opts.onExit, opts.ghosts);
             } catch (e) {
                 console.error(e);
             }
@@ -964,12 +1047,7 @@
         try {
             const src = data.createThumbnail();
             if (!src?.width || !src?.height) return null;
-            const scale = Math.min(360 / src.width, 360 / src.height, 2);
-            const c = document.createElement("canvas");
-            c.width = Math.max(1, Math.round(src.width * scale));
-            c.height = Math.max(1, Math.round(src.height * scale));
-            c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
-            return c.toDataURL("image/png");
+            return pixelScale(src, 360);
         } catch {
             return null;
         }
@@ -983,9 +1061,10 @@
         const pic = el("div", "nt-lthumb");
         const img = el("img");
         img.alt = "";
-        const src = bigThumb(data) || item.thumb;
+        const src = item.image || bigThumb(data) || item.thumb;
         if (src) img.src = src;
-        else {
+        if (item.image) img.className = "photo";
+        else if (!src) {
             img.className = "env";
             img.src = "images/" + (info.env || "summer").toLowerCase() + ".svg";
         }
@@ -1056,9 +1135,49 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-row.sel{background:rgba(114,114,194,.16);}
 .nt-row.pick{cursor:pointer;}
 .nt-row.pick:hover{background:rgba(255,255,255,.05);}
-.nt-thumb{width:56px;height:56px;flex:none;display:flex;align-items:center;justify-content:center;background:#192042;overflow:hidden;}
+.nt-thumb{width:64px;height:64px;flex:none;display:flex;align-items:center;justify-content:center;background:#192042;overflow:hidden;}
 .nt-thumb>img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;}
 .nt-thumb>img.env{width:60%;height:60%;opacity:.45;image-rendering:auto;}
+.nt-thumb>img.photo{object-fit:cover;image-rendering:auto;}
+.nt-row.open{cursor:pointer;}
+.nt-row.open:hover{background:rgba(255,255,255,.05);}
+.nt-pbar{position:relative;height:6px;margin:10px 0 4px;overflow:hidden;background:rgba(255,255,255,.15);}
+.nt-pbar>div{position:absolute;top:0;bottom:0;left:0;width:0;background:#7272c2;transition:width .2s;}
+.nt-pbar.busy>div{width:35%;transition:none;animation:ntLoad 1.1s linear infinite;}
+.nt-page{z-index:100450;flex-direction:column;align-items:stretch;justify-content:flex-start;background:#192042;outline:none;}
+.nt-pbg{position:absolute;inset:-20px;background-size:cover;background-position:center;image-rendering:pixelated;opacity:.16;pointer-events:none;}
+.nt-pbg.photo{image-rendering:auto;filter:blur(6px);}
+.nt-pwrap{position:relative;display:flex;flex-direction:column;width:min(1120px,100%);height:100%;margin:0 auto;min-height:0;}
+.nt-ptop{display:flex;align-items:center;gap:10px;padding:10px 14px;}
+.nt-ptop h2{margin:0;font-size:24px;font-weight:normal;color:rgba(255,255,255,.7);}
+.nt-pbody{flex:1;min-height:0;display:flex;gap:18px;padding:4px 14px 14px;}
+.nt-hero{flex:0 0 min(360px,40%);display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto;}
+.nt-hero .nt-lthumb{width:min(100%,38vh);flex:none;}
+.nt-hero .nt-line{margin:0;flex-wrap:wrap;}
+.nt-ptitle{font-size:36px;line-height:1.1;overflow-wrap:anywhere;}
+.nt-pstats{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:4px 0;font-size:18px;}
+.nt-pstats>span:nth-child(odd){color:rgba(255,255,255,.55);}
+.nt-host .button.nt-pplay{font-size:26px;padding:12px 26px;}
+.nt-host .button.nt-pplay>img{width:28px;height:28px;}
+.nt-board{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;background:#212b58;}
+.nt-bhead{display:flex;align-items:baseline;gap:12px;padding:10px 14px;font-size:24px;border-bottom:1px solid rgba(255,255,255,.12);}
+.nt-bhead>span:last-child{font-size:15px;color:rgba(255,255,255,.55);}
+.nt-blist{flex:1;min-height:0;overflow:auto;}
+.nt-bmsg{padding:14px;}
+.nt-brow{display:grid;grid-template-columns:44px 30px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:5px 14px;font-size:18px;}
+.nt-brow:nth-child(odd){background:rgba(255,255,255,.04);}
+.nt-brow.me{background:rgba(114,114,194,.2);box-shadow:inset 3px 0 0 #8f8ff0;}
+.nt-brow>.rank{text-align:right;color:rgba(255,255,255,.6);}
+.nt-brow>.rank.top{color:#fff;}
+.nt-brow .flag{display:block;width:26px;height:19px;}
+.nt-brow>.nick{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
+.nt-brow>.nick:hover{text-decoration:underline;}
+.nt-brow>.time{font-variant-numeric:tabular-nums;}
+.nt-gbtn{padding:3px 10px;font:inherit;font-size:14px;font-style:italic;color:rgba(255,255,255,.75);background:#192042;border:0;cursor:pointer;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
+.nt-gbtn.on{color:#fff;background:#7272c2;}
+.nt-gbtn:disabled{opacity:.3;cursor:default;}
+.nt-host .button.nt-bmore{display:block;margin:10px auto;}
+@media (max-width:760px){.nt-pbody{flex-direction:column;overflow:auto;}.nt-hero{flex:none;overflow:visible;}.nt-hero .nt-lthumb{width:min(260px,70vw);align-self:center;}.nt-board{flex:none;min-height:360px;}.nt-ptitle{font-size:28px;}}
 .nt-info{flex:1;min-width:0;}
 .nt-name{font-size:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .nt-meta{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;margin-top:5px;font-size:14px;color:rgba(255,255,255,.6);}
@@ -1070,7 +1189,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-lcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px;transform:translateY(14px) scale(.98);transition:transform .5s ease-out;}
 .nt-launch.on .nt-lcard{transform:none;}
 .nt-lthumb{width:min(340px,62vw);aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#212b58;clip-path:polygon(14px 0,100% 0,calc(100% - 14px) 100%,0 100%);}
-.nt-lthumb img{width:100%;height:100%;object-fit:contain;}
+.nt-lthumb img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;}
+.nt-lthumb img.photo{object-fit:cover;image-rendering:auto;}
 .nt-lthumb img.env{width:40%;height:40%;}
 .nt-lname{max-width:90vw;font-size:40px;text-align:center;overflow-wrap:anywhere;}
 .nt-launch .nt-meta{justify-content:center;font-size:18px;}
@@ -1381,7 +1501,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const box = el("div", "nt-thumb");
         const img = el("img");
         img.alt = "";
-        if (track.thumb) img.src = track.thumb;
+        if (track.image) {
+            img.src = track.image;
+            img.className = "photo";
+        } else if (track.thumb) img.src = track.thumb;
         else {
             img.className = "env";
             img.src = "images/" + (track.env || "summer").toLowerCase() + ".svg";
@@ -1398,6 +1521,300 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         if (normMode(info.mode) !== "normal") meta.appendChild(el("span", "nt-chip mode", MODE_LABEL[info.mode]));
         if (extra) meta.appendChild(el("span", null, extra));
         return meta;
+    }
+
+    // The track page: the track big, your best, its leaderboard (pick runs to race as ghosts), and Play.
+    const BOARD_PAGE = 25;
+    const GHOSTS_MAX = 5;
+    const fmtTime = (frames) => {
+        const ms = Math.max(0, Math.round(frames));
+        return Math.floor(ms / 60000) + ":" + String(Math.floor(ms / 1000) % 60).padStart(2, "0") + "." + String(ms % 1000).padStart(3, "0");
+    };
+
+    function pickImageFile() {
+        return new Promise((resolve) => {
+            const inp = document.createElement("input");
+            inp.type = "file";
+            inp.accept = "image/*";
+            inp.addEventListener("change", () => resolve(inp.files?.[0] || null));
+            inp.click();
+        });
+    }
+
+    // Square-crops a picture and shrinks it until it fits in the track details that sync with the account.
+    async function imageThumb(file) {
+        if (!/^image\//.test(file?.type || "")) throw new Error("Pick an image file.");
+        if (file.size > 25e6) throw new Error("That image is too big (25 MB at most).");
+        let bmp;
+        try {
+            bmp = await createImageBitmap(file);
+        } catch {
+            throw new Error("That image couldn't be read.");
+        }
+        try {
+            for (const size of [256, 192, 128]) {
+                const c = document.createElement("canvas");
+                c.width = c.height = size;
+                const g = c.getContext("2d");
+                const s = Math.max(size / bmp.width, size / bmp.height);
+                g.imageSmoothingQuality = "high";
+                g.drawImage(bmp, (size - bmp.width * s) / 2, (size - bmp.height * s) / 2, bmp.width * s, bmp.height * s);
+                for (const q of [0.85, 0.72, 0.6, 0.48]) {
+                    const url = c.toDataURL("image/jpeg", q);
+                    if (url.length <= IMAGE_MAX) return url;
+                }
+            }
+        } finally {
+            bmp.close?.();
+        }
+        throw new Error("That image couldn't be made small enough.");
+    }
+
+    function openTrackPage(track) {
+        ensureCss();
+        let t = track;
+        const board = window.__nswsTrackBoard;
+        const online = t.kind !== "be" && !!board && !!t.trackId;
+        const host = isolate(el("div", "nt-host nt-page"));
+        host.tabIndex = -1;
+        const bg = el("div", "nt-pbg");
+        const wrap = el("div", "nt-pwrap");
+        const top = el("div", "nt-ptop");
+        const body = el("div", "nt-pbody");
+        const hero = el("div", "nt-hero");
+        const boardEl = el("div", "nt-board");
+        body.append(hero, boardEl);
+        wrap.append(top, body);
+        host.append(bg, wrap);
+        let closed = false;
+        const unsub = onChange(() => {
+            if (!t.id) return;
+            get(t.id).then((x) => {
+                if (x && !closed) {
+                    t = x;
+                    drawHero();
+                }
+            }, () => {});
+        });
+        const close = () => {
+            if (closed) return;
+            closed = true;
+            unsub();
+            host.remove();
+            const i = modals.indexOf(entry);
+            if (i >= 0) modals.splice(i, 1);
+            (screen && !screen.root.hidden ? screen.root : null)?.focus();
+        };
+        const entry = { host, cancel: close };
+        top.append(button("Back", close, { icon: "back" }), el("h2", null, "Track"));
+
+        let mapSrc;
+        const mapImage = () => {
+            if (mapSrc === undefined) {
+                const loaded = t.kind === "be" && !beReady() ? null : stockParse(t.code);
+                mapSrc = (loaded?.data && bigThumb(loaded.data)) || t.thumb || null;
+            }
+            return mapSrc;
+        };
+
+        const ghosts = new Map();
+        const playBtn = button("Play", () => start(), { icon: "play", primary: true });
+        playBtn.classList.add("nt-pplay");
+        const playLabel = () => {
+            playBtn.lastChild.textContent = ghosts.size ? "Play vs " + ghosts.size + (ghosts.size === 1 ? " ghost" : " ghosts") : "Play";
+        };
+        function toggleGhost(key, ghost, b) {
+            if (ghosts.has(key)) ghosts.delete(key);
+            else if (ghosts.size >= GHOSTS_MAX) {
+                toast("You can race " + GHOSTS_MAX + " ghosts at most.");
+                return;
+            } else ghosts.set(key, ghost);
+            b.classList.toggle("on", ghosts.has(key));
+            playLabel();
+        }
+
+        let entries = [];
+        let total = 0;
+        let userEntry = null;
+        let loadingBoard = false;
+        let boardError = null;
+        const myRecord = () => {
+            try {
+                return t.trackId && board ? board.record(t.trackId) : null;
+            } catch {
+                return null;
+            }
+        };
+
+        function drawHero() {
+            const src = t.image || mapImage();
+            bg.className = "nt-pbg" + (t.image ? " photo" : "");
+            bg.style.backgroundImage = src ? 'url("' + src + '")' : "";
+            hero.replaceChildren();
+            const pic = el("div", "nt-lthumb");
+            const img = el("img");
+            img.alt = "";
+            if (t.image) {
+                img.src = t.image;
+                img.className = "photo";
+            } else if (src) img.src = src;
+            else {
+                img.className = "env";
+                img.src = "images/" + (t.env || "summer").toLowerCase() + ".svg";
+            }
+            pic.appendChild(img);
+            hero.appendChild(pic);
+            if (t.id) {
+                const picBar = el("div", "nt-line");
+                picBar.appendChild(button(t.image ? "Change picture" : "Add picture", async () => {
+                    const file = await pickImageFile();
+                    if (!file || closed) return;
+                    try {
+                        t = await update(t.id, { image: await imageThumb(file) });
+                        drawHero();
+                        toast("Picture saved");
+                    } catch (e) {
+                        toast(e.message || "Couldn't use that picture.");
+                    }
+                }, { icon: "load", title: "Use your own picture for this track (only you see it)" }));
+                if (t.image) picBar.appendChild(button("Use map", async () => {
+                    t = await update(t.id, { image: null });
+                    drawHero();
+                }));
+                hero.appendChild(picBar);
+            }
+            hero.append(el("div", "nt-ptitle", t.name || "Untitled track"), metaNode(t));
+            const stats = el("div", "nt-pstats");
+            const rec = myRecord();
+            stats.append(el("span", null, "Your best"), el("span", null, rec ? fmtTime(rec.time.numberOfFrames) : "No time yet"));
+            if (online && userEntry) stats.append(el("span", null, "Rank"), el("span", null, "#" + userEntry.position + (total ? " of " + total : "")));
+            hero.appendChild(stats);
+            if (rec?.recording) {
+                const own = el("div", "nt-line");
+                const g = el("button", "nt-gbtn" + (ghosts.has("self") ? " on" : ""), "Ghost");
+                g.type = "button";
+                g.addEventListener("click", () => toggleGhost("self", { self: true }, g));
+                own.append(g, el("span", "nt-text dim", "Race your best as a ghost"));
+                hero.appendChild(own);
+            }
+            const acts = el("div", "nt-line");
+            acts.append(playBtn);
+            if (t.id) acts.append(button("Edit", () => openInEditor(t), { icon: "editor" }), button("Share", () => openShare([t]), { icon: "share" }));
+            hero.appendChild(acts);
+            playLabel();
+        }
+
+        function boardRow(e, rank) {
+            const r = el("div", "nt-brow" + (e.isSelf ? " me" : ""));
+            r.appendChild(el("span", "rank" + (rank <= 3 ? " top" : ""), String(rank)));
+            const flag = el("span");
+            if (typeof e.countryCode === "string" && /^[a-z]{2}$/i.test(e.countryCode)) {
+                const f = el("img", "flag");
+                f.src = "images/countries/" + e.countryCode.toLowerCase() + ".svg";
+                f.alt = "";
+                f.onerror = () => f.remove();
+                flag.appendChild(f);
+            }
+            const nick = el("span", "nick", e.nickname || "?");
+            nick.title = "Open profile";
+            nick.addEventListener("click", () => {
+                window.__nswsProfile?.open(e.nickname, { carStyle: e.carStyle, countryCode: e.countryCode });
+                const p = document.getElementById("nsws-profile");
+                if (p) p.style.zIndex = "100650";
+            });
+            r.append(flag, nick, el("span", "time", e.hidden ? "hidden" : fmtTime(e.time.numberOfFrames)));
+            const key = "e" + e.id;
+            const can = !e.hidden && !e.noReplay && e.id > 0;
+            const g = el("button", "nt-gbtn" + (ghosts.has(key) ? " on" : ""), "Ghost");
+            g.type = "button";
+            g.disabled = !can;
+            g.title = can ? "Race against this run" : "This run has no replay";
+            g.addEventListener("click", () => toggleGhost(key, { id: e.id, nickname: e.nickname }, g));
+            r.appendChild(g);
+            return r;
+        }
+
+        function drawBoard() {
+            boardEl.replaceChildren();
+            const head = el("div", "nt-bhead");
+            head.append(el("span", null, "Leaderboard"), el("span", null, online && total ? total + (total === 1 ? " driver" : " drivers") : ""));
+            const list = el("div", "nt-blist");
+            boardEl.append(head, list);
+            if (!online) {
+                list.appendChild(el("p", "nt-text dim nt-bmsg", t.kind === "be" ? "Better Editor tracks have no online leaderboard yet, because the leaderboard can't check runs on their blocks. Your best time is kept on this device." : "The leaderboard isn't available on this copy of the site."));
+                return;
+            }
+            if (boardError) {
+                list.append(el("p", "nt-text bad nt-bmsg", boardError), button("Try again", () => loadBoard(false), { icon: "refresh" }));
+                return;
+            }
+            if (!entries.length) {
+                list.appendChild(el("p", "nt-text dim nt-bmsg", loadingBoard ? "Loading..." : "No times yet. Set the first one!"));
+                return;
+            }
+            entries.forEach((e, i) => list.appendChild(boardRow(e, i + 1)));
+            if (entries.length < total) {
+                const more = button(loadingBoard ? "Loading..." : "Show more", () => loadBoard(true), { disabled: loadingBoard });
+                more.classList.add("nt-bmore");
+                list.appendChild(more);
+            }
+        }
+
+        async function loadBoard(more) {
+            if (!online || loadingBoard) return;
+            loadingBoard = true;
+            boardError = null;
+            drawBoard();
+            try {
+                const res = await board.page(t.trackId, more ? entries.length : 0, BOARD_PAGE);
+                entries = more ? entries.concat(res.entries) : res.entries;
+                total = res.total;
+                userEntry = res.userEntry;
+            } catch (e) {
+                console.warn(e);
+                boardError = "Couldn't load the leaderboard. Check your connection and try again.";
+            }
+            loadingBoard = false;
+            if (closed) return;
+            drawBoard();
+            drawHero();
+        }
+
+        async function start() {
+            playBtn.disabled = true;
+            const list = [];
+            try {
+                const picked = [...ghosts.values()];
+                const remote = picked.filter((g) => g.id);
+                if (remote.length) {
+                    const runs = await board.recordings(remote.map((g) => g.id));
+                    runs.forEach((r, i) => r && list.push({ recording: r.recording, carStyle: r.carStyle, nickname: remote[i].nickname, time: r.time, isSelf: false }));
+                }
+                const rec = ghosts.has("self") ? myRecord() : null;
+                if (rec) {
+                    const me = board.profile();
+                    list.push({ recording: rec.recording, carStyle: me?.carStyle, nickname: me?.nickname || "You", time: rec.time, isSelf: true });
+                }
+            } catch (e) {
+                console.warn(e);
+                toast("Couldn't load the ghosts, so you're racing alone.");
+            }
+            playBtn.disabled = false;
+            const id = t.id;
+            const back = () => {
+                openLibrary();
+                (id ? get(id) : Promise.resolve(null)).then((x) => openTrackPage(x || t), () => openTrackPage(t));
+            };
+            await play(t, { start: true, intro: true, ghosts: list, onExit: back });
+        }
+
+        modals.push(entry);
+        document.body.appendChild(host);
+        drawHero();
+        drawBoard();
+        loadBoard(false);
+        host.focus();
+        return close;
     }
 
     // The Custom Tracks screen.
@@ -1576,6 +1993,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             info.append(name, metaNode(t, "added " + when(t.added)));
             r.appendChild(info);
             if (!state.selecting) {
+                r.classList.add("open");
+                r.title = "Open the track page";
+                r.addEventListener("click", () => openTrackPage(t));
                 const actions = el("div", "nt-actions");
                 actions.append(
                     button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary() }), { icon: "play", title: "Play" }),
@@ -2078,7 +2498,6 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         select,
         check,
         modeSelect,
-        markSubmitted,
         thumb: thumbNode,
         meta: metaNode,
         alert: alertBox,
@@ -2099,6 +2518,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         update,
         remove,
         setMode,
+        markSubmitted,
+        openTrackPage,
         onChange,
         play,
         registerModes,

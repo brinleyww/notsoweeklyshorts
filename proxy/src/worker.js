@@ -2067,6 +2067,25 @@ async function handleCupLink(request, url, env, code, wantsCard) {
 const TRACKS_PREFIX = "/nsws/tracks/";
 // A shared track pack: /t/<ID>. Like a cup link, it is the unfurl page for chat apps.
 const PACK_LINK = /^\/t\/([0-9A-Za-z]{10})$/;
+
+// The Better Editor's site through this Worker, for networks that block its github.io address. The site only
+// switches to it after github.io fails, so this sees little traffic.
+const BE_SITE = "https://brinleyww.github.io/Better-Editor-PT/";
+const BE_KEEP_HEADERS = ["content-type", "etag", "last-modified", "cache-control"];
+
+async function handleBeMirror(request, url) {
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Max-Age": "86400" } });
+    if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", "*");
+    if (url.pathname === "/be") return Response.redirect(url.origin + "/be/" + url.search, 301);
+    const rest = url.pathname.slice(4);
+    if (rest.split("/").some((p) => p === ".." || p === ".") || rest.includes("\\")) return plain(400, "Bad path", "*");
+    const headers = {};
+    for (const h of ["if-none-match", "if-modified-since"]) if (request.headers.get(h)) headers[h] = request.headers.get(h);
+    const upstream = await fetch(BE_SITE + rest + url.search, { method: request.method, headers, redirect: "follow" });
+    const out = new Headers({ "Access-Control-Allow-Origin": "*" });
+    for (const h of BE_KEEP_HEADERS) if (upstream.headers.get(h)) out.set(h, upstream.headers.get(h));
+    return new Response(upstream.body, { status: upstream.status, headers: out });
+}
 // A 4 MB pack or campaign plus the JSON around it.
 const MAX_TRACKS_BODY = 4_400_000;
 const MAX_TRACKS_SMALL_BODY = 16_384;
@@ -2306,6 +2325,14 @@ export default {
                 noteDoError(err);
                 console.error("cup link error:", err && err.message);
                 return plain(500, "Cup links failed", null);
+            }
+        }
+        if (url.pathname === "/be" || url.pathname.startsWith("/be/")) {
+            try {
+                return await handleBeMirror(request, url);
+            } catch (err) {
+                console.error("editor mirror error:", err && err.message);
+                return plain(502, "The editor mirror failed", "*");
             }
         }
         const packLink = PACK_LINK.exec(url.pathname);

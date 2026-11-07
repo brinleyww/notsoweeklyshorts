@@ -63128,15 +63128,32 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ));
                 let loading = null
                   , ready = !1;
+                const from = async b => {
+                    self.TM_BASE = b;
+                    if (!self.TM_DATA && (await script(b + "tm_parts.js"), !self.TM_DATA))
+                        throw new Error("Couldn't load " + b + "tm_parts.js");
+                    if (!self.TM && (await script(b + "tm_runtime.js"), !self.TM))
+                        throw new Error("Couldn't load " + b + "tm_runtime.js");
+                    await u;
+                    await self.TM.load()
+                };
                 return {
-                    base,
+                    get base() {
+                        return base
+                    },
                     ready: () => ready,
                     ensure: () => loading ?? (loading = (async () => {
-                        self.TM_BASE = base,
-                        self.TM_DATA || await script(base + "tm_parts.js"),
-                        self.TM || await script(base + "tm_runtime.js"),
-                        await u,
-                        await self.TM.load(),
+                        try {
+                            await from(base)
+                        } catch (e) {
+                            // Networks that block github.io still reach the NSWS Worker, which mirrors these files.
+                            const mirror = window.__nswsApiBase ? window.__nswsApiBase + "be/" : null;
+                            if (!mirror || base === mirror)
+                                throw e;
+                            console.warn(e),
+                            base = mirror,
+                            await from(base)
+                        }
                         d.addTMParts(i(405).registerTM(self.TM)),
                         ready = !0
                     }
@@ -63226,8 +63243,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             window.__bw_returnToMenu = () => M(!1, null);
             // Races a parsed track at once, with no track screen and local records only. onExit runs when the race is left
             // (the main menu is showing then).
-            window.__nswsRaceTrack = (meta, data, onExit) => (W(meta, data, "custom", [], null, "function" == typeof onExit ? onExit : null),
+            window.__nswsRaceTrack = (meta, data, onExit, ghosts) => (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
             !0);
+            // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
+            window.__nswsTrackBoard = {
+                page: (id, skip, amount) => x.getLeaderboard(w.getCurrentUserProfile().tokenHash, id, skip, amount, !1),
+                recordings: ids => x.getRecordings(ids),
+                record: id => S.getRecord(w.profileSlot, id),
+                profile: () => w.getCurrentUserProfile()
+            };
             // For mod/competitions.js: Competitions run on the game's own multiplayer.
             const cupCategory = data => {
                 const id = data?.getId?.();
