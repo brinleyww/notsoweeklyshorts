@@ -58424,9 +58424,6 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Hh = async function(e, t, n, i, r) {
             if (C.get(this, Fh, "f").determinismState != Js.Ok)
                 return null;
-            // Kodub's servers can't verify Better Editor blocks.
-            if (self.TM?.extTrackIds.has(t))
-                return null;
             const a = C.get(this, Oh, "f").getUserProfile(e);
             if (null == a)
                 return null;
@@ -61079,6 +61076,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             getLeaderboard(e, t, n, i, r) {
                 let a = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString() + window.__nswsTrackQuery(t);
                 this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e));
+                window.__nswsBEBoard?.(t) && (a = window.__nswsApiBase + "nsws/tracks/board?trackId=" + t + "&skip=" + n + "&amount=" + i + "&userTokenHash=" + encodeURIComponent(e));
                 const __nswsBoard = new Promise(( (t, n) => {
                     const i = new XMLHttpRequest;
                     i.timeout = C.get(this, wu, "f"),
@@ -61263,6 +61261,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             // Fetched 10 ids at a time: the watch list has no limit, but one request with every id might be refused.
             getRecordings(e) {
+                // Better Editor board runs have ids from 8e15 up and come from NSWS's board.
+                const be = e.filter((x => x >= 8e15));
+                if (be.length && be.length < e.length) {
+                    const kodub = e.filter((x => x < 8e15));
+                    return Promise.all([this.getRecordings(kodub), this.getRecordings(be)]).then((([k, b]) => e.map((x => x >= 8e15 ? b[be.indexOf(x)] : k[kodub.indexOf(x)]))))
+                }
                 if (e.length <= 10)
                     return this.getRecordingsBatch(e);
                 const t = [];
@@ -61271,7 +61275,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return Promise.all(t).then((e => e.flat()))
             }
             getRecordingsBatch(e) {
-                const t = window.__nswsApiBase + "" + C.get(this, ku, "f") + "recordings?version=0.6.2&ids=" + e.join(",");
+                const t = e.length && e[0] >= 8e15 ? window.__nswsApiBase + "nsws/tracks/board/recordings?ids=" + e.join(",") : window.__nswsApiBase + "" + C.get(this, ku, "f") + "recordings?version=0.6.2&ids=" + e.join(",");
                 return new Promise(( (e, n) => {
                     if (this.determinismState != Js.Ok)
                         n(new Error("Getting recordings not allowed"));
@@ -61335,6 +61339,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ))
             }
             submitLeaderboard(e, t, n, i, r, a, s, o) {
+                if (window.__nswsBEBoard?.(r) && this.determinismState == Js.Ok && !window.__nswsMacro?.locked())
+                    return window.__nswsBESubmit(e, t, n, i, r, s, o);
                 return new Promise(( (l, c) => {
                     if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(r))
                         c(new Error("Submit not allowed"));
@@ -63270,6 +63276,21 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             window.__nswsRaceTrack = (meta, data, onExit, ghosts) => (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
             !0);
             // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
+            window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id));
+            window.__nswsBESubmit = async (token, nickname, countryCode, carStyle, trackId, time, recording) => {
+                const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
+                    method: "POST",
+                    headers: { "Content-Type": "text/plain" },
+                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize() })
+                });
+                const d = await res.json().catch((() => null));
+                if (!res.ok || !d || d.error)
+                    throw new Error(d?.error || "Upload failed (" + res.status + ")");
+                return {
+                    uploadId: Number.isSafeInteger(d.uploadId) ? d.uploadId : null,
+                    positionChange: Number.isSafeInteger(d.newPosition) && d.newPosition > 0 ? { previousPosition: d.previousPosition || 0, newPosition: d.newPosition } : null
+                }
+            };
             window.__nswsTrackBoard = {
                 page: (id, skip, amount) => x.getLeaderboard(w.getCurrentUserProfile().tokenHash, id, skip, amount, !1),
                 recordings: ids => x.getRecordings(ids),

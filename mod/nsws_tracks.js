@@ -10,6 +10,8 @@
     const BE_PREFIX = "PolyTrackBE1";
     const MAX_PACK_TRACKS = 50;
     const IMAGE_MAX = 20000;
+    const validImage = (v) => (typeof v === "string" && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v) && v.length <= IMAGE_MAX ? v : null);
+    const TRACK_ID = /^[0-9a-f]{64}$/;
     const MAX_PACK_BYTES = 4 * 1024 * 1024;
     const MAX_IMPORT = 200;
     const CLUB_CODE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{6}$/;
@@ -678,8 +680,8 @@
         const now = Date.now();
         const base = { code: info.code, kind: info.kind, name: info.name, author: info.author, trackId: info.trackId, env: info.env, hash, updated: now };
         const track = existing
-            ? { ...existing, ...base, thumb: thumb || existing.thumb || null, mode: opts.mode ? normMode(opts.mode) : existing.mode, sync: "all" }
-            : { id: newId(), ...base, mode: normMode(opts.mode), thumb, added: now, source: opts.source || "import", favourite: false, folder: null, sync: "all" };
+            ? { ...existing, ...base, thumb: thumb || existing.thumb || null, mode: opts.mode ? normMode(opts.mode) : existing.mode, image: validImage(opts.image) || existing.image || null, sync: "all" }
+            : { id: newId(), ...base, mode: normMode(opts.mode), thumb, image: validImage(opts.image), added: now, source: opts.source || "import", favourite: false, folder: null, sync: "all" };
         await putTrack(track);
         schedulePush();
         return { track, isNew: !existing };
@@ -696,7 +698,7 @@
         for (const item of items || []) {
             const code = typeof item === "string" ? item : item?.code;
             try {
-                const { track, isNew } = await addOne(code, { mode: item?.mode, source: opts.source });
+                const { track, isNew } = await addOne(code, { mode: item?.mode, image: item?.image, source: opts.source });
                 isNew ? result.added++ : result.updated++;
                 result.tracks.push(track);
             } catch (e) {
@@ -715,7 +717,7 @@
         if (typeof patch.name === "string" && patch.name.trim()) next.name = patch.name.trim().slice(0, 80);
         if ("folder" in patch) next.folder = patch.folder ? String(patch.folder).slice(0, 40) : null;
         if ("favourite" in patch) next.favourite = !!patch.favourite;
-        if ("image" in patch) next.image = typeof patch.image === "string" && /^data:image\/(jpeg|png|webp);base64,/.test(patch.image) && patch.image.length <= IMAGE_MAX ? patch.image : null;
+        if ("image" in patch) next.image = validImage(patch.image);
         if ("submitted" in patch) next.submitted = patch.submitted ? { id: String(patch.submitted.id || "").slice(0, 32), at: Number(patch.submitted.at) || Date.now() } : null;
         next.updated = Date.now();
         if (next.sync === "ok") next.sync = "meta";
@@ -767,7 +769,7 @@
     function normItems(items) {
         const arr = Array.isArray(items) ? items : items ? [items] : [];
         return arr
-            .map((t) => (typeof t === "string" ? { code: clean(t), mode: "normal" } : { code: clean(t?.code), mode: normMode(t?.mode), name: t?.name || null }))
+            .map((t) => (typeof t === "string" ? { code: clean(t), mode: "normal" } : { code: clean(t?.code), mode: normMode(t?.mode), name: t?.name || null, image: validImage(t?.image) }))
             .filter((t) => t.code);
     }
 
@@ -778,7 +780,7 @@
         const json = { v: 1 };
         const packName = typeof name === "string" ? name.trim().slice(0, 64) : "";
         if (packName) json.name = packName;
-        json.tracks = tracks.map((t) => (t.mode === "normal" ? { code: t.code } : { code: t.code, mode: t.mode }));
+        json.tracks = tracks.map((t) => ({ code: t.code, ...(t.mode !== "normal" && { mode: t.mode }), ...(t.image && { image: t.image }) }));
         const bytes = new TextEncoder().encode(JSON.stringify(json));
         if (bytes.length > MAX_PACK_BYTES) throw new Error("That's too much track data for one pack (4 MB at most). Share fewer tracks at once.");
         return PACK_PREFIX + toB64url(await deflateRaw(bytes));
@@ -802,7 +804,7 @@
         const tracks = json.tracks
             .slice(0, MAX_PACK_TRACKS)
             .filter((t) => t && typeof t.code === "string" && t.code.trim())
-            .map((t) => ({ code: clean(t.code), mode: normMode(t.mode) }));
+            .map((t) => ({ code: clean(t.code), mode: normMode(t.mode), image: validImage(t.image) }));
         return { name: typeof json.name === "string" ? json.name.slice(0, 64) : "", tracks };
     }
 
@@ -817,7 +819,7 @@
         const me = user();
         const answer = await api("nsws/tracks/pack", { pack, name: typeof name === "string" ? name.trim().slice(0, 64) : "", count: tracks.length, names, token: me.token, nickname: me.nickname });
         if (!answer?.id || !LINK_ID.test(answer.id)) throw new Error("The server didn't send a link back. Try again.");
-        const out = { url: window.__nswsApiBase + "t/" + answer.id, id: answer.id };
+        const out = { url: (window.__nswsShareBase || location.origin + "/") + "?tracks=" + answer.id, id: answer.id };
         linkCache.set(pack, out);
         return out;
     }
@@ -1047,8 +1049,35 @@
             }
         }
         intro?.finish(ok);
+        if (ok) notePlayed(info.trackId);
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
+    }
+
+    function notePlayed(trackId) {
+        const me = user();
+        if (!me.token || !TRACK_ID.test(trackId || "")) return;
+        let seen = [];
+        try {
+            seen = JSON.parse(localStorage.getItem("nswsPlayed") || "[]");
+        } catch {}
+        const key = me.token.slice(0, 8) + trackId.slice(0, 24);
+        if (seen.includes(key)) return;
+        api("nsws/tracks/played", { token: me.token, trackId }).then(() => {
+            seen.push(key);
+            try {
+                localStorage.setItem("nswsPlayed", JSON.stringify(seen.slice(-3000)));
+            } catch {}
+        }, () => {});
+    }
+
+    // Favourites live on the account's My Tracks entry; the server also counts them per track.
+    async function setFavourite(track, on) {
+        const next = await update(track.id, { favourite: on });
+        const me = user();
+        let stats = null;
+        if (me.token && TRACK_ID.test(track.trackId || "")) stats = await api("nsws/tracks/favourite", { token: me.token, trackId: track.trackId, on }).catch(() => null);
+        return { track: next, stats };
     }
 
     function bigThumb(data) {
@@ -1582,7 +1611,19 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         ensureCss();
         let t = track;
         const board = window.__nswsTrackBoard;
-        const online = t.kind !== "be" && !!board && !!t.trackId;
+        const online = !!board && !!t.trackId;
+        if (t.kind === "be" && t.trackId) (window.__nswsBEBoardIds ??= new Set()).add(t.trackId);
+        let stats = null;
+        const me0 = user();
+        if (me0.token && TRACK_ID.test(t.trackId || ""))
+            api("nsws/tracks/stats", { token: me0.token, trackId: t.trackId }).then((s) => {
+                stats = s;
+                if (!closed) drawHero();
+            }, () => {});
+        const isCreator = () => {
+            const nick = (user().nickname || "").trim().toLowerCase();
+            return t.source === "editor" || (!!nick && (t.author || "").trim().toLowerCase() === nick);
+        };
         const host = isolate(el("div", "nt-host nt-page"));
         host.tabIndex = -1;
         const bg = el("div", "nt-pbg");
@@ -1672,9 +1713,24 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             }
             pic.appendChild(img);
             hero.appendChild(pic);
-            if (t.id) {
+            if (t.id && isCreator()) {
+                // Picture (the creator's choice, shared with the track): the map PolyTrack draws from it, or an uploaded one.
                 const picBar = el("div", "nt-line");
-                picBar.appendChild(button(t.image ? "Change picture" : "Add picture", async () => {
+                picBar.appendChild(el("span", "nt-text dim", "Picture"));
+                picBar.appendChild(button("Map icon", async () => {
+                    if (t.kind === "be" && !beReady()) {
+                        let ok = false;
+                        try {
+                            ok = await ensureBE();
+                        } catch {}
+                        if (!ok || closed) return;
+                    }
+                    mapSrc = undefined;
+                    if (t.image) t = await update(t.id, { image: null });
+                    drawHero();
+                    if (!mapImage()) toast("PolyTrack couldn't draw a map for this track.");
+                }, { icon: "images/" + (t.env || "summer").toLowerCase() + ".svg", primary: !t.image, title: "Use the map PolyTrack draws from the track" }));
+                picBar.appendChild(button(t.image ? "Change picture" : "Upload picture", async () => {
                     const file = await pickImageFile();
                     if (!file || closed) return;
                     try {
@@ -1684,19 +1740,16 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                     } catch (e) {
                         toast(e.message || "Couldn't use that picture.");
                     }
-                }, { icon: "load", title: "Use your own picture for this track (only you see it)" }));
-                if (t.image) picBar.appendChild(button("Use map", async () => {
-                    t = await update(t.id, { image: null });
-                    drawHero();
-                }));
+                }, { icon: "load", primary: !!t.image, title: "Use your own picture for this track; it goes with the track when you share it" }));
                 hero.appendChild(picBar);
             }
             hero.append(el("div", "nt-ptitle", t.name || "Untitled track"), metaNode(t));
-            const stats = el("div", "nt-pstats");
+            const statsEl = el("div", "nt-pstats");
             const rec = myRecord();
-            stats.append(el("span", null, "Your best"), el("span", null, rec ? fmtTime(rec.time.numberOfFrames) : "No time yet"));
-            if (online && userEntry) stats.append(el("span", null, "Rank"), el("span", null, "#" + userEntry.position + (total ? " of " + total : "")));
-            hero.appendChild(stats);
+            statsEl.append(el("span", null, "Your best"), el("span", null, rec ? fmtTime(rec.time.numberOfFrames) : "No time yet"));
+            if (online && userEntry) statsEl.append(el("span", null, "Rank"), el("span", null, "#" + userEntry.position + (total ? " of " + total : "")));
+            if (stats) statsEl.append(el("span", null, "Players"), el("span", null, String(stats.players)), el("span", null, "Favourites"), el("span", null, String(stats.favourites)));
+            hero.appendChild(statsEl);
             if (rec?.recording) {
                 const own = el("div", "nt-line");
                 const g = el("button", "nt-gbtn" + (ghosts.has("self") ? " on" : ""), "Ghost");
@@ -1708,6 +1761,16 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const acts = el("div", "nt-line");
             acts.append(playBtn);
             if (t.id) acts.append(button("Edit", () => openInEditor(t), { icon: "editor" }), button("Share", () => openShare([t]), { icon: "share" }));
+            if (t.id) acts.append(button(t.favourite ? "Favourite" : "Favourite", async () => {
+                try {
+                    const r = await setFavourite(t, !t.favourite);
+                    t = r.track;
+                    if (r.stats && !r.stats.error) stats = r.stats;
+                    if (!closed) drawHero();
+                } catch (e) {
+                    toast(e.message || "Couldn't change that.");
+                }
+            }, { icon: t.favourite ? "nsws_star_on" : "nsws_star", primary: !!t.favourite, title: t.favourite ? "Remove from favourites" : "Add to favourites" }));
             hero.appendChild(acts);
             playLabel();
         }
@@ -1749,9 +1812,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const list = el("div", "nt-blist");
             boardEl.append(head, list);
             if (!online) {
-                list.appendChild(el("p", "nt-text dim nt-bmsg", t.kind === "be" ? "Better Editor tracks have no online leaderboard yet, because the leaderboard can't check runs on their blocks. Your best time is kept on this device." : "The leaderboard isn't available on this copy of the site."));
+                list.appendChild(el("p", "nt-text dim nt-bmsg", "The leaderboard isn't available on this copy of the site."));
                 return;
             }
+            if (t.kind === "be") list.appendChild(el("p", "nt-text dim nt-bmsg", "Better Editor board, kept by NSWS: the anti-cheat can't replay runs on these blocks yet."));
             if (boardError) {
                 list.append(el("p", "nt-text bad nt-bmsg", boardError), button("Try again", () => loadBoard(false), { icon: "refresh" }));
                 return;
@@ -1932,7 +1996,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const sort = select([{ id: "recent", label: "Recent" }, { id: "name", label: "Name" }, { id: "author", label: "Author" }], "recent", (v) => { state.sort = v; draw(); });
         sort.title = "Sort";
         const filter = select(
-            [{ id: "all", label: "All tracks" }, { id: "normal", label: "Normal" }, { id: "rocket", label: "Rocket League" }, { id: "royale", label: "Royale" }, { id: "be", label: "Better Editor" }, { id: "stock", label: "Plays in NSWS" }],
+            [{ id: "all", label: "All tracks" }, { id: "fav", label: "Favourites" }, { id: "normal", label: "Normal" }, { id: "rocket", label: "Rocket League" }, { id: "royale", label: "Royale" }, { id: "be", label: "Better Editor" }, { id: "stock", label: "Plays in NSWS" }],
             "all",
             (v) => { state.filter = v; draw(); }
         );
@@ -1974,6 +2038,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         function shown() {
             let out = state.tracks.filter((t) => {
                 if (state.q && !((t.name || "").toLowerCase().includes(state.q) || (t.author || "").toLowerCase().includes(state.q))) return false;
+                if (state.filter === "fav") return !!t.favourite;
                 if (state.filter === "be" || state.filter === "stock") return t.kind === state.filter;
                 if (state.filter !== "all") return normMode(t.mode) === state.filter;
                 return true;
@@ -2009,6 +2074,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                     button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary() }), { icon: "play", title: "Play" }),
                     button("Edit", () => openInEditor(t), { icon: "editor", title: "Open in the Track Editor" }),
                     button("Share", () => openShare([t]), { icon: "share", title: t.submitted ? "Submitted to Weekly Shorts" : "Share, or submit to Weekly Shorts" }),
+                    button("", () => setFavourite(t, !t.favourite).catch((e) => toast(e.message)), { icon: t.favourite ? "nsws_star_on" : "nsws_star", title: t.favourite ? "Favourite (click to remove)" : "Add to favourites" }),
                     button("", async () => {
                         if (!(await confirmBox("Delete \"" + (t.name || "Untitled track") + "\" from My Tracks? This can't be undone.", { title: "Delete track", ok: "Delete" }))) return;
                         await remove(t.id);
@@ -2118,7 +2184,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                     primary: true,
                     disabled: !n,
                     onClick: async () => {
-                        const chosen = items.filter((i) => i.on && i.info.ok).map((i) => ({ code: i.info.code, mode: i.mode }));
+                        const chosen = items.filter((i) => i.on && i.info.ok).map((i) => ({ code: i.info.code, mode: i.mode, image: i.image }));
                         const result = await addMany(chosen, { source: fromLink ? "link" : "import" });
                         const parts = [];
                         if (result.added) parts.push("added " + result.added);
@@ -2167,7 +2233,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                     if (info.kind === "stock") existing = [...library.values()].find((x) => x.trackId === info.trackId) || null;
                     else existing = [...library.values()].find((x) => x.code === info.code) || null;
                 }
-                next.push({ info, mode: t.mode, on: info.ok, existing });
+                next.push({ info, mode: t.mode, image: validImage(t.image), on: info.ok, existing });
             }
             for (const f of result.failed || []) next.push({ info: failed(f.code, f.error), mode: "normal", on: false });
             items = next;
@@ -2237,7 +2303,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     function openShare(items, name) {
         const tracks = (Array.isArray(items) ? items : items ? [items] : [])
             .map((t) => (typeof t === "string" ? { code: t } : t || {}))
-            .map((t) => ({ id: t.id || null, code: clean(t.code), mode: normMode(t.mode), name: t.name || null, kind: t.kind || null, trackId: t.trackId || null, submitted: t.submitted || null }))
+            .map((t) => ({ id: t.id || null, code: clean(t.code), mode: normMode(t.mode), name: t.name || null, kind: t.kind || null, trackId: t.trackId || null, submitted: t.submitted || null, image: validImage(t.image) }))
             .filter((t) => t.code);
         if (!tracks.length) return alertBox("Pick at least one track to share.");
         const locked = tracks.filter((t) => t.submitted);
