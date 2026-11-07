@@ -2875,9 +2875,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                 if (p.has(TM.parts[0].i))
                     return [];
                 TM.addEnum(Part);
-                for (const [k,v] of [["Plastic", 9], ["Wood", 10], ["Stadium", 11], ["Ice", 12]])
+                for (const [k,v] of [["Plastic", 9], ["Wood", 10], ["Stadium", 11], ["Ice", 12], ["Water", 13]])
                     PartCategory[PartCategory[k] = v] = k;
-                const added = TM.parts.map((q => new PartObject(null,[PartCategory.Plastic, PartCategory.Wood, PartCategory.Stadium, PartCategory.Ice][q.f],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new THREE.Vector3(q.o[0],q.o[1],q.o[2]) : null,q)));
+                const added = TM.parts.map((q => new PartObject(null,[PartCategory.Plastic, PartCategory.Wood, PartCategory.Stadium, PartCategory.Ice, PartCategory.Water][q.f],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new THREE.Vector3(q.o[0],q.o[1],q.o[2]) : null,q)));
                 for (const e of added)
                     u.push(e),
                     p.set(e.id, e),
