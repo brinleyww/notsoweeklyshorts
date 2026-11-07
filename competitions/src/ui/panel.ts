@@ -1119,12 +1119,8 @@ export class Panel {
     return { box, msgs, input, cupTab, allTab };
   }
 
-  // Through the proxy (worker.js /c/<code>), the only side that can tell a chat app whose cup
-  // this is and what it is doing. Whoever opens it is sent straight on to the site.
   #link() {
     const code = this.app.code ?? '';
-    const api = site.__nswsApiBase;
-    if (api) return new URL('c/' + encodeURIComponent(code), api).toString();
     const url = new URL(site.__nswsShareBase || location.href);
     url.search = '';
     url.hash = '';
