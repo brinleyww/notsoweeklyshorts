@@ -34,7 +34,7 @@
     const clearedModes = new Set();
     const simWorkers = new Set();
 
-    function modesMessage() {
+    function modesMessage(worker) {
         const rocket = [];
         const royale = [];
         for (const [id, mode] of modeRegistry) (mode === "rocket" ? rocket : royale).push(id);
@@ -42,7 +42,7 @@
         // Ids set back to Normal; a worker that can't remove ids just ignores this list.
         if (clearedModes.size) nswsModes.normal = [...clearedModes];
         // Where the worker loads Better Editor's blocks from, when a track with them arrives.
-        return { nswsModes, nswsTMBase: window.__nswsTM?.base };
+        return { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base };
     }
 
     const NativeWorker = window.Worker;
@@ -51,9 +51,10 @@
             constructor(url, options) {
                 super(url, options);
                 if (/simulation_worker/.test(String(url))) {
+                    this.nswsTMBase = window.__nswsSimBase || null;
                     simWorkers.add(this);
                     try {
-                        this.postMessage(modesMessage());
+                        this.postMessage(modesMessage(this));
                     } catch {}
                 }
             }
@@ -102,10 +103,9 @@
             }
         }
         if (!changed) return;
-        const message = modesMessage();
         for (const w of simWorkers) {
             try {
-                w.postMessage(message);
+                w.postMessage(modesMessage(w));
             } catch {}
         }
         window.dispatchEvent(new CustomEvent("nsws-track-modes"));
@@ -305,6 +305,55 @@
             close();
         }
         setTimeout(() => refreshThumbs().catch(() => {}), 0);
+        return !cancelled;
+    }
+
+    async function preloadPhysics(base, version) {
+        const ctrl = new AbortController();
+        let cancelled = false;
+        let finished = false;
+        const body = el("div");
+        const bar = el("div", "nt-pbar busy");
+        const fill = el("div");
+        bar.appendChild(fill);
+        const sub = el("p", "nt-text dim", "Starting...");
+        body.append(el("p", "nt-text", "Loading Better Editor physics v" + version + ". The first replay on it downloads its blocks (about 70 MB)."), bar, sub);
+        const close = dialog({
+            title: "Old physics",
+            body,
+            actions: [{ label: "Cancel" }],
+            onClose: () => {
+                if (finished) return;
+                cancelled = true;
+                ctrl.abort();
+            },
+        });
+        try {
+            for (const f of ["tm_parts.js", "tm_runtime.js"]) {
+                const r = await fetch(base + f, { signal: ctrl.signal });
+                if (!r.ok) throw new Error(f + ": " + r.status);
+                await r.arrayBuffer();
+            }
+            const r = await fetch(base + "models/tm_blocks.bin", { signal: ctrl.signal });
+            if (!r.ok || !r.body) throw new Error("tm_blocks.bin: " + r.status);
+            const total = Number(r.headers.get("content-length")) || 0;
+            const reader = r.body.getReader();
+            let got = 0;
+            for (;;) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                got += value.byteLength;
+                bar.classList.toggle("busy", !total);
+                if (total) fill.style.width = Math.min(100, (got / total) * 100).toFixed(1) + "%";
+                sub.textContent = mb(got) + (total ? " of " + mb(total) : "") + " MB";
+            }
+        } catch (e) {
+            if (cancelled) return false;
+            throw e;
+        } finally {
+            finished = true;
+            close();
+        }
         return !cancelled;
     }
 
@@ -1014,7 +1063,7 @@
             return false;
         }
         const intro = opts.intro && !isKnown(info.trackId) ? await launchCard(item, info, mode, loaded.data) : null;
-        closeAll();
+        closeAll(true);
         try {
             window.__nswsEditor?.close?.();
         } catch {}
@@ -1031,7 +1080,13 @@
         }
         registerModes([{ trackId: info.trackId, mode }]);
         let ok = false;
-        if (opts.start && window.__nswsRaceTrack) {
+        if (opts.watch && window.__nswsWatchTrack) {
+            try {
+                ok = !!window.__nswsWatchTrack(loaded.meta, loaded.data, opts.watch.runs, opts.onExit, opts.watch.tmBase || null);
+            } catch (e) {
+                console.error(e);
+            }
+        } else if (opts.start && window.__nswsRaceTrack) {
             try {
                 ok = !!window.__nswsRaceTrack(loaded.meta, loaded.data, opts.onExit, opts.ghosts);
             } catch (e) {
@@ -1049,7 +1104,7 @@
             }
         }
         intro?.finish(ok);
-        if (ok) notePlayed(info.trackId);
+        if (ok && !opts.watch) notePlayed(info.trackId);
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
     }
@@ -1181,9 +1236,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-pbar{position:relative;height:6px;margin:10px 0 4px;overflow:hidden;background:rgba(255,255,255,.15);}
 .nt-pbar>div{position:absolute;top:0;bottom:0;left:0;width:0;background:#7272c2;transition:width .2s;}
 .nt-pbar.busy>div{width:35%;transition:none;animation:ntLoad 1.1s linear infinite;}
+.nt-bvers{flex-wrap:wrap;gap:6px;margin:0 0 8px;}
 .nt-page{z-index:100450;flex-direction:column;align-items:stretch;justify-content:flex-start;background:#192042;outline:none;}
-.nt-pbg{position:absolute;inset:-20px;background-size:cover;background-position:center;image-rendering:pixelated;opacity:.16;pointer-events:none;}
-.nt-pbg.photo{image-rendering:auto;filter:blur(6px);}
 .nt-pwrap{position:relative;display:flex;flex-direction:column;width:min(1120px,100%);height:100%;margin:0 auto;min-height:0;}
 .nt-ptop{display:flex;align-items:center;gap:10px;padding:10px 14px;}
 .nt-ptop h2{margin:0;font-size:24px;font-weight:normal;color:rgba(255,255,255,.7);}
@@ -1607,9 +1661,12 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         throw new Error("That image couldn't be made small enough.");
     }
 
-    function openTrackPage(track) {
+    function openTrackPage(track, opts = {}) {
         ensureCss();
         let t = track;
+        // Better Editor physics version being shown; null is the current one.
+        let physicsView = Number.isSafeInteger(opts.physics) ? opts.physics : null;
+        let older = [];
         const board = window.__nswsTrackBoard;
         const online = !!board && !!t.trackId;
         if (t.kind === "be" && t.trackId) (window.__nswsBEBoardIds ??= new Set()).add(t.trackId);
@@ -1626,7 +1683,6 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         };
         const host = isolate(el("div", "nt-host nt-page"));
         host.tabIndex = -1;
-        const bg = el("div", "nt-pbg");
         const wrap = el("div", "nt-pwrap");
         const top = el("div", "nt-ptop");
         const body = el("div", "nt-pbody");
@@ -1634,7 +1690,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const boardEl = el("div", "nt-board");
         body.append(hero, boardEl);
         wrap.append(top, body);
-        host.append(bg, wrap);
+        host.append(wrap);
         let closed = false;
         const unsub = onChange(() => {
             if (!t.id) return;
@@ -1697,8 +1753,6 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 
         function drawHero() {
             const src = t.image || mapImage();
-            bg.className = "nt-pbg" + (t.image ? " photo" : "");
-            bg.style.backgroundImage = src ? 'url("' + src + '")' : "";
             hero.replaceChildren();
             const pic = el("div", "nt-lthumb");
             const img = el("img");
@@ -1747,7 +1801,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const statsEl = el("div", "nt-pstats");
             const rec = myRecord();
             statsEl.append(el("span", null, "Your best"), el("span", null, rec ? fmtTime(rec.time.numberOfFrames) : "No time yet"));
-            if (online && userEntry) statsEl.append(el("span", null, "Rank"), el("span", null, "#" + userEntry.position + (total ? " of " + total : "")));
+            if (online && userEntry && !physicsView) statsEl.append(el("span", null, "Rank"), el("span", null, "#" + userEntry.position + (total ? " of " + total : "")));
             if (stats) statsEl.append(el("span", null, "Players"), el("span", null, String(stats.players)), el("span", null, "Favourites"), el("span", null, String(stats.favourites)));
             hero.appendChild(statsEl);
             if (rec?.recording) {
@@ -1794,6 +1848,16 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 if (p) p.style.zIndex = "100650";
             });
             r.append(flag, nick, el("span", "time", e.hidden ? "hidden" : fmtTime(e.time.numberOfFrames)));
+            if (physicsView) {
+                const ref = older.find((o) => o.physics === physicsView)?.ref;
+                const w = el("button", "nt-gbtn", "Watch");
+                w.type = "button";
+                w.disabled = !ref;
+                w.title = ref ? "Replay this run on the physics it was driven on" : "That physics version wasn't kept, so its runs can't be replayed";
+                w.addEventListener("click", () => watchOld(e, ref, w));
+                r.appendChild(w);
+                return r;
+            }
             const key = "e" + e.id;
             const can = !e.hidden && !e.noReplay && e.id > 0;
             const g = el("button", "nt-gbtn" + (ghosts.has(key) ? " on" : ""), "Ghost");
@@ -1815,7 +1879,25 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 list.appendChild(el("p", "nt-text dim nt-bmsg", "The leaderboard isn't available on this copy of the site."));
                 return;
             }
-            if (t.kind === "be") list.appendChild(el("p", "nt-text dim nt-bmsg", "Better Editor board, kept by NSWS: the anti-cheat can't replay runs on these blocks yet."));
+            if (t.kind === "be" && (older.length || physicsView)) {
+                const vers = el("div", "nt-line nt-bvers");
+                const chip = (label, v) => {
+                    const b = el("button", "nt-gbtn" + (physicsView === v ? " on" : ""), label);
+                    b.type = "button";
+                    b.addEventListener("click", () => {
+                        if (physicsView === v || loadingBoard) return;
+                        physicsView = v;
+                        entries = [];
+                        loadBoard(false);
+                        drawHero();
+                    });
+                    return b;
+                };
+                vers.append(chip("Current physics", null), ...older.map((o) => chip("Old physics v" + o.physics + " (" + o.total + ")", o.physics)));
+                list.appendChild(vers);
+            }
+            if (physicsView) list.appendChild(el("p", "nt-text dim nt-bmsg", "Times set before a Better Editor physics change (physics v" + physicsView + "). They don't count any more. Watch replays a run on the physics it was driven on."));
+            else if (t.kind === "be") list.appendChild(el("p", "nt-text dim nt-bmsg", "Better Editor board, kept by NSWS: the anti-cheat can't replay runs on these blocks yet."));
             if (boardError) {
                 list.append(el("p", "nt-text bad nt-bmsg", boardError), button("Try again", () => loadBoard(false), { icon: "refresh" }));
                 return;
@@ -1838,10 +1920,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             boardError = null;
             drawBoard();
             try {
-                const res = await board.page(t.trackId, more ? entries.length : 0, BOARD_PAGE);
+                const res = t.kind === "be" ? await bePage(more ? entries.length : 0) : await board.page(t.trackId, more ? entries.length : 0, BOARD_PAGE);
                 entries = more ? entries.concat(res.entries) : res.entries;
                 total = res.total;
-                userEntry = res.userEntry;
+                if (!physicsView) userEntry = res.userEntry;
             } catch (e) {
                 console.warn(e);
                 boardError = "Couldn't load the leaderboard. Check your connection and try again.";
@@ -1850,6 +1932,54 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (closed) return;
             drawBoard();
             drawHero();
+        }
+
+        // NSWS's own board for Better Editor tracks, read directly so it can show older physics versions.
+        async function bePage(skip) {
+            let hash = null;
+            try {
+                hash = board.profile()?.tokenHash || null;
+            } catch {}
+            const q = "nsws/tracks/board?trackId=" + t.trackId + "&skip=" + skip + "&amount=" + BOARD_PAGE + (physicsView ? "&physics=" + physicsView : "") + (hash ? "&userTokenHash=" + encodeURIComponent(hash) : "");
+            const d = await api(q);
+            older = Array.isArray(d.older) ? d.older : [];
+            if (physicsView && d.physics !== physicsView) physicsView = null;
+            const style = (s) => {
+                try {
+                    return window.__clipCarStyleClass?.deserializeSafe(s) ?? null;
+                } catch {
+                    return null;
+                }
+            };
+            return {
+                total: d.total || 0,
+                userEntry: d.userEntry || null,
+                entries: (d.entries || []).map((e) => ({ id: e.id, nickname: e.nickname, countryCode: e.countryCode, carStyle: style(e.carStyle), time: { numberOfFrames: e.frames }, isSelf: !!hash && e.userId === hash })),
+            };
+        }
+
+        async function watchOld(e, ref, btn) {
+            const base = window.__nswsApiBase;
+            if (!ref || !base) return;
+            btn.disabled = true;
+            const view = physicsView;
+            try {
+                const [r] = await board.recordings([e.id]);
+                if (!r) throw new Error("This run has no replay.");
+                const tmBase = base + "be@" + ref + "/";
+                if (!(await preloadPhysics(tmBase, view))) return;
+                const id = t.id;
+                const back = () => {
+                    openLibrary();
+                    (id ? get(id) : Promise.resolve(null)).then((x) => openTrackPage(x || t, { physics: view }), () => openTrackPage(t, { physics: view }));
+                };
+                await play(t, { watch: { runs: [{ recording: r.recording, carStyle: r.carStyle, nickname: e.nickname, time: r.time, isSelf: false }], tmBase }, onExit: back });
+            } catch (err) {
+                console.warn(err);
+                toast(err.message === "This run has no replay." ? err.message : "Couldn't load that run's physics. Check your connection and try again.");
+            } finally {
+                btn.disabled = false;
+            }
         }
 
         async function start() {
@@ -1900,7 +2030,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         root.hidden = true;
         const panel = el("div", "nt-panel");
         const top = el("div", "nt-top");
-        top.appendChild(button("Back", closeLibrary, { icon: "back" }));
+        top.appendChild(button("Back", () => closeLibrary(), { icon: "back" }));
         top.appendChild(el("h2", null, "Custom Tracks"));
         const editorBtn = button("Track Editor", () => openInEditor(null), { icon: "editor" });
         top.appendChild(editorBtn);
@@ -1955,6 +2085,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         if (!screen) buildScreen();
         screen.editorBtn.hidden = !window.__nswsEditor?.open;
         screen.root.hidden = false;
+        window.__nswsMainMenu?.hide();
         sync().catch(() => {});
         const wanted = tab || screen.current || "tracks";
         if (tab && !tabs.some((t) => t.id === tab)) pendingTab = tab;
@@ -1963,13 +2094,16 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         return true;
     }
 
-    function closeLibrary() {
-        if (screen) screen.root.hidden = true;
+    // keepMenu: a race is about to replace the main menu, so its buttons stay hidden.
+    function closeLibrary(keepMenu) {
+        if (!screen || screen.root.hidden) return;
+        screen.root.hidden = true;
+        if (keepMenu !== true) window.__nswsMainMenu?.show();
     }
 
-    function closeAll() {
+    function closeAll(keepMenu) {
         while (modals.length) modals[modals.length - 1].cancel();
-        closeLibrary();
+        closeLibrary(keepMenu);
     }
 
     function registerTab(tab) {

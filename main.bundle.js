@@ -57001,6 +57001,17 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 fit.textContent = ".menu-ui > .main-buttons-container{container-type:inline-size}.menu-ui > .main-buttons-container:not(.hidden){display:grid;grid-template-columns:repeat(8,auto);gap:16px;place-content:center;align-items:center;grid-template-areas:'clips settings standings standings play play comps editor' 'clips customize standings standings play play load editor'}.menu-ui .main-buttons-container > .button-image{--s:min(170px,(100cqw - 160px) / 8);margin:0;width:var(--s);height:var(--s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--s) * .06)}.menu-ui .main-buttons-container > .button-image > img{margin:0;width:calc(var(--s) * .44);height:calc(var(--s) * .44)}.menu-ui .main-buttons-container > .button-image > p{padding:0 4px;font-size:calc(var(--s) * .125);line-height:1.15}.menu-ui .main-buttons-container > .nsws-mb-big{width:calc(var(--s) * 2 + 16px);height:calc(var(--s) * 2 + 16px)}.menu-ui .main-buttons-container > .nsws-mb-big > img{width:calc(var(--s) * .9);height:calc(var(--s) * .9)}.menu-ui .main-buttons-container > .nsws-mb-big > p{font-size:calc(var(--s) * .21)}.nsws-mb-clips{grid-area:clips}.nsws-mb-settings{grid-area:settings}.nsws-mb-garage{grid-area:customize}.nsws-mb-standings{grid-area:standings}.nsws-mb-play{grid-area:play}.nsws-mb-comps{grid-area:comps}.nsws-mb-load{grid-area:load}.nsws-mb-editor{grid-area:editor}";
                 document.head.appendChild(fit);
             }
+            // Custom Tracks is a menu of its own (mod/nsws_tracks.js): the main menu's buttons and logo hide while it is open.
+            window.__nswsMainMenu = {
+                hide: () => {
+                    C.get(this, vc, "m", qc).call(this),
+                    C.get(this, vc, "m", Xc).call(this)
+                },
+                show: () => {
+                    C.get(this, vc, "m", Qc).call(this),
+                    C.get(this, vc, "m", Yc).call(this)
+                }
+            };
             for (const [img, label, open] of [["load", "Custom Tracks", () => window.__nswsTracks?.openLibrary()], ["editor", "Custom Tracks Editor", () => window.__nswsEditor?.open()]]) {
                 const btn = document.createElement("button");
                 btn.className = "button button-image nsws-mb-" + img;
@@ -63142,9 +63153,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ));
                 let loading = null
-                  , ready = !1;
+                  , ready = !1
+                  , physics = 1;
                 const from = async b => {
                     self.TM_BASE = b;
+                    const version = fetch(b + "physics.json", { cache: "no-cache" }).then((r => r.ok ? r.json() : null)).then((j => Number.isSafeInteger(j?.version) && j.version > 0 ? j.version : 1)).catch((() => 1));
                     if (!self.TM_DATA && (await script(b + "tm_parts.js"), !self.TM_DATA))
                         throw new Error("Couldn't load " + b + "tm_parts.js");
                     if (!self.TM && (await script(b + "tm_runtime.js"), !self.TM))
@@ -63165,11 +63178,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         await script(b + "tm_water.js").catch((e => console.warn(e)))
                     }
                     await u;
-                    await self.TM.load()
+                    await self.TM.load();
+                    physics = await version
                 };
                 return {
                     get base() {
                         return base
+                    },
+                    get physics() {
+                        return physics
                     },
                     ready: () => ready,
                     ensure: () => loading ?? (loading = (async () => {
@@ -63275,13 +63292,41 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // (the main menu is showing then).
             window.__nswsRaceTrack = (meta, data, onExit, ghosts) => (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
             !0);
+            // Replays runs of a parsed track, then calls done. tmBase gives them a simulation of their own that loads
+            // Better Editor's blocks from there: an older commit, for runs driven on older physics.
+            let ownSim = null;
+            window.__nswsWatchTrack = (meta, data, runs, done, tmBase) => {
+                ownSim?.dispose(),
+                ownSim = null;
+                if (tmBase) {
+                    window.__nswsSimBase = tmBase;
+                    try {
+                        ownSim = new Lu.A(!1,d,t)
+                    } finally {
+                        window.__nswsSimBase = null
+                    }
+                }
+                const sim = ownSim;
+                watchingClip = !0,
+                afterClipWatch = () => {
+                    sim?.dispose(),
+                    ownSim === sim && (ownSim = null);
+                    try {
+                        done?.()
+                    } catch (e) {
+                        console.error(e)
+                    }
+                },
+                j(meta, data, "custom", runs, sim);
+                return !0
+            };
             // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
             window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id));
             window.__nswsBESubmit = async (token, nickname, countryCode, carStyle, trackId, time, recording) => {
                 const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize() })
+                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize(), physics: window.__nswsTM?.physics ?? 1 })
                 });
                 const d = await res.json().catch((() => null));
                 if (!res.ok || !d || d.error)
@@ -63455,11 +63500,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ))))
             }
-              , j = (e, t, n, i) => {
+              , j = (e, t, n, i, sim=null) => {
                 o.trigger(( () => {
                     P.pS(),
                     Q.dispose(),
-                    Q = new Rf(f,v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
+                    Q = new Rf(sim ?? f,v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
                         if (watchingClip) {
                             showClipSkyOverlay(),
                             watchingClip = false,

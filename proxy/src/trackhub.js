@@ -139,11 +139,26 @@ export class TrackHub extends DurableObject {
         // Each account's My Tracks; the code is in blobs (kind "l", ref "<user_id>:<id>").
         this.sql.exec(`CREATE TABLE IF NOT EXISTS library (user_id TEXT NOT NULL, id TEXT NOT NULL, meta TEXT NOT NULL, size INTEGER NOT NULL,
             updated INTEGER NOT NULL, PRIMARY KEY (user_id, id))`);
-        // One best run per player on each Better Editor track.
-        this.sql.exec(`CREATE TABLE IF NOT EXISTS be_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, track_id TEXT NOT NULL, user_id TEXT NOT NULL,
+        // One best run per player on each Better Editor track and physics version (Better Editor's physics.json): a physics
+        // change starts a new board, and the older ones stay readable.
+        const beRuns = (name) => `CREATE TABLE IF NOT EXISTS ${name} (id INTEGER PRIMARY KEY AUTOINCREMENT, track_id TEXT NOT NULL, user_id TEXT NOT NULL,
             nickname TEXT NOT NULL, country TEXT, car_style TEXT NOT NULL, frames INTEGER NOT NULL, created INTEGER NOT NULL,
-            recording TEXT NOT NULL, UNIQUE (track_id, user_id))`);
-        this.sql.exec("CREATE INDEX IF NOT EXISTS be_runs_board ON be_runs(track_id, frames, created)");
+            recording TEXT NOT NULL, physics INTEGER NOT NULL DEFAULT 1, UNIQUE (track_id, user_id, physics))`;
+        this.sql.exec(beRuns("be_runs"));
+        this.sql.exec("CREATE TABLE IF NOT EXISTS be_counts (track_id TEXT NOT NULL, physics INTEGER NOT NULL, runs INTEGER NOT NULL, PRIMARY KEY (track_id, physics))");
+        try {
+            this.sql.exec("SELECT physics FROM be_runs LIMIT 0");
+        } catch {
+            ctx.storage.transactionSync(() => {
+                this.sql.exec(beRuns("be_runs_v2"));
+                this.sql.exec(`INSERT INTO be_runs_v2 (id, track_id, user_id, nickname, country, car_style, frames, created, recording, physics)
+                    SELECT id, track_id, user_id, nickname, country, car_style, frames, created, recording, 1 FROM be_runs`);
+                this.sql.exec("DROP TABLE be_runs");
+                this.sql.exec("ALTER TABLE be_runs_v2 RENAME TO be_runs");
+                this.sql.exec("INSERT OR REPLACE INTO be_counts (track_id, physics, runs) SELECT track_id, 1, COUNT(*) FROM be_runs GROUP BY track_id");
+            });
+        }
+        this.sql.exec("CREATE INDEX IF NOT EXISTS be_runs_physics ON be_runs(track_id, physics, frames, created)");
         // Who played and who favourited each custom track; track_stats keeps the counts so reading them is one row.
         this.sql.exec("CREATE TABLE IF NOT EXISTS track_players (track_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
         this.sql.exec("CREATE TABLE IF NOT EXISTS track_favs (track_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
@@ -571,26 +586,31 @@ export class TrackHub extends DurableObject {
 
     // ---- Better Editor leaderboards (same shapes as Kodub's leaderboard, recordings and upload replies) ----
 
-    bePosition(trackId, run) {
-        return 1 + this.first("SELECT COUNT(*) AS n FROM be_runs WHERE track_id = ? AND (frames < ? OR (frames = ? AND created < ?))", trackId, run.frames, run.frames, run.created).n;
+    bePosition(trackId, physics, run) {
+        return 1 + this.first("SELECT COUNT(*) AS n FROM be_runs WHERE track_id = ? AND physics = ? AND (frames < ? OR (frames = ? AND created < ?))", trackId, physics, run.frames, run.frames, run.created).n;
     }
 
-    beBoard({ trackId, skip, amount, userId }) {
+    // physics: the current version; view: an older one to read instead. older lists the older boards that have runs.
+    beBoard({ trackId, skip, amount, userId, physics, view }) {
         if (!HEX64.test(trackId ?? "")) return fail(400, "Bad track.");
         skip = Math.max(0, Math.min(1_000_000, Math.floor(Number(skip)) || 0));
         amount = Math.max(1, Math.min(MAX_BOARD_PAGE, Math.floor(Number(amount)) || 20));
-        const total = this.first("SELECT runs FROM track_stats WHERE track_id = ?", trackId)?.runs ?? 0;
+        const v = Number.isSafeInteger(view) && view > 0 && view < physics ? view : physics;
+        const total = this.first("SELECT runs FROM be_counts WHERE track_id = ? AND physics = ?", trackId, v)?.runs ?? 0;
         const entries = total
-            ? this.sql.exec("SELECT id, user_id, nickname, country, car_style, frames FROM be_runs WHERE track_id = ? ORDER BY frames, created LIMIT ? OFFSET ?", trackId, amount, skip)
+            ? this.sql.exec("SELECT id, user_id, nickname, country, car_style, frames FROM be_runs WHERE track_id = ? AND physics = ? ORDER BY frames, created LIMIT ? OFFSET ?", trackId, v, amount, skip)
                 .toArray()
                 .map((r) => ({ id: BE_RUN_BASE + r.id, userId: r.user_id, nickname: r.nickname, frames: r.frames, carStyle: r.car_style, verifiedState: 0, countryCode: r.country ?? null }))
             : [];
         let userEntry = null;
         if (total && HEX64.test(userId ?? "")) {
-            const mine = this.first("SELECT id, frames, created FROM be_runs WHERE track_id = ? AND user_id = ?", trackId, userId);
-            if (mine) userEntry = { position: this.bePosition(trackId, mine), frames: mine.frames, id: BE_RUN_BASE + mine.id };
+            const mine = this.first("SELECT id, frames, created FROM be_runs WHERE track_id = ? AND user_id = ? AND physics = ?", trackId, userId, v);
+            if (mine) userEntry = { position: this.bePosition(trackId, v, mine), frames: mine.frames, id: BE_RUN_BASE + mine.id };
         }
-        return { total, entries, userEntry };
+        const older = this.sql.exec("SELECT physics, runs FROM be_counts WHERE track_id = ? AND physics < ? AND runs > 0 ORDER BY physics DESC LIMIT 20", trackId, physics)
+            .toArray()
+            .map((r) => ({ physics: r.physics, total: r.runs }));
+        return { total, entries, userEntry, physics: v, current: physics, older };
     }
 
     beRecordings(ids) {
@@ -601,33 +621,34 @@ export class TrackHub extends DurableObject {
         });
     }
 
-    beSubmit({ userId, ipKey, nickname, countryCode, carStyle, trackId, frames, recording }) {
+    beSubmit({ userId, ipKey, nickname, countryCode, carStyle, trackId, frames, recording, physics }) {
         if (!HEX64.test(trackId ?? "")) return fail(400, "Bad track.");
+        if (!Number.isSafeInteger(physics) || physics < 1) return fail(400, "Bad physics version.");
         if (!Number.isSafeInteger(frames) || frames <= 0 || frames > BE_MAX_FRAMES) return fail(400, "Bad time.");
         if (typeof recording !== "string" || !recording || recording.length > BE_MAX_RECORDING) return fail(413, "That run is too big.");
         if (typeof carStyle !== "string" || !carStyle || carStyle.length > 400) return fail(400, "Bad car.");
         const country = typeof countryCode === "string" && /^[A-Za-z]{2}$/.test(countryCode) ? countryCode : null;
         const keys = ["berun:ip:" + ipKey, "berun:u:" + userId];
         if (this.overLimit(keys, BE_RUNS_PER_DAY)) return fail(429, "Too many runs sent today. Try again tomorrow.");
-        const old = this.first("SELECT id, frames, created FROM be_runs WHERE track_id = ? AND user_id = ?", trackId, userId);
+        const old = this.first("SELECT id, frames, created FROM be_runs WHERE track_id = ? AND user_id = ? AND physics = ?", trackId, userId, physics);
         if (old && old.frames <= frames) {
-            const p = this.bePosition(trackId, old);
+            const p = this.bePosition(trackId, physics, old);
             return { uploadId: BE_RUN_BASE + old.id, previousPosition: p, newPosition: p };
         }
-        const before = old ? this.bePosition(trackId, old) : 0;
+        const before = old ? this.bePosition(trackId, physics, old) : 0;
         const now = Date.now();
         let id = old?.id;
         this.ctx.storage.transactionSync(() => {
             if (old) {
                 this.sql.exec("UPDATE be_runs SET nickname = ?, country = ?, car_style = ?, frames = ?, created = ?, recording = ? WHERE id = ?", nick(nickname), country, carStyle, frames, now, recording, old.id);
             } else {
-                id = this.sql.exec("INSERT INTO be_runs (track_id, user_id, nickname, country, car_style, frames, created, recording) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                    trackId, userId, nick(nickname), country, carStyle, frames, now, recording).one().id;
-                this.bumpStats(trackId, "runs", 1);
+                id = this.sql.exec("INSERT INTO be_runs (track_id, user_id, nickname, country, car_style, frames, created, recording, physics) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                    trackId, userId, nick(nickname), country, carStyle, frames, now, recording, physics).one().id;
+                this.sql.exec("INSERT INTO be_counts (track_id, physics, runs) VALUES (?, ?, 1) ON CONFLICT (track_id, physics) DO UPDATE SET runs = runs + 1", trackId, physics);
             }
             this.countHit(keys);
         });
-        return { uploadId: BE_RUN_BASE + id, previousPosition: before, newPosition: this.bePosition(trackId, { frames, created: now }) };
+        return { uploadId: BE_RUN_BASE + id, previousPosition: before, newPosition: this.bePosition(trackId, physics, { frames, created: now }) };
     }
 
     libraryList({ userId }) {

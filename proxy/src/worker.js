@@ -2084,6 +2084,48 @@ const PACK_LINK = /^\/t\/([0-9A-Za-z]{10})$/;
 const BE_SITE = "https://brinleyww.github.io/Better-Editor-PT/";
 const BE_KEEP_HEADERS = ["content-type", "etag", "last-modified", "cache-control"];
 
+// Old physics: the runtime files of a Better Editor commit, for replaying runs driven before a physics change.
+const BE_RAW = "https://raw.githubusercontent.com/brinleyww/Better-Editor-PT/";
+const BE_REF_FILES = { "tm_parts.js": "text/javascript; charset=utf-8", "tm_runtime.js": "text/javascript; charset=utf-8", "models/tm_blocks.bin": "application/octet-stream" };
+async function handleBeRefMirror(request, url) {
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Max-Age": "86400" } });
+    if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", "*");
+    const m = /^\/be@([0-9a-f]{40})\/(.+)$/.exec(url.pathname);
+    const type = m && BE_REF_FILES[m[2]];
+    if (!type) return plain(404, "Not found", "*");
+    const upstream = await fetch(BE_RAW + m[1] + "/" + m[2], { method: request.method, cf: { cacheEverything: true, cacheTtl: 2_592_000 } });
+    if (!upstream.ok) return plain(upstream.status === 404 ? 404 : 502, "That Better Editor version couldn't be read", "*");
+    return new Response(upstream.body, { headers: { "Access-Control-Allow-Origin": "*", "Content-Type": type, "Cache-Control": "public, max-age=31536000, immutable" } });
+}
+
+// Better Editor's physics.json: the current physics version, and a commit that still has each older one.
+const BE_PHYSICS_TTL = 60_000;
+let bePhysicsCache = null;
+async function bePhysics(fresh = false) {
+    const now = Date.now();
+    if (!fresh && bePhysicsCache && now - bePhysicsCache.at < BE_PHYSICS_TTL) return bePhysicsCache;
+    let version = bePhysicsCache?.version ?? 1;
+    let old = bePhysicsCache?.old ?? {};
+    try {
+        const r = await fetch(BE_SITE + "physics.json" + (fresh ? "?t=" + now : ""), { cf: { cacheTtl: fresh ? -1 : 60 } });
+        if (r.status === 404) {
+            version = 1;
+            old = {};
+        } else if (r.ok) {
+            const j = await r.json();
+            if (Number.isSafeInteger(j?.version) && j.version > 0) {
+                version = j.version;
+                old = {};
+                for (const [k, v] of Object.entries(j.old ?? {})) if (/^\d+$/.test(k) && /^[0-9a-f]{40}$/.test(v)) old[k] = v;
+            }
+        }
+    } catch (err) {
+        console.error("physics.json:", err && err.message);
+    }
+    bePhysicsCache = { at: now, version, old };
+    return bePhysicsCache;
+}
+
 async function handleBeMirror(request, url) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD", "Access-Control-Max-Age": "86400" } });
     if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", "*");
@@ -2185,7 +2227,10 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
         }
         // Better Editor boards, in the shapes the game reads from Kodub's leaderboard and recordings.
         if (path === "board") {
-            return reply(await hub.beBoard({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip"), amount: url.searchParams.get("amount"), userId: url.searchParams.get("userTokenHash") }));
+            const ph = await bePhysics();
+            const board = await hub.beBoard({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip"), amount: url.searchParams.get("amount"), userId: url.searchParams.get("userTokenHash"), physics: ph.version, view: Number(url.searchParams.get("physics")) });
+            if (Array.isArray(board?.older)) for (const o of board.older) o.ref = ph.old[o.physics] ?? null;
+            return reply(board);
         }
         if (path === "board/recordings") {
             return reply(await hub.beRecordings(String(url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
@@ -2212,7 +2257,15 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
     const nickname = body.nickname;
     const clubId = body.clubId;
     switch (path) {
-        case "board/submit": return reply(await hub.beSubmit({ userId, ipKey, nickname, countryCode: body.countryCode, carStyle: body.carStyle, trackId: body.trackId, frames: body.frames, recording: body.recording }));
+        case "board/submit": {
+            // Runs are kept on the physics they were driven on; a page loaded before a physics change can't add to the new board.
+            const physics = Number.isSafeInteger(body.physics) ? body.physics : 1;
+            let ph = await bePhysics();
+            if (physics !== ph.version) ph = await bePhysics(true);
+            if (physics < ph.version) return json({ error: "Better Editor's physics changed since this page loaded. Press Ctrl+F5, then drive again to set a time." }, origin, 409);
+            if (physics > ph.version + 1) return json({ error: "Bad physics version." }, origin, 400);
+            return reply(await hub.beSubmit({ userId, ipKey, nickname, countryCode: body.countryCode, carStyle: body.carStyle, trackId: body.trackId, frames: body.frames, recording: body.recording, physics }));
+        }
         case "played": return reply(await hub.played({ userId, trackId: body.trackId }));
         case "favourite": return reply(await hub.favourite({ userId, ipKey, trackId: body.trackId, on: body.on === true }));
         case "stats": return reply(await hub.trackStats({ userId, trackId: body.trackId }));
@@ -2347,6 +2400,14 @@ export default {
                 noteDoError(err);
                 console.error("cup link error:", err && err.message);
                 return plain(500, "Cup links failed", null);
+            }
+        }
+        if (url.pathname.startsWith("/be@")) {
+            try {
+                return await handleBeRefMirror(request, url);
+            } catch (err) {
+                console.error("editor version mirror error:", err && err.message);
+                return plain(502, "The editor mirror failed", "*");
             }
         }
         if (url.pathname === "/be" || url.pathname.startsWith("/be/")) {
