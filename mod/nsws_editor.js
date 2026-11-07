@@ -13,6 +13,8 @@
     const REQUEST_TIMEOUT_MS = 15000;
     const MODES_KEY = "nswsEditorModes";
     const MANUAL = "\u0000pasted";
+    const NEW = "\u0000new";
+    const LAST_KEY = "nswsEditorLast";
     const MODES = [
         { id: "normal", label: "Normal", help: "Normal: stock PolyTrack driving." },
         { id: "rocket", label: "Rocket League", help: "Rocket League: jump, boost and flip, with the Rocket League weeks' physics." },
@@ -241,8 +243,11 @@
         const pick = el("label", "nse-pick");
         const select = el("select");
         select.addEventListener("change", () => {
+            const before = selected;
             selected = select.value;
             renderMode();
+            if (selected === NEW) editTrack(null, { fresh: true, before });
+            else if (selected !== MANUAL && selected) editTrack(selected, { before });
         });
         pick.append("Track", select);
         const seg = el("div", "nse-seg");
@@ -291,6 +296,7 @@
         fbCopy.style.display = "none";
         const fbReload = button("Reload editor", () => {
             unloadFrame();
+            editorOpen = false;
             createFrame();
         }, "images/refresh.svg");
         fallback.append(fbText, fbBox, fbUse, fbCopy, fbReload);
@@ -311,6 +317,11 @@
         if (manual) {
             const o = el("option", null, "Pasted: " + manual.name);
             o.value = MANUAL;
+            s.appendChild(o);
+        }
+        if (ready) {
+            const o = el("option", null, "+ New track");
+            o.value = NEW;
             s.appendChild(o);
         }
         for (const t of tracks) {
@@ -434,7 +445,76 @@
         ui?.fallback.classList.add("hidden");
         refreshList(false).then(() => {
             if (pendingImport) runImport();
+            else if (!editorOpen) {
+                let last = null;
+                try {
+                    last = localStorage.getItem(LAST_KEY);
+                } catch {}
+                const known = tracks.some((t) => t.name === last);
+                selected = known ? last : NEW;
+                renderPicker();
+                renderMode();
+                editTrack(known ? last : null, { fresh: !known, quiet: true });
+            }
         });
+    }
+
+    let editorOpen = false;
+    // Opens a saved track (or a new one when name is null) straight in the block editor.
+    async function editTrack(name, opts = {}, attempt = 0) {
+        let reply;
+        try {
+            reply = await request("edit", { name, force: !!opts.force, fresh: !!opts.fresh });
+        } catch (err) {
+            note(err.message, "bad");
+            return false;
+        }
+        if (!reply.ok && /loading/i.test(reply.error || "") && attempt < 40) {
+            await new Promise((r) => setTimeout(r, 1000));
+            return editTrack(name, opts, attempt + 1);
+        }
+        if (reply.dirty) {
+            const saveFirst = button("Save it first", async () => {
+                let saved;
+                try {
+                    saved = await request("autosave");
+                } catch {}
+                closeDialog();
+                if (!saved?.saved && saved?.reason !== "clean") {
+                    note(saved?.reason === "unnamed" ? "Your track has no name yet: press Save in the editor first, then pick the other track." : "The editor couldn't save your track.", "bad");
+                    revert(opts.before);
+                    return;
+                }
+                editTrack(name, { ...opts, force: true });
+            }, "images/save.svg", true);
+            const discard = button("Throw it away", () => {
+                closeDialog();
+                editTrack(name, { ...opts, force: true });
+            }, "images/erase.svg");
+            const cancel = button("Keep editing", () => {
+                closeDialog();
+                revert(opts.before);
+            }, "images/back.svg");
+            dialog("Unsaved changes", [el("p", null, "The track open in the editor has changes that aren't saved.")], [cancel, discard, saveFirst]);
+            return false;
+        }
+        if (!reply.ok) {
+            note(reply.error || "The editor couldn't open that track.", "bad");
+            revert(opts.before);
+            return false;
+        }
+        editorOpen = true;
+        try {
+            name ? localStorage.setItem(LAST_KEY, name) : localStorage.removeItem(LAST_KEY);
+        } catch {}
+        if (!opts.quiet) note(name ? 'Editing "' + name + '".' : "New track. Press Save in the editor to name it; it then shows up in Track.", "good");
+        return true;
+    }
+
+    function revert(before) {
+        selected = before ?? null;
+        renderPicker();
+        renderMode();
     }
 
     async function refreshList(pickNewest) {
@@ -478,14 +558,11 @@
         pendingImport = null;
         if (job.mode && job.mode !== "normal") setMode(reply.name, job.mode);
         await refreshList(false);
+        const before = selected;
         selected = reply.name;
         renderPicker();
         renderMode();
-        note(
-            (reply.existed ? '"' + reply.name + '" is already in the editor.' : 'Added "' + reply.name + '" to the editor.') +
-                (reply.opened ? "" : " Open it from the editor's track list."),
-            "good",
-        );
+        if (await editTrack(reply.name, { before, quiet: true })) note('Editing "' + reply.name + '".', "good");
     }
 
     async function usePasted() {
