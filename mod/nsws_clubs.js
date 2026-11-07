@@ -832,7 +832,7 @@
         add.appendChild(btn("Paste codes", () => pasteDialog(d, changed), { disabled: d.tracks.length >= MAX_TRACKS }));
         root.appendChild(add);
 
-        if (!d.tracks.length) root.appendChild(h("div", "nc-empty", "No tracks yet. Add some from My Tracks or paste track codes, a pack code or an NSWS track link."));
+        if (!d.tracks.length) root.appendChild(h("div", "nc-empty", "No tracks yet. Add some from My Tracks or paste an NSWS Track code, an NSWS track link or PolyTrack codes."));
         d.tracks.forEach((t, i) => {
             const sel = h("select", "nc-in nc-sel");
             for (const [val, label] of MODES) {
@@ -932,7 +932,7 @@
 
     function pasteDialog(d, changed) {
         const body = h("div");
-        body.appendChild(h("div", "nc-p", "Paste track codes (one per line), a pack code or an NSWS track link."));
+        body.appendChild(h("div", "nc-p", "Paste an NSWS Track code, an NSWS track link, or PolyTrack codes (one per line)."));
         const ta = textarea("", 0, "PolyTrack2...");
         ta.rows = 7;
         body.appendChild(ta);

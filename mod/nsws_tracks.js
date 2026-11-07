@@ -218,7 +218,7 @@
         const cached = infoCache.get(code);
         if (cached && !(be && beReady() && cached.ok && !cached.trackId)) return cached;
         if (be && !beReady()) return { ok: true, kind: "be", code, name: null, author: null, trackId: null, env: null };
-        if (code.startsWith(PACK_PREFIX)) return failed(code, "That's a pack of tracks, not a single track code.");
+        if (code.startsWith(PACK_PREFIX)) return failed(code, "That's an NSWS Track code. Paste it into Import on NSWS.");
         const loaded = stockParse(code);
         if (loaded.error && be && !loaded.error.startsWith("The game")) return remember(code, failed(code, "That Better Editor code is damaged or cut short."));
         if (loaded.error) return loaded.error.startsWith("The game") ? failed(code, loaded.error) : remember(code, failed(code, loaded.error));
@@ -792,7 +792,7 @@
             else if (piece.type === "pack" || piece.type === "link") {
                 try {
                     const pack = piece.type === "pack" ? await readPack(piece.value) : await fetchPack(piece.value);
-                    if (!pack) throw new Error("That pack code is damaged or cut short.");
+                    if (!pack) throw new Error("That NSWS Track code is damaged or cut short.");
                     sources.push(pack.name);
                     for (const t of pack.tracks) out.tracks.push({ ...t, fromLink: piece.type === "link" });
                 } catch (e) {
@@ -1510,7 +1510,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (!state.tracks.length) {
                 const empty = el("div", "nt-empty");
                 empty.appendChild(el("h3", null, "No custom tracks yet"));
-                empty.appendChild(el("p", null, "Use Import to paste a PolyTrack track code, a Better Editor code, an NSWS pack code or an NSWS track link. Tracks you save in the Track Editor or from a club campaign land here too."));
+                empty.appendChild(el("p", null, "Use Import to paste an NSWS Track code, an NSWS track link, or a code from PolyTrack or the Better Editor. Tracks you save in the Track Editor or from a club campaign land here too."));
                 const buttons = el("div");
                 buttons.appendChild(button("Import", () => openImport(), { icon: "import", primary: true }));
                 if (window.__nswsEditor?.open) buttons.appendChild(button("Open Track Editor", () => openInEditor(null), { icon: "editor" }));
@@ -1563,7 +1563,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     // Import.
     function openImport(prefill, opts = {}) {
         const body = el("div");
-        body.appendChild(el("p", "nt-text dim", "Paste track codes (PolyTrack or Better Editor), an NSWS pack code, an NSWS track link or a club invite. Put several codes one per line."));
+        body.appendChild(el("p", "nt-text dim", "Paste an NSWS Track code, an NSWS track link, a club invite, or codes from PolyTrack or the Better Editor (one per line)."));
         const area = input({ multiline: true, placeholder: "PolyTrack2...  /  NSWSPack1...  /  https://notweeklyshorts.github.io/?tracks=..." });
         body.appendChild(area);
         const line = el("div", "nt-line");
@@ -1768,12 +1768,12 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         linkLine.append(linkInput, linkMake, linkCopy);
         body.appendChild(linkLine);
 
-        body.appendChild(section("Pack code"));
+        body.appendChild(section("NSWS Track code"));
         body.appendChild(el("p", "nt-text dim", "Text that holds " + (single ? "the track" : "every track") + (anyMode ? " and its mode" : "") + ". Works offline: paste it into Import on NSWS."));
         const packBox = el("div");
         body.appendChild(packBox);
         let packText = "";
-        const packCopy = button("Copy pack code", () => copyText(packText), { icon: "copy", disabled: true });
+        const packCopy = button("Copy NSWS Track code", () => copyText(packText), { icon: "copy", disabled: true });
         const packInfo = el("p", "nt-text dim", "Packing...");
         packInfo.style.margin = "0 auto 0 0";
         const packLine = el("div", "nt-line");
@@ -1811,23 +1811,6 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             linkCopy.disabled = true;
             clearTimeout(resetTimer);
             resetTimer = setTimeout(makePack, 400);
-        }
-
-        if (single) {
-            const t = tracks[0];
-            body.appendChild(section("Track code"));
-            const note =
-                t.kind === "be"
-                    ? "A Better Editor code. It plays in NSWS and opens in the Better Editor and NSWS's Track Editor, not in stock PolyTrack."
-                    : "The normal PolyTrack code. It works in PolyTrack's own import and the editor.";
-            body.appendChild(el("p", "nt-text dim", note));
-            if (t.mode !== "normal") body.appendChild(el("p", "nt-text bad", "Mode isn't kept in a plain code. Use the link or the pack code to keep " + MODE_LABEL[t.mode] + "."));
-            if (t.code.length <= 60000) body.appendChild(input({ multiline: true, readOnly: true, value: t.code }));
-            const codeLine = el("div", "nt-line");
-            const size = el("p", "nt-text dim", kb(t.code.length));
-            size.style.margin = "0 auto 0 0";
-            codeLine.append(size, button("Copy track code", () => copyText(t.code), { icon: "copy" }));
-            body.appendChild(codeLine);
         }
 
         makePack();
