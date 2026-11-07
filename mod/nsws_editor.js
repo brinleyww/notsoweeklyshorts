@@ -1,6 +1,6 @@
 // Custom Tracks Editor: Better Editor PT in a full-screen iframe with an NSWS bar on top. Tracks move
 // between the two through BE's nsws_bridge.js (postMessage). The BE editor keeps unsaved work only in
-// memory, so Back hides the iframe instead of removing it; it is unloaded after KEEP_HIDDEN_MS closed.
+// memory, so Back only hides the iframe; it stays loaded until the page is closed or reloaded.
 (function () {
     "use strict";
     const DEFAULT_URL = "https://brinleyww.github.io/Better-Editor-PT/?nsws=1";
@@ -8,7 +8,8 @@
     const HELLO_TRIES = 90;
     const FALLBACK_AFTER_LOAD_MS = 5000;
     const FALLBACK_HARD_MS = 25000;
-    const KEEP_HIDDEN_MS = 15 * 60 * 1000;
+    const AUTOSAVE_KEY = "nswsEditorAutosave";
+    const AUTOSAVE_EVERY_MS = 30000;
     const REQUEST_TIMEOUT_MS = 15000;
     const MODES_KEY = "nswsEditorModes";
     const MANUAL = "\u0000pasted";
@@ -150,6 +151,52 @@
         } catch {}
     }
 
+    function autosaveOn() {
+        try {
+            return localStorage.getItem(AUTOSAVE_KEY) === "1";
+        } catch {
+            return false;
+        }
+    }
+
+    let autosaveTimer = null;
+    let unnamedTold = false;
+    function setAutosave(on) {
+        try {
+            on ? localStorage.setItem(AUTOSAVE_KEY, "1") : localStorage.removeItem(AUTOSAVE_KEY);
+        } catch {}
+        renderAutosave();
+        note(on ? "Autosave is on: the open track is saved in the editor every 30 seconds and when you go Back." : "Autosave is off. Use the editor's Save to keep your work.");
+        if (on) autosave();
+    }
+
+    function renderAutosave() {
+        if (!ui) return;
+        const on = autosaveOn();
+        ui.autoBtn.classList.toggle("on", on);
+        ui.autoBtn.textContent = on ? "Autosave: On" : "Autosave: Off";
+        clearInterval(autosaveTimer);
+        autosaveTimer = on ? setInterval(() => autosave(), AUTOSAVE_EVERY_MS) : null;
+    }
+
+    async function autosave() {
+        if (!autosaveOn() || !frame || !ready) return;
+        let reply;
+        try {
+            reply = await request("autosave");
+        } catch {
+            return;
+        }
+        if (reply?.saved) {
+            if (host && !host.classList.contains("hidden")) note("Autosaved \"" + reply.name + "\" at " + new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + ".");
+        } else if (reply?.reason === "unnamed" && !unnamedTold && host && !host.classList.contains("hidden")) {
+            unnamedTold = true;
+            note("Autosave needs a name: press Save in the editor once, and it saves by itself after that.");
+        } else if (reply?.reason === "failed") {
+            note("Autosave couldn't save the track. The editor's storage may be full.", "bad");
+        }
+    }
+
     function note(text, kind) {
         if (!ui) return;
         ui.note.textContent = text || "";
@@ -217,8 +264,17 @@
         }
         const save = button("Save to My Tracks", (e, b) => saveToLibrary(b), "images/save.svg", true);
         const test = button("Test drive", (e, b) => testDrive(b), "images/play.svg");
-        const send = button("Send to Race Control", () => openSubmit(), "images/share.svg");
-        bar.append(back, pick, seg, el("div", "gap"), save, test, send);
+        const send = button("Submit to Weekly Shorts", () => openSubmit(), "images/share.svg");
+        const auto = el("div", "nse-seg");
+        const autoBtn = el("button", null, "Autosave");
+        autoBtn.type = "button";
+        autoBtn.title = "Saves the open track in the editor every 30 seconds and when you go Back";
+        autoBtn.addEventListener("click", () => {
+            window.__nswsUIClick?.();
+            setAutosave(!autosaveOn());
+        });
+        auto.appendChild(autoBtn);
+        bar.append(back, pick, seg, auto, el("div", "gap"), save, test, send);
 
         const info = el("div", "nse-info");
         const help = el("div", "nse-help");
@@ -242,9 +298,10 @@
         const frameBox = el("div", "nse-frame");
         host.append(bar, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { select, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox };
+        ui = { select, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn };
         renderPicker();
         renderMode();
+        renderAutosave();
     }
 
     function renderPicker() {
@@ -579,7 +636,8 @@
         mine.appendChild(el("p", "nse-dimtext", "Loading..."));
 
         const body = [
-            el("p", null, "Suggest this track for a future NSWS week. Race Control reviews every track, and you can follow it here."),
+            el("p", null, "Suggest this track for a future Not So Weekly Shorts week. Race Control reviews every track, and you can follow it here."),
+            el("p", "bad", "Keep this track to yourself after you submit it: don't post or share it anywhere (code, link, video or screenshots). A submitted track that has been posted is disqualified."),
             el("div", "nse-sec", "Track"),
             row("Name", info.name || t.name),
             row("Author", info.author || "-"),
@@ -591,7 +649,7 @@
         noteRow.append(el("label", null, "Note"), noteBox);
         body.push(noteRow, status, el("div", "nse-sec", "My submissions"), mine);
 
-        const send = button("Send", (e, b) => {
+        const send = button("Submit", (e, b) => {
             const user = T.user?.() || {};
             if (!user.token) {
                 status.className = "bad";
@@ -600,7 +658,7 @@
             }
             busy(b, async () => {
                 status.className = "";
-                status.textContent = "Sending...";
+                status.textContent = "Submitting...";
                 try {
                     await T.api("nsws/tracks/submit", {
                         token: user.token,
@@ -621,12 +679,12 @@
                 setMode(t.name, mode);
                 renderMode();
                 status.className = "good";
-                status.textContent = "Sent! Race Control will take a look.";
+                status.textContent = "Submitted! Race Control will take a look. Remember: don't post this track anywhere, or it gets disqualified.";
                 b.disabled = true;
                 loadMine(mine, user.token);
             });
         }, "images/share.svg", true);
-        dialog("Send to Race Control", body, [button("Close", () => closeDialog(), "images/back.svg"), send]);
+        dialog("Submit to Weekly Shorts", body, [button("Close", () => closeDialog(), "images/back.svg"), send]);
         const user = T.user?.() || {};
         if (user.token) loadMine(mine, user.token);
         else mine.firstChild.textContent = "Your submissions show here once your player token is ready.";
@@ -672,17 +730,13 @@
         if (!host || host.classList.contains("hidden")) return;
         closeDialog();
         host.classList.add("hidden");
-        clearTimeout(hideTimer);
-        hideTimer = setTimeout(() => {
-            hideTimer = null;
-            if (host.classList.contains("hidden")) unloadFrame();
-        }, KEEP_HIDDEN_MS);
+        autosave();
     }
 
     function open(track) {
         const wasLoaded = !!frame;
         show();
-        note(wasLoaded ? "" : "Unsaved work stays in the editor for " + KEEP_HIDDEN_MS / 60000 + " minutes after you go Back. Use the editor's Save to keep it.");
+        note(wasLoaded ? "" : "Unsaved work stays in the editor until you close or reload this page" + (autosaveOn() ? "; autosave is on." : ". Turn on Autosave, or use the editor's Save, to keep it."));
         const code = typeof track === "string" ? track : track?.code;
         if (typeof code !== "string" || !code) return;
         pendingImport = { code, mode: typeof track === "object" ? track.mode : null };
