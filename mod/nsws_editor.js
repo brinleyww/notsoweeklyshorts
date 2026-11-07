@@ -21,6 +21,8 @@
     const MANUAL = "\u0000pasted";
     const NEW = "\u0000new";
     const LAST_KEY = "nswsEditorLast";
+    const COPIED_KEY = "nswsEditorCopied";
+    const COPY_MAX_CODE = 400000;
     const MODES = [
         { id: "normal", label: "Normal", help: "Normal: stock PolyTrack driving." },
         { id: "rocket", label: "Rocket League", help: "Rocket League: jump, boost and flip, with the Rocket League weeks' physics." },
@@ -415,6 +417,7 @@
         const m = e.data;
         if (!m || m.nsws !== "be") return;
         if (m.type === "ready") {
+            bridgeVersion = Number(m.version) || 0;
             if (!ready) onReady();
             return;
         }
@@ -505,7 +508,64 @@
                 renderMode();
                 editTrack(known ? last : null, { fresh: !known, quiet: true });
             }
+            copyLibrary();
         });
+        if (!libWatch && lib()?.onChange) libWatch = lib().onChange(() => copyLibrary());
+    }
+
+    let bridgeVersion = 0;
+    let libWatch = null;
+    let copying = null;
+    const mark = (t) => t.hash || String(t.updated || t.code.length);
+    // Copies My Tracks into the editor's own Custom tracks (its Load list), each version once, so one deleted there stays deleted.
+    function copyLibrary() {
+        if (!ready || bridgeVersion < 3 || !lib()) return;
+        if (copying) {
+            copying.again = true;
+            return;
+        }
+        copying = { again: false };
+        (async () => {
+            let done = {};
+            try {
+                done = JSON.parse(localStorage.getItem(COPIED_KEY)) || {};
+            } catch {}
+            const all = await lib().list();
+            const kept = {};
+            for (const t of all) if (done[t.id]) kept[t.id] = done[t.id];
+            done = kept;
+            const todo = all.filter((t) => typeof t.code === "string" && t.code.length <= COPY_MAX_CODE && done[t.id] !== mark(t));
+            let added = false;
+            for (let i = 0; i < todo.length; i += 20) {
+                const batch = todo.slice(i, i + 20);
+                const reply = await request("copy", { tracks: batch.map((t) => ({ code: t.code })) });
+                if (!reply?.ok) break;
+                let full = false;
+                batch.forEach((t, j) => {
+                    const r = reply.results?.[j];
+                    if (!r || r.full) {
+                        full = true;
+                        return;
+                    }
+                    done[t.id] = mark(t);
+                    if (r.ok && !r.existed) {
+                        added = true;
+                        if (t.mode && t.mode !== "normal") setMode(r.name, t.mode);
+                    }
+                });
+                try {
+                    localStorage.setItem(COPIED_KEY, JSON.stringify(done));
+                } catch {}
+                if (full) break;
+            }
+            if (added) await refreshList(false);
+        })()
+            .catch(() => {})
+            .finally(() => {
+                const again = copying?.again;
+                copying = null;
+                if (again) copyLibrary();
+            });
     }
 
     let editorOpen = false;
@@ -827,7 +887,10 @@
         try {
             (frame || host).focus();
         } catch {}
-        if (ready) refreshLive();
+        if (ready) {
+            refreshLive();
+            copyLibrary();
+        }
         // Follows tracks opened with the editor's own Load, so the mode shown is that track's.
         liveTimer ??= setInterval(() => {
             if (ready && !testing && host && !host.classList.contains("hidden")) refreshLive();
