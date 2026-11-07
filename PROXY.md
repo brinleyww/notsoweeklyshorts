@@ -645,7 +645,12 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   tag with the count (`king:7`), and `refer/me` returns `wrs` (the player's
   own count) and `king` (`{nickname, wrs, since}`). Boards nobody opens would
   never be noted, so the owner's page opens every NSWS board once every 12 hours
-  (`sweepWrs` in `mod/nsws_traffic.js`, after the track sync).
+  (`sweepWrs` in `mod/nsws_traffic.js`, after the track sync). On every load it
+  also posts every track still in a week to `POST /nsws/wrs/keep` (owner key):
+  WRs on any other board (a map swapped out of a week, like week 11's old Launch
+  Control) are deleted and the board goes in `wr_dropped`, so `noteWrs` ignores it
+  until it is back in the list. Fewer than 20 tracks is refused, as a week list
+  that failed to load.
 - **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
   tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,
@@ -1029,7 +1034,10 @@ community tracks) and All; the choice is remembered.
   and then waits a minute, counting down on the button.
 - **Weekly standings** come from `__nswsStandingsData(week)` in `main.bundle.js`, the same code the
   Standings window draws ended weeks with, so the two always agree. The live week is worked out from
-  the boards already read.
+  the boards already read. Locked weeks keep the names players had when the week ended, and a rename
+  leaves nothing on the Worker linking an old name to the account, so `oldNames` lines each locked
+  board up with today's (names on both pin the order; between two pins with as many unpinned runs on
+  each side, the runs are the same) and takes an old name for the week when two of its boards agree.
 - **`GET /nsws/profile?nick=`** (site only) answers the account part: worn tag, owned tags, hours,
   bingos, WR count and King, confirmed referrals, first-seen date and grinding totals
   (`Accounts.publicProfile`). It finds the account by exact nickname (names are unique) and never

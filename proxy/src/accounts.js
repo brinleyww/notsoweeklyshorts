@@ -16,6 +16,9 @@ const VIEW_GAP_MS = 30_000;
 const SHARE_ID = /^[A-Za-z0-9]{10}$/;
 const CLIP_ID = /^[0-9a-f]{16}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
+// A shorter list means the page's week list didn't load, not that the maps are gone.
+const MIN_KEPT_TRACKS = 20;
+const MAX_KEPT_TRACKS = 5000;
 const SHARE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
 // Names that compare equal: case, width variants and spacing are ignored, so "Bob",
 // "BOB" and "B o b" are one name.
@@ -272,6 +275,8 @@ export class Accounts extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wrs (
             track TEXT PRIMARY KEY, week INTEGER NOT NULL, user_id TEXT NOT NULL, nickname TEXT NOT NULL,
             frames INTEGER NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID`);
+        // Boards taken out of every week (a map swapped out), whose WRs no longer count (keepWrs).
+        this.sql.exec("CREATE TABLE IF NOT EXISTS wr_dropped (track TEXT PRIMARY KEY) WITHOUT ROWID");
         // The one NSWS King. before only holds a tag for a King crowned when the crown was still put
         // on for them; they get it back when they lose the crown.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wr_king (
@@ -305,6 +310,7 @@ export class Accounts extends DurableObject {
             this.wrs = new Map();
             for (const r of this.sql.exec("SELECT track, week, user_id, nickname, frames, at FROM wrs")) this.wrs.set(r.track, r);
             this.king = this.sql.exec("SELECT user_id, since, before FROM wr_king WHERE id = 0").toArray()[0] ?? null;
+            this.dropped = new Set(this.sql.exec("SELECT track FROM wr_dropped").toArray().map((r) => r.track));
         }
         return this.wrs;
     }
@@ -344,7 +350,7 @@ export class Accounts extends DurableObject {
         const now = Date.now();
         this.ctx.storage.transactionSync(() => {
             for (const e of entries) {
-                if (!HEX64.test(e?.track ?? "") || !Number.isSafeInteger(e.week)) continue;
+                if (!HEX64.test(e?.track ?? "") || !Number.isSafeInteger(e.week) || this.dropped.has(e.track)) continue;
                 const old = table.get(e.track);
                 if (!HEX64.test(e.userId ?? "")) {
                     if (!old) continue;
@@ -370,6 +376,34 @@ export class Accounts extends DurableObject {
             }
         });
         return { retags: touched.size ? this.crown(touched) : [] };
+    }
+
+    // tracks: every board still in a week, from the owner's page. WRs on any other board stop counting and
+    // aren't noted again, so an old link to a swapped-out map can't bring one back. Returns chat retags.
+    keepWrs(tracks) {
+        if (!Array.isArray(tracks) || tracks.length < MIN_KEPT_TRACKS || tracks.length > MAX_KEPT_TRACKS || !tracks.every((t) => HEX64.test(t))) {
+            return { error: "bad" };
+        }
+        const keep = new Set(tracks);
+        const table = this.wrTable();
+        const back = [...this.dropped].filter((t) => keep.has(t));
+        const gone = [...table.values()].filter((w) => !keep.has(w.track));
+        if (!back.length && !gone.length) return { dropped: 0, retags: [] };
+        const touched = new Set();
+        this.ctx.storage.transactionSync(() => {
+            for (const t of back) {
+                this.sql.exec("DELETE FROM wr_dropped WHERE track = ?", t);
+                this.dropped.delete(t);
+            }
+            for (const w of gone) {
+                this.sql.exec("DELETE FROM wrs WHERE track = ?", w.track);
+                this.sql.exec("INSERT OR IGNORE INTO wr_dropped (track) VALUES (?)", w.track);
+                table.delete(w.track);
+                this.dropped.add(w.track);
+                touched.add(w.user_id);
+            }
+        });
+        return { dropped: gone.length, retags: touched.size ? this.crown(touched) : [] };
     }
 
     // Most WRs wins. A tie keeps the current King; with no King among the tied, whoever got there first.

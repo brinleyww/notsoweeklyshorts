@@ -357,10 +357,48 @@
             }
             if (row) rows.push(row);
         }
-        return { rows, names, latest };
+        return { rows, names, latest, owner };
     }
 
-    async function standings(nick, names, tracks, data) {
+    // Names both boards share, as [locked index, live index] pairs in order (longest common subsequence).
+    function sharedNames(locked, live) {
+        const n = locked.length;
+        const m = live.length;
+        const len = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+        for (let i = n - 1; i >= 0; i--) {
+            for (let j = m - 1; j >= 0; j--) len[i][j] = locked[i] === live[j] ? len[i + 1][j + 1] + 1 : Math.max(len[i + 1][j], len[i][j + 1]);
+        }
+        const pairs = [];
+        for (let i = 0, j = 0; i < n && j < m;) {
+            if (locked[i] === live[j]) pairs.push([i++, j++]);
+            else if (len[i + 1][j] >= len[i][j + 1]) i++;
+            else j++;
+        }
+        return pairs;
+    }
+
+    // Locked standings keep the names from when the week ended, and nothing links a renamed account to its old
+    // name. Lining each locked board up with today's finds it; two of the week's boards have to agree.
+    function oldNames(owner, week, maps, data) {
+        const votes = new Map();
+        (window.__nswsTracksForWeek?.(week) || []).forEach((t, index) => {
+            const live = data.get(t.id)?.entries || [];
+            const at = live.findIndex((e) => e.userId === owner);
+            if (at < 0 || !maps?.[index]) return;
+            const lockedNames = Object.entries(maps[index]).sort((a, b) => a[1] - b[1]).map(([nm]) => nm);
+            const pairs = [[-1, -1], ...sharedNames(lockedNames.map(nameKey), live.map((e) => nameKey(e.nickname))), [lockedNames.length, live.length]];
+            const after = pairs.findIndex(([, j]) => j >= at);
+            if (pairs[after][1] === at) return;
+            const [i0, j0] = pairs[after - 1];
+            const [i1, j1] = pairs[after];
+            if (i1 - i0 !== j1 - j0) return;
+            const nm = lockedNames[i0 + (at - j0)];
+            votes.set(nm, (votes.get(nm) ?? 0) + 1);
+        });
+        return [...votes].filter(([, n]) => n >= 2).map(([nm]) => nm);
+    }
+
+    async function standings(nick, names, owner, tracks, data) {
         const keys = new Set([nameKey(nick), ...[...names].map(nameKey)]);
         const weeks = [...new Set(tracks.filter((t) => !t.event).map((t) => t.week))].sort((a, b) => b - a);
         const out = [];
@@ -382,7 +420,8 @@
                 result = await window.__nswsStandingsData?.(week).catch(() => null);
             }
             if (!result) return;
-            const index = result.sorted.findIndex(([nm]) => keys.has(nameKey(nm)));
+            const weekKeys = owner && !result.live ? new Set([...keys, ...oldNames(owner, week, result.maps, data).map(nameKey)]) : keys;
+            const index = result.sorted.findIndex(([nm]) => weekKeys.has(nameKey(nm)));
             if (index < 0) return;
             const label = (window.__nswsWeeks || []).find((w) => w.week === week)?.label || "Week " + week;
             out.push({ week, label, rank: index + 1, of: result.sorted.length, points: result.sorted[index][1], live: !!result.live });
@@ -474,7 +513,7 @@
         const found = await collect(v.nick, tracks, data);
         if (found.latest?.carStyle) v.carStyle = found.latest.carStyle;
         if (found.latest?.countryCode) v.countryCode = found.latest.countryCode;
-        const weeks = await standings(v.nick, found.names, tracks, data);
+        const weeks = await standings(v.nick, found.names, found.owner, tracks, data);
         await accountReq;
         if (v.closed) return;
         v.result = { ...found, weeks, tracks, failed: [...data.values()].filter((d) => !d).length };

@@ -415,15 +415,19 @@
     const WR_SWEEP_KEY = "_nswsWrSweep";
     const WR_SWEEP_MS = 12 * 3600_000;
     async function sweepWrs() {
+        if (!window.__nswsTracksForWeek || !window.__nswsTrackQuery) return;
+        const ids = [...new Set((window.__nswsWeeks || []).flatMap((w) => window.__nswsTracksForWeek(w.week).map((t) => t.id)))];
+        // WRs on maps no longer in any week (one swapped out) stop counting.
+        const token = await ownerToken();
+        if (token) await ownerPost("wrs/keep", token, { tracks: ids }).catch(() => {});
         let last = 0;
         try {
             last = Number(localStorage.getItem(WR_SWEEP_KEY)) || 0;
         } catch {}
-        if (Date.now() - last < WR_SWEEP_MS || !window.__nswsTracksForWeek || !window.__nswsTrackQuery) return;
+        if (Date.now() - last < WR_SWEEP_MS) return;
         try {
             localStorage.setItem(WR_SWEEP_KEY, String(Date.now()));
         } catch {}
-        const ids = [...new Set((window.__nswsWeeks || []).flatMap((w) => window.__nswsTracksForWeek(w.week).map((t) => t.id)))];
         for (const id of ids) {
             await fetch(API + "v6/leaderboard?version=0.6.2&trackId=" + id + "&skip=0&amount=1&onlyVerified=false" + window.__nswsTrackQuery(id),
                 { credentials: "omit", cache: "no-store" }).catch(() => {});

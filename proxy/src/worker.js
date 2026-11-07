@@ -1505,7 +1505,8 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     if (!env.TRAFFIC) return plain(503, "Traffic stats are off", origin);
     const stub = env.TRAFFIC.get(env.TRAFFIC.idFromName("global"));
     const syncing = url.pathname === TRAFFIC_PREFIX + "anticheat/tracks";
-    const text = await readSmallBody(request, syncing ? MAX_TRACK_SYNC_BODY : MAX_TRAFFIC_BODY);
+    const keeping = url.pathname === TRAFFIC_PREFIX + "wrs/keep";
+    const text = await readSmallBody(request, syncing || keeping ? MAX_TRACK_SYNC_BODY : MAX_TRAFFIC_BODY);
     if (text == null) return plain(413, "Too large", origin);
 
     if (url.pathname === TRAFFIC_PREFIX + "beat") {
@@ -1586,6 +1587,14 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         const result = await stub.stopAnnouncement();
         if (result.stopped != null) await chatBroadcast(env, { t: "ann-stop", id: result.stopped });
         return json(result, origin);
+    }
+    if (keeping) {
+        const accountsStub = accounts(env);
+        if (!accountsStub) return plain(503, "Accounts are off", origin);
+        const result = await accountsStub.keepWrs(body.tracks);
+        if (result.error) return plain(400, "Bad request", origin);
+        for (const retag of result.retags) await chatRetag(env, retag);
+        return json({ dropped: result.dropped }, origin);
     }
     if (url.pathname.startsWith(TRAFFIC_PREFIX + "tagadmin")) {
         const accountsStub = accounts(env);
