@@ -6,12 +6,12 @@ import { BotView } from './bots/view.ts';
 import { CupChat } from './chat.ts';
 import { Driver } from './driver.ts';
 import type { Bridge, Connection, Game, GameInfo, LobbyPlayer, Native } from './game.ts';
-import { background, site } from './game.ts';
+import { background, beReady, BE_NOT_LOADED, ensureBE, isBE, site } from './game.ts';
 import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
 import { drawCars, ghostBehind, installSmoothing, nudgeCar } from './smooth.ts';
-import { BE_REFUSED, UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
+import { UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
 import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult, type TrackMode } from './state.ts';
@@ -593,7 +593,11 @@ export class App {
     this.state = next;
     const t = next.round?.track;
     // Before the game's session brings the track: rocket and royale physics are set per track id.
-    if (t?.cat === 'custom' && (prev?.round?.track.id !== t.id || prev?.round?.n !== next.round!.n)) site.__nswsTracks?.registerModes?.([{ trackId: t.id, mode: t.mode ?? 'normal' }]);
+    if (t?.cat === 'custom' && (prev?.round?.track.id !== t.id || prev?.round?.n !== next.round!.n)) {
+      site.__nswsTracks?.registerModes?.([{ trackId: t.id, mode: t.mode ?? 'normal' }]);
+      // The game's session waits for them too; starting now saves that wait.
+      if (next.custom?.some((c) => c.id === t.id && c.be) && !beReady()) void ensureBE();
+    }
     // At once, not on the next frame: bot chunks sent after a new cup's first state belong to that cup.
     this.bots.sync(next);
     if (prev?.round && next.round && (prev.round.n !== next.round.n || prev.round.try !== next.round.try)) this.live.clear();
@@ -631,7 +635,7 @@ export class App {
   uploadTrack(raw: string, mode?: TrackMode): string | null {
     const code = raw.trim();
     if (!code) return 'Paste a track code first.';
-    if (/^PolyTrackBE/.test(code)) return BE_REFUSED;
+    if (isBE(code) && !beReady()) return BE_NOT_LOADED;
     if (!this.org && this.state?.rules.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
     const m = mode === 'rocket' || mode === 'royale' ? mode : undefined;
     let track: ReturnType<Native['parse']> = null;

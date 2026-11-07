@@ -226,6 +226,21 @@ export interface SiteTracks {
   isKnown?(trackId: string): boolean;
 }
 
+// Better Editor codes (PolyTrackBE1): a page reads and races them once their blocks have loaded (window.__nswsTM).
+export const isBE = (code: string) => /^PolyTrackBE/.test(code.trim());
+export const beReady = () => !!site.__nswsTM?.ready();
+export const BE_NOT_LOADED = "Better Editor blocks haven't loaded on this page yet. Try again in a moment.";
+// Null once loaded, or why they couldn't load.
+export async function ensureBE(): Promise<string | null> {
+  if (!site.__nswsTM) return "This copy of the site can't load Better Editor blocks.";
+  try {
+    await site.__nswsTM.ensure();
+    return null;
+  } catch {
+    return "Couldn't load the Better Editor blocks. Check your connection and try again.";
+  }
+}
+
 // Hidden, or another window has the focus.
 export const background = () => document.hidden || !document.hasFocus();
 
@@ -260,5 +275,6 @@ export const site = window as unknown as {
   __nswsCupLeave?: (message: string) => void;
   __nswsCupApp?: unknown;
   __nswsTracks?: SiteTracks;
+  __nswsTM?: { ensure(): Promise<void>; ready(): boolean };
   __nswsChatIdentity?: { visitorId(): string; nickname(): string; ownerKey(): Promise<string | null> };
 };

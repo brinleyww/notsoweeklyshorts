@@ -7,8 +7,7 @@ import { player, standings, type Category, type CupState, type Player, type Trac
 import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
-import { site } from '../game.ts';
-import { BE_REFUSED } from '../protocol.ts';
+import { beReady, ensureBE, isBE, site } from '../game.ts';
 
 const MODE_LABEL: Record<TrackMode, string> = { normal: '', rocket: 'Rocket League', royale: 'Royale' };
 
@@ -606,9 +605,9 @@ export class Panel {
       const text = code.value.trim();
       if (!text) return app.notify('Paste a track code first.', 'bad');
       // One plain code needs nothing from the library, so it works even without it.
-      const single = /^PolyTrack\S*$/.test(text) && !/^PolyTrackBE/.test(text);
+      const single = /^PolyTrack\S*$/.test(text);
       if (single || !lib?.importText) {
-        if (this.#addTracks([{ code: text }])) this.#clearCode(code);
+        if (await this.#addTracks([{ code: text }])) this.#clearCode(code);
         return;
       }
       this.#adding = true;
@@ -617,7 +616,7 @@ export class Panel {
         const got = await lib.importText(text);
         if (got.club && !got.tracks?.length) return app.notify('That is a club code. Join the club in Custom Tracks, then add its tracks from My Tracks.', 'bad');
         if (!got.tracks?.length) return app.notify("That isn't a track code, pack code or NSWS link.", 'bad');
-        if (this.#addTracks(got.tracks)) this.#trackCode = '';
+        if (await this.#addTracks(got.tracks)) this.#trackCode = '';
       } catch (e) {
         app.notify((e as Error)?.message || "That link couldn't be read.", 'bad');
       } finally {
@@ -632,7 +631,7 @@ export class Panel {
     });
     const fromLibrary = async () => {
       const picked = await lib?.pick?.({ multi: true });
-      if (picked?.length) this.#addTracks(picked);
+      if (picked?.length) void this.#addTracks(picked);
     };
     const count = app.org ? 'As the organizer you have no limit.' : `${mine} of ${r.customLimit} added.`;
     return h(
@@ -652,22 +651,26 @@ export class Panel {
   }
 
   // Sends tracks to the organizer one by one; true when at least one went.
-  #addTracks(items: { code: string; mode?: string }[]) {
-    const app = this.app,
-      s = app.state;
+  async #addTracks(items: { code: string; mode?: string }[]) {
+    const app = this.app;
+    if (!app.state) return false;
+    if (items.some((t) => isBE(String(t.code ?? ''))) && !beReady()) {
+      app.notify('Loading Better Editor blocks...', 'info');
+      const error = await ensureBE();
+      if (error) {
+        app.notify(error, 'bad');
+        return false;
+      }
+    }
+    const s = app.state;
     if (!s) return false;
     const limit = s.rules.customLimit;
     let room = app.org ? Infinity : Math.max(0, limit - (s.custom ?? []).filter((t) => t.by === app.me).length);
     let sent = 0,
-      be = 0,
       over = 0,
       error: string | null = null;
     for (const t of items) {
       const c = String(t.code ?? '').trim();
-      if (/^PolyTrackBE/.test(c)) {
-        be++;
-        continue;
-      }
       if (room <= 0) {
         over++;
         continue;
@@ -681,7 +684,6 @@ export class Panel {
       sent++;
       room--;
     }
-    if (be) app.notify(be === 1 ? BE_REFUSED : `${be} of those are Better Editor tracks with new blocks, which NSWS can't race.`, 'bad');
     if (over) app.notify(`You can add up to ${limit} ${limit === 1 ? 'track' : 'tracks'}; ${over} left out.`, 'bad');
     if (error) app.notify(error, 'bad');
     if (sent && !app.org) app.notify(sent === 1 ? 'Uploading the track...' : `Uploading ${sent} tracks...`, 'info');

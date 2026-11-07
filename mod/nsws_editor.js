@@ -744,7 +744,6 @@
             row("Mode", seg),
             modeHelp,
         ];
-        if (info.kind === "be") body.push(el("p", "bad", "This track uses Better Editor blocks, which NSWS can't race yet. Race Control can still look at it."));
         const noteRow = el("div", "nse-row col");
         noteRow.append(el("label", null, "Note"), noteBox);
         body.push(noteRow, status, el("div", "nse-sec", "My submissions"), mine);

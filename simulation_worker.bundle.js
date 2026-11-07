@@ -11020,13 +11020,16 @@
         }]);
         class lo {
             constructor(t, e, i, r, s, n, a=null, o=null) {
-                const l = [];
+                const l = []
+                  , seen = new Set;
                 for (const [t,e] of n)
                     for (let i = t[0]; i <= e[0]; i++)
                         for (let r = t[1]; r <= e[1]; r++)
                             for (let s = t[2]; s <= e[2]; s++) {
-                                if (null != l.find(( ([t,e,n]) => t == i && e == r && n == s)))
+                                const key = i + "|" + r + "|" + s;
+                                if (seen.has(key))
                                     throw new Error("Duplicate tile in track part");
+                                seen.add(key),
                                 l.push([i, r, s])
                             }
                 this.checksum = t,
@@ -11150,6 +11153,34 @@
         }
         const uo = ho.filter((t => t.detector?.type == to.Checkpoint)).map((t => t.id))
           , fo = ho.filter((t => null != t.startOffset)).map((t => t.id));
+        // Better Editor blocks (~BE1 save strings): loaded and added to the part table the first time such a track arrives.
+        let __nswsTMReady = !1;
+        function __nswsTMLoad() {
+            if (__nswsTMReady)
+                return !0;
+            try {
+                self.TM_BASE = __nswsTMBase;
+                self.TM_DATA || importScripts(__nswsTMBase + "tm_parts.js");
+                self.TM || importScripts(__nswsTMBase + "tm_runtime.js");
+                const TM = self.TM;
+                if (!co.has(TM.parts[0].i)) {
+                    TM.addEnum(Za);
+                    for (const [k,v] of [["Plastic", 9], ["Wood", 10], ["Stadium", 11], ["Ice", 12]])
+                        Xa[Xa[k] = v] = k;
+                    for (const q of TM.parts) {
+                        const e = new lo(null,[Xa.Plastic, Xa.Wood, Xa.Stadium, Xa.Ice][q.f],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new R(q.o[0],q.o[1],q.o[2]) : null);
+                        ho.push(e),
+                        co.set(e.id, e),
+                        e.detector?.type == to.Checkpoint && uo.push(e.id),
+                        null != e.startOffset && fo.push(e.id)
+                    }
+                }
+                __nswsTMReady = !0
+            } catch (e) {
+                console.error("Couldn't load Better Editor blocks:", e)
+            }
+            return __nswsTMReady
+        }
         function go(t) {
             if ("object" != typeof t || null == t)
                 return null;
@@ -12416,14 +12447,16 @@
               , A = Math.max(1, Math.min(4, Math.ceil(Math.log2(l + 1) / 8)))
               , d = Math.max(1, Math.min(4, Math.ceil(Math.log2(h + 1) / 8)));
             t.push(255 & e, e >>> 8 & 255, e >>> 16 & 255, e >>> 24 & 255, 255 & i, i >>> 8 & 255, i >>> 16 & 255, i >>> 24 & 255, 255 & r, r >>> 8 & 255, r >>> 16 & 255, r >>> 24 & 255, 255 & (c | A << 2 | d << 4));
+            const tmExt = null != self.TM && this.hasExtendedParts();
+            tmExt && t.push(255 & self.TM.version, self.TM.version >>> 8 & 255);
             for (const s of ji(this, Ho, "f")) {
                 const n = ji(this, Go, "f").get(s);
                 if (null == n)
                     throw new Error("Part list does not exist");
-                if (s < 0 || s > 255)
+                if (s < 0 || s > (tmExt ? 65535 : 255))
                     throw new Error("Part id is out of range");
                 const a = n.length;
-                t.push(255 & s, 255 & a, a >>> 8 & 255, a >>> 16 & 255, a >>> 24 & 255);
+                tmExt ? t.push(255 & s, s >>> 8 & 255, 255 & a, a >>> 8 & 255, a >>> 16 & 255, a >>> 24 & 255) : t.push(255 & s, 255 & a, a >>> 8 & 255, a >>> 16 & 255, a >>> 24 & 255);
                 for (const a of n) {
                     const n = a.x - e
                       , o = a.y - i
@@ -12457,6 +12490,9 @@
                 Go.set(this, new Map),
                 Xi(this, Oo, t, "f"),
                 Xi(this, Vo, e.clone(), "f")
+            }
+            hasExtendedParts() {
+                return ji(this, Ho, "f").some((t => t > 255))
             }
             get environment() {
                 return ji(this, Oo, "f")
@@ -12576,7 +12612,7 @@
                     memLevel: 9
                 });
                 return r.push(i, !0),
-                za(r.result)
+                (null != self.TM && this.hasExtendedParts() ? self.TM.SAVE_PREFIX : "") + za(r.result)
             }
             toExportString(t) {
                 const e = (new TextEncoder).encode(t.name);
@@ -12613,9 +12649,21 @@
                     memLevel: 9
                 });
                 return h.push(l, !0),
-                "PolyTrack2" + za(h.result)
+                (null != self.TM && this.hasExtendedParts() ? self.TM.EXPORT_PREFIX : "PolyTrack2") + za(h.result)
             }
             static fromSaveString(t) {
+                if ("string" == typeof t && t.startsWith("~BE1"))
+                    return __nswsTMLoad() ? self.TM.fromSave(t, {
+                        pako: Ma,
+                        fromBase62: Wa,
+                        create: (t, e) => new Zo(t,new Oa(e)),
+                        environments: Ha,
+                        partIds: Za,
+                        axes: Ka,
+                        colors: Ja,
+                        checkpointIds: uo,
+                        startIds: fo
+                    }) : null;
                 const e = function(t) {
                     const e = Wa(t);
                     if (null == e)
@@ -13049,7 +13097,9 @@
             royale: new Set
         };
         let __nswsModeSink = null;
+        let __nswsTMBase = "https://brinleyww.github.io/Better-Editor-PT/";
         function __nswsModesMessage(t) {
+            "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase);
             const m = t?.data?.nswsModes;
             if (null == m || "object" != typeof m)
                 return !1;
@@ -13119,6 +13169,22 @@
             }();
             const e = [];
             let createCarTrack = null;
+            // Cars on tracks with Better Editor blocks, which get its surface and effect physics around each frame.
+            const __tmActive = new Set;
+            let __tmProxies = !1;
+            function __tmAddProxies() {
+                if (__tmProxies)
+                    return;
+                __tmProxies = !0;
+                for (const l of self.TM.proxyConfigs()) {
+                    const A = t.ccall("malloc", "number", ["number"], [l.vertices.byteLength]);
+                    if ("number" != typeof A || 0 == A)
+                        throw new Error("Failed to allocate memory for track part vertices");
+                    t.HEAPF32.set(l.vertices, A / 4),
+                    t.ccall("addTrackPartConfiguration", "void", ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "boolean", "number", "number", "number"], [l.id, A, l.vertices.length, null != l.detector ? l.detector.type : -1, null != l.detector ? l.detector.center[0] : 0, null != l.detector ? l.detector.center[1] : 0, null != l.detector ? l.detector.center[2] : 0, null != l.detector ? l.detector.size[0] : 0, null != l.detector ? l.detector.size[1] : 0, null != l.detector ? l.detector.size[2] : 0, null != l.startOffset, null != l.startOffset ? l.startOffset[0] : 0, null != l.startOffset ? l.startOffset[1] : 0, null != l.startOffset ? l.startOffset[2] : 0]),
+                    t.ccall("free", "void", ["number"], [A])
+                }
+            }
             function i(i) {
                 const s = i.data;
                 switch (s.messageType) {
@@ -13198,6 +13264,7 @@
                             rocket: __rocketCars.has(l) ? { version: e.rocketVersion ?? s.rocketVersion, latest: __RL.version } : null
                         }),
                         __rocketFree(l),
+                        __tmActive.delete(l),
                         t.ccall("deleteCarModel", "void", ["number"], [l]),
                         n.dispose()
                     }(s);
@@ -13267,6 +13334,7 @@
                             if (s.id == r) {
                                 s.controls.dispose(),
                                 __rocketFree(r),
+                                __tmActive.delete(r),
                                 t.ccall("deleteCarModel", "void", ["number"], [r]),
                                 e.splice(i, 1);
                                 break
@@ -13350,17 +13418,24 @@
             for (const t of jo)
                 i(t);
             function r(e, i, r, s, n, rocketVersion) {
+                const tmCar = null == self.TM ? null : (__tmAddProxies(),
+                self.TM.prepareCar(e, i, r, s, ( (t, e, i) => Ao(t).tiles.rotated(e, i))));
+                null != tmCar && tmCar.vertices !== i ? (__tmActive.add(e),
+                i = tmCar.vertices) : __tmActive.delete(e);
                 const a = t.ccall("malloc", "number", ["number"], [4 * i.length]);
                 if ("number" != typeof a || 0 == a)
                     throw new Error("Failed to allocate memory for mountain vertices");
                 t.HEAPF32.set(i, a / 4);
-                const o = s.numberOfParts
+                const o = null != tmCar ? tmCar.records : s.numberOfParts
                   , l = t.ccall("malloc", "number", ["number"], [19 * o]);
                 if ("number" != typeof l || 0 == l)
                     throw new Error("Failed to allocate memory for track data");
                 let h = l;
                 const c = new DataView(t.HEAPU8.buffer);
                 s.forEachPart(( (t, e, i, r, s, n, a, o) => {
+                    if (null != tmCar && (r = self.TM.physicsId(r),
+                    null == r))
+                        return;
                     c.setUint8(h, r),
                     h++,
                     c.setInt32(h, t, !0),
@@ -14082,7 +14157,17 @@
             }
             )();
             function stepCar(e, i) {
+                const tm = __tmActive.has(e.id);
+                if (tm) {
+                    const f = self.TM.fxControls(e.id, i);
+                    f !== i && (f.rocket = i.rocket,
+                    i = f);
+                    const held = self.TM.fxSkip(e.id, t.HEAPU8);
+                    if (null != held)
+                        return new Uint8Array(held)
+                }
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
+                tm && self.TM.fxStep(e.id, t.HEAPU8, t.HEAPU8.slice(n, n + s).buffer),
                 __royaleStep(e.id),
                 __collideStep(e),
                 __rocketStep(e, i);

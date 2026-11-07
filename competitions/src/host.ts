@@ -7,8 +7,8 @@ import { BOT_NAMES, botStyle, matchStep, mix, nameOrder, personas, seedOf, tierS
 import { EXPERT_SKILL, type RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
-import { site } from './game.ts';
-import { BE_REFUSED, UPLOAD_CHUNK, UPLOAD_PARTS, type Msg } from './protocol.ts';
+import { beReady, BE_NOT_LOADED, ensureBE, isBE, site } from './game.ts';
+import { UPLOAD_CHUNK, UPLOAD_PARTS, type Msg } from './protocol.ts';
 import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
 import { botPid, byPid, isBot, isFinalist, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category, type TrackMode } from './state.ts';
 
@@ -809,7 +809,13 @@ export class Organizer {
       for (const t of this.state.custom ?? []) {
         const code = this.#codes.get(t.id);
         if (!code || have.has(t.id)) continue;
-        list.push({ id: t.id, name: t.name, author: t.author, cat: 'custom', ...(t.mode ? { mode: t.mode } : {}), load: async () => this.#parse(code)!, thumb: '' });
+        list.push({ id: t.id, name: t.name, author: t.author, cat: 'custom', ...(t.mode ? { mode: t.mode } : {}), load: async () => {
+            if (isBE(code)) {
+              const error = await ensureBE();
+              if (error) throw new Error(error);
+            }
+            return this.#parse(code)!;
+          }, thumb: '' });
       }
     }
     this.#pool = list;
@@ -863,8 +869,13 @@ export class Organizer {
     up.at = now;
     if (up.got < m.n) return;
     this.#parts.delete(key);
-    const error = this.addTrack(p.u, up.parts.join(''), m.m);
-    if (error) this.#tell(p, error, 'bad');
+    const code = up.parts.join('');
+    const add = () => {
+      const error = this.addTrack(p.u, code, m.m);
+      if (error) this.#tell(p, error, 'bad');
+    };
+    if (!isBE(code) || beReady()) return add();
+    void ensureBE().then((error) => (error ? this.#tell(p, error, 'bad') : add()));
   }
 
   // Adds a track from its import code; returns why it can't, or null.
@@ -874,7 +885,8 @@ export class Organizer {
     if (!p) return null;
     if (!s.rules.customTracks) return 'Custom tracks are off in this cup.';
     if (u !== this.me && s.rules.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
-    if (/^PolyTrackBE/.test(code)) return BE_REFUSED;
+    const be = isBE(code);
+    if (be && !beReady()) return BE_NOT_LOADED;
     const track = this.#parse(code);
     if (!track?.trackData) return "That isn't a PolyTrack track code.";
     if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
@@ -889,7 +901,7 @@ export class Organizer {
     const author = (track.trackMetadata?.author ?? '').trim().slice(0, 30);
     // A listed track keeps its own physics: its id races on the real leaderboards.
     const m = (mode === 'rocket' || mode === 'royale') && !site.__nswsTracks?.isKnown?.(id) ? mode : null;
-    custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', ...(m ? { mode: m } : {}), by: u, bn: p.name.slice(0, 24) });
+    custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', ...(m ? { mode: m } : {}), ...(be ? { be: true as const } : {}), by: u, bn: p.name.slice(0, 24) });
     this.#codes.set(id, code);
     this.#poolAt = 0;
     this.notifyAll(`${p.name} added ${name} to the maps`, 'good');

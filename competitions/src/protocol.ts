@@ -5,7 +5,6 @@ export const VERSION = 1;
 // An uploaded track's code goes in parts that fit the cup channel's 120k message limit (net.ts).
 export const UPLOAD_CHUNK = 100_000;
 export const UPLOAD_PARTS = 15;
-export const BE_REFUSED = "That's a Better Editor track with new blocks. NSWS can't race those; open it in the Custom Tracks Editor instead.";
 
 export type Action =
   | { a: 'role'; v: 'racer' | 'spectator' }

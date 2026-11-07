@@ -687,8 +687,8 @@
         const c = h("div", "nc-ctl");
         if (t.mode && t.mode !== "normal") c.appendChild(chip(MODE_NAME[t.mode] || t.mode, "nc-chip-strong"));
         if (isBE(t.code)) {
-            const be = chip("Editor only");
-            be.title = "Uses Better Editor blocks: open it in the editor to drive it";
+            const be = chip("Better Editor");
+            be.title = "Uses Better Editor blocks, which download the first time you play one";
             c.appendChild(be);
         }
         for (const x of [].concat(ctl || [])) c.appendChild(x);
@@ -863,7 +863,7 @@
             const r = trackRow(i, Object.assign({}, t, { mode: "normal" }), ctl);
             root.appendChild(r);
         });
-        if (d.tracks.some((t) => isBE(t.code))) root.appendChild(h("div", "nc-note", "Editor only tracks use Better Editor blocks. Players can save and open them in the editor, but can't race them in NSWS."));
+        if (d.tracks.some((t) => isBE(t.code))) root.appendChild(h("div", "nc-note", "Better Editor tracks use new blocks. They download the first time a player plays one (about 60 MB), then they race like any other track."));
         if (d.tracks.some((t) => t.mode === "royale")) root.appendChild(h("div", "nc-note", "Royale: each checkpoint number has two gates. After crossing one, a reset puts you at the other gate of that number."));
 
         const foot = h("div", "nc-actions nc-foot");

@@ -27,6 +27,8 @@ export interface TrackRef {
 // A track someone in the cup added by its import code. Only the organizer's page has the code.
 export interface CustomTrack extends TrackRef {
   by: number;
+  // Uses Better Editor blocks, which every page loads before the round.
+  be?: true;
   // The uploader's name, kept for when they leave.
   bn?: string;
 }

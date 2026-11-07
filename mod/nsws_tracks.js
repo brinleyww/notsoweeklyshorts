@@ -38,7 +38,8 @@
         const nswsModes = { rocket, royale };
         // Ids set back to Normal; a worker that can't remove ids just ignores this list.
         if (clearedModes.size) nswsModes.normal = [...clearedModes];
-        return { nswsModes };
+        // Where the worker loads Better Editor's blocks from, when a track with them arrives.
+        return { nswsModes, nswsTMBase: window.__nswsTM?.base };
     }
 
     const NativeWorker = window.Worker;
@@ -213,11 +214,13 @@
     function parse(code) {
         code = clean(code);
         if (!code) return failed(code, "There's no code there.");
+        const be = code.startsWith(BE_PREFIX);
         const cached = infoCache.get(code);
-        if (cached) return cached;
-        if (code.startsWith(BE_PREFIX)) return { ok: true, kind: "be", code, name: null, author: null, trackId: null, env: null };
+        if (cached && !(be && beReady() && cached.ok && !cached.trackId)) return cached;
+        if (be && !beReady()) return { ok: true, kind: "be", code, name: null, author: null, trackId: null, env: null };
         if (code.startsWith(PACK_PREFIX)) return failed(code, "That's a pack of tracks, not a single track code.");
         const loaded = stockParse(code);
+        if (loaded.error && be && !loaded.error.startsWith("The game")) return remember(code, failed(code, "That Better Editor code is damaged or cut short."));
         if (loaded.error) return loaded.error.startsWith("The game") ? failed(code, loaded.error) : remember(code, failed(code, loaded.error));
         let trackId = null;
         try {
@@ -226,7 +229,34 @@
         const env = ENVS[loaded.data.environment] ?? null;
         const name = String(loaded.meta?.name ?? "").trim() || "Untitled track";
         const author = loaded.meta?.author ? String(loaded.meta.author) : null;
-        return remember(code, { ok: true, kind: "stock", code, name, author, trackId, env });
+        return remember(code, { ok: true, kind: be ? "be" : "stock", code, name, author, trackId, env });
+    }
+
+    const beReady = () => !!window.__nswsTM?.ready();
+
+    // Loads Better Editor's blocks (about 60 MB the first time, then from the browser's cache) with a dialog
+    // while it takes. False when the player cancelled; throws when they couldn't load.
+    async function ensureBE() {
+        const tm = window.__nswsTM;
+        if (!tm) throw new Error("This copy of the site can't load Better Editor blocks.");
+        if (tm.ready()) return true;
+        let done = false;
+        let cancelled = false;
+        const close = dialog({
+            title: "Better Editor track",
+            body: "Loading Better Editor blocks... The first time this downloads about 60 MB.",
+            actions: [{ label: "Cancel" }],
+            onClose: () => {
+                if (!done) cancelled = true;
+            },
+        });
+        try {
+            await tm.ensure();
+        } finally {
+            done = true;
+            close();
+        }
+        return !cancelled;
     }
 
     async function readBeHeader(code) {
@@ -251,7 +281,7 @@
 
     async function parseAsync(code) {
         code = clean(code);
-        if (!code.startsWith(BE_PREFIX)) return parse(code);
+        if (!code.startsWith(BE_PREFIX) || beReady()) return parse(code);
         const cached = infoCache.get(code);
         if (cached) return cached;
         try {
@@ -831,18 +861,26 @@
     async function play(trackOrCode, opts = {}) {
         const item = typeof trackOrCode === "string" ? { code: trackOrCode } : trackOrCode || {};
         const mode = normMode(opts.mode ?? item.mode);
-        const info = await parseAsync(item.code);
+        let info = await parseAsync(item.code);
         if (!info.ok) {
             await ui.alert(info.error, "Can't play this track");
             return false;
         }
-        if (info.kind === "be") {
-            const open = await ui.confirm(
-                "\"" + (item.name || info.name) + "\" uses Better Editor blocks, which NSWS can't race. Open it in the Track Editor and drive it with the editor's test drive.",
-                { title: "Better Editor track", ok: "Open in editor", cancel: "Cancel" }
-            );
-            if (open) openInEditor({ ...item, code: info.code, kind: "be", name: item.name || info.name, mode });
-            return false;
+        if (info.kind === "be" && !beReady()) {
+            let loadedBE = false;
+            try {
+                loadedBE = await ensureBE();
+            } catch (e) {
+                console.error(e);
+                await ui.alert("Couldn't load the Better Editor blocks this track uses. Check your connection and try again.", "Can't play this track");
+                return false;
+            }
+            if (!loadedBE) return false;
+            info = parse(info.code);
+            if (!info.ok) {
+                await ui.alert(info.error, "Can't play this track");
+                return false;
+            }
         }
         const hooks = window.__nswsTrackHooks;
         const loaded = stockParse(info.code, true);
@@ -866,15 +904,23 @@
             if (opened) return true;
         }
         registerModes([{ trackId: info.trackId, mode }]);
-        let thumb = null;
-        try {
-            thumb = loaded.data.createThumbnail();
-        } catch {}
         let ok = false;
-        try {
-            ok = !!hooks.openTrack(loaded.meta, loaded.data, info.trackId, thumb);
-        } catch (e) {
-            console.error(e);
+        if (opts.start && window.__nswsRaceTrack) {
+            try {
+                ok = !!window.__nswsRaceTrack(loaded.meta, loaded.data, opts.onExit);
+            } catch (e) {
+                console.error(e);
+            }
+        } else {
+            let thumb = null;
+            try {
+                thumb = loaded.data.createThumbnail();
+            } catch {}
+            try {
+                ok = !!hooks.openTrack(loaded.meta, loaded.data, info.trackId, thumb);
+            } catch (e) {
+                console.error(e);
+            }
         }
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
@@ -1439,7 +1485,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (!state.selecting) {
                 const actions = el("div", "nt-actions");
                 actions.append(
-                    button("Play", () => play(t), { icon: "play", title: t.kind === "be" ? "Better Editor tracks open in the editor" : "Play" }),
+                    button("Play", () => play(t), { icon: "play", title: "Play" }),
                     button("Edit", () => openInEditor(t), { icon: "editor", title: "Open in the Track Editor" }),
                     button("Share", () => openShare([t]), { icon: "share", title: "Share or export" }),
                     modeSelect(t.mode, async (m) => {
@@ -1772,7 +1818,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             body.appendChild(section("Track code"));
             const note =
                 t.kind === "be"
-                    ? "A Better Editor code. It opens in the Better Editor and NSWS's Track Editor, not in stock PolyTrack."
+                    ? "A Better Editor code. It plays in NSWS and opens in the Better Editor and NSWS's Track Editor, not in stock PolyTrack."
                     : "The normal PolyTrack code. It works in PolyTrack's own import and the editor.";
             body.appendChild(el("p", "nt-text dim", note));
             if (t.mode !== "normal") body.appendChild(el("p", "nt-text bad", "Mode isn't kept in a plain code. Use the link or the pack code to keep " + MODE_LABEL[t.mode] + "."));
@@ -1795,7 +1841,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             typeof opts.filter === "function"
                 ? opts.filter
                 : opts.filter && typeof opts.filter === "object"
-                ? (t) => (!opts.filter.kind || t.kind === opts.filter.kind) && (!opts.filter.mode || normMode(t.mode) === opts.filter.mode) && (!opts.filter.playable || t.kind !== "be")
+                ? (t) => (!opts.filter.kind || t.kind === opts.filter.kind) && (!opts.filter.mode || normMode(t.mode) === opts.filter.mode)
                 : () => true;
         return new Promise((resolve) => {
             const body = el("div");

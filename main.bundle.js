@@ -2450,7 +2450,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 getPart: () => f,
                 checkpointPartIds: () => g,
                 startPartIds: () => m,
-                allParts: () => u
+                allParts: () => u,
+                registerTM: () => registerTM
             });
             var THREE = __webpack_require__(4922)
               , PartCategory = __webpack_require__(1882).A
@@ -2547,14 +2548,17 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
             }]);
             class PartObject {
-                constructor(e, t, n, i, r, a, s=null, o=null) {
-                    const c = [];
+                constructor(e, t, n, i, r, a, s=null, o=null, tm=null) {
+                    const c = []
+                      , seen = new Set;
                     for (const [e,t] of a)
                         for (let n = e[0]; n <= t[0]; n++)
                             for (let i = e[1]; i <= t[1]; i++)
                                 for (let r = e[2]; r <= t[2]; r++) {
-                                    if (null != c.find(( ([e,t,a]) => e == n && t == i && a == r)))
+                                    const key = n + "|" + i + "|" + r;
+                                    if (seen.has(key))
                                         throw new Error("Duplicate tile in track part");
+                                    seen.add(key),
                                     c.push([n, i, r])
                                 }
                     this.checksum = e,
@@ -2565,6 +2569,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     this.tiles = new l.A(c),
                     this.detector = s,
                     this.startOffset = o,
+                    this.tm = tm,
                     Object.freeze(this)
                 }
             }
@@ -2865,6 +2870,21 @@ window.__nswsAutoGhostNote = function(trackId) {
             }
             const g = u.filter((e => e.detector?.type == TrackPartDetectorType.Checkpoint)).map((e => e.id))
               , m = u.filter((e => null != e.startOffset)).map((e => e.id))
+            // Better Editor blocks, added by window.__nswsTM once their data has loaded. Returns the new parts.
+            function registerTM(TM) {
+                if (p.has(TM.parts[0].i))
+                    return [];
+                TM.addEnum(Part);
+                for (const [k,v] of [["Plastic", 9], ["Wood", 10], ["Stadium", 11], ["Ice", 12]])
+                    PartCategory[PartCategory[k] = v] = k;
+                const added = TM.parts.map((q => new PartObject(null,[PartCategory.Plastic, PartCategory.Wood, PartCategory.Stadium, PartCategory.Ice][q.f],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new THREE.Vector3(q.o[0],q.o[1],q.o[2]) : null,q)));
+                for (const e of added)
+                    u.push(e),
+                    p.set(e.id, e),
+                    e.detector?.type == TrackPartDetectorType.Checkpoint && g.push(e.id),
+                    null != e.startOffset && m.push(e.id);
+                return added
+            }
         }
         ,
         493: (module, exports, __webpack_require__) => {
@@ -31238,14 +31258,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , m = Math.max(1, Math.min(4, Math.ceil(Math.log2(p + 1) / 8)))
                   , A = Math.max(1, Math.min(4, Math.ceil(Math.log2(f + 1) / 8)));
                 e.push(255 & t, t >>> 8 & 255, t >>> 16 & 255, t >>> 24 & 255, 255 & n, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255, 255 & i, i >>> 8 & 255, i >>> 16 & 255, i >>> 24 & 255, 255 & (g | m << 2 | A << 4));
+                const tmExt = null != self.TM && this.hasExtendedParts();
+                tmExt && e.push(255 & self.TM.version, self.TM.version >>> 8 & 255);
                 for (const r of d.get(this, o, "f")) {
                     const a = d.get(this, l, "f").get(r);
                     if (null == a)
                         throw new Error("Part list does not exist");
-                    if (r < 0 || r > 255)
+                    if (r < 0 || r > (tmExt ? 65535 : 255))
                         throw new Error("Part id is out of range");
                     const s = a.length;
-                    e.push(255 & r, 255 & s, s >>> 8 & 255, s >>> 16 & 255, s >>> 24 & 255);
+                    tmExt ? e.push(255 & r, r >>> 8 & 255, 255 & s, s >>> 8 & 255, s >>> 16 & 255, s >>> 24 & 255) : e.push(255 & r, 255 & s, s >>> 8 & 255, s >>> 16 & 255, s >>> 24 & 255);
                     for (const s of a) {
                         const a = s.x - t
                           , o = s.y - n
@@ -31269,6 +31291,18 @@ window.__nswsAutoGhostNote = function(trackId) {
                 return new Uint8Array(e)
             }
             ;
+            // What Better Editor's PolyTrackBE1 reader (self.TM, loaded by window.__nswsTM) builds tracks with.
+            const tmCtx = () => ({
+                pako: u.Ay,
+                fromBase62: e => Base62.decode(e),
+                create: (e, t) => new TrackData(e,new (n(7680).A)(t)),
+                environments: TrackEnvironment,
+                partIds: n(2203).A,
+                axes: n(8566).A,
+                colors: n(4183).A,
+                checkpointIds: TrackPartManager.checkpointPartIds,
+                startIds: TrackPartManager.startPartIds
+            });
             // Every restart sends the track to the physics worker, and compressing it twice at level 9 stalls weak devices.
             const trackSaveStrings = new WeakMap;
             const TrackData = class {
@@ -31281,6 +31315,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     l.set(this, new Map),
                     d.set(this, _environment, environment, "f"),
                     d.set(this, _sunDirection, sunDirection.clone(), "f")
+                }
+                hasExtendedParts() {
+                    return d.get(this, o, "f").some((e => e > 255))
                 }
                 get environment() {
                     return d.get(this, _environment, "f")
@@ -31347,6 +31384,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 getId() {
                     return d.set(this, r, d.get(this, r, "f") ?? (0,
                     p.sha256)(d.get(this, i, "m", h).call(this)), "f"),
+                    null != self.TM && this.hasExtendedParts() && self.TM.extTrackIds.add(d.get(this, r, "f")),
                     d.get(this, r, "f")
                 }
                 getBounds() {
@@ -31404,7 +31442,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         memLevel: 9
                     });
                     r.push(n, !0);
-                    const value = Base62.encode(r.result);
+                    const value = (null != self.TM && this.hasExtendedParts() ? self.TM.SAVE_PREFIX : "") + Base62.encode(r.result);
                     return trackSaveStrings.set(this, {
                         id,
                         value
@@ -31446,9 +31484,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                         memLevel: 9
                     });
                     return p.push(c, !0),
-                    "PolyTrack2" + Base62.encode(p.result)
+                    (null != self.TM && this.hasExtendedParts() ? self.TM.EXPORT_PREFIX : "PolyTrack2") + Base62.encode(p.result)
                 }
                 static fromSaveString(e) {
+                    if (null != self.TM && "string" == typeof e && e.startsWith(self.TM.SAVE_PREFIX))
+                        return self.TM.fromSave(e, tmCtx());
                     const t = TrackDataImporterV5.withoutMetadata(e);
                     if (null != t)
                         return t;
@@ -31469,6 +31509,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 static fromExportString(exportString) {
                     const exportStringWithoutWhitespace = exportString.replace(/\s+/g, "");
+                    if (null != self.TM && exportStringWithoutWhitespace.startsWith(self.TM.EXPORT_PREFIX))
+                        return self.TM.fromExport(exportStringWithoutWhitespace, tmCtx());
                     
                     const v5 = TrackDataImporterV5.withMetadata(exportStringWithoutWhitespace);
                     if (null != v5)
@@ -55281,7 +55323,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
             }
             ,
-            e.onmessage = e => {
+            e.onmessage = tmGate(this, e => {
                 let n = "Client data channel error: ";
                 if (!(e.data instanceof ArrayBuffer))
                     return console.error(n + "Received non-ArrayBuffer data"),
@@ -55628,9 +55670,28 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 return i.length != r ? (console.error(n + "Leftover data"),
                 void t.close()) : void 0
-            }
+            })
         }
         ;
+        // A session on a track with Better Editor blocks waits for them to load, and every message after it waits too, in order.
+        function tmGate(client, handle) {
+            return e => {
+                if (null != client.__tmGate)
+                    return void client.__tmGate.push(( () => handle(e)));
+                const tm = window.__nswsTM;
+                if (null != tm && !tm.ready() && e.data instanceof ArrayBuffer && new Uint8Array(e.data)[0] == Jt.NewSession && C.get(client, Ll, "f")?.buffer.startsWith("PolyTrackBE")) {
+                    const queue = client.__tmGate = [ () => handle(e)]
+                      , run = () => {
+                        client.__tmGate = null;
+                        for (const f of queue)
+                            f()
+                    }
+                    ;
+                    return void tm.ensure().then(run, run)
+                }
+                handle(e)
+            }
+        }
         const Dl = class {
             constructor(e, t, n, i) {
                 hl.add(this),
@@ -58355,6 +58416,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Hh = async function(e, t, n, i, r) {
             if (C.get(this, Fh, "f").determinismState != Js.Ok)
                 return null;
+            // Kodub's servers can't verify Better Editor blocks.
+            if (self.TM?.extTrackIds.has(t))
+                return null;
             const a = C.get(this, Oh, "f").getUserProfile(e);
             if (null == a)
                 return null;
@@ -59146,7 +59210,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const s = new THREE.MeshLambertMaterial({
                     vertexColors: !0
                 });
-                e.addMaterial(s);
+                e.addMaterial(s),
+                this.__tmMaterial = s;
                 const o = async e => {
                     if (t.addResource(),
                     C.get(this, ld, "f").has(e.id))
@@ -59436,6 +59501,34 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 i.dispose(),
                 l
             }
+            // Better Editor blocks: a part's mesh in a colour is built from tm_blocks.bin the first time it is drawn.
+            // They have no physics shape here; the physics worker adds them to the terrain mesh itself.
+            addTMParts(list) {
+                for (const e of list) {
+                    if (C.get(this, ld, "f").has(e.id))
+                        continue;
+                    const n = {
+                        configuration: e,
+                        colors: new PartColors(e.colors.map(( ({id: e}) => [e, null]))),
+                        physicsShapeVertices: null
+                    }
+                      , palettes = new Map(e.colors.map((t => [t.id, t])));
+                    n.colors.build = t => {
+                        const {pos: i, col: r} = self.TM.renderArrays(e.id, palettes.get(t).colors, (e => {
+                            const t = new THREE.Color(e);
+                            return [t.r, t.g, t.b]
+                        }
+                        ))
+                          , a = new THREE.BufferGeometry;
+                        return a.setAttribute("position", new THREE.BufferAttribute(i,3)),
+                        a.setAttribute("color", new THREE.BufferAttribute(r,3)),
+                        a.computeVertexNormals(),
+                        new THREE.Mesh(BufferGeometryUtils.mergeVertices(a),this.__tmMaterial)
+                    }
+                    ,
+                    C.get(this, ld, "f").set(e.id, n)
+                }
+            }
             isPartCombinationAllowed(e, t) {
                 const n = C.get(this, od, "m", hd).call(this, e.id, t.id);
                 if (n?.(e, t))
@@ -59446,6 +59539,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             getPhysicsParts() {
                 const e = [];
                 for (const {configuration: t, physicsShapeVertices: n} of C.get(this, ld, "f").values()) {
+                    if (null != t.tm)
+                        continue;
                     if (null == n)
                         throw new Error("Part model has not been loaded yet");
                     e.push({
@@ -59545,6 +59640,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             const e = Object.values(Part).filter((e => "string" != typeof e));
             let t = !0;
             for (const n of e) {
+                if (n >= 1e3)
+                    continue;
                 const e = C.get(this, ld, "f").get(n);
                 if (null == e)
                     throw new Error("Part with id " + n.toString() + " does not exist");
@@ -61220,7 +61317,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             submitLeaderboard(e, t, n, i, r, a, s, o) {
                 return new Promise(( (l, c) => {
-                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked())
+                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(r))
                         c(new Error("Submit not allowed"));
                     else {
                         const h = o.serialize();
@@ -63004,6 +63101,43 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     n.start(0)
                 } catch (e) {}
             };
+            // Better Editor blocks (PolyTrackBE1 codes). Nothing of theirs loads until ensure() is called for such a track.
+            window.__nswsTM = (() => {
+                let base = "https://brinleyww.github.io/Better-Editor-PT/";
+                try {
+                    const own = localStorage.getItem("nswsBEBase");
+                    /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && own && /^https?:\/\/\S+$/.test(own) && (base = own.replace(/\/?$/, "/"))
+                } catch (e) {}
+                const script = src => new Promise(( (ok, fail) => {
+                    const e = document.createElement("script");
+                    e.src = src,
+                    e.onload = ok,
+                    e.onerror = () => fail(new Error("Couldn't load " + src)),
+                    document.head.appendChild(e)
+                }
+                ));
+                let loading = null
+                  , ready = !1;
+                return {
+                    base,
+                    ready: () => ready,
+                    ensure: () => loading ?? (loading = (async () => {
+                        self.TM_BASE = base,
+                        self.TM_DATA || await script(base + "tm_parts.js"),
+                        self.TM || await script(base + "tm_runtime.js"),
+                        await u,
+                        await self.TM.load(),
+                        d.addTMParts(i(405).registerTM(self.TM)),
+                        ready = !0
+                    }
+                    )().catch((e => {
+                        throw loading = null,
+                        e
+                    }
+                    )))
+                }
+            }
+            )();
             const c = document.getElementById("screen");
             if (!(c instanceof HTMLCanvasElement))
                 throw new Error("Screen is not a canvas element");
@@ -63080,6 +63214,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             ;
             window.__bw_returnToMenu = () => M(!1, null);
+            // Races a parsed track at once, with no track screen and local records only. onExit runs when the race is left
+            // (the main menu is showing then).
+            window.__nswsRaceTrack = (meta, data, onExit) => (W(meta, data, "custom", [], null, "function" == typeof onExit ? onExit : null),
+            !0);
             // For mod/competitions.js: Competitions run on the game's own multiplayer.
             const cupCategory = data => {
                 const id = data?.getId?.();
@@ -63169,7 +63307,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ))
             }
-              , W = (t, n, i, a, c) => {
+              , W = (t, n, i, a, c, onExit=null) => {
                 o.trigger(( () => P.RN("start-game").finally(( () => {
                     let o, d;
                     P.pS(),
@@ -63214,7 +63352,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         M(!1, t)
                     }
                     ),( () => {
-                        M(null == c, null)
+                        if (null != onExit) {
+                            M(!1, null);
+                            try {
+                                onExit()
+                            } catch (e) {
+                                console.error(e)
+                            }
+                        } else
+                            M(null == c, null)
                     }
                     ),j,d,( (e, t, n, i) => {
                         if (null == c)
