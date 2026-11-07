@@ -418,6 +418,10 @@
             if (!ready) onReady();
             return;
         }
+        if (m.type === "exit" && !m.reqId) {
+            close();
+            return;
+        }
         if (m.type === "test" && !m.reqId) {
             startTest(m);
             return;
