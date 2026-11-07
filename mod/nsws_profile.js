@@ -661,12 +661,9 @@
         const wrap = el("div", "tags");
         const worn = String(a.tag ?? "").split(":")[0];
         for (const id of a.owned || []) {
-            const chip = window.__nswsTags?.chip(id === "king" ? "king:" + a.wrs : id);
+            const chip = window.__nswsTags?.chip(id === "king" ? "king:" + a.wrs : id, id === worn ? "wearing it" : null);
             if (!chip) continue;
-            if (id === worn) {
-                chip.classList.add("wearing");
-                chip.title = (chip.title ? chip.title + " \u00b7 " : "") + "wearing it";
-            }
+            if (id === worn) chip.classList.add("wearing");
             wrap.appendChild(chip);
         }
         if (!wrap.childNodes.length) wrap.appendChild(el("span", "note", "No tags yet."));

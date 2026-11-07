@@ -90,6 +90,8 @@ const OUTAGES_MAX = 60;
 const ACHIEVED_SLACK_MS = 10 * 60_000;
 const LATE_CACHE_S = 300;
 const PROFILE_CACHE_S = 120;
+const TAG_COUNTS_CACHE_S = 3600;
+const TAG_COUNTS_KEY = new Request("https://nsws-tag-counts.invalid/");
 // Official and Kodub community places, PROFILE_RUNS_MAX boards a call: two upstream reads a board, under the
 // free plan's 50 subrequests.
 const PROFILE_RUNS_MAX = 20;
@@ -2098,7 +2100,7 @@ async function handleBeMirror(request, url) {
 // A 4 MB pack or campaign plus the JSON around it.
 const MAX_TRACKS_BODY = 4_400_000;
 const MAX_TRACKS_SMALL_BODY = 16_384;
-const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put"]);
+const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put", "board/submit"]);
 // Reads an address may make in a minute; only there to stop sweeps of club codes and ids.
 const TRACK_READS_PER_MIN = 60;
 // Packs never change, so an instance keeps the small ones it has read.
@@ -2181,6 +2183,13 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
             }
             return reply(pack, "That track link doesn't exist.");
         }
+        // Better Editor boards, in the shapes the game reads from Kodub's leaderboard and recordings.
+        if (path === "board") {
+            return reply(await hub.beBoard({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip"), amount: url.searchParams.get("amount"), userId: url.searchParams.get("userTokenHash") }));
+        }
+        if (path === "board/recordings") {
+            return reply(await hub.beRecordings(String(url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
+        }
         if ((m = /^club\/([0-9A-Za-z]{6}|[0-9A-Za-z]{12})$/.exec(path))) {
             const club = await hub.getClub(m[1]);
             return reply(club && { club }, "No club has that code.");
@@ -2203,6 +2212,10 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
     const nickname = body.nickname;
     const clubId = body.clubId;
     switch (path) {
+        case "board/submit": return reply(await hub.beSubmit({ userId, ipKey, nickname, countryCode: body.countryCode, carStyle: body.carStyle, trackId: body.trackId, frames: body.frames, recording: body.recording }));
+        case "played": return reply(await hub.played({ userId, trackId: body.trackId }));
+        case "favourite": return reply(await hub.favourite({ userId, ipKey, trackId: body.trackId, on: body.on === true }));
+        case "stats": return reply(await hub.trackStats({ userId, trackId: body.trackId }));
         case "club/create": return reply(await hub.createClub({ userId, ipKey, nickname, name: body.name, tag: body.tag, description: body.description }));
         case "club/get": {
             const club = await hub.getClub(body.code ?? clubId, userId);
@@ -2421,6 +2434,21 @@ export default {
             if (url.pathname === TRAFFIC_PREFIX + "late" && request.method === "GET") {
                 if (!fromSite) return forbidden();
                 return handleLate(url, env, cfg, requestOrigin);
+            }
+            if (url.pathname === TRAFFIC_PREFIX + "tag-counts" && request.method === "GET") {
+                if (!fromSite) return forbidden();
+                const hit = await cacheMatch(TAG_COUNTS_KEY);
+                if (hit) return withCors(hit, requestOrigin);
+                if (doLimited() || !accounts(env)) return busy(requestOrigin);
+                try {
+                    const response = cachedJson({ counts: await accounts(env).tagCounts() }, TAG_COUNTS_CACHE_S);
+                    ctx.waitUntil(caches.default.put(TAG_COUNTS_KEY, response.clone()).catch(() => {}));
+                    return withCors(response, requestOrigin);
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("tag counts error:", err && err.message);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Tag counts failed", requestOrigin);
+                }
             }
             if ((url.pathname === TRAFFIC_PREFIX + "profile" || url.pathname === TRAFFIC_PREFIX + "profile-runs") && request.method === "GET") {
                 if (!fromSite) return forbidden();

@@ -19,6 +19,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
 // A shorter list means the page's week list didn't load, not that the maps are gone.
 const MIN_KEPT_TRACKS = 20;
 const MAX_KEPT_TRACKS = 5000;
+const TAG_COUNTS_MS = 6 * 3600_000;
 const SHARE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
 // Names that compare equal: case, width variants and spacing are ignored, so "Bob",
 // "BOB" and "B o b" are one name.
@@ -277,6 +278,7 @@ export class Accounts extends DurableObject {
             frames INTEGER NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID`);
         // Boards taken out of every week (a map swapped out), whose WRs no longer count (keepWrs).
         this.sql.exec("CREATE TABLE IF NOT EXISTS wr_dropped (track TEXT PRIMARY KEY) WITHOUT ROWID");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS tag_counts (id INTEGER PRIMARY KEY CHECK (id = 0), at INTEGER NOT NULL, data TEXT NOT NULL)");
         // The one NSWS King. before only holds a tag for a King crowned when the crown was still put
         // on for them; they get it back when they lose the crown.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wr_king (
@@ -603,6 +605,44 @@ export class Accounts extends DurableObject {
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         return owned;
+    }
+
+    // How many accounts own each tag, by the same rules as ownedTags. It reads whole tables, so it is
+    // worked out at most once every TAG_COUNTS_MS and saved in one row.
+    tagCounts() {
+        const saved = this.sql.exec("SELECT at, data FROM tag_counts WHERE id = 0").toArray()[0];
+        if (saved && Date.now() - saved.at < TAG_COUNTS_MS) return JSON.parse(saved.data);
+        const owners = Object.fromEntries(Object.keys(TAGS).map((id) => [id, new Set()]));
+        const confirmed = new Map();
+        for (const r of this.sql.exec("SELECT referred, referrer, at, confirmed FROM referrals")) {
+            owners.referred.add(r.referred);
+            if (r.confirmed == null) continue;
+            confirmed.set(r.referrer, (confirmed.get(r.referrer) ?? 0) + 1);
+            if (r.at >= HALLOWEEN.from && r.at < HALLOWEEN.until) owners.pumpkin.add(r.referrer).add(r.referred);
+        }
+        const bingo = new Map();
+        for (const r of this.sql.exec("SELECT user_id, week, marks, banked, banked_full FROM bingo")) {
+            const b = bingo.get(r.user_id) ?? { total: 0, blackouts: 0 };
+            const lines = r.banked + bingoLines(r.marks);
+            b.total += lines;
+            b.blackouts += r.banked_full + ((r.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0);
+            bingo.set(r.user_id, b);
+            if (r.week === HALLOWEEN.week && lines > 0) owners.haunted.add(r.user_id);
+        }
+        const hours = this.sql.exec("SELECT user_id, seconds FROM playtime").toArray();
+        for (const [id, tag] of Object.entries(TAGS)) {
+            if (tag.kind === "milestone") for (const [userId, n] of confirmed) if (n >= tag.referrals) owners[id].add(userId);
+            if (tag.kind === "hours") for (const r of hours) if (r.seconds / 3600 >= tag.hours) owners[id].add(r.user_id);
+            if (tag.kind === "bingo") for (const [userId, b] of bingo) if (b.total >= tag.bingos) owners[id].add(userId);
+            if (tag.kind === "blackout") for (const [userId, b] of bingo) if (b.blackouts > 0) owners[id].add(userId);
+        }
+        if (this.kingId()) owners.king.add(this.kingId());
+        for (const table of ["tag_bought", "tag_grants"]) {
+            for (const r of this.sql.exec(`SELECT user_id, tag FROM ${table}`)) if (isTag(r.tag)) owners[r.tag].add(r.user_id);
+        }
+        const counts = Object.fromEntries(Object.entries(owners).map(([id, set]) => [id, set.size]));
+        this.sql.exec("INSERT OR REPLACE INTO tag_counts (id, at, data) VALUES (0, ?, ?)", Date.now(), JSON.stringify(counts));
+        return counts;
     }
 
     topRecruiters() {

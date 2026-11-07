@@ -651,6 +651,11 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   Control) are deleted and the board goes in `wr_dropped`, so `noteWrs` ignores it
   until it is back in the list. Fewer than 20 tracks is refused, as a week list
   that failed to load.
+- **Hover text.** Every tag chip (chat, garage, profiles) says on hover how the tag is
+  earned and how many accounts own it. The page asks `GET /nsws/tag-counts` (site
+  only) on the first hover. `Accounts.tagCounts` applies `ownedTags`'s rules to whole
+  tables, so it runs at most every 6 hours and is saved in `tag_counts`; the Worker
+  keeps the reply in the colo cache and the browser for an hour.
 - **Kinds of tag.** Shop tags are bought with points and kept for good. Reward
   tags (`RECRUITER`, `AMBASSADOR`, `HYPE TRAIN`) come free at 5, 15 and 30
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,

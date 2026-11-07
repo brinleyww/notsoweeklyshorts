@@ -282,33 +282,70 @@
         return { status: response.status, data };
     }
 
-    // The chat sends the King's tag with its WR count ("king:7").
-    function chip(id) {
+    // How many accounts own each tag, asked for on the first hover (the Worker and browser cache it).
+    let counts = null;
+    let countsLoad = null;
+    function loadCounts() {
+        if (!countsLoad && API) {
+            countsLoad = fetch(API + "nsws/tag-counts").then((r) => (r.ok ? r.json() : null)).then((data) => {
+                if (data?.counts) counts = data.counts;
+            }).catch(() => {}).finally(() => {
+                if (!counts) setTimeout(() => (countsLoad = null), 60_000);
+            });
+        }
+        return countsLoad ?? Promise.resolve();
+    }
+
+    function howText(tag) {
+        if (tag.group === "king") return "Held by whoever has the most WRs (first place on a board) over every NSWS week.";
+        if (tag.group === "shop") return "Bought in the referral shop for " + requirement(tag) + ".";
+        if (tag.group === "discord") return tag.need + " Given out by the owner.";
+        if (tag.hours) return "Played NSWS for " + tag.hours + (tag.hours === 1 ? " hour." : " hours.");
+        if (tag.blackout) return "Marked every square of one weekly bingo card.";
+        if (tag.bingos) return "Made " + bingosText(tag.bingos) + " on the weekly bingo cards.";
+        return tag.need;
+    }
+
+    function countText(tag) {
+        if (tag.group === "king") return "Only one player can have it.";
+        const n = counts?.[tag.id];
+        if (!Number.isSafeInteger(n)) return null;
+        return n === 0 ? "Nobody has it yet." : n === 1 ? "1 player has it." : n.toLocaleString() + " players have it.";
+    }
+
+    // The chat sends the King's tag with its WR count ("king:7"). note goes on the hover text's first line.
+    function chip(id, note) {
         const [base, count] = String(id ?? "").split(":");
         const tag = BY_ID.get(base);
         if (!tag) return null;
         const span = el("span", "nsws-tag t-" + base);
+        let head = tag.label;
         if (tag.group === "king") {
             const wrs = count != null ? Number(count) : owns(base) ? state.wrs : state?.king?.wrs;
             span.appendChild(document.createTextNode(tag.label));
             if (Number.isSafeInteger(wrs)) {
                 span.appendChild(el("span", "wr", wrsText(wrs)));
-                span.title = tag.label + " · holds " + wrsText(wrs) + ", the most on NSWS";
-            } else {
-                span.title = tag.label;
+                head = tag.label + " · holds " + wrsText(wrs) + ", the most on NSWS";
             }
-            return span;
-        }
-        if (tag.hours) {
-            span.appendChild(el("span", "h", tag.hours + "H"));
-            span.title = tag.label + " · " + tag.hours + (tag.hours === 1 ? " hour" : " hours") + " played";
-        } else if (tag.group === "bingo") {
-            span.appendChild(el("span", "ball", tag.blackout ? "25" : String(tag.bingos)));
-            span.title = tag.label + " · " + (tag.blackout ? "a whole bingo card" : bingosText(tag.bingos));
         } else {
-            span.title = tag.label;
+            if (tag.hours) {
+                span.appendChild(el("span", "h", tag.hours + "H"));
+                head = tag.label + " · " + tag.hours + (tag.hours === 1 ? " hour" : " hours") + " played";
+            } else if (tag.group === "bingo") {
+                span.appendChild(el("span", "ball", tag.blackout ? "25" : String(tag.bingos)));
+                head = tag.label + " · " + (tag.blackout ? "a whole bingo card" : bingosText(tag.bingos));
+            }
+            span.appendChild(document.createTextNode(tag.label));
         }
-        span.appendChild(document.createTextNode(tag.label));
+        if (note) head += " · " + note;
+        const describe = () => {
+            span.title = [head, howText(tag), countText(tag)].filter(Boolean).join("\n");
+        };
+        describe();
+        span.addEventListener("pointerenter", () => {
+            if (counts) describe();
+            else loadCounts().then(() => counts && describe());
+        });
         return span;
     }
 
