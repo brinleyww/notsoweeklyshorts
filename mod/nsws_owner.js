@@ -1007,6 +1007,12 @@
             r.longest ? duration(r.longest.runtime) : "–",
             r.longest ? (r.longest.nickname || "Someone") + " · " + fmt.dateTime(r.longest.start) : "No sessions in range");
         rec("VISITORS EVER", num(r.visitorsEver), r.firstSeen ? "Counting since " + fmt.fullDate(r.firstSeen) : "Counting starts now");
+        const mau = r.lastMonth;
+        if (mau) {
+            const month = new Date(mau.from).toLocaleDateString([], { year: "numeric", month: "long" });
+            const partial = r.firstSeen && r.firstSeen > mau.from ? " · counted from " + fmt.fullDate(r.firstSeen) : "";
+            rec("MONTHLY ACTIVE USERS", num(mau.people), month + " · " + num(mau.sites) + (mau.sites === 1 ? " site" : " sites") + partial);
+        }
         c.appendChild(grid);
         return c;
     }

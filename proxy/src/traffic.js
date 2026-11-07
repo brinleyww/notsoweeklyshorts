@@ -948,8 +948,55 @@ export class TrafficStats extends DurableObject {
                 busiestDay: busiestDay ? { day: busiestDay.d, runtime: busiestDay.runtime, opens: busiestDay.opens } : null,
                 longest,
                 visitorsEver,
+                lastMonth: this.lastMonthActive(tz, now),
             },
         };
+    }
+
+    // People with a session started last calendar month (owner's time zone), on every site. A browser
+    // and the account in it count once. The month is over, so the count is saved and scanned only once.
+    lastMonthActive(tz, now) {
+        const local = new Date(now + tz * 1000);
+        const y = local.getUTCFullYear();
+        const m = local.getUTCMonth();
+        const from = Date.UTC(y, m - 1, 1) - tz * 1000;
+        const to = Date.UTC(y, m, 1) - tz * 1000;
+        const key = "mau:" + from;
+        const saved = this.sql.exec("SELECT v FROM meta WHERE k = ?", key).toArray()[0];
+        if (saved) return JSON.parse(saved.v);
+
+        const parent = new Map();
+        const find = (k) => {
+            let root = k;
+            while (parent.get(root) !== root) root = parent.get(root);
+            while (k !== root) {
+                const next = parent.get(k);
+                parent.set(k, root);
+                k = next;
+            }
+            return root;
+        };
+        const join = (a, b) => {
+            const ra = find(a);
+            const rb = find(b);
+            if (ra !== rb) parent.set(rb, ra);
+        };
+        const sites = new Set();
+        for (const s of this.sql.exec("SELECT visitor, account, site FROM sessions WHERE start >= ? AND start < ?", from, to)) {
+            const v = "v" + s.visitor;
+            if (!parent.has(v)) parent.set(v, v);
+            if (s.account) {
+                const a = "a" + s.account;
+                if (!parent.has(a)) parent.set(a, a);
+                join(v, a);
+            }
+            if (s.site) sites.add(s.site);
+        }
+        let people = 0;
+        for (const [k, p] of parent) if (k === p) people++;
+        const result = { from, to, people, sites: sites.size };
+        this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)", key, JSON.stringify(result));
+        return result;
     }
 }
 
