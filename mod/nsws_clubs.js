@@ -702,7 +702,7 @@
         const tr = T();
         if (!tr?.play) throw new Error("Custom Tracks didn't load, so tracks can't be played right now. Reload the page.");
         S.progress.set(key, i);
-        const ok = await tr.play(t.code, { mode: t.mode || "normal" });
+        const ok = await tr.play(t.code, { mode: t.mode || "normal", start: true, intro: true, onExit: () => tr.openLibrary(undefined, true) });
         if (ok === false) {
             if (S.container) draw();
         }

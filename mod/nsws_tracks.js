@@ -639,6 +639,7 @@
         if (typeof patch.name === "string" && patch.name.trim()) next.name = patch.name.trim().slice(0, 80);
         if ("folder" in patch) next.folder = patch.folder ? String(patch.folder).slice(0, 40) : null;
         if ("favourite" in patch) next.favourite = !!patch.favourite;
+        if ("submitted" in patch) next.submitted = patch.submitted ? { id: String(patch.submitted.id || "").slice(0, 32), at: Number(patch.submitted.at) || Date.now() } : null;
         next.updated = Date.now();
         if (next.sync === "ok") next.sync = "meta";
         await putTrack(next);
@@ -653,6 +654,37 @@
     }
 
     const setMode = (id, mode) => update(id, { mode });
+
+    // A track sent to Weekly Shorts can't be shared any more, so every copy of it in My Tracks gets marked.
+    async function markSubmitted(code, sub) {
+        const info = await parseAsync(code).catch(() => null);
+        if (!info?.ok) return;
+        const hash = await sha256(info.code);
+        const ids = [];
+        for (const t of (await loadAll()).values()) if (t.hash === hash || (info.trackId && t.trackId === info.trackId)) ids.push(t.id);
+        for (const id of ids) await update(id, { submitted: sub });
+    }
+
+    async function submitTrack(track, note) {
+        const me = user();
+        if (!me.token) throw new Error("Your player token isn't ready yet. Open any track's leaderboard once, then try again.");
+        const info = await parseAsync(track.code);
+        if (!info.ok) throw new Error(info.error);
+        const answer = await api("nsws/tracks/submit", {
+            token: me.token,
+            nickname: me.nickname || "",
+            code: info.code,
+            mode: normMode(track.mode),
+            name: info.name || track.name || "",
+            author: info.author || "",
+            trackId: info.trackId || null,
+            env: info.env ?? null,
+            note: String(note || "").trim().slice(0, 500),
+        });
+        const sub = { id: answer?.id || "", at: Date.now() };
+        await markSubmitted(info.code, sub);
+        return sub;
+    }
 
     // Items for packs and sharing: Tracks, {code, mode} objects or bare codes.
     function normItems(items) {
@@ -888,6 +920,7 @@
             await ui.alert(loaded.error || "The game is still loading. Try again in a moment.", "Can't play this track");
             return false;
         }
+        const intro = opts.intro && !isKnown(info.trackId) ? await launchCard(item, info, mode, loaded.data) : null;
         closeAll();
         try {
             window.__nswsEditor?.close?.();
@@ -922,8 +955,56 @@
                 console.error(e);
             }
         }
+        intro?.finish(ok);
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
+    }
+
+    function bigThumb(data) {
+        try {
+            const src = data.createThumbnail();
+            if (!src?.width || !src?.height) return null;
+            const scale = Math.min(360 / src.width, 360 / src.height, 2);
+            const c = document.createElement("canvas");
+            c.width = Math.max(1, Math.round(src.width * scale));
+            c.height = Math.max(1, Math.round(src.height * scale));
+            c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+            return c.toDataURL("image/png");
+        } catch {
+            return null;
+        }
+    }
+
+    // Covers the switch from the list to the car: fades in, the race loads behind it, then it fades away.
+    function launchCard(item, info, mode, data) {
+        ensureCss();
+        const host = isolate(el("div", "nt-host nt-launch"));
+        const card = el("div", "nt-lcard");
+        const pic = el("div", "nt-lthumb");
+        const img = el("img");
+        img.alt = "";
+        const src = bigThumb(data) || item.thumb;
+        if (src) img.src = src;
+        else {
+            img.className = "env";
+            img.src = "images/" + (info.env || "summer").toLowerCase() + ".svg";
+        }
+        pic.appendChild(img);
+        card.append(pic, el("div", "nt-lname", info.name || item.name || "Untitled track"), metaNode({ ...info, mode }), el("div", "nt-lbar"));
+        host.appendChild(card);
+        document.body.appendChild(host);
+        const finish = (ok) => {
+            setTimeout(() => {
+                host.classList.remove("on");
+                setTimeout(() => host.remove(), 450);
+            }, ok ? 900 : 0);
+        };
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                host.classList.add("on");
+                setTimeout(() => resolve({ finish }), 300);
+            }, 20);
+        });
     }
 
     function openInEditor(track) {
@@ -984,6 +1065,20 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-chip{padding:2px 8px;font-size:13px;color:#fff;background:#192042;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);white-space:nowrap;}
 .nt-chip.mode{box-shadow:inset 0 -2px 0 #8f8ff0;}
 .nt-chip.be{color:#cfd3ff;}
+.nt-launch{z-index:100700;flex-direction:column;background:#192042;opacity:0;transition:opacity .3s;pointer-events:none;}
+.nt-launch.on{opacity:1;pointer-events:auto;}
+.nt-lcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px;transform:translateY(14px) scale(.98);transition:transform .5s ease-out;}
+.nt-launch.on .nt-lcard{transform:none;}
+.nt-lthumb{width:min(340px,62vw);aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#212b58;clip-path:polygon(14px 0,100% 0,calc(100% - 14px) 100%,0 100%);}
+.nt-lthumb img{width:100%;height:100%;object-fit:contain;}
+.nt-lthumb img.env{width:40%;height:40%;}
+.nt-lname{max-width:90vw;font-size:40px;text-align:center;overflow-wrap:anywhere;}
+.nt-launch .nt-meta{justify-content:center;font-size:18px;}
+.nt-lbar{position:relative;width:min(340px,62vw);height:4px;margin-top:6px;overflow:hidden;background:rgba(255,255,255,.15);}
+.nt-lbar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;background:#7272c2;animation:ntLoad 1s linear infinite;}
+@keyframes ntLoad{from{transform:translateX(-100%);}to{transform:translateX(250%);}}
+.nt-screen.fadein{animation:ntFadeIn .35s ease-out;}
+@keyframes ntFadeIn{from{opacity:0;}to{opacity:1;}}
 .nt-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;}
 .nt-actions .button{font-size:16px;padding:6px 12px;}
 .nt-actions .nt-select{font-size:15px;padding:6px 8px;}
@@ -1369,10 +1464,15 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         }
     }
 
-    function openLibrary(tab) {
+    function openLibrary(tab, fade) {
         if (!screen) buildScreen();
         screen.editorBtn.hidden = !window.__nswsEditor?.open;
         screen.root.hidden = false;
+        if (fade) {
+            screen.root.classList.remove("fadein");
+            void screen.root.offsetWidth;
+            screen.root.classList.add("fadein");
+        }
         sync().catch(() => {});
         const wanted = tab || screen.current || "tracks";
         if (tab && !tabs.some((t) => t.id === tab)) pendingTab = tab;
@@ -1485,13 +1585,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (!state.selecting) {
                 const actions = el("div", "nt-actions");
                 actions.append(
-                    button("Play", () => play(t), { icon: "play", title: "Play" }),
+                    button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary(undefined, true) }), { icon: "play", title: "Play" }),
                     button("Edit", () => openInEditor(t), { icon: "editor", title: "Open in the Track Editor" }),
-                    button("Share", () => openShare([t]), { icon: "share", title: "Share or export" }),
-                    modeSelect(t.mode, async (m) => {
-                        await setMode(t.id, m);
-                        toast(t.name + ": " + MODE_LABEL[m]);
-                    }),
+                    button("Share", () => openShare([t]), { icon: "share", title: t.submitted ? "Submitted to Weekly Shorts" : "Share, or submit to Weekly Shorts" }),
                     button("", async () => {
                         if (!(await confirmBox("Delete \"" + (t.name || "Untitled track") + "\" from My Tracks? This can't be undone.", { title: "Delete track", ok: "Delete" }))) return;
                         await remove(t.id);
@@ -1680,11 +1776,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 const info = el("div", "nt-info");
                 if (item.info.ok) {
                     r.appendChild(check(item.on, (v) => { item.on = v; setActions(); }));
-                    info.append(el("div", "nt-name", item.info.name), metaNode(item.info, item.existing ? "already in My Tracks, will be updated" : null));
+                    info.append(el("div", "nt-name", item.info.name), metaNode({ ...item.info, mode: item.mode }, item.existing ? "already in My Tracks, will be updated" : null));
                     r.appendChild(info);
-                    const actions = el("div", "nt-actions");
-                    actions.appendChild(modeSelect(item.mode, (m) => (item.mode = m)));
-                    r.appendChild(actions);
                 } else {
                     info.append(el("div", "nt-name", item.info.code ? item.info.code.slice(0, 32) + (item.info.code.length > 32 ? "..." : "") : "Couldn't read"), el("div", "nt-text bad", item.info.error));
                     r.appendChild(info);
@@ -1723,9 +1816,18 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     function openShare(items, name) {
         const tracks = (Array.isArray(items) ? items : items ? [items] : [])
             .map((t) => (typeof t === "string" ? { code: t } : t || {}))
-            .map((t) => ({ code: clean(t.code), mode: normMode(t.mode), name: t.name || null, kind: t.kind || null }))
+            .map((t) => ({ id: t.id || null, code: clean(t.code), mode: normMode(t.mode), name: t.name || null, kind: t.kind || null, trackId: t.trackId || null, submitted: t.submitted || null }))
             .filter((t) => t.code);
         if (!tracks.length) return alertBox("Pick at least one track to share.");
+        const locked = tracks.filter((t) => t.submitted);
+        if (locked.length) {
+            const names = locked.slice(0, 5).map((t) => "\"" + (t.name || "Untitled track") + "\"").join(", ") + (locked.length > 5 ? " and " + (locked.length - 5) + " more" : "");
+            const one = locked.length === 1;
+            return alertBox(
+                names + (one ? " was" : " were") + " submitted to Weekly Shorts" + (one && locked[0].submitted.at ? " on " + new Date(locked[0].submitted.at).toLocaleDateString() : "") + ", so " + (one ? "it" : "they") + " can't be shared any more. A submitted track that gets posted is disqualified." + (locked.length < tracks.length ? " Pick only the other tracks to share them." : ""),
+                "Already submitted"
+            );
+        }
         if (tracks.length > MAX_PACK_TRACKS) return alertBox("You can share " + MAX_PACK_TRACKS + " tracks at once at most. You picked " + tracks.length + ".");
         const single = tracks.length === 1;
         for (const t of tracks) {
@@ -1813,8 +1915,41 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             resetTimer = setTimeout(makePack, 400);
         }
 
+        let share = null;
+        if (single && tracks[0].id && !isKnown(tracks[0].trackId)) {
+            const t = tracks[0];
+            body.appendChild(section("Submit to Weekly Shorts"));
+            body.appendChild(el("p", "nt-text dim", "Suggest this track for a future Not So Weekly Shorts week" + (t.mode !== "normal" ? ", raced in " + MODE_LABEL[t.mode] : "") + ". Race Control reviews every track; follow yours under Submit to Weekly Shorts in the Track Editor."));
+            body.appendChild(el("p", "nt-text bad", "After you submit, you can't share this track any more, and you mustn't post it anywhere (code, link, video or screenshots). A submitted track that has been posted is disqualified."));
+            const noteBox = input({ multiline: true, placeholder: "Anything Race Control should know (optional)", maxLength: 500 });
+            noteBox.style.minHeight = "60px";
+            body.appendChild(noteBox);
+            const subLine = el("div", "nt-line");
+            const subStatus = el("p", "nt-text dim", "");
+            subStatus.style.margin = "0 auto 0 0";
+            const subBtn = button("Submit to Weekly Shorts", async () => {
+                if (!(await confirmBox("Submit \"" + t.name + "\" to Weekly Shorts? You won't be able to share it afterwards.", { title: "Submit track", ok: "Submit" }))) return;
+                subBtn.disabled = true;
+                subStatus.className = "nt-text dim";
+                subStatus.textContent = "Submitting...";
+                try {
+                    await submitTrack(t, noteBox.value);
+                } catch (e) {
+                    subStatus.className = "nt-text bad";
+                    subStatus.textContent = e.message || "Couldn't send the track.";
+                    subBtn.disabled = false;
+                    return;
+                }
+                share?.();
+                alertBox("Race Control will take a look. Remember: don't post this track anywhere, or it gets disqualified.", "Submitted!");
+            }, { icon: "share", primary: true });
+            subLine.append(subStatus, subBtn);
+            body.appendChild(subLine);
+        }
+
         makePack();
-        return dialog({ title: single ? "Share \"" + tracks[0].name + "\"" : "Share " + tracks.length + " tracks", body, wide: true, actions: [{ label: "Done" }] });
+        share = dialog({ title: single ? "Share \"" + tracks[0].name + "\"" : "Share " + tracks.length + " tracks", body, wide: true, actions: [{ label: "Done" }] });
+        return share;
     }
 
     // Picker.
@@ -1950,6 +2085,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         select,
         check,
         modeSelect,
+        markSubmitted,
         thumb: thumbNode,
         meta: metaNode,
         alert: alertBox,

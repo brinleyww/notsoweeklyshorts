@@ -822,8 +822,9 @@
             busy(b, async () => {
                 status.className = "";
                 status.textContent = "Submitting...";
+                let answer;
                 try {
-                    await T.api("nsws/tracks/submit", {
+                    answer = await T.api("nsws/tracks/submit", {
                         token: user.token,
                         nickname: user.nickname || "",
                         code: t.code,
@@ -841,6 +842,7 @@
                 }
                 setMode(t.name, mode);
                 renderMode();
+                T.markSubmitted?.(t.code, { id: answer?.id || "", at: Date.now() }).catch(() => {});
                 status.className = "good";
                 status.textContent = "Submitted! Race Control will take a look. Remember: don't post this track anywhere, or it gets disqualified.";
                 b.disabled = true;
