@@ -128,6 +128,8 @@
 #nsws-chat .m:hover,#nsws-chat .m.open{background:rgba(0,0,0,.14);}
 #nsws-chat .m>.meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 7px;}
 #nsws-chat .m>.meta>.nick{font-weight:var(--nsws-chat-name-weight);}
+#nsws-chat .m>.meta>.nick.link{cursor:pointer;}
+#nsws-chat .m>.meta>.nick.link:hover{text-decoration:underline;}
 #nsws-chat .m>.meta>.badge{align-self:center;padding:0 5px;background:#e6a23c;color:#1a1a1a;font-family:ForcedSquare,Arial,sans-serif;font-style:italic;font-weight:normal;font-size:.7em;line-height:1;}
 #nsws-chat .m>.meta>.nsws-tag{align-self:center;font-size:.68em;}
 #nsws-chat .m>.meta>.time{font-size:.7em;opacity:.5;}
@@ -2005,6 +2007,14 @@
             nick.className = "nick";
             nick.style.color = color;
             nick.textContent = m.nick;
+            if (window.__nswsProfile) {
+                nick.classList.add("link");
+                nick.title = "View profile";
+                nick.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    window.__nswsProfile.open(m.nick);
+                });
+            }
             meta.appendChild(nick);
             if (m.owner) {
                 const badge = document.createElement("span");

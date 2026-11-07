@@ -43250,6 +43250,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Ot.A && Ot.A.locals && Ot.A.locals;
         var Vt, Ht = i(3075), jt = i(765), Kt = i(2108);
         window.__clipCarStyleClass = jt.A;
+        // A data URL of a 200x200 render, as the leaderboard's thumbnails; angle is degrees around the car.
+        window.__nswsCarThumb = (style, angle = 45) => {
+            const THREE = i(4922), a = angle * Math.PI / 180;
+            const view = { position: new THREE.Vector3(1414.21 * Math.sin(a) + .1, 1000.3, 1414.21 * Math.cos(a)), look: new THREE.Vector3(.1, .3, 0), zoom: .5 };
+            return i(832).F(jt.A.deserializeSafe(style ?? ""), { addCancelCallback() {} }, view);
+        };
+        window.__nswsCountries = () => i(2970).O();
         !function(e) {
             e[e.CarReset = 0] = "CarReset",
             e[e.CarUpdate = 1] = "CarUpdate",
@@ -54679,8 +54686,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 y.appendChild(e)
             }
             const x = document.createElement("span");
-            if (x.className = "name",
+            // The name opens the player's profile (mod/nsws_profile.js); the rest of the row still picks the ghost.
+            if (x.className = "name nsws-profile-link",
             x.textContent = t,
+            x.addEventListener("click", (ev => {
+                if (!window.__nswsProfile) return;
+                ev.stopPropagation(),
+                C.get(this, eo, "f").playUIClick(),
+                window.__nswsProfile.open(t, { carStyle: r?.serialize?.() ?? null, countryCode: n })
+            })),
             y.appendChild(x),
             s) {
                 const e = document.createElement("span");
@@ -57208,6 +57222,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             nameEl.addEventListener("mouseleave", () => {
                                 nameScrollTo(0, () => { nameEl.style.textOverflow = "ellipsis"; });
                             });
+                            if (window.__nswsProfile) {
+                                nameEl.classList.add("nsws-profile-link");
+                                nameEl.addEventListener("click", () => {
+                                    n.playUIClick();
+                                    window.__nswsProfile.open(nick);
+                                });
+                            }
 
                             const totalEl = document.createElement("span");
                             totalEl.textContent = p.toLocaleString();
@@ -57280,18 +57301,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         // Ended weeks are drawn from the boards as saved when the week ended, so runs set later
                         // don't count. Only a week with no saved file falls back to the live boards.
                         if (!isCurrentWeek) {
-                            const frozen = await fetch("tracks/community/standings/week" + week + ".json")
-                                .then(r => r.ok ? r.json() : null).catch(() => null);
+                            const maps = await stFrozenMaps(week, LB_TRACKS);
                             if (stCurrentWeek !== week) return;
-                            if (frozen && frozen.boards) {
-                                const late = await stFetchLate(week);
-                                if (stCurrentWeek !== week) return;
-                                const banned = new Set(late?.banned ?? []);
-                                const maps = LB_TRACKS.map(t => {
-                                    const m = {};
-                                    stLockedBoard(frozen, t.id, late).filter(nm => !banned.has((nm || "").trim().toLowerCase())).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
-                                    return m;
-                                });
+                            if (maps) {
                                 const sorted = stTotals(maps);
                                 stWeekCache[week] = { sorted, maps };
                                 stRenderRows(sorted, maps, gridTemplate, stContentWidth);
@@ -57312,17 +57324,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             if (stCurrentWeek !== week) return;
                             const selfNick = selfEntry && selfEntry.entry ? (selfEntry.entry.nickname || "").trim() : (window.__nswsSelfNick || "");
                             window.__nswsSelfNick = selfNick || window.__nswsSelfNick;
-                            const maps = results.map(data => {
-                                // Banned players never reach the page - the proxy drops them - so the
-                                // list position is already the rank.
-                                const entries = Array.isArray(data) ? data : (data.entries || []);
-                                const m = {};
-                                entries.forEach((e, idx) => {
-                                    const nm = (e.nickname || e.name || "").trim();
-                                    if (nm && !(nm in m)) m[nm] = idx + 1;
-                                });
-                                return m;
-                            });
+                            const maps = stBoardMaps(results);
                             const sorted = stTotals(maps);
 
                             stRenderRows(sorted, maps, gridTemplate, stContentWidth);
@@ -57339,6 +57341,41 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             }
                         }
                     }
+                    // nickname -> rank per track, from the files saved when the week ended; null for a week with no file.
+                    async function stFrozenMaps(week, tracks) {
+                        const frozen = await fetch("tracks/community/standings/week" + week + ".json")
+                            .then(r => r.ok ? r.json() : null).catch(() => null);
+                        if (!frozen || !frozen.boards) return null;
+                        const late = await stFetchLate(week);
+                        const banned = new Set(late?.banned ?? []);
+                        return tracks.map(t => {
+                            const m = {};
+                            stLockedBoard(frozen, t.id, late).filter(nm => !banned.has((nm || "").trim().toLowerCase())).forEach((nm, idx) => { if (nm && !(nm in m)) m[nm] = idx + 1; });
+                            return m;
+                        });
+                    }
+                    function stBoardMaps(results) {
+                        return results.map(data => {
+                            // Banned players never reach the page - the proxy drops them - so the
+                            // list position is already the rank.
+                            const entries = Array.isArray(data) ? data : (data.entries || []);
+                            const m = {};
+                            entries.forEach((e, idx) => {
+                                const nm = (e.nickname || e.name || "").trim();
+                                if (nm && !(nm in m)) m[nm] = idx + 1;
+                            });
+                            return m;
+                        });
+                    }
+                    // An ended week's standings as this window shows them, for profiles (mod/nsws_profile.js).
+                    window.__nswsStandingsData = async week => {
+                        if (week === window.__nswsMaxWeek) return null;
+                        if (stWeekCache[week]) return stWeekCache[week];
+                        const tracks = stTracksForWeek(week);
+                        const maps = await stFrozenMaps(week, tracks) ?? stBoardMaps(await Promise.all(tracks.map(t =>
+                            stFetchBoard(window.__nswsApiBase + "v6/leaderboard?version=0.6.2&trackId=" + t.id + "&skip=0&amount=500&onlyVerified=false" + window.__nswsTrackQuery(t.id)))));
+                        return stWeekCache[week] = { sorted: stTotals(maps), maps };
+                    };
                     // Runs set during a server outage before the week locked, but uploaded after it. Saved files with
                     // runs ([nickname, frames, id]) can take them; equal times order as on the boards (id, or tie + at).
                     function stFetchLate(week) {

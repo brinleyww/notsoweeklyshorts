@@ -662,6 +662,47 @@ export class Accounts extends DurableObject {
         };
     }
 
+    // What anyone may see on a player's profile window, found by exact nickname. No userId or token.
+    publicProfile(nickname) {
+        const key = nameKey(text(nickname, MAX_NICK));
+        const userId = SHARED_NAMES.has(key) ? null : this.holder(key);
+        if (!userId) return { found: false };
+        const counts = this.referralCounts(userId);
+        const hours = this.hoursOf(userId);
+        const bingo = this.bingoOf(userId);
+        const owned = this.ownedTags(userId, counts, hours, bingo);
+        const equipped = this.tagProfile(userId).equipped;
+        const wrs = this.wrCount(userId);
+        const joined = this.sql.exec("SELECT MIN(at) AS at FROM names WHERE user_id = ?", userId).one().at;
+        const grindText = this.sql.exec("SELECT data FROM grind WHERE user_id = ?", userId).toArray()[0]?.data;
+        let grind = null;
+        if (grindText) {
+            const g = JSON.parse(grindText);
+            grind = { since: g.since, seconds: 0, attempts: 0, finishes: 0, tracks: 0 };
+            for (const row of Object.values(g.t ?? {})) {
+                grind.seconds += row.t ?? 0;
+                grind.attempts += row.a ?? 0;
+                grind.finishes += row.f ?? 0;
+                grind.tracks++;
+            }
+            grind.seconds = Math.round(grind.seconds);
+        }
+        return {
+            found: true,
+            nickname: censor(this.nicknameOf(userId) || nickname),
+            tag: equipped && owned.has(equipped) ? (equipped === "king" ? "king:" + wrs : equipped) : null,
+            owned: Object.keys(TAGS).filter((id) => owned.has(id)),
+            hours: Math.round(hours * 10) / 10,
+            bingos: bingo.total,
+            blackouts: bingo.blackouts,
+            wrs,
+            king: this.kingId() === userId,
+            referrals: counts.confirmed,
+            joined,
+            grind,
+        };
+    }
+
     setEquipped(userId, tag) {
         this.sql.exec(`INSERT INTO tag_profile (user_id, equipped, bonus) VALUES (?, ?, 0)
             ON CONFLICT(user_id) DO UPDATE SET equipped = excluded.equipped`, userId, tag);

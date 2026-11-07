@@ -89,6 +89,7 @@ const OUTAGES_KEY = "upload-outages";
 const OUTAGES_MAX = 60;
 const ACHIEVED_SLACK_MS = 10 * 60_000;
 const LATE_CACHE_S = 300;
+const PROFILE_CACHE_S = 120;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -826,6 +827,29 @@ async function handleLate(url, env, cfg, origin) {
             ...corsHeaders(origin),
         },
     });
+}
+
+// The account part of a player's profile window (mod/nsws_profile.js); the page reads the boards itself.
+// Every viewer of one player gets the same answer, so it is cached per name and costs the Accounts object
+// one call per name every PROFILE_CACHE_S at most.
+async function handleProfile(url, env, cfg, origin, ctx) {
+    const nick = (url.searchParams.get("nick") ?? "").slice(0, 100);
+    const stub = accounts(env);
+    if (!nick.trim() || !stub) return json({ found: false }, origin);
+    const banned = new Set([...cfg.banned].flatMap((name) => [name, normalizeNickname(censor(name))]));
+    if (banned.has(normalizeNickname(nick))) return json({ found: false }, origin);
+    const cacheKey = new Request("https://nsws-profile.invalid/" + encodeURIComponent(normalizeNickname(nick)));
+    try {
+        const hit = await caches.default.match(cacheKey);
+        if (hit) return withCors(hit, origin);
+    } catch {
+        /* cache unavailable */
+    }
+    const response = new Response(JSON.stringify(await stub.publicProfile(nick)), {
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=" + PROFILE_CACHE_S },
+    });
+    ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+    return withCors(response, origin);
 }
 
 // Runs on the board the snapshot hasn't seen; everything when there is no snapshot of it.
@@ -2182,6 +2206,17 @@ export default {
             if (url.pathname === TRAFFIC_PREFIX + "late" && request.method === "GET") {
                 if (!fromSite) return forbidden();
                 return handleLate(url, env, cfg, requestOrigin);
+            }
+            if (url.pathname === TRAFFIC_PREFIX + "profile" && request.method === "GET") {
+                if (!fromSite) return forbidden();
+                if (doLimited()) return busy(requestOrigin);
+                try {
+                    return await handleProfile(url, env, cfg, requestOrigin, ctx);
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("profile error:", err && err.message);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Profile failed", requestOrigin);
+                }
             }
             // Owner endpoints check the owner's key themselves, so they work from anywhere.
             if (!fromSite && ["beat", "poll", "like"].some((p) => url.pathname === TRAFFIC_PREFIX + p)) return forbidden();

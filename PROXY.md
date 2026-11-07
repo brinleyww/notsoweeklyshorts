@@ -968,10 +968,33 @@ editor test drives.
 - **Requests:** a tab sends every 5 minutes at most while there are new counts, stretching to every
   30 minutes when many players are online, plus once on leaving a race and once on closing the page.
   Hidden tabs send nothing after that.
-- **Trust:** the numbers come from the page and only their owner can read them, so nothing here feeds
-  a tag or a leaderboard. Check them on the server first if they ever do.
+- **Trust:** the numbers come from the page, so nothing here feeds a tag or a leaderboard. Check them on
+  the server first if they ever do. Only their owner reads the per-track detail; profiles show the totals.
 - **Older PBs:** a track that already had a PB when its stats began is marked `o`, and the share image
   shows its numbers with a `+`.
+
+## Player profiles
+
+Clicking a name on a leaderboard, in the standings or in the chat opens that player's profile
+(`mod/nsws_profile.js`): their car (drawn by the game's own thumbnail renderer, `__nswsCarThumb`),
+flag, tags, where they place on every NSWS board, their weekly standings and their totals.
+
+- **Boards:** the page reads every NSWS board itself through the normal `/v6/leaderboard` request
+  (first 500 runs), so hidden times, bans and the anti-cheat apply as everywhere else. The boards are
+  kept in the page (3 minutes for the live week, 20 for ended ones), so the first profile of a visit
+  costs one Worker request per track (about 60; boards the snapshot covers call no Durable Object) and later ones
+  cost nothing. A player is matched by nickname; on ended weeks, where entries carry userIds, every
+  run of the same account counts, so runs under an old name are found too.
+- **Weekly standings** come from `__nswsStandingsData(week)` in `main.bundle.js`, the same code the
+  Standings window draws ended weeks with, so the two always agree. The live week is worked out from
+  the boards already read.
+- **`GET /nsws/profile?nick=`** (site only) answers the account part: worn tag, owned tags, hours,
+  bingos, WR count and King, confirmed referrals, first-seen date and grinding totals
+  (`Accounts.publicProfile`). It finds the account by exact nickname (names are unique) and never
+  returns a userId or token. Banned names get `{found: false}`. Answers are cached for 2 minutes
+  per name in the colo's cache, so a popular profile costs the Accounts object one call per
+  2 minutes. While Durable Objects are limited it answers `busy`, and the window shows the boards
+  without the account part.
 
 ## Bad days (free-plan limits)
 
