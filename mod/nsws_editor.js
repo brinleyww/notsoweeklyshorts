@@ -3,6 +3,12 @@
 // memory, so Back only hides the iframe; it stays loaded until the page is closed or reloaded.
 (function () {
     "use strict";
+    // The first-launch graphics picker belongs to the main menu; Custom Tracks and the editor can open a
+    // track over it, so it waits out of sight until the menu is back.
+    const pickerStyle = document.createElement("style");
+    pickerStyle.textContent =
+        "body:has(.track-info-ui:not(.hidden)) .device-preset-ui,body:has(.track-selection-ui:not(.hidden)) .device-preset-ui,body:has(.game-ui) .device-preset-ui,body:has(#nsws-editor:not(.hidden)) .device-preset-ui{display:none!important;}";
+    document.head.appendChild(pickerStyle);
     const DEFAULT_URL = "https://brinleyww.github.io/Better-Editor-PT/?nsws=1";
     const HELLO_EVERY_MS = 1000;
     const HELLO_TRIES = 90;
@@ -205,9 +211,54 @@
         ui.note.className = "nse-note" + (kind ? " " + kind : "");
     }
 
+    // The track open in the editor right now, saved or not; refreshed by refreshLive().
+    let live = null;
     function current() {
         if (selected === MANUAL) return manual;
-        return tracks.find((t) => t.name === selected) || null;
+        return live;
+    }
+
+    async function refreshLive() {
+        if (!ready) return current();
+        let reply;
+        try {
+            reply = await request("current");
+        } catch {
+            return current();
+        }
+        const t = reply?.track;
+        live = t && typeof t.code === "string" ? { name: t.name || "Unnamed Track", named: !!t.name, author: t.author || "", code: t.code } : null;
+        renderMode();
+        syncMode();
+        return current();
+    }
+
+    // The editor's own Test runs in NSWS when Rocket League or Royale is picked, so it needs to know the mode.
+    function syncMode() {
+        const t = current();
+        post({ type: "mode", mode: t ? modeOf(t.name) : "normal" });
+    }
+
+    let testing = false;
+    async function startTest(m) {
+        const T = lib();
+        if (!T || typeof m.code !== "string") {
+            note("Custom Tracks didn't load. Reload the page and try again.", "bad");
+            return;
+        }
+        hide();
+        testing = true;
+        const back = () => {
+            if (!testing) return;
+            testing = false;
+            show();
+        };
+        const ok = await T.play(m.code, { mode: m.mode, start: true, onExit: back }).catch(() => false);
+        if (!ok) {
+            testing = false;
+            show();
+            note("The " + (m.mode === "royale" ? "Royale" : "Rocket League") + " test didn't start.", "bad");
+        }
     }
 
     function stopAll(node) {
@@ -240,35 +291,25 @@
 
         const bar = el("div", "nse-bar");
         const back = button("Back", () => close(), "images/back.svg");
-        const pick = el("label", "nse-pick");
-        const select = el("select");
-        select.addEventListener("change", () => {
-            const before = selected;
-            selected = select.value;
-            renderMode();
-            if (selected === NEW) editTrack(null, { fresh: true, before });
-            else if (selected !== MANUAL && selected) editTrack(selected, { before });
-        });
-        pick.append("Track", select);
         const seg = el("div", "nse-seg");
         for (const m of MODES) {
             const b = el("button", null, m.label);
             b.type = "button";
             b.dataset.mode = m.id;
-            b.addEventListener("click", () => {
+            b.addEventListener("click", async () => {
                 window.__nswsUIClick?.();
-                const t = current();
+                const t = await refreshLive();
                 if (!t) {
-                    note("Save a track in the editor first, then pick its mode.", "bad");
+                    note(ready ? "Open a track in the editor first." : "The editor isn't connected yet.", "bad");
                     return;
                 }
                 setMode(t.name, m.id);
                 renderMode();
+                syncMode();
             });
             seg.appendChild(b);
         }
         const save = button("Save to My Tracks", (e, b) => saveToLibrary(b), "images/save.svg", true);
-        const test = button("Test drive", (e, b) => testDrive(b), "images/play.svg");
         const send = button("Submit to Weekly Shorts", () => openSubmit(), "images/share.svg");
         const auto = el("div", "nse-seg");
         const autoBtn = el("button", null, "Autosave");
@@ -279,7 +320,7 @@
             setAutosave(!autosaveOn());
         });
         auto.appendChild(autoBtn);
-        bar.append(back, pick, seg, auto, el("div", "gap"), save, test, send);
+        bar.append(back, seg, auto, el("div", "gap"), save, send);
 
         const info = el("div", "nse-info");
         const help = el("div", "nse-help");
@@ -304,14 +345,14 @@
         const frameBox = el("div", "nse-frame");
         host.append(bar, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { select, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn };
+        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn };
         renderPicker();
         renderMode();
         renderAutosave();
     }
 
     function renderPicker() {
-        if (!ui) return;
+        if (!ui?.select) return;
         const s = ui.select;
         s.textContent = "";
         if (manual) {
@@ -347,7 +388,7 @@
         const t = current();
         const mode = t ? modeOf(t.name) : "normal";
         for (const b of ui.seg.children) b.classList.toggle("on", b.dataset.mode === mode);
-        ui.help.textContent = MODES.find((m) => m.id === mode).help + (t ? "" : " Save your track in the editor (Save button) and it shows up in Track.");
+        ui.help.textContent = MODES.find((m) => m.id === mode).help + (mode === "normal" ? "" : " The editor's Test button tests in this mode.");
     }
 
     function post(msg) {
@@ -377,6 +418,10 @@
             if (!ready) onReady();
             return;
         }
+        if (m.type === "test" && !m.reqId) {
+            startTest(m);
+            return;
+        }
         if (m.reqId && pending.has(m.reqId)) {
             const p = pending.get(m.reqId);
             pending.delete(m.reqId);
@@ -384,7 +429,7 @@
             p.resolve(m);
             return;
         }
-        if (m.type === "changed") refreshList(true);
+        if (m.type === "changed") refreshList(true).then(() => refreshLive());
     });
 
     function createFrame() {
@@ -507,7 +552,8 @@
         try {
             name ? localStorage.setItem(LAST_KEY, name) : localStorage.removeItem(LAST_KEY);
         } catch {}
-        if (!opts.quiet) note(name ? 'Editing "' + name + '".' : "New track. Press Save in the editor to name it; it then shows up in Track.", "good");
+        refreshLive();
+        if (!opts.quiet) note(name ? 'Editing "' + name + '".' : "New track. Press Save in the editor to give it a name.", "good");
         return true;
     }
 
@@ -592,10 +638,10 @@
         }
     }
 
-    function need() {
-        const t = current();
+    async function need() {
+        const t = await refreshLive();
         if (!t) {
-            note(ready ? "Save your track in the editor first (Save button), then pick it in Track." : "The editor isn't connected yet.", "bad");
+            note(ready ? "Open a track in the editor first." : "The editor isn't connected yet.", "bad");
             return null;
         }
         if (!lib()) {
@@ -616,35 +662,12 @@
         }
     }
 
-    function saveToLibrary(b) {
-        const t = need();
+    async function saveToLibrary(b) {
+        const t = await need();
         if (!t) return;
         busy(b, async () => {
             await lib().add(t.code, { mode: modeOf(t.name), source: "editor" });
             note('Saved "' + t.name + '" to My Tracks.', "good");
-        });
-    }
-
-    function testDrive(b) {
-        const t = need();
-        if (!t) return;
-        busy(b, async () => {
-            const T = lib();
-            const info = await T.parseAsync(t.code);
-            if (!info?.ok) {
-                note(info?.error || "That track code can't be read.", "bad");
-                return;
-            }
-            if (info.kind === "be") {
-                note("This track uses Better Editor blocks, which NSWS can't race. Use the editor's own test drive for it.", "bad");
-                return;
-            }
-            hide();
-            const ok = await T.play(t.code, { mode: modeOf(t.name) }).catch(() => false);
-            if (!ok) {
-                show();
-                note("The test drive didn't start.", "bad");
-            }
         });
     }
 
@@ -684,7 +707,7 @@
     }
 
     async function openSubmit() {
-        const t = need();
+        const t = await need();
         if (!t) return;
         const T = lib();
         const info = await T.parseAsync(t.code).catch(() => null);
@@ -801,7 +824,13 @@
         try {
             (frame || host).focus();
         } catch {}
+        if (ready) refreshLive();
+        // Follows tracks opened with the editor's own Load, so the mode shown is that track's.
+        liveTimer ??= setInterval(() => {
+            if (ready && !testing && host && !host.classList.contains("hidden")) refreshLive();
+        }, 3000);
     }
+    let liveTimer = null;
 
     function hide() {
         if (!host || host.classList.contains("hidden")) return;
