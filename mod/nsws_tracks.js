@@ -1077,8 +1077,6 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-lbar{position:relative;width:min(340px,62vw);height:4px;margin-top:6px;overflow:hidden;background:rgba(255,255,255,.15);}
 .nt-lbar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;background:#7272c2;animation:ntLoad 1s linear infinite;}
 @keyframes ntLoad{from{transform:translateX(-100%);}to{transform:translateX(250%);}}
-.nt-screen.fadein{animation:ntFadeIn .35s ease-out;}
-@keyframes ntFadeIn{from{opacity:0;}to{opacity:1;}}
 .nt-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;}
 .nt-actions .button{font-size:16px;padding:6px 12px;}
 .nt-actions .nt-select{font-size:15px;padding:6px 8px;}
@@ -1464,15 +1462,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         }
     }
 
-    function openLibrary(tab, fade) {
+    function openLibrary(tab) {
         if (!screen) buildScreen();
         screen.editorBtn.hidden = !window.__nswsEditor?.open;
         screen.root.hidden = false;
-        if (fade) {
-            screen.root.classList.remove("fadein");
-            void screen.root.offsetWidth;
-            screen.root.classList.add("fadein");
-        }
         sync().catch(() => {});
         const wanted = tab || screen.current || "tracks";
         if (tab && !tabs.some((t) => t.id === tab)) pendingTab = tab;
@@ -1585,7 +1578,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (!state.selecting) {
                 const actions = el("div", "nt-actions");
                 actions.append(
-                    button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary(undefined, true) }), { icon: "play", title: "Play" }),
+                    button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary() }), { icon: "play", title: "Play" }),
                     button("Edit", () => openInEditor(t), { icon: "editor", title: "Open in the Track Editor" }),
                     button("Share", () => openShare([t]), { icon: "share", title: t.submitted ? "Submitted to Weekly Shorts" : "Share, or submit to Weekly Shorts" }),
                     button("", async () => {
