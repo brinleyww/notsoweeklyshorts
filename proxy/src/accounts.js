@@ -663,7 +663,8 @@ export class Accounts extends DurableObject {
     }
 
     // What anyone may see on a player's profile window, found by exact nickname. No userId or token.
-    publicProfile(nickname) {
+    // withOwner adds the account's userId, for the Worker's own use; it never goes to the page.
+    publicProfile(nickname, withOwner = false) {
         const key = nameKey(text(nickname, MAX_NICK));
         const userId = SHARED_NAMES.has(key) ? null : this.holder(key);
         if (!userId) return { found: false };
@@ -700,6 +701,7 @@ export class Accounts extends DurableObject {
             referrals: counts.confirmed,
             joined,
             grind,
+            ...(withOwner ? { userId } : {}),
         };
     }
 

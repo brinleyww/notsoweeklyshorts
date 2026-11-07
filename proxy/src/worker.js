@@ -90,6 +90,16 @@ const OUTAGES_MAX = 60;
 const ACHIEVED_SLACK_MS = 10 * 60_000;
 const LATE_CACHE_S = 300;
 const PROFILE_CACHE_S = 120;
+// Official and Kodub community places, PROFILE_RUNS_MAX boards a call: two upstream reads a board, under the
+// free plan's 50 subrequests.
+const PROFILE_RUNS_MAX = 20;
+const PROFILE_RUNS_CACHE_S = 600;
+const BOARD_TOTAL_TTL_MS = 10 * 60_000;
+// The profile window's board reads may sit in the viewer's own browser this long.
+const PROFILE_BOARD_LIVE_S = 120;
+const PROFILE_BOARD_ENDED_S = 900;
+const PROFILE_IP_LIMIT = 60;
+const PROFILE_IP_WINDOW_MS = 60_000;
 
 // Track ids, user tokens and token hashes are all 64 lowercase hex characters.
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -862,22 +872,109 @@ async function handleLate(url, env, cfg, origin) {
 // one call per name every PROFILE_CACHE_S at most.
 async function handleProfile(url, env, cfg, origin, ctx) {
     const nick = (url.searchParams.get("nick") ?? "").slice(0, 100);
-    const stub = accounts(env);
-    if (!nick.trim() || !stub) return json({ found: false }, origin);
+    if (!nick.trim() || !accounts(env) || profileBanned(cfg, nick)) return json({ found: false }, origin);
+    const cacheKey = profileCacheKey("profile", nick);
+    const hit = await cacheMatch(cacheKey);
+    if (hit) return withCors(hit, origin);
+    return withCors((await lookUpProfile(env, nick, ctx)).response, origin);
+}
+
+function profileBanned(cfg, nick) {
     const banned = new Set([...cfg.banned].flatMap((name) => [name, normalizeNickname(censor(name))]));
-    if (banned.has(normalizeNickname(nick))) return json({ found: false }, origin);
-    const cacheKey = new Request("https://nsws-profile.invalid/" + encodeURIComponent(normalizeNickname(nick)));
+    return banned.has(normalizeNickname(nick));
+}
+
+const profileCacheKey = (kind, nick, rest = "") => new Request("https://nsws-" + kind + ".invalid/" + encodeURIComponent(normalizeNickname(nick)) + rest);
+
+async function cacheMatch(key) {
     try {
-        const hit = await caches.default.match(cacheKey);
-        if (hit) return withCors(hit, origin);
+        return await caches.default.match(key);
     } catch {
-        /* cache unavailable */
+        return null;
     }
-    const response = new Response(JSON.stringify(await stub.publicProfile(nick)), {
-        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=" + PROFILE_CACHE_S },
+}
+
+function cachedJson(data, seconds) {
+    return new Response(JSON.stringify(data), {
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=" + seconds },
     });
-    ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
+}
+
+// One Accounts call answers both the public profile and, kept inside Cloudflare's cache only, whose it is.
+async function lookUpProfile(env, nick, ctx) {
+    const { userId = null, ...profile } = await accounts(env).publicProfile(nick, true);
+    const response = cachedJson(profile, PROFILE_CACHE_S);
+    // A found account with no userId is an Accounts object still on the code before a deploy: don't keep that.
+    ctx.waitUntil(Promise.all([
+        caches.default.put(profileCacheKey("profile", nick), response.clone()),
+        profile.found && !userId ? null : caches.default.put(profileCacheKey("profile-owner", nick), cachedJson({ userId }, PROFILE_RUNS_CACHE_S)),
+    ]).catch(() => {}));
+    return { response, userId };
+}
+
+async function profileOwner(env, nick, ctx) {
+    const hit = await cacheMatch(profileCacheKey("profile-owner", nick));
+    if (hit) return (await hit.json()).userId ?? null;
+    return (await lookUpProfile(env, nick, ctx)).userId;
+}
+
+// track id -> { at, total }
+const boardTotals = new Map();
+
+async function boardTotal(cfg, request, trackId) {
+    const hit = boardTotals.get(trackId);
+    if (hit && Date.now() - hit.at < BOARD_TOTAL_TTL_MS) return hit.total;
+    const data = await fetchUpstreamJson(cfg, request, "/v6/leaderboard", { version: DEFAULT_VERSION, trackId, skip: 0, amount: 1, onlyVerified: "false" });
+    if (!Number.isSafeInteger(data?.total)) throw new UpstreamError(502);
+    boardTotals.delete(trackId);
+    boardTotals.set(trackId, { at: Date.now(), total: data.total });
+    if (boardTotals.size > 400) boardTotals.delete(boardTotals.keys().next().value);
+    return data.total;
+}
+
+// A player's place on official and Kodub community boards, which are far too big for the page to read whole.
+// Positions are Kodub's own.
+async function handleProfileRuns(request, url, env, cfg, origin, ctx) {
+    const nick = (url.searchParams.get("nick") ?? "").slice(0, 100);
+    const ids = [...new Set((url.searchParams.get("tracks") ?? "").split(","))].filter((id) => HEX64.test(id)).sort();
+    if (!ids.length || ids.length > PROFILE_RUNS_MAX) return plain(400, "Bad tracks", origin);
+    if (!nick.trim() || !accounts(env) || profileBanned(cfg, nick)) return json({ found: false }, origin);
+    const cacheKey = profileCacheKey("profile-runs", nick, "/" + ids.join(","));
+    const hit = await cacheMatch(cacheKey);
+    if (hit) return withCors(hit, origin);
+    const userId = await profileOwner(env, nick, ctx);
+    if (!userId) return withCors(cachedJson({ found: false }, PROFILE_CACHE_S), origin);
+    const runs = {};
+    const failed = [];
+    await Promise.all(ids.map(async (trackId) => {
+        try {
+            const [entry, total] = await Promise.all([
+                fetchUpstreamJson(cfg, request, "/v6/leaderboardUserEntry", { version: DEFAULT_VERSION, trackId, userTokenHash: userId, onlyVerified: "false" }),
+                boardTotal(cfg, request, trackId),
+            ]);
+            runs[trackId] = Number.isSafeInteger(entry?.position) ? { position: entry.position, frames: Number.isSafeInteger(entry.frames) ? entry.frames : null, total } : null;
+        } catch {
+            failed.push(trackId);
+        }
+    }));
+    const response = cachedJson({ found: true, runs, failed }, failed.length ? 30 : PROFILE_RUNS_CACHE_S);
+    if (!failed.length) ctx.waitUntil(caches.default.put(cacheKey, response.clone()).catch(() => {}));
     return withCors(response, origin);
+}
+
+// ip -> { at, n }: one instance's count of profile calls from an address, so a script can't walk every name.
+const profileCallers = new Map();
+
+function profileLimited(request) {
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    const now = Date.now();
+    const hit = profileCallers.get(ip);
+    if (!hit || now - hit.at > PROFILE_IP_WINDOW_MS) {
+        if (profileCallers.size > 5000) profileCallers.clear();
+        profileCallers.set(ip, { at: now, n: 1 });
+        return false;
+    }
+    return ++hit.n > PROFILE_IP_LIMIT;
 }
 
 // Runs on the board the snapshot hasn't seen; everything when there is no snapshot of it.
@@ -946,7 +1043,10 @@ async function handleLeaderboard(request, url, env, cfg, origin, ctx) {
         const flagged = await antiCheat(env)?.flaggedOn(track.trackId).catch(() => null);
         if (flagged) body.flagged = page.map((e) => e.id).filter((id) => flagged.includes(id));
     }
-    return json(body, origin);
+    const response = json(body, origin);
+    // The profile window reads every board; its copy may stay in this caller's browser (the reply can hold their own entry).
+    if (params.get("nswsProfile") === "1") response.headers.set("Cache-Control", "private, max-age=" + (track.secret ? PROFILE_BOARD_LIVE_S : PROFILE_BOARD_ENDED_S));
+    return response;
 }
 
 async function handleUserEntry(request, url, env, cfg, origin) {
@@ -2286,10 +2386,12 @@ export default {
                 if (!fromSite) return forbidden();
                 return handleLate(url, env, cfg, requestOrigin);
             }
-            if (url.pathname === TRAFFIC_PREFIX + "profile" && request.method === "GET") {
+            if ((url.pathname === TRAFFIC_PREFIX + "profile" || url.pathname === TRAFFIC_PREFIX + "profile-runs") && request.method === "GET") {
                 if (!fromSite) return forbidden();
                 if (doLimited()) return busy(requestOrigin);
+                if (profileLimited(request)) return json({ error: "slow down" }, requestOrigin, 429);
                 try {
+                    if (url.pathname.endsWith("-runs")) return await handleProfileRuns(request, url, env, cfg, requestOrigin, ctx);
                     return await handleProfile(url, env, cfg, requestOrigin, ctx);
                 } catch (err) {
                     noteDoError(err);

@@ -1,19 +1,49 @@
-// A player's profile window: where they place on every NSWS board, their weekly standings, their car and
-// their tags. Opened from a name on a leaderboard, in the standings or in the chat. The boards come from the
-// same proxied leaderboard requests the game makes, kept here for a while so opening more profiles is free;
-// the account part (tags, hours, bingos) is one cached GET /nsws/profile.
+// A player's profile window: where they place on NSWS, official and Kodub community boards, their weekly
+// standings, their car and their tags. Opened from a name on a leaderboard, in the standings or in the chat.
+// NSWS boards come from the same proxied leaderboard requests the game makes, kept here (and in the browser's
+// cache) for a while so opening more profiles is free; the account part (tags, hours, bingos) is one cached
+// GET /nsws/profile, and official/community places are GET /nsws/profile-runs, 20 boards a call.
 (function () {
     const API = window.__nswsApiBase;
     const PAGE = 500;
     const LIVE_TTL_MS = 3 * 60_000;
     const ENDED_TTL_MS = 20 * 60_000;
+    const ACCOUNT_TTL_MS = 5 * 60_000;
+    const ACCOUNT_FRESH_MS = 2 * 60_000;
+    const RUNS_TTL_MS = 10 * 60_000;
+    const RUNS_CHUNK = 20;
+    const REFRESH_GAP_MS = 60_000;
+    // Per-player lookups: a burst of LOOKUP_BURST goes straight out, then one every LOOKUP_REFILL_MS, kept across reloads.
+    const LOOKUP_BURST = 12;
+    const LOOKUP_REFILL_MS = 4000;
+    const LOOKUP_KEY = "nsws_profile_lookups";
+    const SCOPE_KEY = "nsws_profile_scope";
     const PARALLEL = 6;
-    const DEFAULT_ANGLE = 45;
+    const TURN_PER_PX = 1.2 * Math.PI / 180;
     const IGNORED_IN_NAMES = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
     const LOG102 = Math.log10(2);
     const BUCKETS = [["World record", 1], ["Top 3", 3], ["Top 10", 10], ["Top 50", 50], ["Top 100", 100], ["Ranked", Infinity]];
+    const SCOPES = [["nsws", "NSWS"], ["official", "Main"], ["kodub", "Community"], ["all", "All"]];
+    const SCOPE_TEXT = {
+        nsws: { tracks: "NSWS tracks", loading: "Reading every NSWS board...", ranked: "Every NSWS track they are ranked on", none: "Not ranked on any NSWS track yet." },
+        official: { tracks: "Official tracks", loading: "Looking up their official tracks...", ranked: "Every official track they are ranked on", none: "Not ranked on any official track yet." },
+        kodub: { tracks: "Community tracks", loading: "Looking up their community tracks...", ranked: "Every community track they are ranked on", none: "Not ranked on any community track yet." },
+        all: { tracks: "Tracks", loading: "Reading every board...", ranked: "Every track they are ranked on", none: "Not ranked on any track yet." },
+    };
+
+    const qmul = (a, b) => [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ];
+    const qaxis = (x, y, z, angle) => [x * Math.sin(angle / 2), y * Math.sin(angle / 2), z * Math.sin(angle / 2), Math.cos(angle / 2)];
+    // The leaderboard thumbnails' view: 45 degrees round, looking down from the cube's corner.
+    const DEFAULT_TURN = qmul(qaxis(0, 1, 0, Math.PI / 4), qaxis(1, 0, 0, -Math.atan(Math.SQRT1_2)));
 
     const boards = new Map();
+    const accountCache = new Map();
+    const runCache = new Map();
     let view = null;
 
     const CSS = `
@@ -27,6 +57,12 @@
 #nsws-profile .top>h1>small{font-size:20px;color:rgba(255,255,255,.6);text-shadow:none;}
 #nsws-profile .top>.nsws-tag{font-size:17px;flex-shrink:0;}
 #nsws-profile .top>.sub{margin-left:auto;font-size:14px;font-style:italic;color:rgba(255,255,255,.6);text-align:right;white-space:nowrap;}
+#nsws-profile .scopes{display:flex;flex-shrink:0;background:var(--surface-secondary-color);border-top:1px solid rgba(255,255,255,.1);}
+#nsws-profile .scopes>button{flex:1;margin:0 -3px;padding:7px 0;border:0;background:transparent;color:rgba(255,255,255,.6);font:inherit;font-size:18px;cursor:pointer;clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);}
+#nsws-profile .scopes>button:first-child{margin-left:0;clip-path:polygon(0 0,100% 0,calc(100% - 8px) 100%,0 100%);}
+#nsws-profile .scopes>button:last-child{margin-right:0;clip-path:polygon(8px 0,100% 0,100% 100%,0 100%);}
+#nsws-profile .scopes>button:hover{color:#fff;background:rgba(255,255,255,.05);}
+#nsws-profile .scopes>button.on{color:#fff;background:var(--surface-tertiary-color);box-shadow:inset 0 -3px 0 #7272c2;}
 #nsws-profile .body{overflow-y:auto;padding:12px 20px 20px;}
 #nsws-profile .head{display:flex;gap:16px;align-items:stretch;}
 #nsws-profile .car{position:relative;flex-shrink:0;width:200px;background:var(--surface-tertiary-color);cursor:grab;touch-action:none;user-select:none;}
@@ -109,7 +145,7 @@
 
     function percent(rank, total) {
         const p = (rank / total) * 100;
-        return "top " + (p < 1 ? p.toFixed(2) : p < 10 ? p.toFixed(1) : Math.round(p)) + "%";
+        return "top " + (p < 0.01 ? String(+p.toPrecision(1)) : p < 1 ? p.toFixed(2) : p < 10 ? p.toFixed(1) : Math.round(p)) + "%";
     }
 
     function median(values) {
@@ -135,10 +171,13 @@
 
     const isLive = (track) => !!window.__nswsIsCurrentWeek?.(track.id);
 
+    // Refresh reads only the week in progress again: ended boards barely change.
     async function loadBoard(track, fresh) {
         const hit = boards.get(track.id);
-        if (!fresh && hit && Date.now() - hit.at < (isLive(track) ? LIVE_TTL_MS : ENDED_TTL_MS)) return hit.data;
-        const r = await fetch(API + "v6/leaderboard?version=0.6.2&trackId=" + track.id + "&skip=0&amount=" + PAGE + "&onlyVerified=false" + window.__nswsTrackQuery(track.id));
+        const live = isLive(track);
+        if (!(fresh && live) && hit && Date.now() - hit.at < (live ? LIVE_TTL_MS : ENDED_TTL_MS)) return hit.data;
+        const url = API + "v6/leaderboard?version=0.6.2&trackId=" + track.id + "&skip=0&amount=" + PAGE + "&onlyVerified=false&nswsProfile=1" + window.__nswsTrackQuery(track.id);
+        const r = await fetch(url, fresh && live ? { cache: "reload" } : {});
         if (!r.ok) throw new Error("HTTP " + r.status);
         const raw = await r.json();
         const data = { total: raw.total ?? 0, entries: Array.isArray(raw) ? raw : raw.entries || [] };
@@ -165,14 +204,114 @@
         return out;
     }
 
-    async function loadAccount(nick) {
+    function readBucket() {
         try {
-            const r = await fetch(API + "nsws/profile?nick=" + encodeURIComponent(nick));
-            if (!r.ok) return { error: true };
-            return await r.json();
+            const saved = JSON.parse(localStorage.getItem(LOOKUP_KEY));
+            if (Number.isFinite(saved?.tokens) && Number.isFinite(saved?.at)) return saved;
+        } catch {}
+        return { tokens: LOOKUP_BURST, at: Date.now() };
+    }
+
+    // Waits for a lookup slot; false if the window closed meanwhile.
+    async function slot(v) {
+        for (;;) {
+            if (v.closed) return false;
+            const bucket = readBucket();
+            const now = Date.now();
+            const tokens = Math.min(LOOKUP_BURST, bucket.tokens + Math.max(0, now - bucket.at) / LOOKUP_REFILL_MS);
+            if (tokens >= 1) {
+                try {
+                    localStorage.setItem(LOOKUP_KEY, JSON.stringify({ tokens: tokens - 1, at: now }));
+                } catch {}
+                if (v.waiting) {
+                    v.waiting = false;
+                    render(v);
+                }
+                return true;
+            }
+            if (!v.waiting) {
+                v.waiting = true;
+                render(v);
+            }
+            await new Promise((resolve) => setTimeout(resolve, (1 - tokens) * LOOKUP_REFILL_MS + 50));
+        }
+    }
+
+    async function lookUp(v, path, cache, key, ttl) {
+        const hit = cache.get(key);
+        if (hit && Date.now() - hit.at < ttl) return hit.data;
+        if (!(await slot(v))) return { error: true };
+        try {
+            const r = await fetch(API + path);
+            if (!r.ok) return { error: true, slow: r.status === 429 };
+            const data = await r.json();
+            if (!data.error && !data.failed?.length) cache.set(key, { at: Date.now(), data });
+            return data;
         } catch {
             return { error: true };
         }
+    }
+
+    function loadAccount(v, fresh) {
+        const key = nameKey(v.nick);
+        if (fresh && Date.now() - (accountCache.get(key)?.at ?? 0) > ACCOUNT_FRESH_MS) accountCache.delete(key);
+        return lookUp(v, "nsws/profile?nick=" + encodeURIComponent(v.nick), accountCache, key, ACCOUNT_TTL_MS);
+    }
+
+    // Official or Kodub community places: Kodub's own positions, looked up by the Worker for the account that holds the name.
+    async function loadSet(v, set) {
+        const list = (window.__nswsTrackSets?.()[set] || []).map((t, i) => ({
+            id: t.id, name: t.name, set, order: (set === "official" ? 10000 : 20000) + i,
+            group: set === "official" ? "Official" : "Community" + (t.group ? " " + t.group : ""),
+        }));
+        const ids = list.map((t) => t.id).sort();
+        const chunks = [];
+        for (let i = 0; i < ids.length; i += RUNS_CHUNK) chunks.push(ids.slice(i, i + RUNS_CHUNK));
+        const runs = new Map();
+        let failed = 0;
+        let found = true;
+        let slow = false;
+        await Promise.all(chunks.map(async (chunk) => {
+            const path = "nsws/profile-runs?nick=" + encodeURIComponent(v.nick) + "&tracks=" + chunk.join(",");
+            const data = await lookUp(v, path, runCache, nameKey(v.nick) + "|" + chunk.join(","), RUNS_TTL_MS);
+            if (data.error) {
+                failed += chunk.length;
+                slow ||= !!data.slow;
+                return;
+            }
+            if (!data.found) found = false;
+            failed += data.failed?.length ?? 0;
+            for (const id of chunk) if (data.runs?.[id]) runs.set(id, data.runs[id]);
+        }));
+        if (v.closed) return;
+        const rows = list.filter((t) => runs.has(t.id)).map((t) => ({ track: t, ...runs.get(t.id), secret: false }));
+        v.sets[set] = { rows, tracks: list, failed: found ? failed : 0, found, slow };
+        render(v);
+    }
+
+    function ensureSets(v) {
+        for (const set of ["official", "kodub"]) {
+            if ((v.scope === set || v.scope === "all") && !v.sets[set] && !v.pending.has(set)) {
+                v.pending.add(set);
+                loadSet(v, set).finally(() => v.pending.delete(set));
+            }
+        }
+    }
+
+    // What the chosen tab shows; null while part of it is still loading.
+    function scopeData(v) {
+        const parts = [];
+        if (v.scope === "nsws" || v.scope === "all") parts.push(v.result && { rows: v.result.rows, tracks: v.result.tracks, failed: v.result.failed, found: true });
+        for (const set of ["official", "kodub"]) if (v.scope === set || v.scope === "all") parts.push(v.sets[set]);
+        if (parts.some((p) => !p)) return null;
+        return {
+            rows: parts.flatMap((p) => p.rows),
+            tracks: parts.flatMap((p) => p.tracks),
+            failed: parts.reduce((n, p) => n + p.failed, 0),
+            unfound: parts.some((p) => !p.found),
+            slow: parts.some((p) => p.slow),
+            weeks: v.scope === "nsws" || v.scope === "all" ? v.result.weeks : null,
+        };
     }
 
     // A board past its first page (rare on NSWS boards): ask for this account's own place on it.
@@ -263,6 +402,7 @@
     function close() {
         if (!view) return;
         view.closed = true;
+        clearTimeout(view.tick);
         view.overlay.remove();
         view = null;
     }
@@ -276,9 +416,10 @@
         const box = el("div", "box");
         box.tabIndex = -1;
         const top = el("div", "top");
+        const scopes = el("div", "scopes");
         const body = el("div", "body");
         const bottom = el("div", "bottom");
-        box.append(el("div", "checker"), top, body, bottom);
+        box.append(el("div", "checker"), top, scopes, body, bottom);
         overlay.appendChild(box);
         overlay.addEventListener("pointerdown", (e) => {
             if (e.target === overlay) close();
@@ -286,17 +427,42 @@
         for (const type of ["keydown", "keyup", "keypress"]) overlay.addEventListener(type, (e) => e.stopPropagation());
         document.body.appendChild(overlay);
         box.focus();
-        view = { nick, hint, overlay, top, body, bottom, sort: "week", angle: DEFAULT_ANGLE, carStyle: hint.carStyle ?? null, countryCode: hint.countryCode ?? null };
+        let scope = "nsws";
+        try {
+            scope = SCOPES.some(([id]) => id === localStorage.getItem(SCOPE_KEY)) ? localStorage.getItem(SCOPE_KEY) : "nsws";
+        } catch {}
+        view = { nick, hint, overlay, top, scopes, body, bottom, scope, sets: {}, pending: new Set(), sort: "week", turn: DEFAULT_TURN, carStyle: hint.carStyle ?? null, countryCode: hint.countryCode ?? null };
         load(view, false);
+    }
+
+    function scopeBar(v) {
+        v.scopes.innerHTML = "";
+        for (const [id, label] of SCOPES) {
+            const b = el("button", v.scope === id ? "on" : null, label);
+            b.addEventListener("click", () => {
+                if (v.scope === id) return;
+                window.__nswsUIClick?.();
+                v.scope = id;
+                v.sort = "week";
+                try {
+                    localStorage.setItem(SCOPE_KEY, id);
+                } catch {}
+                ensureSets(v);
+                render(v);
+            });
+            v.scopes.appendChild(b);
+        }
     }
 
     async function load(v, fresh) {
         v.result = null;
         v.account = undefined;
         v.pct = null;
+        v.loadedAt = null;
+        ensureSets(v);
         render(v);
         const tracks = allTracks();
-        const accountReq = loadAccount(v.nick).then((a) => {
+        const accountReq = loadAccount(v, fresh).then((a) => {
             v.account = a;
             if (!v.closed) render(v);
         });
@@ -312,6 +478,7 @@
         await accountReq;
         if (v.closed) return;
         v.result = { ...found, weeks, tracks, failed: [...data.values()].filter((d) => !d).length };
+        v.loadedAt = Date.now();
         render(v);
     }
 
@@ -344,39 +511,50 @@
         const img = el("img");
         img.src = "images/car_thumbnail_placeholder.png";
         img.alt = "";
+        wrap.title = "Double-click to put it back";
         wrap.append(img, el("span", null, "Drag to turn"));
         let rendering = false;
         let shown = null;
         const draw = () => {
             if (rendering || !window.__nswsCarThumb || v.closed) return;
-            const want = v.angle;
+            const want = v.turn;
             const style = v.carStyle;
-            if (shown === want + "|" + style) return;
+            const key = want.join(",") + "|" + style;
+            if (shown === key) return;
             rendering = true;
             window.__nswsCarThumb(style, want).then((src) => {
                 if (src) img.src = src;
-                shown = want + "|" + style;
+                shown = key;
             }).catch(() => {}).finally(() => {
                 rendering = false;
                 draw();
             });
         };
-        let dragX = null;
+        // Turns about the view's own axes, so the car rolls over the top as far as it is dragged.
+        let drag = null;
         wrap.addEventListener("pointerdown", (e) => {
-            dragX = e.clientX;
+            drag = { x: e.clientX, y: e.clientY };
             wrap.classList.add("drag");
             try {
                 wrap.setPointerCapture(e.pointerId);
             } catch {}
         });
         wrap.addEventListener("pointermove", (e) => {
-            if (dragX == null) return;
-            v.angle = (v.angle - (e.clientX - dragX) * 1.2 + 360) % 360;
-            dragX = e.clientX;
+            if (!drag) return;
+            const dx = e.clientX - drag.x;
+            const dy = e.clientY - drag.y;
+            drag = { x: e.clientX, y: e.clientY };
+            const q = qmul(v.turn, qmul(qaxis(0, 1, 0, -dx * TURN_PER_PX), qaxis(1, 0, 0, -dy * TURN_PER_PX)));
+            const len = Math.hypot(...q);
+            v.turn = q.map((c) => c / len);
+            draw();
+        });
+        wrap.addEventListener("dblclick", () => {
+            v.turn = DEFAULT_TURN;
             draw();
         });
         const stop = () => {
-            dragX = null;
+            drag = null;
             wrap.classList.remove("drag");
         };
         wrap.addEventListener("pointerup", stop);
@@ -392,23 +570,25 @@
         return t;
     }
 
-    function tiles(v) {
+    function tiles(v, d) {
         const wrap = el("div", "tiles");
-        const r = v.result;
-        if (!r) {
-            wrap.appendChild(el("div", "msg", "Reading every NSWS board..."));
-            const bar = el("div", "progress");
-            v.progress = el("i");
-            v.progress.style.width = v.pct ?? "0%";
-            bar.appendChild(v.progress);
-            wrap.firstChild.appendChild(bar);
+        if (!d) {
+            const msg = el("div", "msg", SCOPE_TEXT[v.scope].loading);
+            if (!v.result) {
+                const bar = el("div", "progress");
+                v.progress = el("i");
+                v.progress.style.width = v.pct ?? "0%";
+                bar.appendChild(v.progress);
+                msg.appendChild(bar);
+            }
+            wrap.appendChild(msg);
             return wrap;
         }
-        const rows = r.rows;
+        const rows = d.rows;
         const positions = rows.map((x) => x.position);
         const shares = rows.map((x) => x.position / x.total);
         const best = rows.length ? rows.reduce((a, b) => (b.position / b.total < a.position / a.total ? b : a)) : null;
-        const wins = r.weeks.filter((w) => w.rank === 1 && !w.live).length;
+        const wins = d.weeks?.filter((w) => w.rank === 1 && !w.live).length ?? 0;
         const timed = rows.filter((x) => x.frames != null);
         const wrs = positions.filter((p) => p === 1).length;
         wrap.append(
@@ -420,10 +600,10 @@
             tile(positions.length ? "#" + median(positions) : "-", "Typical placing"),
             tile(best ? percent(best.position, best.total) : "-", "Best standing"),
             tile(shares.length ? "top " + Math.max(1, Math.round(median(shares) * 100)) + "%" : "-", "Typical standing"),
-            tile(rows.length + " / " + r.tracks.length, "NSWS tracks"),
-            tile(num(wins), wins === 1 ? "Week won" : "Weeks won", wins > 0),
-            tile(timed.length ? raceTime(timed.reduce((s, x) => s + x.frames, 0)) : "-", timed.length < rows.length ? "Times add up to (" + (rows.length - timed.length) + " secret)" : "Their times add up to"),
+            tile(rows.length + " / " + d.tracks.length, SCOPE_TEXT[v.scope].tracks),
         );
+        if (d.weeks) wrap.appendChild(tile(num(wins), wins === 1 ? "Week won" : "Weeks won", wins > 0));
+        wrap.appendChild(tile(timed.length ? raceTime(timed.reduce((s, x) => s + x.frames, 0)) : "-", timed.length < rows.length ? "Times add up to (" + (rows.length - timed.length) + " secret)" : "Their times add up to"));
         return wrap;
     }
 
@@ -432,7 +612,7 @@
         if (a === undefined) return;
         body.appendChild(el("div", "sec", "Tags"));
         if (!a || a.error) {
-            body.appendChild(el("p", "note", "Tags and account stats can't be read right now."));
+            body.appendChild(el("p", "note", a?.slow ? "Lots of profiles were looked up in a row. Wait a minute, then try Refresh." : "Tags and account stats can't be read right now."));
             return;
         }
         if (!a.found) {
@@ -469,8 +649,8 @@
         }
     }
 
-    function placeSection(v, body) {
-        const rows = v.result.rows;
+    function placeSection(d, body) {
+        const rows = d.rows;
         if (!rows.length) return;
         body.appendChild(el("div", "sec", "Where they place"));
         const bars = el("div", "bars");
@@ -485,9 +665,9 @@
         body.appendChild(bars);
     }
 
-    function weekSection(v, body) {
-        const weeks = v.result.weeks;
-        if (!weeks.length) return;
+    function weekSection(d, body) {
+        const weeks = d.weeks;
+        if (!weeks?.length) return;
         body.appendChild(el("div", "sec", "Weekly standings"));
         const table = el("table");
         const head = el("tr");
@@ -503,14 +683,17 @@
         body.appendChild(table);
     }
 
-    function trackSection(v, body) {
-        const rows = [...v.result.rows];
-        body.appendChild(el("div", "sec", rows.length ? "Every NSWS track they are ranked on" : "NSWS tracks"));
+    function trackSection(v, d, body) {
+        const rows = [...d.rows];
+        const text = SCOPE_TEXT[v.scope];
+        body.appendChild(el("div", "sec", rows.length ? text.ranked : text.tracks));
+        const unfound = "No NSWS account goes by this name, so their places on official and community boards can't be looked up.";
+        const slow = "Lots of profiles were looked up in a row. Wait a minute, then try Refresh.";
         if (!rows.length) {
-            body.appendChild(el("div", "msg", v.result.failed ? "Some boards didn't load. Try Refresh." : "Not ranked on any NSWS track yet."));
+            body.appendChild(el("div", "msg", d.unfound ? unfound : d.slow ? slow : d.failed ? "Some boards didn't load. Try Refresh." : text.none));
             return;
         }
-        const order = { week: (a, b) => b.track.week - a.track.week || a.track.order - b.track.order, place: (a, b) => a.position - b.position || a.position / a.total - b.position / b.total, standing: (a, b) => a.position / a.total - b.position / b.total };
+        const order = { week: (a, b) => (b.track.week ?? 0) - (a.track.week ?? 0) || a.track.order - b.track.order, place: (a, b) => a.position - b.position || a.position / a.total - b.position / b.total, standing: (a, b) => a.position / a.total - b.position / b.total };
         rows.sort(order[v.sort]);
         const table = el("table");
         const head = el("tr");
@@ -537,31 +720,45 @@
             table.appendChild(tr);
         }
         body.appendChild(table);
-        if (v.result.failed) body.appendChild(el("p", "note", plural(v.result.failed, "board") + " didn't load, so this list may be missing tracks."));
+        if (d.unfound) body.appendChild(el("p", "note", unfound));
+        else if (d.slow) body.appendChild(el("p", "note", slow));
+        else if (d.failed) body.appendChild(el("p", "note", plural(d.failed, "board") + " didn't load, so this list may be missing tracks."));
         if (rows.some((x) => x.secret)) body.appendChild(el("p", "note", "Times on the week in progress stay secret until it ends."));
+    }
+
+    // Refresh waits REFRESH_GAP_MS after the last load, counting down on the button.
+    function bottomBar(v) {
+        if (v.closed) return;
+        clearTimeout(v.tick);
+        v.bottom.innerHTML = "";
+        const left = v.loadedAt ? Math.ceil((v.loadedAt + REFRESH_GAP_MS - Date.now()) / 1000) : 0;
+        const refresh = button(left > 0 ? "Refresh (" + left + ")" : "Refresh", () => load(v, true));
+        refresh.disabled = !v.result || left > 0;
+        v.bottom.append(button("Back", close), refresh);
+        if (left > 0) v.tick = setTimeout(() => bottomBar(v), 1000);
     }
 
     function render(v) {
         if (v.closed) return;
         header(v);
+        scopeBar(v);
+        const d = scopeData(v);
         const keepScroll = v.body.scrollTop;
         v.body.innerHTML = "";
         const head = el("div", "head");
         v.carNode ??= car(v);
-        head.append(v.carNode, tiles(v));
+        head.append(v.carNode, tiles(v, d));
         v.body.appendChild(head);
+        if (v.waiting) v.body.appendChild(el("p", "note", "Lots of profiles were opened in a row, so this one waits a few seconds."));
         tagSection(v, v.body);
-        if (v.result) {
-            placeSection(v, v.body);
-            weekSection(v, v.body);
-            trackSection(v, v.body);
+        if (d) {
+            placeSection(d, v.body);
+            weekSection(d, v.body);
+            trackSection(v, d, v.body);
         }
         v.body.scrollTop = keepScroll;
         v.carNode.dispatchEvent(new Event("nsws-draw"));
-        v.bottom.innerHTML = "";
-        const refresh = button("Refresh", () => load(v, true));
-        refresh.disabled = !v.result;
-        v.bottom.append(button("Back", close), refresh);
+        bottomBar(v);
     }
 
     if (!document.getElementById("nsws-profile-style")) {

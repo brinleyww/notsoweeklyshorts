@@ -3553,6 +3553,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                             },null,null,c,null,null,null,null,null,null),
                             o.update(0)),
                             h.position.copy(n?.position ?? new THREE.Vector3(1000.1,1000.3,1e3)),
+                            h.up.copy(n?.up ?? new THREE.Vector3(0,1,0)),
                             h.lookAt(n?.look ?? new THREE.Vector3(.1,.3,0)),
                             h.zoom = n?.zoom ?? .5,
                             h.updateProjectionMatrix(),
@@ -43298,10 +43299,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Ot.A && Ot.A.locals && Ot.A.locals;
         var Vt, Ht = i(3075), jt = i(765), Kt = i(2108);
         window.__clipCarStyleClass = jt.A;
-        // A data URL of a 200x200 render, as the leaderboard's thumbnails; angle is degrees around the car.
-        window.__nswsCarThumb = (style, angle = 45) => {
-            const THREE = i(4922), a = angle * Math.PI / 180;
-            const view = { position: new THREE.Vector3(1414.21 * Math.sin(a) + .1, 1000.3, 1414.21 * Math.cos(a)), look: new THREE.Vector3(.1, .3, 0), zoom: .5 };
+        // A data URL of a 200x200 render, as the leaderboard's thumbnails; turn is the camera's [x, y, z, w] rotation
+        // around the car, from looking down +z (left out: the thumbnails' own view).
+        window.__nswsCarThumb = (style, turn) => {
+            const THREE = i(4922), look = new THREE.Vector3(.1, .3, 0);
+            const q = turn ? new THREE.Quaternion(...turn) : null;
+            const view = q
+                ? { position: new THREE.Vector3(0, 0, 1732.05).applyQuaternion(q).add(look), look, up: new THREE.Vector3(0, 1, 0).applyQuaternion(q), zoom: .5 }
+                : { position: new THREE.Vector3(1000.1, 1000.3, 1e3), look, zoom: .5 };
             return i(832).F(jt.A.deserializeSafe(style ?? ""), { addCancelCallback() {} }, view);
         };
         window.__nswsCountries = () => i(2970).O();
@@ -58702,6 +58707,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 $h.set(this, void 0),
                 ed.set(this, []),
                 C.set(this, $h, t, "f");
+                // The official and Kodub community boards, for the profile window (official ids exist once their files load).
+                window.__nswsTrackSets = () => ({
+                    official: C.get(this, Jh, "f").map((t) => ({ id: t.id, name: t.trackMetadata.name })),
+                    kodub: (this.kodubCommunity ?? []).map((t) => ({ id: t.id, name: t.trackMetadata.name, group: t.group }))
+                });
                 Promise.all(["summer1.track", "summer2.track", "summer3.track", "summer4.track", "summer5.track", "summer6.track", "summer7.track", "winter1.track", "winter2.track", "winter3.track", "winter4.track", "winter5.track", "desert1.track", "desert2.track", "desert3.track", "desert4.track", "desert5.track"].map((t => C.get(this, Qh, "m", td).call(this, t, e)))).then((e => {
                     C.set(this, Jh, e, "f")
                 }

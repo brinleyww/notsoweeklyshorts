@@ -1012,15 +1012,21 @@ editor test drives.
 ## Player profiles
 
 Clicking a name on a leaderboard, in the standings or in the chat opens that player's profile
-(`mod/nsws_profile.js`): their car (drawn by the game's own thumbnail renderer, `__nswsCarThumb`),
-flag, tags, where they place on every NSWS board, their weekly standings and their totals.
+(`mod/nsws_profile.js`): their car (drawn by the game's own thumbnail renderer, `__nswsCarThumb`,
+turned any way by dragging; double-click puts it back), flag, tags, where they place, their weekly
+standings and their totals. Tabs switch between NSWS, Main (official tracks), Community (Kodub's
+community tracks) and All; the choice is remembered.
 
-- **Boards:** the page reads every NSWS board itself through the normal `/v6/leaderboard` request
-  (first 500 runs), so hidden times, bans and the anti-cheat apply as everywhere else. The boards are
-  kept in the page (3 minutes for the live week, 20 for ended ones), so the first profile of a visit
-  costs one Worker request per track (about 60; boards the snapshot covers call no Durable Object) and later ones
-  cost nothing. A player is matched by nickname; on ended weeks, where entries carry userIds, every
-  run of the same account counts, so runs under an old name are found too.
+- **NSWS boards:** the page reads every NSWS board itself through the normal `/v6/leaderboard` request
+  (first 500 runs, with `nswsProfile=1`), so hidden times, bans and the anti-cheat apply as everywhere
+  else. The boards are kept in the page (3 minutes for the live week, 20 for ended ones), and the
+  Worker marks these replies `private, max-age` (2 minutes live, 15 ended) so the browser keeps them
+  across reloads too. The first profile of a visit costs one Worker request per track (about 60; boards
+  the snapshot covers call no Durable Object); later ones, and the same profile after a reload, cost
+  nothing. A player is matched by nickname; on ended weeks, where entries carry userIds, every run of
+  the same account counts, so runs under an old name are found too.
+- **Refresh** re-reads only the live week's boards (the account part only if it is over 2 minutes old)
+  and then waits a minute, counting down on the button.
 - **Weekly standings** come from `__nswsStandingsData(week)` in `main.bundle.js`, the same code the
   Standings window draws ended weeks with, so the two always agree. The live week is worked out from
   the boards already read.
@@ -1031,6 +1037,19 @@ flag, tags, where they place on every NSWS board, their weekly standings and the
   per name in the colo's cache, so a popular profile costs the Accounts object one call per
   2 minutes. While Durable Objects are limited it answers `busy`, and the window shows the boards
   without the account part.
+- **`GET /nsws/profile-runs?nick=&tracks=id,id,...`** (site only, at most 20 track ids) answers the
+  Main and Community tabs: `{found, runs: {trackId: {position, frames, total} | null}, failed}`.
+  Those boards are far too big to read, so the Worker asks Kodub for the account's own entry
+  (`leaderboardUserEntry`) and the board's size (`amount=1`, kept 10 minutes per instance): two
+  subrequests a board, under the free plan's 50. Positions are Kodub's own, so a player banned on
+  NSWS above them still counts. The account's userId comes from the same `publicProfile` call as the
+  account part and stays in the colo's cache (`nsws-profile-owner.invalid`), so it costs no extra
+  Accounts call; answers are cached 10 minutes per name and track list. The tabs load only when
+  picked: Main is one call, Community four.
+- **Spam limits:** the page sends at most 12 player lookups (account or runs calls) in a burst, then one
+  every 4 seconds, counted across reloads in localStorage; a profile closed before its turn sends
+  nothing, and a waiting one says so. Both profile endpoints also answer 429 after 60 calls a minute
+  from one address (counted per Worker instance), before any cache, Accounts or Kodub call.
 
 ## Bad days (free-plan limits)
 
