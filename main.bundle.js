@@ -6763,6 +6763,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                     return null
                 }
                 deleteProfileSlot(e) {
+                    if (window.__nswsIsProfileBanned?.(h.get(this, a, "f").loadUserProfile(e)?.token)) {
+                        const box = window.__nswsMessageBox;
+                        box && !box.isOpen && box.show("Your account is banned, so this profile can't be deleted.", "Ok", null);
+                        throw new Error("Profile is banned")
+                    }
                     h.get(this, a, "f").deleteAllRecordsForProfile(e),
                     h.get(this, a, "f").deleteUserProfile(e)
                 }

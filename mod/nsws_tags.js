@@ -407,6 +407,7 @@
                 if (profileToken() === token) setState(saved, true);
                 return saved;
             }
+            window.__nswsAccountBan?.receive(token, data?.ban ?? null);
             if (profileToken() === token) {
                 setState(data);
                 storageSet(STATE_KEY, JSON.stringify({ who: token.slice(0, 12), at: Date.now(), data }));

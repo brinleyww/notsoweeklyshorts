@@ -101,6 +101,12 @@ function ownerHashes(value) {
     return new Set(list.map((h) => String(h).trim().toLowerCase()).filter((h) => HEX64.test(h)));
 }
 
+function banLeft(ms) {
+    const hours = Math.ceil(ms / 3600_000);
+    if (hours < 48) return hours + (hours === 1 ? " hour" : " hours");
+    return Math.ceil(hours / 24) + " days";
+}
+
 function duration(ms) {
     const seconds = Math.ceil(ms / 1000);
     if (seconds < 60) return seconds + (seconds === 1 ? " second" : " seconds");
@@ -164,6 +170,8 @@ export class ChatRoom extends DurableObject {
             id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, uid TEXT NOT NULL,
             nick TEXT NOT NULL, owner INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL)`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS ip_blocks (ip TEXT PRIMARY KEY, until INTEGER)");
+        // Account bans (src/traffic.js user_bans), by the chat ids linked to the account. chat = chat only.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS user_blocks (uid TEXT PRIMARY KEY, user_id TEXT NOT NULL, until INTEGER, chat INTEGER NOT NULL, reason TEXT)");
         for (const column of ["pings TEXT", "reply_to TEXT", "edited INTEGER", "tag TEXT", "media TEXT", "file TEXT", "gif TEXT", "ip TEXT"]) {
             try {
                 this.sql.exec("ALTER TABLE messages ADD COLUMN " + column);
@@ -264,6 +272,26 @@ export class ChatRoom extends DurableObject {
 
     unblockIp(ip) {
         this.sql.exec("DELETE FROM ip_blocks WHERE ip = ?", ip);
+    }
+
+    // Called by the Worker for a ban, and again when a banned account links another browser's chat.
+    blockUser(userId, uids, until, chat, reason) {
+        for (const uid of (uids ?? []).filter((u) => /^[0-9a-f]{16}$/.test(u))) {
+            this.sql.exec("INSERT OR REPLACE INTO user_blocks (uid, user_id, until, chat, reason) VALUES (?, ?, ?, ?, ?)", uid, userId, until, chat ? 1 : 0, reason ?? null);
+        }
+        this.sql.exec("DELETE FROM user_blocks WHERE until IS NOT NULL AND until <= ?", Date.now());
+    }
+
+    unblockUser(userId) {
+        this.sql.exec("DELETE FROM user_blocks WHERE user_id = ?", userId);
+    }
+
+    // What a banned account is told when it tries to post, or null.
+    bannedText(uid) {
+        const row = this.sql.exec("SELECT until, chat, reason FROM user_blocks WHERE uid = ?", uid).toArray()[0];
+        if (!row || (row.until != null && row.until <= Date.now())) return null;
+        const text = (row.chat ? "You're banned from the chat" : "Your account is banned") + (row.until ? " for another " + banLeft(row.until - Date.now()) + "." : ".");
+        return row.reason ? text + " " + row.reason : text;
     }
 
     // The tag a player's account wears (src/accounts.js), or null. Only new messages carry it.
@@ -467,6 +495,8 @@ export class ChatRoom extends DurableObject {
         const bytes = body.subarray(4 + headerLength);
         if (bytes.length > MAX_UPLOAD) return jsonReply({ error: "That file is too big (10 MB at most)." }, 413);
         const now = Date.now();
+        const banned = this.bannedText(me.uid);
+        if (banned) return jsonReply({ error: banned });
         const until = this.mutedUntil(me.uid);
         if (until) return jsonReply({ error: "You're muted for " + duration(until - now) + "." });
         if (!me.owner) {
@@ -616,6 +646,8 @@ export class ChatRoom extends DurableObject {
         const e = this.reactionEmoji(msg.e);
         if (!e || !Number.isSafeInteger(msg.id)) return;
         if (!this.sql.exec("SELECT 1 FROM messages WHERE id = ?", msg.id).toArray().length) return;
+        const banned = this.bannedText(me.uid);
+        if (banned) return reply({ t: "err", text: banned });
         const until = this.mutedUntil(me.uid);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
         if (this.sql.exec("SELECT 1 FROM reactions WHERE msg = ? AND emoji = ? AND uid = ?", msg.id, e, me.uid).toArray().length) {
@@ -795,6 +827,8 @@ export class ChatRoom extends DurableObject {
         // A message with an image or GIF may lose its text; any other needs some.
         if (!row || row.uid !== me.uid || (!text && !row.media)) return;
         const now = Date.now();
+        const banned = this.bannedText(me.uid);
+        if (banned) return reply({ t: "err", text: banned });
         const until = this.mutedUntil(me.uid);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
         if (!me.owner) {
@@ -831,6 +865,8 @@ export class ChatRoom extends DurableObject {
             const media = this.mediaFor(msg.media);
             if (typeof media === "string") return reply({ t: "err", text: media });
             if (!text && !media) return;
+            const banned = this.bannedText(me.uid);
+            if (banned) return reply({ t: "err", text: banned });
             const until = this.mutedUntil(me.uid);
             if (until) return reply({ t: "err", text: me.cup ? "The organizer muted you for this cup." : "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
@@ -919,6 +955,28 @@ export class ChatRoom extends DurableObject {
             }
             this.blockIp(ip, until);
             reply({ t: "err", text: "IP banned " + (msg.days ? "for " + msg.days + (msg.days === 1 ? " day" : " days") : "for good") + ". Lift it in Race Control -> Bans." });
+        } else if (msg?.t === "userban" && !me.cup && Number.isSafeInteger(msg.id) && IP_BAN_DAYS.includes(msg.days)) {
+            const row = this.sql.exec("SELECT uid, nick, owner FROM messages WHERE id = ?", msg.id).toArray()[0];
+            if (!row) return;
+            if (row.owner || row.uid === me.uid) return reply({ t: "err", text: "That's your own account, so it wasn't banned." });
+            const chat = msg.chat === true;
+            const until = msg.days ? Date.now() + msg.days * 86400_000 : null;
+            const reason = readBanReason(msg.reason);
+            try {
+                const accounts = this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global"));
+                const userId = await accounts.chatUser(row.uid);
+                if (!userId) return reply({ t: "err", text: "That chat isn't linked to an account yet. Try Race Control -> Bans with their name." });
+                if (ownerHashes(this.env.OWNER_USER_IDS).has(userId)) return reply({ t: "err", text: "That's your own account, so it wasn't banned." });
+                const target = await accounts.banTarget(userId);
+                const names = target.names.length ? target.names : [row.nick];
+                await this.env.TRAFFIC.get(this.env.TRAFFIC.idFromName("global")).banUser(userId, until, chat, target.nickname || row.nick, reason, names);
+                this.blockUser(userId, [...new Set([row.uid, ...target.uids])], until, chat, reason);
+            } catch (err) {
+                console.error("account ban failed:", err && err.message);
+                return reply({ t: "err", text: "Couldn't ban that account. Try again in a moment." });
+            }
+            const span = msg.days ? "for " + msg.days + (msg.days === 1 ? " day" : " days") : "for good";
+            reply({ t: "err", text: (chat ? "Banned from the chat " : "Account banned ") + span + ". Lift it in Race Control -> Bans." });
         }
     }
 

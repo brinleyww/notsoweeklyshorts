@@ -1820,22 +1820,27 @@
         add("Delete all theirs", { t: "clear", uid: m.uid });
         if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : mediaLabel(m).toLowerCase()), { t: "ban", id: m.id });
         if (!m.owner) {
-            const ipBan = document.createElement("button");
-            ipBan.textContent = "IP ban…";
-            ipBan.addEventListener("click", () => {
-                ipBan.remove();
-                const reason = document.createElement("input");
-                reason.placeholder = "Ban message (optional)";
-                reason.maxLength = 200;
-                tools.appendChild(reason);
-                const banFor = (label, days) => add(label, () => ({ t: "ipban", id: m.id, days, reason: reason.value }));
-                banFor("IP ban 1d", 1);
-                banFor("IP ban 7d", 7);
-                banFor("IP ban 30d", 30);
-                banFor("IP ban for good", 0);
-                reason.focus();
-            });
-            tools.appendChild(ipBan);
+            const openers = [];
+            const banMenu = (title, label, data) => {
+                const open = document.createElement("button");
+                open.textContent = title;
+                openers.push(open);
+                open.addEventListener("click", () => {
+                    for (const b of openers) b.remove();
+                    const reason = document.createElement("input");
+                    reason.placeholder = "Ban message (optional)";
+                    reason.maxLength = 200;
+                    tools.appendChild(reason);
+                    for (const [days, span] of [[1, "1d"], [7, "7d"], [30, "30d"], [0, "for good"]]) {
+                        add(label + " " + span, () => ({ ...data, id: m.id, days, reason: reason.value }));
+                    }
+                    reason.focus();
+                });
+                tools.appendChild(open);
+            };
+            banMenu("Chat ban…", "Chat ban", { t: "userban", chat: true });
+            banMenu("Ban account…", "Ban account", { t: "userban", chat: false });
+            banMenu("IP ban…", "IP ban", { t: "ipban" });
         }
         el.after(tools);
     }

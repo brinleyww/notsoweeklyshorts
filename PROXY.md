@@ -946,6 +946,34 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 - **Not covered:** a cup socket that is already open keeps running until it drops (only new ones are refused). A VPN
   or a new address from the ISP gets past any IP ban, and everyone sharing a banned address is blocked with the player.
 
+## Account bans
+
+A ban on one account (its userId, `sha256(token)`), in two kinds. **Ban:** its runs leave every board, rank and
+standing (live and locked), its uploads get `403 {"banned": true, "account": true, ...}`, it can't post in the chat,
+and the page puts up the ban screen ("This account is banned"). **Chat ban:** it only can't post, react, edit or send
+files in the chat. Under either, the account can't take another name and the page won't rename or delete the profile.
+
+- **Where:** Race Control -> Bans -> "Ban an account" (exact name, or a 64-character user id), or the chat's Moderate
+  menu (Chat ban... / Ban account...), which finds the account through `chat_links`, so a chat that was never linked
+  to a profile can't be banned this way. Same lengths and optional message as IP bans.
+- **Who holds what:** `TrafficStats.user_bans` is the list, published into the same KV value as IP bans (`ip-bans`),
+  keyed by the userId, as `{ until, chat, reason, names, nick }`, so no extra KV read. `names` are the account's names
+  in `Accounts` (claimed and WR names) when banned, `nick` the one it held. The global `ChatRoom` keeps
+  `user_blocks` by chat uid; a browser the account links after the ban (`refer/me`) is added to it.
+- **Boards:** `cfg.bannedUsers` hides the userId on live boards; the names go into `cfg.banned` too, since late runs
+  and locked standings (`/nsws/late`) only carry names. An account `Accounts` never saw (no NSWS board, upload or
+  profile read) has no names, so only its live runs are hidden.
+- **Renames:** `names/check`, `names/claim` answer `{available: false, banned: true}` and a profile save gets 409 (the
+  game puts the old name back) for any name but `nick`. Deleting a profile only happens in the browser, so the page
+  stops it: `refer/me` replies carry `ban`, saved per profile in `_nswsAccountBans` (`mod/nsws_traffic.js`), which
+  locks the nickname box and Delete in the profile screen and `deleteProfileSlot` itself (import over a full set of
+  slots goes through it).
+- **Timing:** a ban made in Race Control reaches the instance that saved it at once and the others within a few
+  minutes; one made in the chat reaches every Worker instance within a few minutes, but the chat at once. The page
+  learns it on its next `refer/me` (each visit, and now and then during a long one).
+- **Not covered:** a new profile (a fresh token) is a new account. Clearing site data undoes the page's locks, though the
+  Worker still refuses the old account's renames and uploads.
+
 ## Grinding stats
 
 `mod/nsws_grind.js` counts time, attempts, finishes, resets, respawns and PBs per track, after the

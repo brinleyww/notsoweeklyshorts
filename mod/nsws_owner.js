@@ -2770,15 +2770,15 @@
         try {
             const data = await post(path, extra);
             if (data.error === "self") {
-                ui.bansNote = "That's your own address, so it wasn't banned.";
+                ui.bansNote = path === "ipban/user/ban" ? "That's your own account, so it wasn't banned." : "That's your own address, so it wasn't banned.";
             } else {
                 ui.bans = data;
                 cachePut("bans", data);
                 ui.bansNote = done;
-                if (path === "ipban/ban") ui.bansReason.value = "";
+                if (path === "ipban/ban" || path === "ipban/user/ban") ui.bansReason.value = "";
             }
         } catch (err) {
-            ui.bansNote = err.status === 400 ? "That isn't an IP address." : "Couldn't save that. Try again in a moment.";
+            ui.bansNote = err.status === 400 && path === "ipban/ban" ? "That isn't an IP address." : "Couldn't save that. Try again in a moment.";
         }
         renderBanLists();
     }
@@ -2802,6 +2802,20 @@
                 const extra = target();
                 if (extra) changeBans("ipban/ban", { ...extra, days, reason: ui.bansReason.value }, "Banned. Other server copies pick it up within a few minutes.");
             });
+            box.appendChild(b);
+        }
+        return box;
+    }
+
+    function accountBanButtons(userId, chat) {
+        const box = el("div");
+        box.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;align-items:center;";
+        box.appendChild(el("span", null, chat ? "Chat ban" : "Ban"));
+        for (const [days, label] of BAN_TIMES) {
+            const b = el("button", "button", label);
+            b.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
+            b.addEventListener("click", () => changeBans("ipban/user/ban", { userId, chat, days, reason: ui.bansReason.value },
+                (chat ? "Banned from the chat." : "Account banned.") + " Other server copies pick it up within a few minutes."));
             box.appendChild(b);
         }
         return box;
@@ -2854,9 +2868,36 @@
             return { ip };
         }));
 
+        const account = card("Ban an account", "list", "Their exact name or their user id. An account ban hides their runs from every board and all standings and stops uploads; a chat ban only stops them posting in the chat. Either way they can't rename or delete the profile while it lasts.");
+        const accountRow = el("div", "nrc-find");
+        const accountInput = banInput("Nickname or user id");
+        const accountGo = el("button", "button", "Find");
+        const findAccount = async () => {
+            const typedAccount = accountInput.value.trim();
+            if (!typedAccount) return;
+            ui.bansNote = "Looking…";
+            renderBanLists();
+            try {
+                const query = /^[0-9a-f]{64}$/i.test(typedAccount) ? { userId: typedAccount.toLowerCase() } : { nickname: typedAccount };
+                ui.bansAccount = { typed: typedAccount, ...(await post("ipban/user/lookup", query)) };
+                ui.bansNote = "";
+            } catch {
+                ui.bansNote = "Couldn't look that up. Try again in a moment.";
+            }
+            renderBanLists();
+        };
+        accountGo.addEventListener("click", findAccount);
+        accountInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") findAccount();
+        });
+        accountRow.append(accountInput, accountGo);
+        account.appendChild(accountRow);
+        ui.bansAccountBox = el("div");
+        account.appendChild(ui.bansAccountBox);
+
         ui.bansNoteBox = el("div", "nrc-sub");
         ui.bansListBox = el("div");
-        root.append(message, find, typed, ui.bansNoteBox, ui.bansListBox);
+        root.append(message, account, find, typed, ui.bansNoteBox, ui.bansListBox);
         return root;
     }
 
@@ -2880,10 +2921,42 @@
                 return [m.hash.slice(0, 8), fmt.dateTime(m.last), num(m.visits), [m.country, m.device, m.browser].filter(Boolean).join(" · "), names, action];
             })));
         }
+        const users = new Map((ui.bans?.users ?? []).map((b) => [b.userId, b]));
+        const accountBox = ui.bansAccountBox;
+        accountBox.textContent = "";
+        const target = ui.bansAccount?.found;
+        if (ui.bansAccount && !target) {
+            accountBox.appendChild(el("div", "nrc-empty", "No account holds that name."));
+        } else if (target) {
+            const names = el("div", null, target.names.join(", "));
+            names.style.whiteSpace = "normal";
+            const current = users.get(target.userId);
+            const action = el("div");
+            action.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+            if (current) action.appendChild(el("span", null, current.chat ? "Banned from the chat" : "Banned"));
+            action.append(accountBanButtons(target.userId, false), accountBanButtons(target.userId, true));
+            accountBox.appendChild(table([["Account"], ["Player", "name"], ["Names", "name"], ["Chats", "num"], [""]],
+                [[target.userId.slice(0, 8), target.nickname || "", names, num(target.chats), action]]));
+        }
         ui.bansNoteBox.textContent = ui.bansNote || "";
         const list = ui.bansListBox;
         list.textContent = "";
-        const c = card("Banned", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names are off every board and all standings until the ban ends.");
+        const accounts = card("Banned accounts", "list", "Banned: runs off every board and all standings, no uploads, no chat, and a ban screen on their next visit. Chat only: they can't post in the chat. Neither can rename or delete the profile.");
+        if (ui.bansError && !ui.bans) accounts.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
+        else if (!ui.bans) accounts.appendChild(el("div", "nrc-empty", "Loading…"));
+        else if (!users.size) accounts.appendChild(el("div", "nrc-empty", "No account is banned."));
+        else accounts.appendChild(table([["Account"], ["Player", "name"], ["Ban"], ["Hidden names", "name"], ["Message", "name"], ["Banned", "num"], ["Ends", "num"], [""]], [...users.values()].map((b) => {
+            const lift = el("button", "button", "Unban");
+            lift.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
+            lift.addEventListener("click", () => changeBans("ipban/user/unban", { userId: b.userId }, "Unbanned. Other server copies pick it up within a few minutes."));
+            const reason = el("div", null, b.reason || "");
+            reason.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
+            const hidden = el("div", null, b.chat ? "" : (b.names ?? []).join(", "));
+            hidden.style.cssText = "white-space:normal;overflow-wrap:anywhere;";
+            return [b.userId.slice(0, 8), b.who || "", b.chat ? "Chat only" : "Banned", hidden, reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
+        })));
+        list.appendChild(accounts);
+        const c = card("Banned addresses", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names are off every board and all standings until the ban ends.");
         if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));

@@ -177,11 +177,12 @@
         }).catch(keep);
     }
 
-    // The Worker is what actually refuses a banned address; this only tells them why nothing loads.
-    async function showBanned(until, reason) {
+    // The Worker is what actually refuses a banned address or account; this only tells them why nothing loads.
+    async function showBanned(until, reason, account) {
         if (document.getElementById("nsws-banned") || await ownerToken()) return;
         const box = document.createElement("div");
         box.id = "nsws-banned";
+        if (account) box.dataset.account = "1";
         box.style.cssText = "position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;background:var(--surface-color,#192042);color:var(--text-color,#fff);";
         const title = document.createElement("div");
         title.style.fontSize = "34px";
@@ -195,11 +196,56 @@
         }
         const line = document.createElement("div");
         line.style.cssText = "font-size:20px;max-width:640px;";
-        line.textContent = (until ? "This network's address is banned until " + new Date(until).toLocaleString() + "." : "This network's address is banned.")
+        if (account) line.textContent = until ? "This account is banned until " + new Date(until).toLocaleString() + "." : "This account is banned.";
+        else line.textContent = (until ? "This network's address is banned until " + new Date(until).toLocaleString() + "." : "This network's address is banned.")
             + " Everyone on it is blocked, so if you share it (a school or a workplace), the ban may not be about you.";
         box.appendChild(line);
         document.body.appendChild(box);
-        for (const type of ["keydown", "keyup", "keypress"]) window.addEventListener(type, (e) => e.stopImmediatePropagation(), true);
+        const swallow = (e) => e.stopImmediatePropagation();
+        for (const type of ["keydown", "keyup", "keypress"]) window.addEventListener(type, swallow, true);
+        box.lift = () => {
+            for (const type of ["keydown", "keyup", "keypress"]) window.removeEventListener(type, swallow, true);
+            box.remove();
+        };
+    }
+
+    // Account bans, as the last refer/me reply (mod/nsws_tags.js) gave them, by token prefix. Kept so a banned
+    // profile stays locked (no rename, no delete) before that reply comes in, and while it's not the one in use.
+    const ACCOUNT_BANS_KEY = "_nswsAccountBans";
+    function accountBans() {
+        try {
+            const all = JSON.parse(localStorage.getItem(ACCOUNT_BANS_KEY)) || {};
+            for (const [who, ban] of Object.entries(all)) if (ban.until && ban.until <= Date.now()) delete all[who];
+            return all;
+        } catch {
+            return {};
+        }
+    }
+
+    window.__nswsAccountBan = {
+        receive(token, ban) {
+            if (typeof token !== "string" || !TRACK_ID.test(token)) return;
+            const all = accountBans();
+            if (ban) all[token.slice(0, 12)] = { until: ban.until ?? null, chat: !!ban.chat, reason: ban.reason ?? null };
+            else delete all[token.slice(0, 12)];
+            try {
+                localStorage.setItem(ACCOUNT_BANS_KEY, JSON.stringify(all));
+            } catch {}
+            if (readProfile()?.token !== token) return;
+            const shown = document.getElementById("nsws-banned");
+            // A screen put up from the saved ban comes down once the server says it's over.
+            if (shown?.dataset.account && (!ban || ban.chat)) shown.lift();
+            else if (ban && !ban.chat) showBanned(ban.until, ban.reason, true);
+        },
+        // { until, chat, reason } or null.
+        of(token) {
+            return typeof token === "string" && TRACK_ID.test(token) ? accountBans()[token.slice(0, 12)] ?? null : null;
+        },
+    };
+    window.__nswsIsProfileBanned = (token) => !!window.__nswsAccountBan.of(token);
+    {
+        const ban = window.__nswsAccountBan.of(readProfile()?.token);
+        if (ban && !ban.chat) showBanned(ban.until, ban.reason, true);
     }
 
     function tick() {

@@ -364,11 +364,11 @@
                     ))
                 }
                 ;
-                const __nswsNicknameBanned = typeof window.__nswsIsNicknameBanned === "function" && window.__nswsIsNicknameBanned(o?.nickname ?? e);
+                const __nswsNicknameBanned = typeof window.__nswsIsProfileBanned === "function" && window.__nswsIsProfileBanned(o?.token);
                 __nswsNicknameBanned && (i.get(this, j, "f").disabled = !0);
                 const v = document.createElement("div");
                 v.className = "description",
-                v.textContent = __nswsNicknameBanned ? t.get("Your profile has been banned. You cannot change your nickname.") : t.get("Choose a nickname to be shown in the leaderboard. Your nickname can be changed at any time."),
+                v.textContent = __nswsNicknameBanned ? t.get("Your account is banned, so you can't change your username or delete this profile.") : t.get("Choose a nickname to be shown in the leaderboard. Your nickname can be changed at any time."),
                 u.appendChild(v);
                 const w = document.createElement("div");
                 w.className = "box",
@@ -442,6 +442,7 @@
                     l(i.get(this, Q, "m", $).call(this))
                 }
                 )),
+                __nswsNicknameBanned && (P.disabled = !0),
                 z.appendChild(P);
                 const I = document.createElement("div");
                 I.className = "description",
@@ -730,8 +731,7 @@
                 }
                 )),
                 g.appendChild(f);
-                const __nswsCurrentNickname = e.getCurrentUserProfile()?.nickname;
-                const __nswsIsBanned = typeof window.__nswsIsNicknameBanned === "function" && window.__nswsIsNicknameBanned(__nswsCurrentNickname);
+                const __nswsIsBanned = typeof window.__nswsIsProfileBanned === "function" && window.__nswsIsProfileBanned(e.getCurrentUserProfile()?.token);
                 if (!__nswsIsBanned) {
                     const p = document.createElement("button");
                     p.className = "button right",

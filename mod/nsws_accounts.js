@@ -6,8 +6,10 @@
     const UNCLAIMED_KEY = "_nswsNameUnclaimed";
     const NAME_TAKEN = "This username is already taken. Please pick another one.";
     const NAME_BLOCKED = "That username isn't allowed. Please pick another one.";
+    const NAME_BANNED = "Your account is banned, so you can't change your username.";
     // Whether the last name refused was refused by the slur filter rather than for being taken.
     let lastBlocked = false;
+    let lastBanned = false;
 
     function profileToken() {
         const token = window.__nswsProfileToken?.();
@@ -39,6 +41,7 @@
         try {
             const answer = await call(claim ? "names/claim" : "names/check", { userToken: token, nickname });
             lastBlocked = answer.blocked === true;
+            lastBanned = answer.banned === true;
             return answer.available === true;
         } catch {
             return null;
@@ -46,7 +49,8 @@
     }
 
     function showNameTaken(onOk, blocked) {
-        const text = blocked ?? lastBlocked ? NAME_BLOCKED : NAME_TAKEN;
+        const banned = lastBanned || !!window.__nswsAccountBan?.of(profileToken());
+        const text = banned ? NAME_BANNED : blocked ?? lastBlocked ? NAME_BLOCKED : NAME_TAKEN;
         const box = window.__nswsMessageBox;
         if (box && !box.isOpen) box.show(text, "Ok", onOk || null);
         else alert(text);

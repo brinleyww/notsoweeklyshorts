@@ -1,7 +1,7 @@
 // NSWS leaderboard proxy; PROXY.md explains what it hides and why. Never log request
 // URLs or bodies: both can carry a player's userToken, which is an account secret.
 
-import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, TYPED_IP_BAN, readBanReason, ipBanEntry } from "./traffic.js";
+import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, TYPED_IP_BAN, readBanReason, ipBanEntry, userBanEntry } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY, REVERT_ID_BASE } from "./anticheat.js";
 import { macroReason, MACRO_REASONS } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
@@ -153,6 +153,8 @@ function readConfig(env) {
         upstreamOrigin: env.UPSTREAM_ORIGIN || DEFAULT_UPSTREAM_ORIGIN,
         allowedOrigins: listVar(env.ALLOWED_ORIGINS, DEFAULT_ALLOWED_ORIGINS),
         banned: new Set(listVar(env.BANNED_NICKNAMES, []).map(normalizeNickname)),
+        // userIds of accounts banned outright (not chat only); set per request.
+        bannedUsers: new Set(),
         publicNicknames: new Set(listVar(env.PUBLIC_NICKNAMES, []).map(normalizeNickname)),
         currentWeek: intVar(env.CURRENT_WEEK),
         hiddenFromWeek: intVar(env.HIDDEN_FROM_WEEK),
@@ -171,7 +173,7 @@ function readConfig(env) {
 
 // Hidden from a board: a banned player, or a run the anti-cheat hasn't passed.
 function isBanned(entry, cfg) {
-    return cfg.banned.has(normalizeNickname(entry.nickname)) || (cfg.blocked?.has(entry.id) ?? false);
+    return cfg.banned.has(normalizeNickname(entry.nickname)) || cfg.bannedUsers.has(entry.userId) || (cfg.blocked?.has(entry.id) ?? false);
 }
 
 function isAllowedOrigin(origin, cfg) {
@@ -329,10 +331,30 @@ async function ipBanOf(request, env) {
 // Every name seen on a banned address leaves the boards while the ban lasts. PUBLIC_NICKNAMES set the medal
 // times, so they stay even if the owner once played from that address.
 async function hideIpBannedNames(cfg, env) {
-    for (const entry of Object.values(await currentIpBans(env))) {
+    for (const [key, entry] of Object.entries(await currentIpBans(env))) {
+        if (HEX64.test(key)) {
+            // An account ban: its names too, since locked standings and late runs only carry names.
+            if (entry.chat || (entry.until && entry.until <= Date.now())) continue;
+            cfg.bannedUsers.add(key);
+            for (const name of (entry.names ?? []).map(normalizeNickname)) cfg.banned.add(name);
+            continue;
+        }
         if (!Array.isArray(entry) || (entry[0] && entry[0] <= Date.now())) continue;
         for (const name of (entry[2] ?? []).map(normalizeNickname)) if (!cfg.publicNicknames.has(name)) cfg.banned.add(name);
     }
+}
+
+// { until, chat, reason, nick } (until null = for good) if this account is banned, otherwise null.
+async function accountBanOf(userId, env) {
+    if (!HEX64.test(userId ?? "")) return null;
+    const entry = (await currentIpBans(env))[userId];
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || (entry.until && entry.until <= Date.now())) return null;
+    return { until: entry.until || null, chat: !!entry.chat, reason: entry.reason ?? null, nick: entry.nick ?? entry.names?.[0] ?? null };
+}
+
+// A banned account keeps the name it was banned under.
+function renameRefused(ban, nickname) {
+    return !!ban && !!ban.nick && nameKey(nickname) !== nameKey(ban.nick);
 }
 
 // Same shape as a real track id, but nobody without TRACK_SALT can work it out.
@@ -541,7 +563,7 @@ async function readPastScan(cfg, request, track, read, rawSkip, count) {
         version: read.version,
         trackId: track.trackId,
         skip: rawSkip,
-        amount: Math.min(PAGE_SIZE, count + cfg.banned.size),
+        amount: Math.min(PAGE_SIZE, count + cfg.banned.size + cfg.bannedUsers.size),
         onlyVerified: read.onlyVerified,
     });
     const entries = data && Array.isArray(data.entries) ? data.entries : [];
@@ -1032,6 +1054,8 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     const hash = await sha256Hex(token);
     observeNames(env, ctx, [{ userId: hash, nickname: form.get("nickname") }]);
     const ownerUpload = cfg.owner || await isOwner(token, cfg);
+    const accountBan = ownerUpload ? null : await accountBanOf(hash, env);
+    if (accountBan && !accountBan.chat) return json({ banned: true, account: true, until: accountBan.until, reason: accountBan.reason }, origin, 403);
     const read = readOptions(form);
     let body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
     const uploadNick = form.get("nickname");
@@ -1229,6 +1253,10 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
     const token = form.get("userToken") ?? "";
     const nickname = form.get("nickname");
     if (nickname != null && findSlurs(nickname).length) return json({ nicknameBlocked: true }, origin, 422);
+    // 409 makes the game put the old name back, as for a taken name.
+    if (nickname != null && HEX64.test(token) && renameRefused(await accountBanOf(await sha256Hex(token), env), nickname)) {
+        return json({ nicknameTaken: true, banned: true }, origin, 409);
+    }
     const stub = accounts(env);
     if (stub && HEX64.test(token) && nickname != null && !doLimited()) {
         let taken = false;
@@ -1289,8 +1317,11 @@ async function handleAccounts(request, url, env, fromSite, origin) {
     const userId = await sha256Hex(body.userToken);
     let result;
     switch (path) {
-        case "names/check": result = await stub.checkName(userId, body.nickname); break;
-        case "names/claim": result = await stub.claimName(userId, body.nickname); break;
+        case "names/check":
+        case "names/claim":
+            if (renameRefused(await accountBanOf(userId, env), body.nickname)) result = { available: false, banned: true };
+            else result = path === "names/check" ? await stub.checkName(userId, body.nickname) : await stub.claimName(userId, body.nickname);
+            break;
         case "clips/list": result = { clips: await stub.listClips(userId) }; break;
         case "clips/get": result = await stub.getClip(userId, body.id); break;
         case "clips/add": result = await stub.addClip(userId, body.clip); break;
@@ -1303,7 +1334,9 @@ async function handleAccounts(request, url, env, fromSite, origin) {
             const uid = HEX32.test(body.v ?? "") ? (await sha256Hex("nsws-chat:" + body.v)).slice(0, 16) : null;
             const { state, linked } = await stub.refState(userId, uid);
             await chatRetag(env, linked);
-            result = state;
+            const ban = await accountBanOf(userId, env);
+            if (ban && linked) await env.CHAT?.get(env.CHAT.idFromName("global")).blockUser(userId, linked.uids, ban.until, ban.chat, ban.reason);
+            result = ban ? { ...state, ban: { until: ban.until, chat: ban.chat, reason: ban.reason } } : state;
             break;
         }
         case "refer/redeem": {
@@ -1420,7 +1453,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
         return json(await stub.stats(String(body.range ?? "day"), Number(body.tz) || 0), origin);
     }
     if (url.pathname === TRAFFIC_PREFIX + "ipban" || url.pathname.startsWith(TRAFFIC_PREFIX + "ipban/")) {
-        return handleIpBans(request, url, env, stub, body, origin);
+        return handleIpBans(request, url, env, cfg, stub, body, origin);
     }
     const anti = antiCheat(env);
     if (url.pathname.startsWith(TRAFFIC_PREFIX + "anticheat") && !anti) return plain(503, "Anti-cheat is off", origin);
@@ -1529,7 +1562,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
     return plain(404, "Not found", origin);
 }
 
-async function handleIpBans(request, url, env, stub, body, origin) {
+async function handleIpBans(request, url, env, cfg, stub, body, origin) {
     const sub = url.pathname.slice((TRAFFIC_PREFIX + "ipban").length);
     const chat = env.CHAT?.get(env.CHAT.idFromName("global"));
     if (sub === "") return json(await stub.ipBans(), origin);
@@ -1552,6 +1585,44 @@ async function handleIpBans(request, url, env, stub, body, origin) {
         await chat?.blockIp(hash, until);
         const names = result.bans.find((b) => b.hash === hash)?.names;
         if (ipBanList) ipBanList.bans = { ...ipBanList.bans, [hash]: ipBanEntry(until, reason, names) };
+        return json(result, origin);
+    }
+    if (sub === "/user/lookup") {
+        const accountsStub = accounts(env);
+        if (!accountsStub) return plain(503, "Accounts are off", origin);
+        let userId = typeof body.userId === "string" ? body.userId.trim().toLowerCase() : null;
+        if (!HEX64.test(userId ?? "")) {
+            const nickname = typeof body.nickname === "string" ? body.nickname.trim().slice(0, 64) : "";
+            if (!nickname) return plain(400, "Bad request", origin);
+            userId = (await accountsStub.lookupTags(nickname, null))?.userId ?? null;
+            if (!userId) return json({ found: null }, origin);
+        }
+        const target = await accountsStub.banTarget(userId);
+        return json({ found: { userId, nickname: target.nickname, names: target.names, chats: target.uids.length } }, origin);
+    }
+    if (sub === "/user/ban") {
+        if (!IP_BAN_DAYS.includes(body.days) || !HEX64.test(body.userId ?? "")) return plain(400, "Bad request", origin);
+        if (cfg.ownerUserIds.includes(body.userId)) return json({ error: "self" }, origin);
+        const accountsStub = accounts(env);
+        if (!accountsStub) return plain(503, "Accounts are off", origin);
+        const target = await accountsStub.banTarget(body.userId);
+        const until = body.days ? Date.now() + body.days * 86_400_000 : null;
+        const chatOnly = body.chat === true;
+        const reason = readBanReason(body.reason);
+        const result = await stub.banUser(body.userId, until, chatOnly, target.nickname, reason, target.names);
+        await chat?.blockUser(body.userId, target.uids, until, chatOnly, reason);
+        const saved = result.users.find((b) => b.userId === body.userId);
+        if (ipBanList && saved) ipBanList.bans = { ...ipBanList.bans, [body.userId]: userBanEntry(saved) };
+        return json(result, origin);
+    }
+    if (sub === "/user/unban") {
+        if (!HEX64.test(body.userId ?? "")) return plain(400, "Bad request", origin);
+        const result = await stub.unbanUser(body.userId);
+        await chat?.unblockUser(body.userId);
+        if (ipBanList) {
+            const { [body.userId]: lifted, ...rest } = ipBanList.bans;
+            ipBanList.bans = rest;
+        }
         return json(result, origin);
     }
     if (sub === "/unban") {

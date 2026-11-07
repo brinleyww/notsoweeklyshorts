@@ -703,6 +703,18 @@ export class Accounts extends DurableObject {
         };
     }
 
+    // For an account ban: who holds the account now, every name it held, and the chat ids linked to it.
+    banTarget(userId) {
+        const { nickname, names } = this.playerFacts(userId);
+        for (const w of this.wrTable().values()) if (w.user_id === userId && !names.includes(w.nickname)) names.push(w.nickname);
+        return { nickname: nickname || names[0] || null, names, uids: this.chatUids(userId) };
+    }
+
+    chatUser(uid) {
+        if (!CHAT_UID.test(uid ?? "")) return null;
+        return this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id ?? null;
+    }
+
     setEquipped(userId, tag) {
         this.sql.exec(`INSERT INTO tag_profile (user_id, equipped, bonus) VALUES (?, ?, 0)
             ON CONFLICT(user_id) DO UPDATE SET equipped = excluded.equipped`, userId, tag);
