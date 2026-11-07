@@ -1,0 +1,701 @@
+// Custom Tracks Editor: Better Editor PT in a full-screen iframe with an NSWS bar on top. Tracks move
+// between the two through BE's nsws_bridge.js (postMessage). The BE editor keeps unsaved work only in
+// memory, so Back hides the iframe instead of removing it; it is unloaded after KEEP_HIDDEN_MS closed.
+(function () {
+    "use strict";
+    const DEFAULT_URL = "https://brinleyww.github.io/Better-Editor-PT/?nsws=1";
+    const HELLO_EVERY_MS = 1000;
+    const HELLO_TRIES = 90;
+    const FALLBACK_AFTER_LOAD_MS = 5000;
+    const FALLBACK_HARD_MS = 25000;
+    const KEEP_HIDDEN_MS = 15 * 60 * 1000;
+    const REQUEST_TIMEOUT_MS = 15000;
+    const MODES_KEY = "nswsEditorModes";
+    const MANUAL = "\u0000pasted";
+    const MODES = [
+        { id: "normal", label: "Normal", help: "Normal: stock PolyTrack driving." },
+        { id: "rocket", label: "Rocket League", help: "Rocket League: jump, boost and flip, with the Rocket League weeks' physics." },
+        {
+            id: "royale",
+            label: "Royale",
+            help: "Royale: give every checkpoint number TWO gates. After you cross one, a reset respawns you at the other gate with that number, so put it where the next section starts.",
+        },
+    ];
+    const STATUS = { new: "Waiting for review", planned: "Planned", rejected: "Not picked" };
+
+    const CSS = `
+#nsws-editor{position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;background:#192042;color:#fff;font-family:ForcedSquare,Arial,sans-serif;}
+#nsws-editor.hidden{display:none;}
+#nsws-editor *{box-sizing:border-box;}
+#nsws-editor .nse-bar{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:6px 10px 4px;background:#212b58;}
+#nsws-editor .nse-bar .gap{flex:1 1 0;min-width:0;}
+#nsws-editor .button{margin:0;padding:5px 13px;font-size:17px;white-space:nowrap;}
+#nsws-editor .button>img{width:18px;height:18px;margin-right:5px;vertical-align:-3px;pointer-events:none;}
+#nsws-editor .button.primary{box-shadow:inset 0 -3px 0 #7272c2;}
+#nsws-editor .nse-pick{display:flex;align-items:center;gap:6px;font-size:15px;color:rgba(255,255,255,.65);}
+#nsws-editor select,#nsws-editor textarea{background:#192042;color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:0;font-family:inherit;font-size:16px;outline:none;}
+#nsws-editor select{max-width:240px;padding:4px 6px;}
+#nsws-editor select:focus,#nsws-editor textarea:focus{border-color:#7272c2;box-shadow:0 0 0 1px #7272c2;}
+#nsws-editor .nse-seg{display:flex;gap:2px;}
+#nsws-editor .nse-seg>button{background:transparent;border:0;border-bottom:2px solid transparent;color:rgba(255,255,255,.6);font-family:inherit;font-size:16px;padding:5px 9px;cursor:pointer;}
+#nsws-editor .nse-seg>button:hover{color:#fff;}
+#nsws-editor .nse-seg>button.on{color:#fff;border-bottom-color:#7272c2;}
+#nsws-editor .nse-info{flex-shrink:0;display:flex;flex-wrap:wrap;gap:2px 16px;padding:0 12px 6px;background:#212b58;border-bottom:1px solid rgba(255,255,255,.15);font-size:14px;line-height:1.35;}
+#nsws-editor .nse-help{flex:1 1 360px;color:rgba(255,255,255,.55);font-style:italic;}
+#nsws-editor .nse-note{flex:0 1 auto;color:rgba(255,255,255,.8);}
+#nsws-editor .good{color:#96ff96;}
+#nsws-editor .bad{color:#ff9a9a;}
+#nsws-editor .nse-fallback{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);font-size:15px;}
+#nsws-editor .nse-fallback.hidden{display:none;}
+#nsws-editor .nse-fallback>span{flex:1 1 300px;color:rgba(255,255,255,.75);}
+#nsws-editor .nse-fallback>textarea{flex:1 1 260px;height:34px;min-height:34px;resize:vertical;padding:5px 7px;font-size:13px;}
+#nsws-editor .nse-frame{position:relative;flex:1 1 auto;min-height:0;background:#192042;}
+#nsws-editor .nse-frame>iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;}
+#nsws-editor .nse-dim{position:absolute;inset:0;z-index:3;display:flex;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.7);}
+#nsws-editor .nse-box{display:flex;flex-direction:column;width:min(640px,100%);max-height:100%;background:#28346a;clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);outline:none;}
+#nsws-editor .nse-box>h1{flex-shrink:0;margin:0;padding:10px 18px;font-size:26px;font-weight:normal;background:#212b58;}
+#nsws-editor .nse-body{overflow-y:auto;padding:4px 18px 14px;}
+#nsws-editor .nse-body>p{margin:10px 0 0;font-size:15px;line-height:1.4;color:rgba(255,255,255,.75);}
+#nsws-editor .nse-sec{margin:16px 0 0;padding-bottom:3px;border-bottom:1px solid rgba(255,255,255,.85);font-size:14px;font-style:italic;color:rgba(255,255,255,.55);}
+#nsws-editor .nse-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:17px;}
+#nsws-editor .nse-row>.val{text-align:right;color:rgba(255,255,255,.8);overflow-wrap:anywhere;}
+#nsws-editor .nse-row.col{flex-direction:column;align-items:stretch;gap:6px;}
+#nsws-editor .nse-row textarea{width:100%;height:70px;resize:vertical;padding:6px 8px;font-size:15px;}
+#nsws-editor .nse-sub{padding:7px 0;border-bottom:1px solid rgba(255,255,255,.08);font-size:16px;}
+#nsws-editor .nse-sub>div{display:flex;justify-content:space-between;gap:12px;}
+#nsws-editor .nse-sub .dim,#nsws-editor .nse-dimtext{color:rgba(255,255,255,.55);font-size:14px;}
+#nsws-editor .nse-sub .st-planned{color:#96ff96;}
+#nsws-editor .nse-sub .st-rejected{color:#ff9a9a;}
+#nsws-editor .nse-actions{flex-shrink:0;display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding:10px 18px;background:#212b58;}
+@media (max-width:700px){#nsws-editor .button{font-size:15px;padding:4px 9px;}#nsws-editor .nse-seg>button{font-size:14px;padding:4px 6px;}#nsws-editor select{max-width:150px;font-size:14px;}#nsws-editor .nse-help{flex-basis:100%;}}
+`;
+
+    let host = null;
+    let ui = null;
+    let frame = null;
+    let frameOrigin = null;
+    let ready = false;
+    let helloTimer = null;
+    let fallbackTimer = null;
+    let hideTimer = null;
+    let reqSeq = 0;
+    const pending = new Map();
+    let tracks = [];
+    let newestSave = 0;
+    let selected = null;
+    let manual = null;
+    let pendingImport = null;
+    let dialogClose = null;
+
+    function el(tag, className, text) {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text != null) node.textContent = text;
+        return node;
+    }
+
+    function button(text, onClick, icon, primary) {
+        const b = el("button", "button" + (primary ? " primary" : ""));
+        if (icon) {
+            const img = el("img");
+            img.src = icon;
+            img.alt = "";
+            b.appendChild(img);
+        }
+        b.append(text);
+        b.addEventListener("click", (e) => {
+            window.__nswsUIClick?.();
+            onClick(e, b);
+        });
+        return b;
+    }
+
+    function editorUrl() {
+        let url = DEFAULT_URL;
+        if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+            try {
+                const own = localStorage.getItem("nswsEditorUrl");
+                if (own && /^https?:\/\//.test(own)) url = own;
+            } catch {}
+        }
+        if (!/[?&]nsws=1/.test(url)) url += (url.includes("?") ? "&" : "?") + "nsws=1";
+        return url;
+    }
+
+    function lib() {
+        return window.__nswsTracks || null;
+    }
+
+    function readModes() {
+        try {
+            const m = JSON.parse(localStorage.getItem(MODES_KEY));
+            return m && typeof m === "object" ? m : {};
+        } catch {
+            return {};
+        }
+    }
+
+    function modeOf(name) {
+        const m = readModes()[name];
+        return MODES.some((x) => x.id === m) ? m : "normal";
+    }
+
+    function setMode(name, mode) {
+        if (name == null) return;
+        const all = readModes();
+        if (mode === "normal") delete all[name];
+        else all[name] = mode;
+        try {
+            localStorage.setItem(MODES_KEY, JSON.stringify(all));
+        } catch {}
+    }
+
+    function note(text, kind) {
+        if (!ui) return;
+        ui.note.textContent = text || "";
+        ui.note.className = "nse-note" + (kind ? " " + kind : "");
+    }
+
+    function current() {
+        if (selected === MANUAL) return manual;
+        return tracks.find((t) => t.name === selected) || null;
+    }
+
+    function stopAll(node) {
+        for (const type of ["keydown", "keyup", "keypress"]) node.addEventListener(type, (e) => e.stopPropagation());
+        for (const type of ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointermove", "pointerup", "mousedown", "mouseup", "wheel", "contextmenu"])
+            node.addEventListener(type, (e) => e.stopPropagation(), { passive: true });
+    }
+
+    function build() {
+        if (host) return;
+        const style = el("style");
+        style.textContent = CSS;
+        document.head.appendChild(style);
+
+        host = el("div", "hidden");
+        host.id = "nsws-editor";
+        host.tabIndex = -1;
+        stopAll(host);
+        // Focus can stay on a game button behind the overlay, and its key events would never pass through host.
+        for (const type of ["keydown", "keyup", "keypress"])
+            window.addEventListener(type, (e) => {
+                if (host && !host.classList.contains("hidden") && !host.contains(e.target)) e.stopImmediatePropagation();
+            }, true);
+        host.addEventListener("keydown", (e) => {
+            if ((e.key === "Escape" || e.code === "Escape") && dialogClose) {
+                e.preventDefault();
+                dialogClose();
+            }
+        });
+
+        const bar = el("div", "nse-bar");
+        const back = button("Back", () => close(), "images/back.svg");
+        const pick = el("label", "nse-pick");
+        const select = el("select");
+        select.addEventListener("change", () => {
+            selected = select.value;
+            renderMode();
+        });
+        pick.append("Track", select);
+        const seg = el("div", "nse-seg");
+        for (const m of MODES) {
+            const b = el("button", null, m.label);
+            b.type = "button";
+            b.dataset.mode = m.id;
+            b.addEventListener("click", () => {
+                window.__nswsUIClick?.();
+                const t = current();
+                if (!t) {
+                    note("Save a track in the editor first, then pick its mode.", "bad");
+                    return;
+                }
+                setMode(t.name, m.id);
+                renderMode();
+            });
+            seg.appendChild(b);
+        }
+        const save = button("Save to My Tracks", (e, b) => saveToLibrary(b), "images/save.svg", true);
+        const test = button("Test drive", (e, b) => testDrive(b), "images/play.svg");
+        const send = button("Send to Race Control", () => openSubmit(), "images/share.svg");
+        bar.append(back, pick, seg, el("div", "gap"), save, test, send);
+
+        const info = el("div", "nse-info");
+        const help = el("div", "nse-help");
+        const noteEl = el("div", "nse-note");
+        info.append(help, noteEl);
+
+        const fallback = el("div", "nse-fallback hidden");
+        const fbText = el("span", null, "The editor isn't answering. In the editor, open your track, press Export and paste the code here:");
+        const fbBox = el("textarea");
+        fbBox.placeholder = "PolyTrack2... or PolyTrackBE1...";
+        fbBox.spellcheck = false;
+        const fbUse = button("Use code", () => usePasted(), "images/paste.svg");
+        const fbCopy = button("Copy track code", () => copyPendingCode(), "images/copy.svg");
+        fbCopy.style.display = "none";
+        const fbReload = button("Reload editor", () => {
+            unloadFrame();
+            createFrame();
+        }, "images/refresh.svg");
+        fallback.append(fbText, fbBox, fbUse, fbCopy, fbReload);
+
+        const frameBox = el("div", "nse-frame");
+        host.append(bar, info, fallback, frameBox);
+        document.body.appendChild(host);
+        ui = { select, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox };
+        renderPicker();
+        renderMode();
+    }
+
+    function renderPicker() {
+        if (!ui) return;
+        const s = ui.select;
+        s.textContent = "";
+        if (manual) {
+            const o = el("option", null, "Pasted: " + manual.name);
+            o.value = MANUAL;
+            s.appendChild(o);
+        }
+        for (const t of tracks) {
+            const o = el("option", null, t.name);
+            o.value = t.name;
+            s.appendChild(o);
+        }
+        if (!s.options.length) {
+            const o = el("option", null, ready ? "No saved tracks yet" : "Waiting for the editor...");
+            o.value = "";
+            s.appendChild(o);
+            s.disabled = true;
+            selected = null;
+        } else {
+            s.disabled = false;
+            if (!Array.from(s.options).some((o) => o.value === selected)) selected = s.options[0].value;
+            s.value = selected;
+        }
+    }
+
+    function renderMode() {
+        if (!ui) return;
+        const t = current();
+        const mode = t ? modeOf(t.name) : "normal";
+        for (const b of ui.seg.children) b.classList.toggle("on", b.dataset.mode === mode);
+        ui.help.textContent = MODES.find((m) => m.id === mode).help + (t ? "" : " Save your track in the editor (Save button) and it shows up in Track.");
+    }
+
+    function post(msg) {
+        try {
+            frame?.contentWindow?.postMessage(Object.assign({ nsws: "be" }, msg), frameOrigin);
+        } catch {}
+    }
+
+    function request(type, extra) {
+        if (!frame || !ready) return Promise.reject(new Error("The editor isn't connected."));
+        const reqId = "e" + ++reqSeq;
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(reqId);
+                reject(new Error("The editor didn't answer."));
+            }, REQUEST_TIMEOUT_MS);
+            pending.set(reqId, { resolve, timer });
+            post(Object.assign({ type, reqId }, extra));
+        });
+    }
+
+    window.addEventListener("message", (e) => {
+        if (!frame || e.source !== frame.contentWindow || e.origin !== frameOrigin) return;
+        const m = e.data;
+        if (!m || m.nsws !== "be") return;
+        if (m.type === "ready") {
+            if (!ready) onReady();
+            return;
+        }
+        if (m.reqId && pending.has(m.reqId)) {
+            const p = pending.get(m.reqId);
+            pending.delete(m.reqId);
+            clearTimeout(p.timer);
+            p.resolve(m);
+            return;
+        }
+        if (m.type === "changed") refreshList(true);
+    });
+
+    function createFrame() {
+        build();
+        const url = editorUrl();
+        frameOrigin = new URL(url).origin;
+        ready = false;
+        frame = el("iframe");
+        frame.title = "Custom Tracks Editor";
+        frame.allow = "fullscreen; gamepad; autoplay; clipboard-read; clipboard-write";
+        frame.src = url;
+        let tries = 0;
+        helloTimer = setInterval(() => {
+            if (ready || ++tries > HELLO_TRIES) {
+                clearInterval(helloTimer);
+                helloTimer = null;
+                return;
+            }
+            post({ type: "hello", version: 1 });
+        }, HELLO_EVERY_MS);
+        frame.addEventListener("load", () => {
+            post({ type: "hello", version: 1 });
+            if (!ready) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = setTimeout(showFallback, FALLBACK_AFTER_LOAD_MS);
+            }
+        });
+        fallbackTimer = setTimeout(showFallback, FALLBACK_HARD_MS);
+        ui.frameBox.appendChild(frame);
+        renderPicker();
+    }
+
+    function unloadFrame() {
+        clearInterval(helloTimer);
+        clearTimeout(fallbackTimer);
+        helloTimer = fallbackTimer = null;
+        for (const p of pending.values()) clearTimeout(p.timer);
+        pending.clear();
+        frame?.remove();
+        frame = null;
+        ready = false;
+        tracks = [];
+        newestSave = 0;
+    }
+
+    function showFallback() {
+        if (ready || !ui) return;
+        ui.fallback.classList.remove("hidden");
+        ui.fbCopy.style.display = pendingImport ? "" : "none";
+        renderPicker();
+    }
+
+    function onReady() {
+        ready = true;
+        clearInterval(helloTimer);
+        clearTimeout(fallbackTimer);
+        helloTimer = fallbackTimer = null;
+        ui?.fallback.classList.add("hidden");
+        refreshList(false).then(() => {
+            if (pendingImport) runImport();
+        });
+    }
+
+    async function refreshList(pickNewest) {
+        let reply;
+        try {
+            reply = await request("list");
+        } catch {
+            return;
+        }
+        tracks = Array.isArray(reply.tracks) ? reply.tracks.filter((t) => t && typeof t.code === "string" && typeof t.name === "string") : [];
+        tracks.sort((a, b) => (b.saveTime || 0) - (a.saveTime || 0));
+        const top = tracks[0];
+        if (top && (top.saveTime || 0) > newestSave) {
+            if (pickNewest || selected == null) selected = top.name;
+            newestSave = top.saveTime || 0;
+        }
+        renderPicker();
+        renderMode();
+    }
+
+    async function runImport(attempt = 0) {
+        const job = pendingImport;
+        if (!job || !ready) return;
+        let reply;
+        try {
+            reply = await request("import", { code: job.code });
+        } catch (err) {
+            note(err.message, "bad");
+            return;
+        }
+        if (pendingImport !== job) return;
+        if (!reply.ok) {
+            if (attempt < 15 && /loading/i.test(reply.error || "")) {
+                setTimeout(() => runImport(attempt + 1), 1500);
+                return;
+            }
+            pendingImport = null;
+            note(reply.error || "The editor couldn't take that track.", "bad");
+            return;
+        }
+        pendingImport = null;
+        if (job.mode && job.mode !== "normal") setMode(reply.name, job.mode);
+        await refreshList(false);
+        selected = reply.name;
+        renderPicker();
+        renderMode();
+        note(
+            (reply.existed ? '"' + reply.name + '" is already in the editor.' : 'Added "' + reply.name + '" to the editor.') +
+                (reply.opened ? "" : " Open it from the editor's track list."),
+            "good",
+        );
+    }
+
+    async function usePasted() {
+        const code = ui.fbBox.value.trim();
+        if (!code) return;
+        const T = lib();
+        const info = T ? await T.parseAsync(code).catch(() => null) : null;
+        if (T && !info?.ok) {
+            note(info?.error || "That isn't a track code.", "bad");
+            return;
+        }
+        manual = { name: info?.name || "Pasted track", code };
+        selected = MANUAL;
+        ui.fbBox.value = "";
+        renderPicker();
+        renderMode();
+        note('Using the pasted "' + manual.name + '".', "good");
+    }
+
+    async function copyPendingCode() {
+        if (!pendingImport) return;
+        try {
+            await navigator.clipboard.writeText(pendingImport.code);
+            note("Code copied. In the editor, use Import in the track list and paste it.", "good");
+        } catch {
+            note("Your browser wouldn't copy the code.", "bad");
+        }
+    }
+
+    function need() {
+        const t = current();
+        if (!t) {
+            note(ready ? "Save your track in the editor first (Save button), then pick it in Track." : "The editor isn't connected yet.", "bad");
+            return null;
+        }
+        if (!lib()) {
+            note("Custom Tracks didn't load. Reload the page and try again.", "bad");
+            return null;
+        }
+        return t;
+    }
+
+    async function busy(b, fn) {
+        if (b) b.disabled = true;
+        try {
+            await fn();
+        } catch (err) {
+            note(err?.message || "Something went wrong.", "bad");
+        } finally {
+            if (b) b.disabled = false;
+        }
+    }
+
+    function saveToLibrary(b) {
+        const t = need();
+        if (!t) return;
+        busy(b, async () => {
+            await lib().add(t.code, { mode: modeOf(t.name), source: "editor" });
+            note('Saved "' + t.name + '" to My Tracks.', "good");
+        });
+    }
+
+    function testDrive(b) {
+        const t = need();
+        if (!t) return;
+        busy(b, async () => {
+            const T = lib();
+            const info = await T.parseAsync(t.code);
+            if (!info?.ok) {
+                note(info?.error || "That track code can't be read.", "bad");
+                return;
+            }
+            if (info.kind === "be") {
+                note("This track uses Better Editor blocks, which NSWS can't race. Use the editor's own test drive for it.", "bad");
+                return;
+            }
+            hide();
+            const ok = await T.play(t.code, { mode: modeOf(t.name) }).catch(() => false);
+            if (!ok) {
+                show();
+                note("The test drive didn't start.", "bad");
+            }
+        });
+    }
+
+    function dialog(title, body, actions) {
+        closeDialog();
+        const dim = el("div", "nse-dim");
+        const box = el("div", "nse-box");
+        box.tabIndex = -1;
+        const bodyEl = el("div", "nse-body");
+        bodyEl.append(...body);
+        const act = el("div", "nse-actions");
+        act.append(...actions);
+        box.append(el("h1", null, title), bodyEl, act);
+        dim.appendChild(box);
+        dim.addEventListener("pointerdown", (e) => {
+            if (e.target === dim) closeDialog();
+        });
+        host.appendChild(dim);
+        box.focus();
+        dialogClose = () => {
+            dim.remove();
+            dialogClose = null;
+        };
+        return dialogClose;
+    }
+
+    function closeDialog() {
+        dialogClose?.();
+    }
+
+    function row(label, value) {
+        const r = el("div", "nse-row");
+        r.append(el("label", null, label));
+        if (value instanceof Node) r.appendChild(value);
+        else r.appendChild(el("div", "val", value));
+        return r;
+    }
+
+    async function openSubmit() {
+        const t = need();
+        if (!t) return;
+        const T = lib();
+        const info = await T.parseAsync(t.code).catch(() => null);
+        if (!info?.ok) {
+            note(info?.error || "That track code can't be read.", "bad");
+            return;
+        }
+        let mode = modeOf(t.name);
+        const seg = el("div", "nse-seg");
+        for (const m of MODES) {
+            const b = el("button", m.id === mode ? "on" : null, m.label);
+            b.type = "button";
+            b.addEventListener("click", () => {
+                mode = m.id;
+                for (const x of seg.children) x.classList.toggle("on", x === b);
+                modeHelp.textContent = m.help;
+            });
+            seg.appendChild(b);
+        }
+        const modeHelp = el("div", "nse-dimtext", MODES.find((m) => m.id === mode).help);
+        const noteBox = el("textarea");
+        noteBox.maxLength = 500;
+        noteBox.placeholder = "Anything Race Control should know (optional)";
+        const status = el("p");
+        const mine = el("div");
+        mine.appendChild(el("p", "nse-dimtext", "Loading..."));
+
+        const body = [
+            el("p", null, "Suggest this track for a future NSWS week. Race Control reviews every track, and you can follow it here."),
+            el("div", "nse-sec", "Track"),
+            row("Name", info.name || t.name),
+            row("Author", info.author || "-"),
+            row("Mode", seg),
+            modeHelp,
+        ];
+        if (info.kind === "be") body.push(el("p", "bad", "This track uses Better Editor blocks, which NSWS can't race yet. Race Control can still look at it."));
+        const noteRow = el("div", "nse-row col");
+        noteRow.append(el("label", null, "Note"), noteBox);
+        body.push(noteRow, status, el("div", "nse-sec", "My submissions"), mine);
+
+        const send = button("Send", (e, b) => {
+            const user = T.user?.() || {};
+            if (!user.token) {
+                status.className = "bad";
+                status.textContent = "Your player token isn't ready yet. Open any track's leaderboard once, then try again.";
+                return;
+            }
+            busy(b, async () => {
+                status.className = "";
+                status.textContent = "Sending...";
+                try {
+                    await T.api("nsws/tracks/submit", {
+                        token: user.token,
+                        nickname: user.nickname || "",
+                        code: t.code,
+                        mode,
+                        name: info.name || t.name,
+                        author: info.author || "",
+                        trackId: info.trackId || null,
+                        env: info.env ?? null,
+                        note: noteBox.value.trim().slice(0, 500),
+                    });
+                } catch (err) {
+                    status.className = "bad";
+                    status.textContent = err?.message || "Couldn't send the track.";
+                    return;
+                }
+                setMode(t.name, mode);
+                renderMode();
+                status.className = "good";
+                status.textContent = "Sent! Race Control will take a look.";
+                b.disabled = true;
+                loadMine(mine, user.token);
+            });
+        }, "images/share.svg", true);
+        dialog("Send to Race Control", body, [button("Close", () => closeDialog(), "images/back.svg"), send]);
+        const user = T.user?.() || {};
+        if (user.token) loadMine(mine, user.token);
+        else mine.firstChild.textContent = "Your submissions show here once your player token is ready.";
+    }
+
+    async function loadMine(box, token) {
+        let list;
+        try {
+            list = (await lib().api("nsws/tracks/submissions/mine", { token }))?.submissions || [];
+        } catch (err) {
+            box.textContent = "";
+            box.appendChild(el("p", "bad", err?.message || "Couldn't load your submissions."));
+            return;
+        }
+        box.textContent = "";
+        if (!list.length) {
+            box.appendChild(el("p", "nse-dimtext", "You haven't sent any tracks yet."));
+            return;
+        }
+        for (const s of list) {
+            const item = el("div", "nse-sub");
+            const top = el("div");
+            top.append(el("span", null, s.name || "Untitled"), el("span", "st-" + s.status, s.status === "planned" && s.week ? "Planned for week " + s.week : STATUS[s.status] || s.status || ""));
+            const sub = el("div", "dim");
+            sub.append(el("span", null, s.created ? new Date(s.created).toLocaleDateString() : ""), el("span", null, s.ownerNote ? "Race Control: " + s.ownerNote : ""));
+            item.append(top, sub);
+            box.appendChild(item);
+        }
+    }
+
+    function show() {
+        build();
+        clearTimeout(hideTimer);
+        hideTimer = null;
+        if (!frame) createFrame();
+        host.classList.remove("hidden");
+        try {
+            (frame || host).focus();
+        } catch {}
+    }
+
+    function hide() {
+        if (!host || host.classList.contains("hidden")) return;
+        closeDialog();
+        host.classList.add("hidden");
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+            hideTimer = null;
+            if (host.classList.contains("hidden")) unloadFrame();
+        }, KEEP_HIDDEN_MS);
+    }
+
+    function open(track) {
+        const wasLoaded = !!frame;
+        show();
+        note(wasLoaded ? "" : "Unsaved work stays in the editor for " + KEEP_HIDDEN_MS / 60000 + " minutes after you go Back. Use the editor's Save to keep it.");
+        const code = typeof track === "string" ? track : track?.code;
+        if (typeof code !== "string" || !code) return;
+        pendingImport = { code, mode: typeof track === "object" ? track.mode : null };
+        if (ready) runImport();
+        else {
+            note("Sending the track to the editor...");
+            if (ui && !ui.fallback.classList.contains("hidden")) ui.fbCopy.style.display = "";
+        }
+    }
+
+    function close() {
+        hide();
+    }
+
+    window.__nswsEditor = { open, close };
+})();

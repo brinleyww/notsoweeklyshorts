@@ -3,12 +3,14 @@
 import type { App } from '../app.ts';
 import { canRace, humanRacers, leaderPoints, racers } from '../engine.ts';
 import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_BOTS, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
-import { player, standings, type Category, type CupState, type Player, type TrackRef, isFinalist } from '../state.ts';
+import { player, standings, type Category, type CupState, type Player, type TrackMode, type TrackRef, isFinalist } from '../state.ts';
 import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { site } from '../game.ts';
-import { CUSTOM_EACH } from '../protocol.ts';
+import { BE_REFUSED } from '../protocol.ts';
+
+const MODE_LABEL: Record<TrackMode, string> = { normal: '', rocket: 'Rocket League', royale: 'Royale' };
 
 type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
 
@@ -578,42 +580,112 @@ export class Panel {
           return h(
             'div',
             { class: 'prow' },
-            h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', up ? `added by ${player(s, up.by)?.name ?? 'a racer who left'}` : t.cat].filter(Boolean).join(' · '))),
+            h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', up ? `added by ${player(s, up.by)?.name ?? up.bn ?? 'a racer who left'}` : t.cat, MODE_LABEL[t.mode ?? up?.mode ?? 'normal']].filter(Boolean).join(' · '))),
             mine ? btn('Remove', () => (org ? org.removeTrack(org.me, t.id) : app.act({ k: 'act', a: 'untrack', v: t.id })), 'small ghost') : null,
             org ? btn(voting ? 'Pick' : queued?.id === t.id ? 'Queued' : 'Play next', () => org.hostPick({ id: t.id, name: t.name, author: t.author, cat: t.cat }), 'small ' + (voting ? 'primary' : 'ghost')) : null,
           );
         }),
-        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : s.rules.customOnly ? 'No tracks yet. Upload one above.' : 'The track list is still loading.'),
+        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : s.rules.customOnly ? 'No tracks yet. Add one above.' : 'The track list is still loading.'),
         pool.length > list.length ? h('div', { class: 'empty' }, `Showing ${list.length} of ${pool.length}. Search for the rest.`) : null,
       ),
     ];
   }
 
   #trackCode = '';
+  #adding = false;
   #uploadSection(s: CupState) {
     const app = this.app;
-    const code = h('input', { class: 'text', placeholder: 'Paste a track code', value: this.#trackCode, spellcheck: 'false', autocomplete: 'off' }) as HTMLInputElement;
-    const send = () => {
-      const error = app.uploadTrack(code.value);
-      if (error) return app.notify(error, 'bad');
-      this.#trackCode = '';
-      code.value = '';
-      code.blur();
-      if (!app.org) app.notify('Uploading the track…', 'info');
+    const r = s.rules;
+    const lib = site.__nswsTracks;
+    const intro = (text: string) => h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, text);
+    if (!app.org && r.customPick === 'organizer') return h('div', { class: 'sect' }, h('h3', null, 'Add tracks'), intro('Only the organizer adds tracks in this cup.'));
+    const mine = (s.custom ?? []).filter((t) => t.by === app.me).length;
+    const full = !app.org && mine >= r.customLimit;
+    const code = h('input', { class: 'text', placeholder: full ? 'You have added all your tracks' : 'Paste a track code, pack code or NSWS link', value: this.#trackCode, spellcheck: 'false', autocomplete: 'off', disabled: full || this.#adding }) as HTMLInputElement;
+    const send = async () => {
+      const text = code.value.trim();
+      if (!text) return app.notify('Paste a track code first.', 'bad');
+      // One plain code needs nothing from the library, so it works even without it.
+      const single = /^PolyTrack\S*$/.test(text) && !/^PolyTrackBE/.test(text);
+      if (single || !lib?.importText) {
+        if (this.#addTracks([{ code: text }])) this.#clearCode(code);
+        return;
+      }
+      this.#adding = true;
+      this.render(true);
+      try {
+        const got = await lib.importText(text);
+        if (got.club && !got.tracks?.length) return app.notify('That is a club code. Join the club in Custom Tracks, then add its tracks from My Tracks.', 'bad');
+        if (!got.tracks?.length) return app.notify("That isn't a track code, pack code or NSWS link.", 'bad');
+        if (this.#addTracks(got.tracks)) this.#trackCode = '';
+      } catch (e) {
+        app.notify((e as Error)?.message || "That link couldn't be read.", 'bad');
+      } finally {
+        this.#adding = false;
+        this.render(true);
+      }
     };
     code.addEventListener('input', () => (this.#trackCode = code.value));
     code.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter') send();
+      if (e.key === 'Enter') void send();
     });
-    const mine = (s.custom ?? []).filter((t) => t.by === app.me).length;
+    const fromLibrary = async () => {
+      const picked = await lib?.pick?.({ multi: true });
+      if (picked?.length) this.#addTracks(picked);
+    };
+    const count = app.org ? 'As the organizer you have no limit.' : `${mine} of ${r.customLimit} added.`;
     return h(
       'div',
       { class: 'sect' },
-      h('h3', null, 'Add a track'),
-      h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, 'Paste a track’s import code (Export in the track editor). It joins this cup’s maps for everyone.', app.org ? '' : ` You have added ${mine} of ${CUSTOM_EACH}.`),
-      h('div', { class: 'frow' }, code, btn('Upload', send, 'small')),
+      h('h3', null, 'Add tracks'),
+      intro(`Paste a track's import code, a pack code or an NSWS track link, or pick from My Tracks. They join this cup's maps for everyone, with their mode. ${count}`),
+      h('div', { class: 'frow' }, code, btn(this.#adding ? 'Adding...' : 'Add', () => !full && !this.#adding && void send(), 'small' + (full || this.#adding ? ' ghost' : ''))),
+      lib?.pick && !full ? h('div', { class: 'frow' }, btn('Add from My Tracks', () => void fromLibrary(), 'small ghost')) : null,
     );
+  }
+
+  #clearCode(code: HTMLInputElement) {
+    this.#trackCode = '';
+    code.value = '';
+    code.blur();
+  }
+
+  // Sends tracks to the organizer one by one; true when at least one went.
+  #addTracks(items: { code: string; mode?: string }[]) {
+    const app = this.app,
+      s = app.state;
+    if (!s) return false;
+    const limit = s.rules.customLimit;
+    let room = app.org ? Infinity : Math.max(0, limit - (s.custom ?? []).filter((t) => t.by === app.me).length);
+    let sent = 0,
+      be = 0,
+      over = 0,
+      error: string | null = null;
+    for (const t of items) {
+      const c = String(t.code ?? '').trim();
+      if (/^PolyTrackBE/.test(c)) {
+        be++;
+        continue;
+      }
+      if (room <= 0) {
+        over++;
+        continue;
+      }
+      const e = app.uploadTrack(c, t.mode as TrackMode);
+      if (e) {
+        error = e;
+        if (e.startsWith('Not connected') || e.startsWith('Only the organizer')) break;
+        continue;
+      }
+      sent++;
+      room--;
+    }
+    if (be) app.notify(be === 1 ? BE_REFUSED : `${be} of those are Better Editor tracks with new blocks, which NSWS can't race.`, 'bad');
+    if (over) app.notify(`You can add up to ${limit} ${limit === 1 ? 'track' : 'tracks'}; ${over} left out.`, 'bad');
+    if (error) app.notify(error, 'bad');
+    if (sent && !app.org) app.notify(sent === 1 ? 'Uploading the track...' : `Uploading ${sent} tracks...`, 'info');
+    return sent > 0;
   }
 
   // ---- Rules ----
@@ -628,7 +700,7 @@ export class Panel {
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill', 'customTracks', 'customOnly'];
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill', 'customTracks', 'customOnly', 'customPick', 'customLimit'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
     const toggle = (field: keyof Rules, label: string, hint: string) => {
@@ -671,6 +743,18 @@ export class Panel {
       return row(label, hint, input);
     };
     const sec = (n: number) => fmtDuration(n);
+    const trackSource = () => {
+      const v = r.customOnly ? 'custom' : r.customTracks ? 'both' : 'pool';
+      const hint = v === 'pool' ? 'The maps picked in the Competitions menu' : v === 'both' ? 'Those maps plus tracks added in the Tracks tab' : 'Only tracks added in the Tracks tab';
+      const options = [
+        ['pool', 'Map pool'],
+        ['both', 'Pool + custom'],
+        ['custom', 'Custom only'],
+      ] as const;
+      const el = row('Track source', hint, h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !live('customTracks'), onclick: click(() => set({ customTracks: k !== 'pool', customOnly: k === 'custom' })) }, l))));
+      el.classList.add('wide');
+      return el;
+    };
     const sect = (title: string, ...rows: (HTMLElement | null)[]) => h('div', { class: 'sect' }, h('h3', null, title), h('div', { class: 'rules' }, rows));
 
     const winning = sect(
@@ -709,8 +793,14 @@ export class Panel {
       r.next !== 'random' || r.draft ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'For votes and picks (you get 3x)' : 'For votes and picks', 5, 60, 1, (n) => `${n} s`) : null,
       r.draft ? slider('draftSeconds', 'Pick and ban time', 'For each step', 10, 120, 5, (n) => `${n} s`) : null,
       toggle('skipVotes', 'Skip votes', 'Racers can vote a track away'),
-      toggle('customTracks', 'Custom tracks', 'Anyone in the cup can add tracks by import code (Tracks tab)'),
-      r.customTracks ? toggle('customOnly', 'Only custom tracks', 'The cup plays only the uploaded tracks') : null,
+      trackSource(),
+      r.customTracks
+        ? seg('customPick', 'Who adds tracks', r.customPick === 'organizer' ? 'Only the organizer, in the Tracks tab' : 'Everyone in the cup, in the Tracks tab', [
+            ['organizer', 'Organizer only'],
+            ['everyone', 'Everyone'],
+          ])
+        : null,
+      r.customTracks && r.customPick === 'everyone' ? slider('customLimit', 'Tracks per player', 'The organizer has no limit', 1, 10, 1, (n) => `${n}`) : null,
     );
     const rounds = sect(
       'Rounds',

@@ -8,9 +8,9 @@ import { EXPERT_SKILL, type RefInput } from './bots/wire.ts';
 import * as E from './engine.ts';
 import type { LoadedTrack, TrackData } from './game.ts';
 import { site } from './game.ts';
-import { CUSTOM_EACH, UPLOAD_CHUNK, UPLOAD_PARTS, type Msg } from './protocol.ts';
+import { BE_REFUSED, UPLOAD_CHUNK, UPLOAD_PARTS, type Msg } from './protocol.ts';
 import { cleanRules, MAX_RACERS, type Rules } from './rules.ts';
-import { botPid, byPid, isBot, isFinalist, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category } from './state.ts';
+import { botPid, byPid, isBot, isFinalist, player, roundDone, standings, type CupState, type Player, type RoundResult, type TrackRef, type Category, type TrackMode } from './state.ts';
 
 const LOAD_WAIT_MS = 15_000;
 const SESSION_RETRY_MS = 8_000;
@@ -809,7 +809,7 @@ export class Organizer {
       for (const t of this.state.custom ?? []) {
         const code = this.#codes.get(t.id);
         if (!code || have.has(t.id)) continue;
-        list.push({ id: t.id, name: t.name, author: t.author, cat: 'custom', load: async () => this.#parse(code)!, thumb: '' });
+        list.push({ id: t.id, name: t.name, author: t.author, cat: 'custom', ...(t.mode ? { mode: t.mode } : {}), load: async () => this.#parse(code)!, thumb: '' });
       }
     }
     this.#pool = list;
@@ -845,12 +845,14 @@ export class Organizer {
     const valid =
       typeof m.id === 'string' && m.id.length <= 16 && Number.isInteger(m.n) && m.n >= 1 && m.n <= UPLOAD_PARTS && Number.isInteger(m.i) && m.i >= 0 && m.i < m.n && typeof m.c === 'string' && m.c.length <= UPLOAD_CHUNK;
     if (!valid || p.bot) return;
+    const r = this.state.rules;
     const now = Date.now();
     for (const [key, up] of this.#parts) if (now - up.at > UPLOAD_STALE_MS) this.#parts.delete(key);
     const key = `${p.u}:${m.id}`;
     let up = this.#parts.get(key);
     if (!up) {
-      if (!this.state.rules.customTracks) return this.#tell(p, 'Custom tracks are off in this cup', 'bad');
+      if (!r.customTracks) return this.#tell(p, 'Custom tracks are off in this cup', 'bad');
+      if (r.customPick === 'organizer') return this.#tell(p, 'Only the organizer adds tracks in this cup', 'bad');
       if ([...this.#parts.keys()].some((k) => k.startsWith(`${p.u}:`))) return this.#tell(p, 'Wait for your last track to finish uploading', 'bad');
       up = { at: now, parts: Array(m.n).fill(null), got: 0 };
       this.#parts.set(key, up);
@@ -861,16 +863,18 @@ export class Organizer {
     up.at = now;
     if (up.got < m.n) return;
     this.#parts.delete(key);
-    const error = this.addTrack(p.u, up.parts.join(''));
+    const error = this.addTrack(p.u, up.parts.join(''), m.m);
     if (error) this.#tell(p, error, 'bad');
   }
 
   // Adds a track from its import code; returns why it can't, or null.
-  addTrack(u: number, code: string): string | null {
+  addTrack(u: number, code: string, mode?: TrackMode): string | null {
     const s = this.state,
       p = player(s, u);
     if (!p) return null;
     if (!s.rules.customTracks) return 'Custom tracks are off in this cup.';
+    if (u !== this.me && s.rules.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
+    if (/^PolyTrackBE/.test(code)) return BE_REFUSED;
     const track = this.#parse(code);
     if (!track?.trackData) return "That isn't a PolyTrack track code.";
     if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
@@ -880,10 +884,12 @@ export class Organizer {
     if (same) return `${same.name} is already in this cup.`;
     if (!s.rules.customOnly && this.#library().some((t) => t.id === id)) return "That track is already in this cup's maps.";
     if (custom.length >= MAX_CUSTOM) return `This cup already has ${MAX_CUSTOM} uploaded tracks.`;
-    if (u !== this.me && custom.filter((t) => t.by === u).length >= CUSTOM_EACH) return `You can upload up to ${CUSTOM_EACH} tracks.`;
+    if (u !== this.me && custom.filter((t) => t.by === u).length >= s.rules.customLimit) return `You can add up to ${s.rules.customLimit} ${s.rules.customLimit === 1 ? 'track' : 'tracks'}.`;
     const name = (track.trackMetadata?.name ?? '').trim().slice(0, 40) || 'Untitled track';
     const author = (track.trackMetadata?.author ?? '').trim().slice(0, 30);
-    custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', by: u });
+    // A listed track keeps its own physics: its id races on the real leaderboards.
+    const m = (mode === 'rocket' || mode === 'royale') && !site.__nswsTracks?.isKnown?.(id) ? mode : null;
+    custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', ...(m ? { mode: m } : {}), by: u, bn: p.name.slice(0, 24) });
     this.#codes.set(id, code);
     this.#poolAt = 0;
     this.notifyAll(`${p.name} added ${name} to the maps`, 'good');
@@ -909,7 +915,7 @@ export class Organizer {
     const pool = this.pool();
     const fresh = pool.filter((t) => !this.#recent.includes(t.id));
     const pick = shuffle([...(fresh.length >= count ? fresh : pool)]).slice(0, count);
-    return pick.map(({ id, name, author, cat }) => ({ id, name, author, cat }));
+    return pick.map(({ id, name, author, cat, mode }) => ({ id, name, author, cat, ...(mode ? { mode } : {}) }));
   }
 
   queue(track: TrackRef | null) {
@@ -923,6 +929,12 @@ export class Organizer {
   async #load(ref: TrackRef, epoch: number) {
     const entry = this.pool().find((t) => t.id === ref.id);
     if (!entry) throw new Error(`${ref.name} isn't in this cup's maps any more.`);
+    // Every page registers the round's mode from the state before the track loads; this page and its bots now.
+    if (entry.cat === 'custom') {
+      ref = { ...ref, ...(entry.mode ? { mode: entry.mode } : {}) };
+      if (!entry.mode) delete ref.mode;
+      site.__nswsTracks?.registerModes?.([{ trackId: ref.id, mode: entry.mode ?? 'normal' }]);
+    }
     const wr = this.#wr.has(ref.id) || ref.cat === 'custom' ? Promise.resolve() : this.app.native.worldRecord(ref.id, true).then((f) => void this.#wr.set(ref.id, f));
     if (this.#seatedBots().length) this.#manager().prefetch(ref.id, ref.cat === 'custom');
     const track = await entry.load();
@@ -939,8 +951,9 @@ export class Organizer {
     this.#taBest.clear();
     this.#planTrack = { ref, data: track.trackData };
     this.#planBots();
-    this.#startSession();
+    // The state first, so racers register a custom round's mode before its session reaches them.
     this.touch(true);
+    this.#startSession();
   }
 
   #startSession() {
@@ -1271,7 +1284,7 @@ export class Organizer {
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill' | 'customTracks' | 'customOnly'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill' | 'customTracks' | 'customOnly' | 'customPick' | 'customLimit'>>) {
     const s = this.state;
     const next = { ...change };
     // The points cap can still move during a cup, but never onto a total someone already has.

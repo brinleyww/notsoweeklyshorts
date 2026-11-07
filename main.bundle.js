@@ -538,6 +538,20 @@ window.__nswsAutoGhostNote = function(trackId) {
         if (/^[A-HJ-NP-Z2-9]{5}$/.test(code)) cupLinkCode = code;
         else if (code) cupLinkBad = true;
     } catch (e) {}
+    // ?tracks=<pack id> and ?club=<code>; mod/nsws_tracks.js acts on them in __nswsTracksOnLoad.
+    window.__nswsStartLink = {};
+    try {
+        const url = new URL(location.href);
+        const tracks = (url.searchParams.get("tracks") || "").trim()
+          , club = (url.searchParams.get("club") || "").trim().toUpperCase();
+        if (url.searchParams.has("tracks") || url.searchParams.has("club")) {
+            url.searchParams.delete("tracks");
+            url.searchParams.delete("club");
+            history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+        }
+        tracks && (window.__nswsStartLink.tracks = tracks);
+        club && (window.__nswsStartLink.club = club);
+    } catch (e) {}
     window.__nswsCompetitions = {
         open() {
             loadCompetitions().then(app => app.open(), err => window.__nswsMessageBox?.show(err.message, "Ok", null));
@@ -12013,6 +12027,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                         u(entry.trackMetadata, entry.trackEnvironment, entry.trackData, playCategory(entry.category), entry.trackId, entry.thumbnail);
                         return true;
                     },
+                    window.__bw_openTrackScreen = (meta, data, trackId, thumbnail) => {
+                        u(meta, data.environment, () => Promise.resolve(data), "custom", trackId, thumbnail);
+                        return true;
+                    },
                     window.__bw_getTrackName = trackId => {
                         let entry = i.get(this, B, "f").find(e => e.trackId === trackId);
                         if (!entry) {
@@ -12020,6 +12038,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                             entry = i.get(this, B, "f").find(e => e.trackId === trackId);
                         }
                         return entry?.trackMetadata?.name ?? null;
+                    },
+                    window.__bw_trackCategory = trackId => {
+                        0 == i.get(this, B, "f").length && this.refresh();
+                        return i.get(this, B, "f").find(e => e.trackId === trackId)?.category ?? null;
                     },
                     i.set(this, _, document.createElement("div"), "f"),
                     i.get(this, _, "f").className = h ? "track-selection-ui with-background hidden" : "track-selection-ui hidden",
@@ -45421,8 +45443,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         if (C.get(this, jr, "f")) {
                             const e = C.get(this, Dr, "f").profileSlot
                               , n = C.get(this, Br, "f").getRecordTime(e, C.get(this, Yr, "f").getId());
+                            // A known track raced as "custom" (an imported copy) keeps no PB, so it can't hide later uploads.
+                            if ("custom" == C.get(this, Zr, "f") && window.__nswsTracks?.isKnown?.(C.get(this, Yr, "f").getId()))
+                                return Promise.resolve(null);
                             if (null == n || t.lessThan(n)) {
-                                const n = "official" == C.get(this, Zr, "f") || "community" == C.get(this, Zr, "f")
+                                const n = ("official" == C.get(this, Zr, "f") || "community" == C.get(this, Zr, "f")) && "normal" === (window.__nswsTracks?.modeOf?.(C.get(this, Yr, "f").getId()) ?? "normal")
                                   , upload = C.get(this, Br, "f").setRecord(e, C.get(this, Yr, "f").getId(), n, t, i);
                                 window.dispatchEvent(new CustomEvent("nsws-new-pb", { detail: { track: C.get(this, Yr, "f").getId(), seconds: t.time, upload: upload } }));
                                 return upload
@@ -46103,6 +46128,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Xr, m, "f"),
                 C.set(this, Yr, A, "f"),
                 window.__nswsTrackNotice?.(A.getId()),
+                window.__nswsSceneTrackId = A.getId(),
                 window.__nswsRocket?.track(!!window.__nswsRocketTrack?.(A.getId())),
                 C.set(this, Zr, v, "f"),
                 null != w ? C.set(this, Sa, {
@@ -55114,7 +55140,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         al.insertStyleElement = h();
         t()(rl.A, al);
         rl.A && rl.A.locals && rl.A.locals;
-        var sl, TrackDataModule = i(8438);
+        var sl, TrackDataModule = i(8438), __nswsBase62 = i(7415);
         class ll extends Error {
             constructor(e) {
                 let t;
@@ -56852,6 +56878,27 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Nc, "f").appendChild(mpBtn);
                 C.get(this, Dc, "f").push(mpBtn);
             }
+            if (!document.getElementById("nsws-menu-fit")) {
+                // The UI is laid out 1150px wide at most scales, so eight 200px buttons need the smaller size.
+                const fit = document.createElement("style");
+                fit.id = "nsws-menu-fit";
+                fit.textContent = ".menu-ui > .main-buttons-container{container-type:inline-size}@container (max-width: 1619px){.menu-ui .main-buttons-container > .button-image{width:142px;height:176px}.menu-ui .main-buttons-container > .button-image > img{margin:28px 35px 0 35px;width:72px;height:72px}.menu-ui .main-buttons-container > .button-image > p{padding:0 2px;font-size:16px;line-height:1.15}}";
+                document.head.appendChild(fit);
+            }
+            for (const [img, label, open] of [["load", "Custom Tracks", () => window.__nswsTracks?.openLibrary()], ["editor", "Custom Tracks Editor", () => window.__nswsEditor?.open()]]) {
+                const btn = document.createElement("button");
+                btn.className = "button button-image";
+                btn.innerHTML = '<img src="images/' + img + '.svg">';
+                btn.addEventListener("click", () => {
+                    n.playUIClick();
+                    (img == "editor" ? window.__nswsEditor : window.__nswsTracks) ? open() : window.__nswsMessageBox?.show(label + " didn't load. Reload the page and try again.", "Ok", null);
+                });
+                const text = document.createElement("p");
+                text.textContent = label;
+                btn.appendChild(text);
+                C.get(this, Nc, "f").appendChild(btn);
+                C.get(this, Dc, "f").push(btn);
+            }
             const T = document.createElement("button");
             T.className = "button button-image",
             T.innerHTML = '<img src="images/play.svg">',
@@ -56869,6 +56916,35 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, vc, "m", Xc).call(this),
                 C.get(this, Rc, "f").show());
                 return !!window.__bw_selectTrackById?.(trackId)
+            };
+            // Used by mod/nsws_tracks.js. openTrack shows any parsed track's screen as a "custom" track: local
+            // records only, nothing is uploaded.
+            window.__nswsTrackHooks = {
+                parse(code) {
+                    try {
+                        return "string" == typeof code && code.trim() ? TrackDataModule.A.fromExportString(code.trim()) ?? null : null
+                    } catch (e) {
+                        return null
+                    }
+                },
+                openTrack: (trackMetadata, trackData, trackId, thumbnail) => {
+                    if (!trackMetadata || !trackData || !window.__bw_openTrackScreen) return !1;
+                    trackId ??= trackData.getId();
+                    if (null == thumbnail)
+                        try {
+                            thumbnail = trackData.createThumbnail()
+                        } catch (e) {
+                            thumbnail = "images/custom_tracks.jpg"
+                        }
+                    document.querySelector(".track-selection-ui:not(.hidden)") || (C.get(this, vc, "m", qc).call(this),
+                    C.get(this, vc, "m", Xc).call(this),
+                    C.get(this, Rc, "f").show());
+                    return !!window.__bw_openTrackScreen(trackMetadata, trackData, trackId, thumbnail)
+                },
+                base62: {
+                    encode: bytes => __nswsBase62.encode(bytes),
+                    decode: text => __nswsBase62.decode(text)
+                }
             };
             // Where the /otct link lands: the Play menu, already switched to Kodub's Official &
             // Community tabs. show() reads the mode, so it has to be set first.
@@ -57813,7 +57889,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             hasChosenDevicePreset() || autoPickDevicePreset(C.get(this, bc, "f"), d, r) ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
                             flushGraphicsNote(),
-                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsOtctOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
+                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsTracksOnLoad?.() || window.__nswsOtctOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }
@@ -58684,7 +58760,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             d.appendChild(span);
             panel.appendChild(d);
         };
-        window.__nswsRocketTrack = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && !!(w.rocket || p.rocket || t.rocket))));
+        // A week track's own flag wins over a custom track registered with the same id (mod/nsws_tracks.js).
+        window.__nswsRocketTrack = trackId => {
+            let listed = !1;
+            return __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && (listed = !0, !!(w.rocket || p.rocket || t.rocket))))) || !listed && "rocket" === window.__nswsTracks?.modeOf?.(trackId);
+        };
+        window.addEventListener("nsws-track-modes", () => {
+            null != window.__nswsSceneTrackId && window.__nswsRocket?.retrack?.(!!window.__nswsRocketTrack(window.__nswsSceneTrackId))
+        });
         window.__nswsNoMedals = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noMedals)));
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);

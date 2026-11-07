@@ -13041,8 +13041,28 @@
         }
         importScripts("lib/polytrack_physics.js");
         const jo = [];
+        // {nswsModes: {rocket: [trackId], royale: [trackId]}} from mod/nsws_tracks.js is the full current set of
+        // custom mode tracks; it replaces the previous one. It can arrive before __rocketTracks / __royaleTracks
+        // exist, so ids wait here.
+        const __nswsModeIds = {
+            rocket: new Set,
+            royale: new Set
+        };
+        let __nswsModeSink = null;
+        function __nswsModesMessage(t) {
+            const m = t?.data?.nswsModes;
+            if (null == m || "object" != typeof m)
+                return !1;
+            for (const k of ["rocket", "royale"]) {
+                __nswsModeIds[k] = new Set;
+                for (const id of Array.isArray(m[k]) ? m[k] : [])
+                    "string" == typeof id && id.length <= 128 && __nswsModeIds[k].add(id)
+            }
+            __nswsModeSink?.();
+            return !0
+        }
         onmessage = t => {
-            jo.push(t)
+            __nswsModesMessage(t) || jo.push(t)
         }
         ,
         PolyTrackPhysics().then((async t => {
@@ -14034,7 +14054,24 @@
                 U8[n + 235] = Math.round(100 * F[b + 8]) & 255
             }
             jo.length = 0,
-            onmessage = i;
+            __nswsModeSink = ( (builtRocket, builtRoyale, added) => () => {
+                for (const id of added.rocket)
+                    __nswsModeIds.rocket.has(id) || (__rocketTracks.delete(id), added.rocket.delete(id));
+                for (const id of added.royale)
+                    __nswsModeIds.royale.has(id) || (__royaleTracks.delete(id), added.royale.delete(id));
+                for (const id of __nswsModeIds.rocket)
+                    builtRocket.has(id) || (__rocketTracks.add(id), added.rocket.add(id));
+                for (const id of __nswsModeIds.royale)
+                    builtRoyale.has(id) || (__royaleTracks.set(id, null), added.royale.add(id))
+            }
+            )(new Set(__rocketTracks), new Set(__royaleTracks.keys()), {
+                rocket: new Set,
+                royale: new Set
+            }),
+            __nswsModeSink(),
+            onmessage = e => {
+                __nswsModesMessage(e) || i(e)
+            };
             // 227 bytes of car state from the physics, then the Rocket League mode's 9 (see __rocketStep).
             const s = 236
               , n = ( () => {

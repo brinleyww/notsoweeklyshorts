@@ -9,7 +9,15 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"], ["subs", "Submissions"]];
+    const SUB_FILTERS = [["new", "New"], ["planned", "Planned"], ["rejected", "Rejected"], ["all", "All"]];
+    const SUB_MODES = { normal: "Normal", rocket: "Rocket League", royale: "Royale" };
+    const SUB_EMPTY = {
+        new: "No new submissions. Players send tracks with Send to Race Control in the track editor.",
+        planned: "Nothing planned yet.",
+        rejected: "Nothing rejected.",
+        all: "Nobody has sent a track yet.",
+    };
     const BAN_TIMES = [[1, "1 day"], [7, "7 days"], [30, "30 days"], [0, "For good"]];
     const DRIVER_SORTS = {
         runtime: ["Most time on the site", "combined runtime across all their visits"],
@@ -206,6 +214,10 @@
 .nrc-hit .alt{flex-shrink:0;font-size:13px;color:rgba(255,255,255,.5);}
 .nrc-hit .chips{display:flex;gap:4px;margin-left:auto;flex-shrink:0;}
 .nrc-hit .nsws-tag{font-size:13px;}
+.nrc-subnote{margin:0 0 12px;padding:10px 14px;background:var(--surface-tertiary-color);font-size:16px;line-height:1.35;white-space:pre-wrap;overflow-wrap:anywhere;}
+.nrc-subnote b{display:block;margin-bottom:4px;font-size:13px;font-weight:400;color:rgba(255,255,255,.55);}
+.nrc-acts .button.armed{color:${BAD};box-shadow:inset 0 -3px 0 ${BAD};}
+.nrc-acts .button:disabled,.nrc-find .button:disabled{opacity:.5;pointer-events:none;}
 .nrc-hits .none{padding:10px 12px;font-size:14px;color:rgba(255,255,255,.5);}
 @media (max-width:720px){.nrc-hero{grid-template-columns:1fr;}.nrc-close.button{position:absolute;right:18px;top:20px;}.nrc-title{margin-right:64px;}.nrc-bar{grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;}.nrc-bar .track{grid-column:1/-1;order:3;}.nrc-head{padding:10px 14px;}.nrc-tabs{padding:8px 14px 0;}.nrc-body{padding:14px;}.nrc-title h1{font-size:26px;}.nrc-chip.button{font-size:15px;padding:6px 11px;}}
 `;
@@ -593,6 +605,20 @@
         tagsHit: 0,
         tagsHitsBox: null,
         tagsInput: null,
+        subs: null,
+        subsError: null,
+        subsFilter: "new",
+        subsNew: null,
+        subsTicket: 0,
+        subsLoading: null,
+        subsPick: null,
+        subsNote: "",
+        subsBusy: false,
+        subsDraft: {},
+        subsArm: null,
+        subsArmTimer: 0,
+        subsRoot: null,
+        subsCodes: new Map(),
     };
 
     async function post(path, extra) {
@@ -605,7 +631,13 @@
             credentials: "omit",
             cache: "no-store",
         });
-        if (!response.ok) throw Object.assign(new Error("HTTP " + response.status), { status: response.status });
+        if (!response.ok) {
+            let reason = "";
+            try {
+                reason = String((await response.json())?.error || "");
+            } catch {}
+            throw Object.assign(new Error("HTTP " + response.status), { status: response.status, reason });
+        }
         return response.json();
     }
 
@@ -645,6 +677,7 @@
         if (ui.tab === "announce") return "ann";
         if (ui.tab === "tags") return "tags";
         if (ui.tab === "bans") return "bans";
+        if (ui.tab === "subs") return "subs";
         return statsKey();
     }
 
@@ -727,6 +760,8 @@
         } else if (ui.tab === "bans") {
             ui.bans ??= cacheGet("bans");
             if (!ui.bans) loads.push(loadBans);
+        } else if (ui.tab === "subs") {
+            if (!ui.subs && ui.subsLoading !== ui.subsFilter) loads.push(loadSubs);
         } else {
             if (!ui.stats) {
                 ui.stats = cacheGet(statsKey());
@@ -749,6 +784,7 @@
         else if (tab === "announce") await loadAnnouncements();
         else if (tab === "tags") await loadTags();
         else if (tab === "bans") await loadBans();
+        else if (tab === "subs") await loadSubs();
         else await loadStats();
         if (!ui.refreshBtn) return;
         ui.refreshBtn.disabled = false;
@@ -2873,6 +2909,348 @@
         renderBanLists();
     }
 
+    function subsLabel() {
+        const b = ui.overlay?.querySelector('[data-tab="subs"]');
+        if (b) b.textContent = ui.subsNew ? "Submissions (" + num(ui.subsNew) + ")" : "Submissions";
+    }
+
+    async function loadSubs() {
+        const filter = ui.subsFilter;
+        const ticket = ++ui.subsTicket;
+        ui.subsLoading = filter;
+        try {
+            const data = await post("tracks/admin/submissions?status=" + filter, { status: filter });
+            if (ticket !== ui.subsTicket) return;
+            const list = Array.isArray(data?.submissions) ? data.submissions : [];
+            ui.subs = { filter, list };
+            ui.fetchedAt.subs = Date.now();
+            ui.subsError = null;
+            if (filter === "new") ui.subsNew = list.length;
+            else if (filter === "all") ui.subsNew = list.filter((s) => s.status === "new").length;
+            if (ui.subsPick && !list.some((s) => s.id === ui.subsPick)) ui.subsPick = null;
+        } catch (err) {
+            if (ticket !== ui.subsTicket) return;
+            ui.subsError = err;
+        } finally {
+            if (ticket === ui.subsTicket) ui.subsLoading = null;
+        }
+        subsLabel();
+        if (ui.overlay && ui.tab === "subs") renderSubLists();
+    }
+
+    function subsProblem(err) {
+        if (typeof err === "string") return err;
+        if (err?.reason) return err.reason;
+        if (err?.status === 429) return "Too many requests. Wait a minute and try again.";
+        if (err?.message && !/^HTTP \d/.test(err.message) && err.message !== "not owner") return err.message;
+        return "Couldn't do that. Try again in a moment.";
+    }
+
+    function subSize(n) {
+        if (!n) return "\u2013";
+        if (n < 1024) return n + " B";
+        if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
+        return (n / 1048576).toFixed(1) + " MB";
+    }
+
+    function subStatus(s) {
+        if (s.status === "planned") return s.week ? "Week " + s.week : "Planned";
+        if (s.status === "rejected") return "Rejected";
+        return "New";
+    }
+
+    function nextWeek() {
+        let top = 0;
+        for (const w of window.__nswsWeeks || []) {
+            const n = Number(w.week);
+            // Event pseudo weeks (like Halloween's 1031) aren't part of the weekly count.
+            if (Number.isFinite(n) && n < 1000) top = Math.max(top, n);
+        }
+        return top + 1;
+    }
+
+    async function subCode(s) {
+        if (ui.subsCodes.has(s.id)) return ui.subsCodes.get(s.id);
+        const data = await post("tracks/admin/submission/" + encodeURIComponent(s.id), {});
+        const code = data?.submission?.code;
+        if (typeof code !== "string" || !code) throw "That submission has no track code.";
+        ui.subsCodes.set(s.id, code);
+        return code;
+    }
+
+    async function copyText(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {}
+        const area = el("textarea");
+        area.value = text;
+        area.setAttribute("readonly", "");
+        area.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+        document.body.appendChild(area);
+        area.select();
+        let ok = false;
+        try {
+            ok = document.execCommand("copy");
+        } catch {}
+        area.remove();
+        return ok;
+    }
+
+    async function subAction(working, run) {
+        if (ui.subsBusy) return;
+        ui.subsBusy = true;
+        ui.subsNote = working;
+        for (const b of ui.subsDetailBox?.querySelectorAll("button") ?? []) b.disabled = true;
+        if (ui.subsNoteBox) ui.subsNoteBox.textContent = working;
+        try {
+            ui.subsNote = (await run()) || "";
+        } catch (err) {
+            ui.subsNote = subsProblem(err);
+        }
+        ui.subsBusy = false;
+        if (ui.overlay && ui.tab === "subs") renderSubLists();
+    }
+
+    function subTrackLike(s, code) {
+        return { id: null, code, kind: code.startsWith("PolyTrackBE") ? "be" : "stock", name: s.name || "", author: s.author || "", trackId: s.trackId || null, env: s.env ?? null, mode: s.mode || "normal", source: "import" };
+    }
+
+    async function setSubStatus(s, status, week) {
+        const ownerNote = (ui.subsDraft.note || "").trim().slice(0, 500);
+        const change = { status, week: status === "planned" ? week : null, ownerNote };
+        await post("tracks/admin/submission/" + encodeURIComponent(s.id) + "/status", change);
+        const was = s.status;
+        Object.assign(s, change);
+        if (ui.subsNew != null) {
+            if (was === "new" && status !== "new") ui.subsNew = Math.max(0, ui.subsNew - 1);
+            else if (was !== "new" && status === "new") ui.subsNew++;
+        }
+        subsLabel();
+        const filter = ui.subs?.filter;
+        if (filter && filter !== "all" && filter !== status) {
+            ui.subs.list = ui.subs.list.filter((x) => x !== s);
+            ui.subsPick = null;
+        }
+        const name = s.name || "The track";
+        if (status === "planned") return name + " is planned for week " + week + ". The player sees that in My submissions.";
+        if (status === "rejected") return name + " was rejected." + (ownerNote ? " The player sees your note." : "");
+        return name + " is back in New.";
+    }
+
+    function subsInput(placeholder, value) {
+        const input = banInput(placeholder);
+        input.value = value ?? "";
+        return input;
+    }
+
+    function buildSubs() {
+        const root = el("div");
+        const head = card("Track submissions", "list", "Tracks players sent with Send to Race Control in the track editor. Plan one for a future week or reject it; the player sees the status and your note under My submissions. Click a row for its actions.");
+        head.appendChild(toggle(SUB_FILTERS, ui.subsFilter, (key) => {
+            if (ui.subsFilter === key) return;
+            ui.subsFilter = key;
+            ui.subs = null;
+            ui.subsError = null;
+            ui.subsPick = null;
+            ui.subsNote = "";
+            renderSubLists();
+            loadSubs();
+        }));
+        ui.subsNoteBox = el("div", "nrc-sub");
+        ui.subsNoteBox.style.margin = "12px 0";
+        ui.subsDetailBox = el("div");
+        ui.subsListBox = el("div");
+        root.append(head, ui.subsNoteBox, ui.subsDetailBox, ui.subsListBox);
+        return root;
+    }
+
+    function renderSubDetail() {
+        const box = ui.subsDetailBox;
+        box.textContent = "";
+        const s = ui.subs?.list.find((x) => x.id === ui.subsPick);
+        if (!s) return;
+        if (ui.subsDraft.id !== s.id) ui.subsDraft = { id: s.id, week: String(s.week || nextWeek()), note: s.ownerNote || "" };
+        const draft = ui.subsDraft;
+        const sent = [s.author ? "by " + s.author : "", "sent by " + (s.nickname || "someone"), s.created ? fmt.dateTime(s.created) : ""].filter(Boolean).join(" \u00b7 ");
+        const c = card(s.name || "Untitled track", null, sent + " \u00b7 " + (SUB_MODES[s.mode] || "Normal") + " \u00b7 " + subStatus(s));
+        if (s.note) {
+            const note = el("div", "nrc-subnote");
+            note.append(el("b", null, "Their note"), document.createTextNode(s.note));
+            c.appendChild(note);
+        }
+
+        const acts = el("div", "nrc-acts");
+        const act = (label, working, run) => {
+            const b = el("button", "button", label);
+            b.disabled = ui.subsBusy;
+            b.addEventListener("click", () => subAction(working, run));
+            acts.appendChild(b);
+            return b;
+        };
+        act("Play", "Getting the track\u2026", async () => {
+            const tracks = window.__nswsTracks;
+            if (!tracks?.play) throw "Custom tracks haven't loaded yet. Try again in a moment.";
+            const code = await subCode(s);
+            close();
+            await tracks.play(code, { mode: s.mode || "normal" });
+        });
+        act("Copy code", "Getting the code\u2026", async () => {
+            const code = await subCode(s);
+            if (!(await copyText(code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
+            return "Code copied (" + subSize(code.length) + ")." + ((s.mode || "normal") !== "normal" ? " Mode isn't kept in a plain code: it's " + SUB_MODES[s.mode] + "." : "");
+        });
+        act("Save to My Tracks", "Saving\u2026", async () => {
+            const tracks = window.__nswsTracks;
+            if (!tracks?.add) throw "Custom tracks haven't loaded yet. Try again in a moment.";
+            const code = await subCode(s);
+            const saved = await tracks.add(code, { mode: s.mode || "normal", source: "import" });
+            return "Saved \"" + (saved?.name || s.name || "the track") + "\" to My Tracks.";
+        });
+        act("Open in editor", "Getting the track\u2026", async () => {
+            const editor = window.__nswsEditor;
+            if (!editor?.open) throw "The track editor hasn't loaded yet. Try again in a moment.";
+            const code = await subCode(s);
+            close();
+            await editor.open(subTrackLike(s, code));
+        });
+        c.appendChild(acts);
+
+        const noteRow = el("div", "nrc-find");
+        noteRow.style.marginTop = "14px";
+        const noteInput = subsInput("Note for the player (optional)", draft.note);
+        noteInput.maxLength = 500;
+        noteInput.spellcheck = true;
+        noteInput.addEventListener("input", () => (draft.note = noteInput.value));
+        noteRow.appendChild(noteInput);
+        c.appendChild(noteRow);
+
+        const planRow = el("div", "nrc-find");
+        planRow.style.cssText = "margin-top:8px;flex-wrap:wrap;";
+        const weekInput = subsInput("Week", draft.week);
+        weekInput.className = "small";
+        weekInput.type = "number";
+        weekInput.min = "1";
+        weekInput.step = "1";
+        weekInput.inputMode = "numeric";
+        const plan = el("button", "button");
+        const planLabel = () => {
+            const n = parseInt(draft.week, 10);
+            plan.textContent = n > 0 ? "Plan for week " + n : "Plan for week\u2026";
+        };
+        planLabel();
+        weekInput.addEventListener("input", () => {
+            draft.week = weekInput.value;
+            planLabel();
+        });
+        plan.disabled = ui.subsBusy;
+        plan.addEventListener("click", () => {
+            const week = parseInt(draft.week, 10);
+            if (!(week > 0 && week < 10000)) {
+                ui.subsNote = "Type the week number first.";
+                if (ui.subsNoteBox) ui.subsNoteBox.textContent = ui.subsNote;
+                weekInput.focus();
+                return;
+            }
+            subAction("Saving\u2026", () => setSubStatus(s, "planned", week));
+        });
+        planRow.append(weekInput, plan);
+        if (s.status !== "rejected") {
+            const reject = el("button", "button", "Reject");
+            reject.disabled = ui.subsBusy;
+            reject.addEventListener("click", () => subAction("Saving\u2026", () => setSubStatus(s, "rejected", null)));
+            planRow.appendChild(reject);
+        }
+        if (s.status !== "new") {
+            const back = el("button", "button", "Move back to New");
+            back.disabled = ui.subsBusy;
+            back.addEventListener("click", () => subAction("Saving\u2026", () => setSubStatus(s, "new", null)));
+            planRow.appendChild(back);
+        }
+        c.appendChild(planRow);
+
+        const danger = el("div", "nrc-acts");
+        const del = el("button", "button", "Delete");
+        del.disabled = ui.subsBusy;
+        del.addEventListener("click", () => {
+            if (ui.subsArm !== s.id) {
+                clearTimeout(ui.subsArmTimer);
+                ui.subsArm = s.id;
+                del.classList.add("armed");
+                del.textContent = "Press again to delete for good";
+                ui.subsArmTimer = setTimeout(() => {
+                    ui.subsArm = null;
+                    del.classList.remove("armed");
+                    del.textContent = "Delete";
+                }, 4000);
+                return;
+            }
+            clearTimeout(ui.subsArmTimer);
+            ui.subsArm = null;
+            subAction("Deleting\u2026", async () => {
+                await post("tracks/admin/submission/" + encodeURIComponent(s.id) + "/delete", {});
+                if (ui.subs) ui.subs.list = ui.subs.list.filter((x) => x !== s);
+                ui.subsCodes.delete(s.id);
+                ui.subsPick = null;
+                if (s.status === "new" && ui.subsNew) ui.subsNew--;
+                subsLabel();
+                return "Deleted " + (s.name || "the submission") + ".";
+            });
+        });
+        danger.appendChild(del);
+        c.appendChild(danger);
+        box.appendChild(c);
+        box.lastChild.style.marginBottom = "14px";
+    }
+
+    function renderSubLists() {
+        if (!ui.subsRoot) return;
+        ui.subsNoteBox.textContent = ui.subsNote || "";
+        ui.subsNoteBox.hidden = !ui.subsNote;
+        const list = ui.subsListBox;
+        list.textContent = "";
+        const rows = ui.subs?.filter === ui.subsFilter ? ui.subs.list : null;
+        if (ui.subsError && !rows) {
+            list.appendChild(el("div", "nrc-empty", ui.subsError.status === 403 ? "This profile isn't the owner, so submissions stay closed." : "Couldn't load submissions. " + (ui.subsError.reason ? ui.subsError.reason + " " : "") + "Press Refresh."));
+        } else if (!rows) {
+            list.appendChild(el("div", "nrc-empty", "Loading\u2026"));
+        } else if (!rows.length) {
+            list.appendChild(el("div", "nrc-empty", SUB_EMPTY[ui.subsFilter] || SUB_EMPTY.all));
+        } else {
+            list.appendChild(table([["Track", "name"], ["Author", "name"], ["Sent by", "name"], ["Mode"], ["Scenery"], ["Sent", "num"], ["Size", "num"], ["Note", "name"], ["Status"]], rows.map((s) => {
+                const who = el("span", null, s.nickname || "\u2013");
+                if (s.userId12) who.appendChild(el("span", "tabs", s.userId12.slice(0, 8)));
+                const note = el("span", null, s.note || "");
+                note.title = s.note || "";
+                const status = el("span", null, subStatus(s));
+                if (s.status === "planned") status.style.color = ACCENT;
+                else if (s.status === "rejected") status.style.color = "rgba(255,255,255,.45)";
+                return [s.name || "Untitled", s.author || "\u2013", who, SUB_MODES[s.mode] || "Normal", s.env != null && s.env !== "" ? String(s.env) : "\u2013", s.created ? fmt.dateTime(s.created) : "\u2013", subSize(s.size), note, status];
+            })));
+            list.querySelectorAll("tbody tr").forEach((tr, i) => {
+                const s = rows[i];
+                tr.className = "pick" + (s.id === ui.subsPick ? " sel" : "");
+                tr.title = "Click for actions";
+                tr.addEventListener("click", () => {
+                    ui.subsPick = ui.subsPick === s.id ? null : s.id;
+                    ui.subsNote = "";
+                    renderSubLists();
+                    if (ui.subsPick) ui.subsDetailBox.scrollIntoView({ block: "nearest", behavior: "smooth" });
+                });
+            });
+        }
+        renderSubDetail();
+    }
+
+    function renderSubsTab(body) {
+        if (!ui.subsRoot) ui.subsRoot = buildSubs();
+        if (ui.subsRoot.parentNode !== body) {
+            body.textContent = "";
+            body.appendChild(ui.subsRoot);
+        }
+        renderSubLists();
+    }
+
     function render() {
         if (!ui.overlay) return;
         const body = ui.body;
@@ -2891,6 +3269,10 @@
         }
         if (ui.tab === "bans") {
             renderBansTab(body);
+            return;
+        }
+        if (ui.tab === "subs") {
+            renderSubsTab(body);
             return;
         }
         body.textContent = "";
@@ -2958,6 +3340,15 @@
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
         ui.tagsRoot = ui.tagsWho = ui.tagsLists = ui.tagsHitsBox = ui.tagsInput = null;
         ui.bansRoot = null;
+        ui.subsRoot = ui.subsNoteBox = ui.subsDetailBox = ui.subsListBox = null;
+        ui.subs = ui.subsError = ui.subsLoading = ui.subsPick = ui.subsArm = null;
+        ui.subsTicket++;
+        ui.subsFilter = "new";
+        ui.subsNote = "";
+        ui.subsBusy = false;
+        ui.subsDraft = {};
+        ui.subsCodes.clear();
+        clearTimeout(ui.subsArmTimer);
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
         ui.refreshBtn = ui.updatedText = ui.liveDot = ui.liveText = null;
@@ -3048,6 +3439,8 @@
         ui.raf = requestAnimationFrame(tick);
         ui.live = null;
         ensureTab();
+        // One request per opening puts the count of new submissions on the tab label.
+        if (ui.tab !== "subs") loadSubs();
     }
 
     window.__nswsOwnerPanel = { open, close, checkRun };

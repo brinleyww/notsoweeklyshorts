@@ -345,6 +345,8 @@ export class Layer {
     if (!keys || site.__nswsKeyBindCapturing || e.defaultPrevented) return;
     if (e.composedPath().some((t) => (t as HTMLElement).tagName === 'INPUT' || (t as HTMLElement).tagName === 'TEXTAREA')) return;
     if (!app.state || !app.game) return;
+    // Custom Tracks dialogs and screen (mod/nsws_tracks.js) sit above Cuppa and handle their own keys.
+    if (document.querySelector('.nt-modal, .nt-screen:not([hidden])')) return;
     const match = (binding: string) => keys.matches(e, binding);
     if (this.hub.isOpen || document.querySelector('.nsws-keys.open')) return;
     if (e.key === 'Escape' && this.keyMenu.open) {

@@ -410,6 +410,19 @@
         track(isRocket) {
             trackIsRocket = isRocket;
         },
+        // A custom track's mode can be registered after the race opened (a Cuppa round's state can lag its session).
+        retrack(isRocket) {
+            trackIsRocket = isRocket;
+            if (!controls || active === isRocket) return;
+            active = isRocket;
+            if (!active) {
+                for (const [id] of ACTIONS) sources[id].clear();
+                mounted = false;
+                hud.unmount();
+                tutorial.leave();
+                sound.stop();
+            }
+        },
         tick(ok) {
             racing = ok;
             const now = performance.now();

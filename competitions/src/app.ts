@@ -11,10 +11,10 @@ import { Organizer } from './host.ts';
 import { LiveTiming } from './live.ts';
 import { Net } from './net.ts';
 import { drawCars, ghostBehind, installSmoothing, nudgeCar } from './smooth.ts';
-import { UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
+import { BE_REFUSED, UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
-import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult } from './state.ts';
+import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult, type TrackMode } from './state.ts';
 
 export interface HostPlan {
   name: string;
@@ -591,6 +591,9 @@ export class App {
   #apply(next: CupState) {
     const prev = this.state;
     this.state = next;
+    const t = next.round?.track;
+    // Before the game's session brings the track: rocket and royale physics are set per track id.
+    if (t?.cat === 'custom' && (prev?.round?.track.id !== t.id || prev?.round?.n !== next.round!.n)) site.__nswsTracks?.registerModes?.([{ trackId: t.id, mode: t.mode ?? 'normal' }]);
     // At once, not on the next frame: bot chunks sent after a new cup's first state belong to that cup.
     this.bots.sync(next);
     if (prev?.round && next.round && (prev.round.n !== next.round.n || prev.round.try !== next.round.try)) this.live.clear();
@@ -625,21 +628,24 @@ export class App {
   }
 
   // Sends a track's import code to the organizer; returns why it can't go, or null.
-  uploadTrack(raw: string): string | null {
+  uploadTrack(raw: string, mode?: TrackMode): string | null {
     const code = raw.trim();
     if (!code) return 'Paste a track code first.';
+    if (/^PolyTrackBE/.test(code)) return BE_REFUSED;
+    if (!this.org && this.state?.rules.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
+    const m = mode === 'rocket' || mode === 'royale' ? mode : undefined;
     let track: ReturnType<Native['parse']> = null;
     try {
       track = this.native.parse(code);
     } catch {}
     if (!track?.trackData) return "That isn't a PolyTrack track code.";
     if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
-    if (this.org) return this.org.addTrack(this.org.me, code);
+    if (this.org) return this.org.addTrack(this.org.me, code, m);
     const n = Math.ceil(code.length / UPLOAD_CHUNK);
     if (n > UPLOAD_PARTS) return 'That track is too big to upload here.';
     const id = Math.random().toString(36).slice(2, 10);
     for (let i = 0; i < n; i++) {
-      if (!this.net.send(0, { k: 'trk', id, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK) }, i === n - 1)) return 'Not connected to the organizer right now.';
+      if (!this.net.send(0, { k: 'trk', id, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK), ...(m ? { m } : {}) }, i === n - 1)) return 'Not connected to the organizer right now.';
     }
     return null;
   }

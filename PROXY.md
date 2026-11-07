@@ -873,6 +873,32 @@ than a WebSocket player, and one on POSTs can race for about 8 hours a day befor
 100,000 requests run out. If many players at once end up on POSTs, the $5 Workers Paid plan
 (10 million requests a month) removes the limit.
 
+## Custom tracks, clubs and submissions
+
+`src/trackhub.js`, the `TrackHub` Durable Object (one instance, `"global"`, binding `TRACKHUB`,
+migration `v7`), behind `/nsws/tracks/*`. Only the site may call it (the Accounts Origin check),
+except `/nsws/tracks/admin/*`, which takes the owner's key (`token` in the body, or `?nswsOwner=`)
+from anywhere and skips the IP ban check like the other owner routes. Every request is at most one
+call to the object; errors are `{ error }` with a sentence for the player, 429 when rate-limited.
+An account is the userId (SHA-256 of the token); the token is never stored.
+
+- **Packs.** `POST pack` stores an `NSWSPack1...` code (4 MB at most) as-is and answers a
+  10-character id; the same pack always gets the same id back. 30 new links a day per address and
+  per account. A pack nobody has opened for 180 days is deleted. `GET pack/<id>` reads it; `/t/<id>` is the unfurl page (pack
+  name, track count, first names) that sends players on to `SHARE_SITE?tracks=<id>`, like cup links.
+- **Clubs.** `club/create|get|join|leave|mine|members|update|role|delete` and
+  `campaign/get|save|delete`. `GET club/<code>` is public; a club by its id and `campaign/get` need
+  membership or the current invite code, so a new code locks out kicked members. Up to 3 owned and
+  20 joined clubs per account, 20 campaigns of 25 tracks per club, 8 MB of codes per club. Each
+  campaign keeps a JSON summary of its tracks, so a club page never reads the track codes.
+- **Submissions.** `submit` (3 a day per address and per account, 10 waiting per account, 2 MB per
+  code) and `submissions/mine`; Race Control reads and judges them through `admin/submissions`,
+  `admin/submission/<id>`, `.../status` and `.../delete`.
+- **Storage.** SQLite refuses values over 2 MB, so pack and submission codes are split across
+  `blobs` rows. Each address may store 30 MB of codes a day across packs, campaigns and
+  submissions. Rate limits are daily counters in the `limits` table (yesterday's rows are dropped
+  on the first hit of a day). Every filtered column is indexed and every list has a LIMIT.
+
 ## Name moderation
 
 Every name and line players write goes through the chat's filter (`proxy/src/chatfilter.js`:

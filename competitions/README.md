@@ -149,11 +149,16 @@ hold it at `leaderPoints(s) + 1`.
   every racer bans, then picks, from one list; the picks become the playlist, repeated; bans always
   leave something to pick); skip votes (over half of the racers skips the track, or changes it after
   the round when someone already finished).
-- **Custom tracks:** with the switch on, anyone in the cup can paste a track's import code in the Tracks
-  tab and it joins the maps (`App.uploadTrack` -> `trk` parts of 100k characters -> `Organizer.addTrack`).
-  Only the organizer's page keeps the codes; the game sends the track to everyone when its round loads.
-  Up to 5 per player and 30 in all; the organizer removes any, a player their own. **Only custom tracks**
-  plays nothing else. Rounds on uploaded tracks never upload PBs and have no world record.
+- **Custom tracks:** **Track source** is the map pool, the pool plus custom tracks, or custom tracks only
+  (`customTracks` / `customOnly`). **Who adds tracks** (`customPick`): the organizer only, or everyone, each up to
+  **Tracks per player** (`customLimit`, 1-10, default 5; the organizer has no limit); 30 in all. The Tracks tab takes a
+  pasted stock code, an NSWS pack code or link (expanded by `__nswsTracks.importText`), or **Add from My Tracks**
+  (`__nswsTracks.pick`, hidden without the library). Better Editor codes are refused. Each upload goes
+  `App.uploadTrack` -> `trk` parts of 100k characters (with its mode `m`) -> `Organizer.addTrack`, which checks the
+  rules again and keeps the uploader (`by`, `bn`) and mode. Only the organizer's page keeps the codes; the game sends
+  the track to everyone when its round loads. The round's track ref carries `mode` (rocket/royale), and every page
+  calls `__nswsTracks.registerModes` for it before the track loads (the organizer in `#load`, others in `App.#apply`).
+  The organizer removes any upload, a player their own. Rounds on uploaded tracks never upload PBs and have no world record.
 - **Rounds:** one run (time limit auto/fixed/off, auto = 3x the best known time from the world record
   or the cup; finish window after the first finish) or time attack (its length); countdown; break.
 - **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times

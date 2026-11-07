@@ -13,17 +13,22 @@ export type Phase =
   | 'podium';
 
 export type Category = 'official' | 'community' | 'custom';
+// Physics of a custom track; missing means normal.
+export type TrackMode = 'normal' | 'rocket' | 'royale';
 
 export interface TrackRef {
   id: string;
   name: string;
   author?: string;
   cat: Category;
+  mode?: TrackMode;
 }
 
 // A track someone in the cup added by its import code. Only the organizer's page has the code.
 export interface CustomTrack extends TrackRef {
   by: number;
+  // The uploader's name, kept for when they leave.
+  bn?: string;
 }
 
 export interface Player {

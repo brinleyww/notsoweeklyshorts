@@ -136,3 +136,13 @@ class_name = "SocketBridge"
 [[migrations]]
 tag = "v6"
 new_sqlite_classes = ["SocketBridge"]
+
+# Custom tracks (src/trackhub.js): shared track packs (/t/<id>), clubs and their campaigns, and the
+# tracks players send to Race Control.
+[[durable_objects.bindings]]
+name = "TRACKHUB"
+class_name = "TrackHub"
+
+[[migrations]]
+tag = "v7"
+new_sqlite_classes = ["TrackHub"]

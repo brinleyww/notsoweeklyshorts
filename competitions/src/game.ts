@@ -218,6 +218,14 @@ export interface SiteKeys {
   record(cb: (code: string | null) => void): void;
 }
 
+// The Custom Tracks library (mod/nsws_tracks.js).
+export interface SiteTracks {
+  pick(o: { multi?: boolean }): Promise<{ code: string; mode?: string; name?: string; kind?: string }[] | null>;
+  importText(text: string): Promise<{ name?: string; tracks: { code: string; mode?: string }[]; club?: string }>;
+  registerModes(list: { trackId: string; mode: string }[]): void;
+  isKnown?(trackId: string): boolean;
+}
+
 // Hidden, or another window has the focus.
 export const background = () => document.hidden || !document.hasFocus();
 
@@ -251,5 +259,6 @@ export const site = window as unknown as {
   __nswsCupRoom?: () => { code: string; secret: string | null } | null;
   __nswsCupLeave?: (message: string) => void;
   __nswsCupApp?: unknown;
+  __nswsTracks?: SiteTracks;
   __nswsChatIdentity?: { visitorId(): string; nickname(): string; ownerKey(): Promise<string | null> };
 };

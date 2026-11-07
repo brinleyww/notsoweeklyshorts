@@ -12,8 +12,9 @@ import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
 import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
 import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
+import { TrackHub } from "./trackhub.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -77,7 +78,7 @@ const SNAPSHOT_TTL_MS = 5 * 60_000;
 // Every instance rereads the ban list from KV this often; each read counts against the free plan's 100k a day.
 const IP_BANS_TTL_MS = 2 * 60_000;
 // These routes check the owner's key themselves, so the owner can always lift a ban from a banned network.
-const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban)(\/|$)/;
+const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban|tracks\/admin)(\/|$)/;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -1858,6 +1859,215 @@ async function handleCupLink(request, url, env, code, wantsCard) {
     });
 }
 
+// ---- Custom tracks: packs, clubs, campaigns and Race Control submissions (src/trackhub.js) ----
+
+const TRACKS_PREFIX = "/nsws/tracks/";
+// A shared track pack: /t/<ID>. Like a cup link, it is the unfurl page for chat apps.
+const PACK_LINK = /^\/t\/([0-9A-Za-z]{10})$/;
+// A 4 MB pack or campaign plus the JSON around it.
+const MAX_TRACKS_BODY = 4_400_000;
+const MAX_TRACKS_SMALL_BODY = 16_384;
+const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put"]);
+// Reads an address may make in a minute; only there to stop sweeps of club codes and ids.
+const TRACK_READS_PER_MIN = 60;
+// Packs never change, so an instance keeps the small ones it has read.
+const PACK_CACHE_MAX = 64;
+const PACK_CACHE_CHARS = 300_000;
+
+const trackReadHits = new Map();
+const packCache = new Map();
+
+function trackHub(env) {
+    return env.TRACKHUB ? env.TRACKHUB.get(env.TRACKHUB.idFromName("global")) : null;
+}
+
+function trackReadFlood(ip) {
+    if (!ip) return false;
+    const now = Date.now();
+    if (trackReadHits.size > 2000) trackReadHits.clear();
+    const seen = trackReadHits.get(ip);
+    if (!seen || now - seen.at > 60_000) {
+        trackReadHits.set(ip, { at: now, count: 1 });
+        return false;
+    }
+    return ++seen.count > TRACK_READS_PER_MIN;
+}
+
+function keepPack(key, value) {
+    if (packCache.size >= PACK_CACHE_MAX) packCache.delete(packCache.keys().next().value);
+    packCache.set(key, value);
+}
+
+async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
+    const path = url.pathname.slice(TRACKS_PREFIX.length);
+    const admin = path.startsWith("admin/");
+    // Race Control's owner routes check the owner's key themselves, so they work from anywhere.
+    if (!fromSite && !admin) return forbidden();
+    const origin = requestOrigin || "*";
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (request.method !== "GET" && request.method !== "POST") return json({ error: "Method not allowed." }, origin, 405);
+    const hub = trackHub(env);
+    if (!hub) return json({ error: "Custom tracks aren't switched on for this server yet." }, origin, 503);
+    if (doLimited()) return busy(origin);
+    const reply = (result, missing = "Not found.") => {
+        if (result == null) return json({ error: missing }, origin, 404);
+        if (result.error) return json({ error: result.error }, origin, result.status || 400);
+        return json(result, origin);
+    };
+
+    let body = {};
+    if (request.method === "POST") {
+        const text = await readSmallBody(request, BIG_TRACK_PATHS.has(path) ? MAX_TRACKS_BODY : MAX_TRACKS_SMALL_BODY);
+        if (text == null) return json({ error: "That's too much to send at once." }, origin, 413);
+        try {
+            body = text ? JSON.parse(text) : {};
+        } catch {
+            body = null;
+        }
+        if (!body || typeof body !== "object" || Array.isArray(body)) return json({ error: "Bad request." }, origin, 400);
+    }
+
+    if (admin) {
+        if (!cfg.owner && !(await isOwner(body.token, cfg))) return json({ error: "Only the owner can do that." }, origin, 403);
+        if (path === "admin/submissions") return reply(await hub.adminSubmissions(String(url.searchParams.get("status") ?? body.status ?? "all")));
+        const m = /^admin\/submission\/([0-9A-Za-z]{12})(?:\/(status|delete))?$/.exec(path);
+        if (!m) return reply(null);
+        if (!m[2]) return reply(await hub.adminSubmission(m[1]));
+        if (request.method !== "POST") return json({ error: "Method not allowed." }, origin, 405);
+        if (m[2] === "delete") return reply(await hub.adminDelete(m[1]));
+        return reply(await hub.adminSetStatus(m[1], { status: body.status, week: body.week, ownerNote: body.ownerNote }));
+    }
+
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    if (request.method === "GET") {
+        if (trackReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);
+        let m;
+        if ((m = /^pack\/([0-9A-Za-z]{10})$/.exec(path))) {
+            let pack = packCache.get("p:" + m[1]) ?? null;
+            if (!pack) {
+                pack = await hub.getPack(m[1]);
+                if (pack && pack.pack.length <= PACK_CACHE_CHARS) keepPack("p:" + m[1], pack);
+            }
+            return reply(pack, "That track link doesn't exist.");
+        }
+        if ((m = /^club\/([0-9A-Za-z]{6}|[0-9A-Za-z]{12})$/.exec(path))) {
+            const club = await hub.getClub(m[1]);
+            return reply(club && { club }, "No club has that code.");
+        }
+        return reply(null);
+    }
+
+    const token = typeof body.token === "string" ? body.token : body.userToken;
+    const userId = HEX64.test(token ?? "") ? await sha256Hex(token) : null;
+    const ipKey = (await sha256Hex("nsws-tracks-ip:" + ipScope(ip))).slice(0, 16);
+    if (path === "pack") {
+        return reply(await hub.putPack({ pack: body.pack, name: body.name, count: body.count, names: body.names, ipKey, userId }));
+    }
+    // Someone previewing a club by its code may have no profile yet.
+    if (path === "campaign/get") {
+        if (trackReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);
+        return reply(await hub.getCampaign({ userId, clubId: body.clubId, campaignId: body.campaignId, code: body.code }), "That campaign doesn't exist any more.");
+    }
+    if (!userId) return json({ error: "Your profile couldn't be read. Reload the page and try again." }, origin, 400);
+    const nickname = body.nickname;
+    const clubId = body.clubId;
+    switch (path) {
+        case "club/create": return reply(await hub.createClub({ userId, ipKey, nickname, name: body.name, tag: body.tag, description: body.description }));
+        case "club/get": {
+            const club = await hub.getClub(body.code ?? clubId, userId);
+            return reply(club && { club }, "No club has that code.");
+        }
+        case "club/join": return reply(await hub.joinClub({ userId, ipKey, nickname, code: body.code }));
+        case "club/leave": return reply(await hub.leaveClub({ userId, clubId }));
+        case "club/mine": return reply(await hub.myClubs({ userId }));
+        case "club/members": return reply(await hub.members({ userId, clubId }));
+        case "club/update": return reply(await hub.updateClub({ userId, clubId, name: body.name, tag: body.tag, description: body.description, newCode: body.newCode === true }));
+        case "club/role": return reply(await hub.setRole({ userId, clubId, member: body.member, role: body.role }));
+        case "club/delete": return reply(await hub.deleteClub({ userId, clubId }));
+        case "campaign/save": return reply(await hub.saveCampaign({ userId, ipKey, clubId, campaignId: body.campaignId ?? null, name: body.name, tracks: body.tracks }));
+        case "campaign/delete": return reply(await hub.deleteCampaign({ userId, clubId, campaignId: body.campaignId }));
+        case "submit": return reply(await hub.submit({
+            userId, ipKey, nickname, code: body.code, mode: body.mode, name: body.name, author: body.author,
+            trackId: body.trackId, env: body.env, note: body.note,
+        }));
+        case "submissions/mine": return reply(await hub.mySubmissions({ userId }));
+        case "library/list": return reply(await hub.libraryList({ userId }));
+        case "library/codes": return reply(await hub.libraryCodes({ userId, ids: body.ids }));
+        case "library/put": return reply(await hub.libraryPut({ userId, ipKey, tracks: body.tracks }));
+        case "library/delete": return reply(await hub.libraryDelete({ userId, ids: body.ids }));
+    }
+    return reply(null);
+}
+
+// The page a track link opens: the pack's name and first tracks for chat apps, then on to the site.
+async function handlePackLink(request, url, env, id) {
+    if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", null);
+    const site = ((typeof env.SHARE_SITE === "string" && env.SHARE_SITE) || DEFAULT_SHARE_SITE).replace(/\/*$/, "/");
+    const open = new URL(site);
+    open.search = "";
+    open.hash = "";
+    open.searchParams.set("tracks", id);
+    const here = url.origin + "/t/" + id;
+    let info = packCache.get("i:" + id) ?? null;
+    let looked = !!info;
+    const hub = trackHub(env);
+    if (!info && hub && !doLimited() && !cupLinkFlood(request.headers.get("CF-Connecting-IP"))) {
+        try {
+            info = await hub.packInfo(id);
+            looked = true;
+            if (info) keepPack("i:" + id, info);
+        } catch (err) {
+            noteDoError(err);
+            console.error("track link error:", err && err.message);
+        }
+    }
+    let title = "Custom tracks";
+    let description = "Open these custom tracks on Not So Weekly Shorts.";
+    if (info) {
+        const count = info.count;
+        const names = info.names ?? [];
+        title = info.name || (count === 1 && names[0]) || count + " custom tracks";
+        const list = names.join(", ") + (count > names.length && names.length ? " and " + (count - names.length) + " more" : "");
+        description = (count === 1 ? "1 custom track" : count + " custom tracks") + " for Not So Weekly Shorts" + (list ? ": " + list : ".");
+    } else if (looked) {
+        title = "Track link not found";
+        description = "This track link doesn't exist.";
+    }
+    const target = escapeHtml(open.toString());
+    const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="description" content="${escapeHtml(description)}">
+<meta name="theme-color" content="#28346a">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Not So Weekly Shorts">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(description)}">
+<meta property="og:url" content="${escapeHtml(here)}">
+<meta property="og:image" content="${escapeHtml(site + "images/og.png")}">
+<meta name="twitter:card" content="summary">
+<link rel="canonical" href="${target}">
+<meta http-equiv="refresh" content="0;url=${target}">
+<style>html{color-scheme:dark}body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#192042;color:#e6ebff;font:16px/1.5 system-ui,sans-serif;text-align:center}a{color:#8f8ff0}</style>
+</head>
+<body>
+<p>Opening <b>${escapeHtml(title)}</b> on Not So Weekly Shorts...<br><a href="${target}">Open the tracks</a></p>
+<script>location.replace(${JSON.stringify(open.toString())})</script>
+</body>
+</html>`;
+    return new Response(page, {
+        headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": info ? "public, max-age=300" : "public, max-age=30",
+            "Referrer-Policy": "no-referrer",
+        },
+    });
+}
+
 // A socket path the page asks for, checked like the WebSocket routes check theirs. Only the cup
 // sockets and cup chats can be carried (the main chat has its own HTTPS fallback in src/chat.js).
 async function sockTarget(text, env, connectingIp) {
@@ -1893,6 +2103,16 @@ export default {
                 noteDoError(err);
                 console.error("cup link error:", err && err.message);
                 return plain(500, "Cup links failed", null);
+            }
+        }
+        const packLink = PACK_LINK.exec(url.pathname);
+        if (packLink) {
+            try {
+                return await handlePackLink(request, url, env, packLink[1]);
+            } catch (err) {
+                noteDoError(err);
+                console.error("track link error:", err && err.message);
+                return plain(500, "Track links failed", null);
             }
         }
 
@@ -1937,6 +2157,16 @@ export default {
                     noteDoError(err);
                     console.error("macro error:", err && err.message);
                     return doLimited() ? busy(requestOrigin) : plain(500, "Macro report failed", requestOrigin);
+                }
+            }
+            if (url.pathname.startsWith(TRACKS_PREFIX)) {
+                const origin = requestOrigin || "*";
+                try {
+                    return await handleTracks(request, url, env, cfg, fromSite, requestOrigin);
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("tracks error:", err && err.message);
+                    return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
                 }
             }
             if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind)\//.test(url.pathname)) {

@@ -8,6 +8,7 @@ export type NextTrack = 'random' | 'vote' | 'winner' | 'last' | 'host';
 export type Limit = 'auto' | 'fixed' | 'off';
 export type WarmupMode = 'off' | 'first' | 'every';
 export type WarmupTiming = 'fixed' | 'wr';
+export type CustomPick = 'organizer' | 'everyone';
 export type BotSkill = 'easy' | 'medium' | 'hard' | 'expert' | 'mixed' | 'match';
 
 export interface Rules {
@@ -44,6 +45,9 @@ export interface Rules {
   // Anyone in the cup can add a track by its import code; the uploads join the maps.
   customTracks: boolean;
   customOnly: boolean;
+  // Who adds custom tracks, and how many each racer may add (the organizer has no limit).
+  customPick: CustomPick;
+  customLimit: number;
   collisions: boolean;
   lateJoin: boolean;
   freecam: boolean;
@@ -117,6 +121,8 @@ const base: Rules = {
   skipVotes: true,
   customTracks: false,
   customOnly: false,
+  customPick: 'everyone',
+  customLimit: 5,
   collisions: false,
   lateJoin: true,
   freecam: true,
@@ -233,6 +239,8 @@ export function cleanRules(value: unknown): Rules {
     skipVotes: bool(o.skipVotes, base.skipVotes),
     customTracks: bool(o.customTracks, base.customTracks),
     customOnly: bool(o.customOnly, base.customOnly),
+    customPick: pick(o.customPick, ['organizer', 'everyone'] as const, base.customPick),
+    customLimit: int(o.customLimit, 1, 10, base.customLimit),
     collisions: bool(o.collisions, base.collisions),
     lateJoin: bool(o.lateJoin, base.lateJoin),
     freecam: bool(o.freecam, base.freecam),
@@ -258,7 +266,8 @@ export function rulesSummary(r: Rules) {
           : `First to ${r.target} pts`;
   const style = r.style === 'timeattack' ? `${fmtDuration(r.taSeconds)} time attack` : 'one run per round';
   const tracks = r.perTrack === 1 ? '1 round per track' : `${r.perTrack} rounds per track`;
-  return [goal, style, tracks, r.draft ? 'drafted tracks' : NEXT_LABEL[r.next]].join(' · ');
+  const custom = r.customOnly ? 'custom tracks only' : r.customTracks ? 'plus custom tracks' : '';
+  return [goal, style, tracks, r.draft ? 'drafted tracks' : NEXT_LABEL[r.next], custom].filter(Boolean).join(' · ');
 }
 
 export const NEXT_LABEL: Record<NextTrack, string> = {
