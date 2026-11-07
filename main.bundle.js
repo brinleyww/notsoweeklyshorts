@@ -56915,7 +56915,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bc, "f").removeChild(e);
             C.set(this, Gc, [], "f");
             const clipsBtn = document.createElement("button");
-            clipsBtn.className = "button button-image",
+            clipsBtn.className = "button button-image nsws-mb-clips",
             clipsBtn.innerHTML = '<img src="images/preview.svg">',
             clipsBtn.addEventListener("click", ( () => {
                 n.playUIClick(),
@@ -56935,7 +56935,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, Nc, "f").appendChild(clipsBtn),
             C.get(this, Dc, "f").push(clipsBtn);
             const v = document.createElement("button");
-            v.className = "button button-image",
+            v.className = "button button-image nsws-mb-garage",
             v.innerHTML = '<img src="images/customize.svg">',
             v.addEventListener("click", ( () => {
                 n.playUIClick(),
@@ -56948,7 +56948,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, Nc, "f").appendChild(v),
             C.get(this, Dc, "f").push(v);
             const x = document.createElement("button");
-            x.className = "button button-image",
+            x.className = "button button-image nsws-mb-settings",
             x.innerHTML = '<img src="images/settings.svg">',
             x.addEventListener("click", ( () => {
                 n.playUIClick(),
@@ -56974,7 +56974,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, Dc, "f").push(x);
             if (window.__nswsCompetitions) {
                 const mpBtn = document.createElement("button");
-                mpBtn.className = "button button-image";
+                mpBtn.className = "button button-image nsws-mb-comps";
                 mpBtn.innerHTML = '<img src="images/multiplayer.svg">';
                 mpBtn.addEventListener("click", () => {
                     n.playUIClick();
@@ -56987,15 +56987,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Dc, "f").push(mpBtn);
             }
             if (!document.getElementById("nsws-menu-fit")) {
-                // The UI is laid out 1150px wide at most scales, so eight 200px buttons need the smaller size.
+                // Clips | Settings over Garage | big Standings | big Play | Competitions over Custom Tracks | Editor.
                 const fit = document.createElement("style");
                 fit.id = "nsws-menu-fit";
-                fit.textContent = ".menu-ui > .main-buttons-container{container-type:inline-size}@container (max-width: 1619px){.menu-ui .main-buttons-container > .button-image{width:142px;height:176px}.menu-ui .main-buttons-container > .button-image > img{margin:28px 35px 0 35px;width:72px;height:72px}.menu-ui .main-buttons-container > .button-image > p{padding:0 2px;font-size:16px;line-height:1.15}}";
+                fit.textContent = ".menu-ui > .main-buttons-container{container-type:inline-size}.menu-ui > .main-buttons-container:not(.hidden){display:grid;grid-template-columns:repeat(8,auto);gap:16px;place-content:center;align-items:center;grid-template-areas:'clips settings standings standings play play comps editor' 'clips customize standings standings play play load editor'}.menu-ui .main-buttons-container > .button-image{--s:min(170px,(100cqw - 160px) / 8);margin:0;width:var(--s);height:var(--s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--s) * .06)}.menu-ui .main-buttons-container > .button-image > img{margin:0;width:calc(var(--s) * .44);height:calc(var(--s) * .44)}.menu-ui .main-buttons-container > .button-image > p{padding:0 4px;font-size:calc(var(--s) * .125);line-height:1.15}.menu-ui .main-buttons-container > .nsws-mb-big{width:calc(var(--s) * 2 + 16px);height:calc(var(--s) * 2 + 16px)}.menu-ui .main-buttons-container > .nsws-mb-big > img{width:calc(var(--s) * .9);height:calc(var(--s) * .9)}.menu-ui .main-buttons-container > .nsws-mb-big > p{font-size:calc(var(--s) * .21)}.nsws-mb-clips{grid-area:clips}.nsws-mb-settings{grid-area:settings}.nsws-mb-garage{grid-area:customize}.nsws-mb-standings{grid-area:standings}.nsws-mb-play{grid-area:play}.nsws-mb-comps{grid-area:comps}.nsws-mb-load{grid-area:load}.nsws-mb-editor{grid-area:editor}";
                 document.head.appendChild(fit);
             }
             for (const [img, label, open] of [["load", "Custom Tracks", () => window.__nswsTracks?.openLibrary()], ["editor", "Custom Tracks Editor", () => window.__nswsEditor?.open()]]) {
                 const btn = document.createElement("button");
-                btn.className = "button button-image";
+                btn.className = "button button-image nsws-mb-" + img;
                 btn.innerHTML = '<img src="images/' + img + '.svg">';
                 btn.addEventListener("click", () => {
                     n.playUIClick();
@@ -57008,7 +57008,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Dc, "f").push(btn);
             }
             const T = document.createElement("button");
-            T.className = "button button-image",
+            T.className = "button button-image nsws-mb-play nsws-mb-big",
             T.innerHTML = '<img src="images/play.svg">',
             T.addEventListener("click", ( () => {
                 n.playUIClick(),
@@ -57069,7 +57069,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
             (() => {
                 const stBtn = document.createElement("button");
-                stBtn.className = "button button-image";
+                stBtn.className = "button button-image nsws-mb-standings nsws-mb-big";
                 stBtn.innerHTML = '<img src="images/standings.svg">';
                 const stLabel = document.createElement("p");
                 stLabel.textContent = "Standings";
