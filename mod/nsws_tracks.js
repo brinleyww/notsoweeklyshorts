@@ -1109,6 +1109,14 @@
         return data ?? {};
     }
 
+    // Your board run as your PB on this device when the device has none (before v11.83 every load deleted them).
+    async function restoreBest(trackId, wait) {
+        const r = window.__nswsTrackBoard?.restore;
+        if (!r || !trackId) return false;
+        const job = Promise.resolve().then(() => r(trackId)).catch((e) => (console.warn(e), false));
+        return wait ? Promise.race([job, new Promise((res) => setTimeout(() => res(false), wait))]) : job;
+    }
+
     // A second Play while one is starting (a double click) would stack launch cards and start two races.
     let starting = false;
     async function play(trackOrCode, opts = {}) {
@@ -1159,6 +1167,7 @@
             await ui.alert(loaded.error || "The game is still loading. Try again in a moment.", "Can't play this track");
             return false;
         }
+        const restoring = opts.watch || isKnown(info.trackId) ? null : restoreBest(info.trackId, 3000);
         const intro = opts.intro && !isKnown(info.trackId) ? await launchCard(item, info, mode, loaded.data) : null;
         closeAll(true);
         try {
@@ -1176,6 +1185,7 @@
             if (opened) return true;
         }
         registerModes([{ trackId: info.trackId, mode }]);
+        await restoring;
         let ok = false;
         if (opts.watch && window.__nswsWatchTrack) {
             try {
@@ -2054,6 +2064,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 entries = more ? entries.concat(res.entries) : res.entries;
                 total = res.total;
                 if (!physicsView) userEntry = res.userEntry;
+                if (!more && !physicsView && userEntry && !myRecord()) restoreBest(t.trackId).then((ok) => ok && !closed && drawHero());
             } catch (e) {
                 console.warn(e);
                 boardError = "Couldn't load the leaderboard. Check your connection and try again.";
@@ -2072,6 +2083,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             } catch {}
             const q = "nsws/tracks/board?trackId=" + t.trackId + "&skip=" + skip + "&amount=" + BOARD_PAGE + (physicsView ? "&physics=" + physicsView : "") + (hash ? "&userTokenHash=" + encodeURIComponent(hash) : "");
             const d = await api(q);
+            if (Number.isSafeInteger(d.current)) window.__nswsBEPhysicsNow = d.current;
             older = Array.isArray(d.older) ? d.older : [];
             if (physicsView && d.physics !== physicsView) physicsView = null;
             const style = (s) => {

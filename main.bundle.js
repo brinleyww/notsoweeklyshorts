@@ -58472,6 +58472,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (null == r || o.time.lessThan(r) || __nswsForce) {
                     C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || keepRecordsOf(t);
                     C.get(this, Bh, "f").saveRecord(e, i.tokenHash, t, n, o.time, o.recording, C.get(this, Fh, "f").determinismState);
+                    markBEPhysics(t);
                     for (const e of C.get(this, Vh, "f"))
                         e()
                 }
@@ -58494,6 +58495,34 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 v.push(id),
                 localStorage.setItem("nswsKeptRecords", JSON.stringify(v.slice(-300)))
             } catch (e) {}
+        };
+        // The Better Editor physics version each Better Editor PB here was driven on (none = 1). A PB from older physics
+        // stops being "Your best" once the physics changes: its run is on the Old physics board now.
+        let bePhysicsMap = null;
+        const bePhysicsOf = () => {
+            if (null == bePhysicsMap)
+                try {
+                    const v = JSON.parse(localStorage.getItem("nswsBEPhysics") || "{}");
+                    bePhysicsMap = v && "object" == typeof v ? v : {}
+                } catch (e) {
+                    bePhysicsMap = {}
+                }
+            return bePhysicsMap
+        }
+          , currentBEPhysics = t => window.__nswsBEBoard?.(t) ? window.__nswsTM?.ready?.() ? window.__nswsTM.physics : window.__nswsBEPhysicsNow ?? null : null
+          , markBEPhysics = t => {
+            const p = currentBEPhysics(t)
+              , v = bePhysicsOf();
+            if (null == p || v[t] === p)
+                return;
+            v[t] = p;
+            try {
+                localStorage.setItem("nswsBEPhysics", JSON.stringify(v))
+            } catch (e) {}
+        }
+          , staleBEPhysics = t => {
+            const p = currentBEPhysics(t);
+            return null != p && (bePhysicsOf()[t] ?? 1) < p
         };
         const qh = class {
             constructor(e, t, n, i) {
@@ -58525,6 +58554,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsTraffic?.drivePb?.(t);
                 C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || keepRecordsOf(t);
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
+                markBEPhysics(t);
                 const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
                 __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
                 null)));
@@ -58565,7 +58595,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             getRecord(e, t) {
                 const n = C.get(this, Oh, "f").getUserProfile(e);
-                return null == n ? null : C.get(this, Bh, "f").loadRecord(e, n.tokenHash, t, C.get(this, Fh, "f").determinismState)
+                if (null == n)
+                    return null;
+                if (staleBEPhysics(t)) {
+                    C.get(this, Bh, "f").deleteAllRecordsForTrack(t);
+                    markBEPhysics(t)
+                }
+                return C.get(this, Bh, "f").loadRecord(e, n.tokenHash, t, C.get(this, Fh, "f").determinismState)
             }
         }
         ;
@@ -63372,7 +63408,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 page: (id, skip, amount) => x.getLeaderboard(w.getCurrentUserProfile().tokenHash, id, skip, amount, !1),
                 recordings: ids => x.getRecordings(ids),
                 record: id => S.getRecord(w.profileSlot, id),
-                profile: () => w.getCurrentUserProfile()
+                profile: () => w.getCurrentUserProfile(),
+                restore: async id => {
+                    const slot = w.profileSlot;
+                    if (x.determinismState != Js.Ok || null != S.getRecord(slot, id))
+                        return !1;
+                    const e = await x.getLeaderboardUserEntry(w.getCurrentUserProfile().tokenHash, id, !0);
+                    return null != e && !e.noReplay && null == S.getRecord(slot, id) && "Download" == await S.syncRecord(slot, id, e)
+                }
             };
             // For mod/competitions.js: Competitions run on the game's own multiplayer.
             const cupCategory = data => {
