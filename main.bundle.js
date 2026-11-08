@@ -32570,6 +32570,11 @@ window.__nswsAutoGhostNote = function(trackId) {
             function wantsTrackSplit(e) {
                 return (e.isTrackCullingEnabled?.() ?? !1) || Number.isFinite(e.getTrackCullDistance?.() ?? 1 / 0)
             }
+            // Better Editor blocks are far heavier than stock parts (a bobsleigh piece 30k triangles), so a track with any
+            // is always split and the camera skips what it can't see.
+            function trackSplit(t, e) {
+                return wantsTrackSplit(e) || null != self.TM?.isTM && m.get(t, l, "f").some((p => self.TM.isTM(p.type.configuration.id)))
+            }
             function trackRenderState(e) {
                 let t = trackRenderStates.get(e);
                 return null == t && trackRenderStates.set(e, t = {
@@ -32824,7 +32829,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 refreshCulling() {
                     const e = m.get(this, r, "f")
                       , t = trackRenderStates.get(this);
-                    (wantsTrackSplit(e) != (t?.split ?? !1) || wantsTrackSplit(e) && trackChunkSpan(e) != t.span) && this.generateMeshes()
+                    (trackSplit(this, e) != (t?.split ?? !1) || trackSplit(this, e) && trackChunkSpan(e) != t.span) && this.generateMeshes()
                 }
                 generateMeshes() {
                     m.get(this, i, "m", p).call(this);
@@ -32858,7 +32863,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     m.get(this, a, "f").getSettingBoolean(k.A.LowPerformanceMode) && (c = null);
                     // Track culling splits each part type into spatial chunks the camera and shadow passes can skip.
                     const d = m.get(this, r, "f")
-                      , A = wantsTrackSplit(d)
+                      , A = trackSplit(this, d)
                       , span = trackChunkSpan(d)
                       , v = trackRenderState(this)
                       , y = new Map;

@@ -1012,6 +1012,7 @@
         hideTimer = null;
         if (!frame) createFrame();
         host.classList.remove("hidden");
+        post({ type: "pause", paused: false });
         try {
             (frame || host).focus();
         } catch {}
@@ -1038,6 +1039,8 @@
         }
         host.classList.add("hidden");
         autosave();
+        // Hidden on the same site, the editor would keep drawing its whole track behind the game (BE's nsws_bridge.js).
+        post({ type: "pause", paused: true });
     }
 
     function open(track) {
