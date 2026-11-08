@@ -1013,6 +1013,11 @@
         if (!frame) createFrame();
         host.classList.remove("hidden");
         post({ type: "pause", paused: false });
+        let settings = null;
+        try {
+            settings = JSON.parse(localStorage.getItem("polytrack_v5_prod_settings"));
+        } catch {}
+        post({ type: "settings", settings });
         try {
             (frame || host).focus();
         } catch {}
