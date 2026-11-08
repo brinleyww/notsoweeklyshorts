@@ -13,8 +13,9 @@ import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
 import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
 import { TrackHub } from "./trackhub.js";
+import { Feedback, MAX_FEEDBACK_BODY } from "./feedback.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub, Feedback };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -78,7 +79,7 @@ const SNAPSHOT_TTL_MS = 5 * 60_000;
 // Every instance rereads the ban list from KV this often; each read counts against the free plan's 100k a day.
 const IP_BANS_TTL_MS = 2 * 60_000;
 // These routes check the owner's key themselves, so the owner can always lift a ban from a banned network.
-const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban|tracks\/admin)(\/|$)/;
+const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban|tracks\/admin|feedback\/admin)(\/|$)/;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -2075,6 +2076,77 @@ async function handleCupLink(request, url, env, code, wantsCard) {
 
 // ---- Custom tracks: packs, clubs, campaigns and Race Control submissions (src/trackhub.js) ----
 
+const FEEDBACK_PREFIX = "/nsws/feedback/";
+
+// Main-menu feedback (src/feedback.js): players send, only the owner reads.
+async function handleFeedback(request, url, env, cfg, fromSite, requestOrigin) {
+    const path = url.pathname.slice(FEEDBACK_PREFIX.length);
+    const admin = path.startsWith("admin/");
+    if (!fromSite && !admin) return forbidden();
+    const origin = requestOrigin || "*";
+    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
+    if (request.method !== "POST") return json({ error: "Method not allowed." }, origin, 405);
+    if (!env.FEEDBACK) return json({ error: "Feedback isn't switched on for this server yet." }, origin, 503);
+    if (doLimited()) return busy(origin);
+    const box = env.FEEDBACK.get(env.FEEDBACK.idFromName("global"));
+
+    if (admin) {
+        const text = await readSmallBody(request, 4096);
+        let body = null;
+        try {
+            body = JSON.parse(text || "{}");
+        } catch {}
+        if (!cfg.owner && !(await isOwner(body?.token, cfg))) return json({ error: "Only the owner can do that." }, origin, 403);
+        const reply = (result) => json(result.error ? { error: result.error } : result, origin, result.error ? result.status || 400 : 200);
+        if (path === "admin/list") return reply(await box.list({ before: body.before }));
+        if (path === "admin/unseen") return reply(await box.unseen());
+        let m;
+        if ((m = /^admin\/delete\/([0-9A-Za-z]{12})$/.exec(path))) return reply(await box.remove({ id: m[1] }));
+        if ((m = /^admin\/file\/([0-9A-Za-z]{12}-[0-2])$/.exec(path))) {
+            const file = await box.fetch(new Request("https://feedback.internal/file/" + m[1]));
+            return new Response(file.body, {
+                status: file.status,
+                headers: { "Content-Type": file.headers.get("Content-Type") || "application/octet-stream", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", ...corsHeaders(origin) },
+            });
+        }
+        return json({ error: "Not found." }, origin, 404);
+    }
+
+    if (path !== "send") return json({ error: "Not found." }, origin, 404);
+    if (Number(request.headers.get("Content-Length")) > MAX_FEEDBACK_BODY) return json({ error: "Each file has to be under 10 MB." }, origin, 413);
+    const buffer = await request.arrayBuffer();
+    if (buffer.byteLength > MAX_FEEDBACK_BODY || buffer.byteLength < 4) return json({ error: "Each file has to be under 10 MB." }, origin, 413);
+    const headLength = new DataView(buffer).getUint32(0);
+    let head = null;
+    try {
+        if (headLength <= 16000) head = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, Math.min(headLength, buffer.byteLength - 4))));
+    } catch {}
+    const token = head?.token;
+    if (!HEX64.test(token ?? "")) return json({ error: "Your profile couldn't be read. Reload the page and try again." }, origin, 400);
+    const userId = await sha256Hex(token);
+    const owner = await isOwner(token, cfg);
+    if (!owner && await accountBanOf(userId, env)) {
+        return json({ error: "You can't send feedback while you're banned from the chat.", banned: true }, origin, 403);
+    }
+    const c = describeClient(request);
+    const client = [c.browser + " on " + c.os, c.device, c.country].filter(Boolean).join(", ");
+    const reply = await box.fetch(new Request("https://feedback.internal/send", {
+        method: "POST",
+        headers: {
+            "X-User": userId,
+            "X-Ip": await ipHash(request.headers.get("CF-Connecting-IP")),
+            "X-Visitor": typeof head.visitor === "string" ? head.visitor : "",
+            "X-Client": client,
+            "X-Owner": owner ? "1" : "",
+        },
+        body: buffer,
+    }));
+    return new Response(reply.body, {
+        status: reply.status,
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(origin) },
+    });
+}
+
 const TRACKS_PREFIX = "/nsws/tracks/";
 // A shared track pack: /t/<ID>. Like a cup link, it is the unfurl page for chat apps.
 const PACK_LINK = /^\/t\/([0-9A-Za-z]{10})$/;
@@ -2481,6 +2553,16 @@ export default {
                 } catch (err) {
                     noteDoError(err);
                     console.error("tracks error:", err && err.message);
+                    return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
+                }
+            }
+            if (url.pathname.startsWith(FEEDBACK_PREFIX)) {
+                const origin = requestOrigin || "*";
+                try {
+                    return await handleFeedback(request, url, env, cfg, fromSite, requestOrigin);
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("feedback error:", err && err.message);
                     return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
                 }
             }

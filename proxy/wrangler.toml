@@ -146,3 +146,12 @@ class_name = "TrackHub"
 [[migrations]]
 tag = "v7"
 new_sqlite_classes = ["TrackHub"]
+
+# Main-menu feedback to the owner (src/feedback.js): the text and attached images/videos.
+[[durable_objects.bindings]]
+name = "FEEDBACK"
+class_name = "Feedback"
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["Feedback"]

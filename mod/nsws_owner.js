@@ -9,7 +9,7 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"], ["subs", "Submissions"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"], ["subs", "Submissions"], ["feedback", "Feedback"]];
     const SUB_FILTERS = [["new", "New"], ["planned", "Planned"], ["rejected", "Rejected"], ["all", "All"]];
     const SUB_MODES = { normal: "Normal", rocket: "Rocket League", royale: "Royale" };
     const SUB_EMPTY = {
@@ -673,6 +673,7 @@
         if (ui.tab === "tags") return "tags";
         if (ui.tab === "bans") return "bans";
         if (ui.tab === "subs") return "subs";
+        if (ui.tab === "feedback") return "feedback";
         return statsKey();
     }
 
@@ -757,6 +758,8 @@
             if (!ui.bans) loads.push(loadBans);
         } else if (ui.tab === "subs") {
             if (!ui.subs && ui.subsLoading !== ui.subsFilter) loads.push(loadSubs);
+        } else if (ui.tab === "feedback") {
+            if (!window.__nswsFeedback?.inbox.loaded()) loads.push(loadFeedback);
         } else {
             if (!ui.stats) {
                 ui.stats = cacheGet(statsKey());
@@ -780,6 +783,7 @@
         else if (tab === "tags") await loadTags();
         else if (tab === "bans") await loadBans();
         else if (tab === "subs") await loadSubs();
+        else if (tab === "feedback") await loadFeedback();
         else await loadStats();
         if (!ui.refreshBtn) return;
         ui.refreshBtn.disabled = false;
@@ -2960,6 +2964,33 @@
         renderBanLists();
     }
 
+    function feedbackLabel(n) {
+        const b = ui.overlay?.querySelector('[data-tab="feedback"]');
+        if (b) b.textContent = n ? "Feedback (" + num(n) + ")" : "Feedback";
+    }
+
+    // The list lives in mod/nsws_feedback.js; listing it marks it read, so it is fetched only on opening the tab or Refresh.
+    async function loadFeedback() {
+        const inbox = window.__nswsFeedback?.inbox;
+        if (!inbox) return;
+        ui.feedbackRoot ??= el("div");
+        await inbox.refresh(ui.feedbackRoot, window.__nswsOwner, feedbackLabel);
+        ui.fetchedAt.feedback = Date.now();
+    }
+
+    function renderFeedbackTab(body) {
+        const inbox = window.__nswsFeedback?.inbox;
+        body.textContent = "";
+        if (!inbox) {
+            body.appendChild(el("div", "nrc-empty", "Feedback didn't load. Reload the page."));
+            return;
+        }
+        ui.feedbackRoot ??= el("div");
+        const head = card("Feedback", "paper", "What players sent with Give feedback on the main menu: up to 200 words and up to 3 images or videos each. Only you can read it. Opening this tab marks it read.");
+        body.append(head, ui.feedbackRoot);
+        inbox.render(ui.feedbackRoot, window.__nswsOwner, feedbackLabel);
+    }
+
     function subsLabel() {
         const b = ui.overlay?.querySelector('[data-tab="subs"]');
         if (b) b.textContent = ui.subsNew ? "Submissions (" + num(ui.subsNew) + ")" : "Submissions";
@@ -3347,6 +3378,10 @@
             renderSubsTab(body);
             return;
         }
+        if (ui.tab === "feedback") {
+            renderFeedbackTab(body);
+            return;
+        }
         body.textContent = "";
 
         if (ui.error && !ui.stats) {
@@ -3511,8 +3546,9 @@
         ui.raf = requestAnimationFrame(tick);
         ui.live = null;
         ensureTab();
-        // One request per opening puts the count of new submissions on the tab label.
+        // One request per opening puts the count of new submissions on the tab label, and one the count of unread feedback.
         if (ui.tab !== "subs") loadSubs();
+        if (ui.tab !== "feedback") window.__nswsFeedback?.inbox.unseen(window.__nswsOwner).then(feedbackLabel, () => {});
     }
 
     window.__nswsOwnerPanel = { open, close, checkRun };

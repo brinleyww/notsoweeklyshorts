@@ -909,6 +909,28 @@ An account is the userId (SHA-256 of the token); the token is never stored.
   submissions. Rate limits are daily counters in the `limits` table (yesterday's rows are dropped
   on the first hit of a day). Every filtered column is indexed and every list has a LIMIT.
 
+## Feedback
+
+`src/feedback.js`, the `Feedback` Durable Object (one instance, `"global"`, binding `FEEDBACK`, migration `v8`).
+The main menu's Give feedback bar (above Standings and Play) opens `mod/nsws_feedback.js`: up to 200 words and up
+to 3 images or videos, each under 10 MB. Race Control's Feedback tab is the only reader.
+
+- **Send:** `POST /nsws/feedback/send`, site only, `text/plain` body like a chat upload: a 4-byte big-endian header
+  length, header JSON `{token, nickname, visitor, text, files: [{name, size}]}`, then the files' bytes in order. The
+  Worker hashes the token to the userId (the token is never stored) and refuses any banned account, chat-only bans
+  included (`403 {banned: true}`); IP bans are refused like every other route. The object checks the word count,
+  line breaks are kept, and each file's bytes must sniff as PNG, JPEG, GIF, WebP, AVIF/HEIC, MP4/MOV or WebM.
+  The browser's client (browser, OS, device, country) is saved with it.
+- **Limits:** one per 30 minutes per account and per browser (`nsws_visitor`), three per 30 minutes per address
+  (a school shares one), 300 a day in all, and 1 GB of files stored (then text only). The owner skips the gap. The page
+  remembers the account's next allowed time (`_nswsFeedbackNext`) and its chat ban (`_nswsAccountBans`) to lock the
+  box before anything is typed; the Worker's check is the real one.
+- **Storage:** files in 1 MB `parts` rows; `meta` keeps the stored bytes and today's count so nothing sums the table.
+  Nothing expires: deleting in Race Control frees the space.
+- **Owner routes** (`/nsws/feedback/admin/*`, the owner's key as `token` in the body, from anywhere): `list` (30 newest,
+  `before` for older; marks them read), `unseen` (count for the tab label, one request per Race Control opening),
+  `file/<id>-<n>` (the bytes, fetched into a blob URL), `delete/<id>`.
+
 ## Name moderation
 
 Every name and line players write goes through the chat's filter (`proxy/src/chatfilter.js`:
