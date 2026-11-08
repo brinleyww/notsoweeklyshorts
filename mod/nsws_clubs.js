@@ -917,7 +917,7 @@
             const r = trackRow(i, Object.assign({}, t, { mode: "normal" }), ctl);
             root.appendChild(r);
         });
-        if (d.tracks.some((t) => isBE(t.code))) root.appendChild(h("div", "nc-note", "Better Editor tracks use new blocks. They download the first time a player plays one (about 60 MB), then they race like any other track."));
+        if (d.tracks.some((t) => isBE(t.code))) root.appendChild(h("div", "nc-note", "Better Editor tracks use new blocks. They download the first time a player plays one (about 65 MB), then they race like any other track."));
         if (d.tracks.some((t) => t.mode === "royale")) root.appendChild(h("div", "nc-note", "Royale: each checkpoint number has two gates. After crossing one, a reset puts you at the other gate of that number."));
 
         const foot = h("div", "nc-actions nc-foot");

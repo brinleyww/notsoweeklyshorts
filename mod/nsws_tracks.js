@@ -242,7 +242,7 @@
 
     const beReady = () => !!window.__nswsTM?.ready();
 
-    // Loads Better Editor's blocks (about 60 MB the first time, then from the browser's cache) with a dialog
+    // Loads Better Editor's blocks (about 65 MB the first time, then from the browser's cache) with a dialog
     // while it takes. False when the player cancelled; throws when they couldn't load.
     const mb = (n) => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
     // Counts the bytes of the block file while TM.load() downloads it, for a real loading bar.
@@ -303,7 +303,7 @@
         const fill = el("div");
         bar.appendChild(fill);
         const sub = el("p", "nt-text dim", "Starting...");
-        body.append(el("p", "nt-text", "Loading Better Editor blocks. The first time this downloads about 60 MB."), bar, sub);
+        body.append(el("p", "nt-text", "Loading Better Editor blocks. The first time this downloads about 65 MB."), bar, sub);
         const show = (got, total) => {
             bar.classList.toggle("busy", !total);
             if (total) fill.style.width = Math.min(100, (got / total) * 100).toFixed(1) + "%";

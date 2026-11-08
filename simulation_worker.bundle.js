@@ -11165,10 +11165,10 @@
                 const TM = self.TM;
                 if (!co.has(TM.parts[0].i)) {
                     TM.addEnum(Za);
-                    for (const [k,v] of [["Plastic", 9], ["Wood", 10], ["Stadium", 11], ["Ice", 12], ["Water", 13]])
-                        Xa[Xa[k] = v] = k;
+                    const families = (self.TM_DATA?.families ?? ["Plastic", "Wood", "Stadium", "Ice", "Water"]);
+                    families.forEach(((k,f) => Xa[Xa[k] = 9 + f] = k));
                     for (const q of TM.parts) {
-                        const e = new lo(null,[Xa.Plastic, Xa.Wood, Xa.Stadium, Xa.Ice, Xa.Water][q.f],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new R(q.o[0],q.o[1],q.o[2]) : null);
+                        const e = new lo(null,Xa[families[q.f]],q.i,[],TM.palette(q),q.c,q.d ?? null,q.o ? new R(q.o[0],q.o[1],q.o[2]) : null);
                         ho.push(e),
                         co.set(e.id, e),
                         e.detector?.type == to.Checkpoint && uo.push(e.id),
