@@ -17,6 +17,8 @@
     const AUTOSAVE_KEY = "nswsEditorAutosave";
     const AUTOSAVE_EVERY_MS = 30000;
     const REQUEST_TIMEOUT_MS = 15000;
+    // The bridge's edit waits up to 60 s for the editor's loading screen (the block download) and 20 s for it to open.
+    const EDIT_TIMEOUT_MS = 100000;
     const MODES_KEY = "nswsEditorModes";
     const MANUAL = "\u0000pasted";
     const NEW = "\u0000new";
@@ -140,11 +142,35 @@
                 if (own && /^https?:\/\//.test(own)) url = own;
             } catch {}
         }
-        if (url === DEFAULT_URL && window.__nswsApiBase && mirrorOn()) url = window.__nswsApiBase + "be/";
+        if (url === DEFAULT_URL && window.__nswsApiBase && (useMirror ?? mirrorOn())) url = window.__nswsApiBase + "be/";
         if (!/[?&]nsws=1/.test(url)) url += (url.includes("?") ? "&" : "?") + "nsws=1";
-        return url;
+        return url + prefsHash();
     }
 
+    // The editor is another site with its own storage; BE's nsws_prefs.js copies these in before the game starts.
+    function prefsHash() {
+        const P = "polytrack_v5_prod_";
+        const read = (key) => {
+            try {
+                return JSON.parse(localStorage.getItem(key));
+            } catch {
+                return null;
+            }
+        };
+        const slot = read(P + "user_slot") ?? 0;
+        const profile = read(P + "user_" + (Number.isSafeInteger(slot) && slot >= 0 ? slot : 0));
+        const prefs = { settings: read(P + "settings"), keys: read(P + "key_bindings"), unlocked: read(P + "unlocked_car_styles") };
+        if (profile && typeof profile.carStyle === "string") {
+            prefs.carStyle = profile.carStyle;
+            prefs.nickname = profile.nickname;
+            prefs.countryCode = profile.countryCode ?? null;
+        }
+        return "#nswsPrefs=" + encodeURIComponent(JSON.stringify(prefs));
+    }
+
+    // Decided for this page once the other address has been tried, so a full or blocked localStorage can't loop the switch.
+    let useMirror = null;
+    let switched = false;
     function mirrorOn() {
         try {
             return Date.now() - Number(localStorage.getItem(MIRROR_KEY) || 0) < MIRROR_FOR_MS;
@@ -261,6 +287,12 @@
         }
         const t = reply?.track;
         live = t && typeof t.code === "string" ? { name: t.name || "Unnamed Track", named: !!t.name, author: t.author || "", code: t.code } : null;
+        // A new track saved or loaded inside the editor is the one to reopen after a reload.
+        if (live?.named) {
+            try {
+                if (localStorage.getItem(LAST_KEY) !== live.name) localStorage.setItem(LAST_KEY, live.name);
+            } catch {}
+        }
         renderMode();
         syncMode();
         return current();
@@ -274,6 +306,7 @@
 
     let testing = false;
     async function startTest(m) {
+        if (testing) return;
         const T = lib();
         if (!T || typeof m.code !== "string") {
             note("Custom Tracks didn't load. Reload the page and try again.", "bad");
@@ -316,9 +349,9 @@
                 if (host && !host.classList.contains("hidden") && !host.contains(e.target)) e.stopImmediatePropagation();
             }, true);
         host.addEventListener("keydown", (e) => {
-            if ((e.key === "Escape" || e.code === "Escape") && dialogClose) {
+            if (e.key === "Escape" || e.code === "Escape") {
                 e.preventDefault();
-                dialogClose();
+                dialogClose ? dialogClose() : close();
             }
         });
 
@@ -437,14 +470,14 @@
         } catch {}
     }
 
-    function request(type, extra) {
+    function request(type, extra, ms) {
         if (!frame || !ready) return Promise.reject(new Error("The editor isn't connected."));
         const reqId = "e" + ++reqSeq;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
                 pending.delete(reqId);
                 reject(new Error("The editor didn't answer."));
-            }, REQUEST_TIMEOUT_MS);
+            }, ms || REQUEST_TIMEOUT_MS);
             pending.set(reqId, { resolve, timer });
             post(Object.assign({ type, reqId }, extra));
         });
@@ -462,7 +495,7 @@
         if (m.type === "progress" && !m.reqId) {
             const got = Number(m.loaded) || 0;
             const total = Number(m.total) || 0;
-            if (!editorOpen) loading(total && got >= total ? "Starting the editor..." : "Downloading blocks: " + mb(got) + (total ? " of " + mb(total) : "") + " MB", total ? got / total : null);
+            if (!editorOpen && !ui.loader.classList.contains("hidden")) loading(total && got >= total ? "Starting the editor..." : "Downloading blocks: " + mb(got) + (total ? " of " + mb(total) : "") + " MB", total ? got / total : null);
             return;
         }
         if (m.type === "exit" && !m.reqId) {
@@ -531,9 +564,12 @@
     // blocked: the page loaded but no editor answered, which is what a network that blocks github.io looks like.
     function showFallback(blocked) {
         if (ready || !ui) return;
-        if (blocked === true && window.__nswsApiBase && !frame?.src.startsWith(window.__nswsApiBase)) {
+        if (blocked === true && window.__nswsApiBase && !switched) {
+            switched = true;
+            // A remembered mirror that stops answering (the Worker over its limits) goes back to github.io.
+            useMirror = !frame?.src.startsWith(window.__nswsApiBase);
             try {
-                localStorage.setItem(MIRROR_KEY, String(Date.now()));
+                useMirror ? localStorage.setItem(MIRROR_KEY, String(Date.now())) : localStorage.removeItem(MIRROR_KEY);
             } catch {}
             unloadFrame();
             createFrame();
@@ -630,8 +666,9 @@
     async function editTrack(name, opts = {}, attempt = 0) {
         let reply;
         try {
-            reply = await request("edit", { name, force: !!opts.force, fresh: !!opts.fresh });
+            reply = await request("edit", { name, force: !!opts.force, fresh: !!opts.fresh }, EDIT_TIMEOUT_MS);
         } catch (err) {
+            loaded();
             note(err.message, "bad");
             return false;
         }
@@ -711,6 +748,7 @@
         try {
             reply = await request("import", { code: job.code });
         } catch (err) {
+            if (!editorOpen) loaded();
             note(err.message, "bad");
             return;
         }
@@ -721,6 +759,7 @@
                 return;
             }
             pendingImport = null;
+            if (!editorOpen) loaded();
             note(reply.error || "The editor couldn't take that track.", "bad");
             return;
         }
@@ -786,9 +825,10 @@
     }
 
     async function saveToLibrary(b) {
-        const t = await need();
-        if (!t) return;
+        // Disabled from the first await: two adds of one new track at once both miss each other and make two entries.
         busy(b, async () => {
+            const t = await need();
+            if (!t) return;
             await lib().add(t.code, { mode: modeOf(t.name), source: "editor" });
             note('Saved "' + t.name + '" to My Tracks.', "good");
         });
@@ -871,7 +911,9 @@
         noteRow.append(el("label", null, "Note"), noteBox);
         body.push(noteRow, status, el("div", "nse-sec", "My submissions"), mine);
 
+        let sent = false;
         const send = button("Submit", (e, b) => {
+            if (sent) return;
             const user = T.user?.() || {};
             if (!user.token) {
                 status.className = "bad";
@@ -904,8 +946,10 @@
                 T.markSubmitted?.(t.code, { id: answer?.id || "", at: Date.now() }).catch(() => {});
                 status.className = "good";
                 status.textContent = "Submitted! Race Control will take a look. Remember: don't post this track anywhere, or it gets disqualified.";
-                b.disabled = true;
+                sent = true;
                 loadMine(mine, user.token);
+            }).then(() => {
+                if (sent) b.disabled = true;
             });
         }, "images/share.svg", true);
         dialog("Submit to Weekly Shorts", body, [button("Close", () => closeDialog(), "images/back.svg"), send]);
@@ -941,6 +985,8 @@
 
     function show() {
         build();
+        // A test race that never called onExit must not keep blocking the next test or the live refresh.
+        testing = false;
         clearTimeout(hideTimer);
         hideTimer = null;
         if (!frame) createFrame();
@@ -962,6 +1008,13 @@
     function hide() {
         if (!host || host.classList.contains("hidden")) return;
         closeDialog();
+        // A hidden iframe can keep keyboard focus, and the game (or a test race) would get no keys.
+        if (host.contains(document.activeElement)) {
+            try {
+                document.activeElement.blur();
+                window.focus();
+            } catch {}
+        }
         host.classList.add("hidden");
         autosave();
     }

@@ -3166,7 +3166,7 @@
         act("Copy PolyTrack code", "Getting the code\u2026", async () => {
             const t = await subTrack(s);
             if (!(await copyText(t.code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
-            return "PolyTrack code copied (" + subSize(t.code.length) + ")." + (t.mode !== "normal" ? " It plays in " + SUB_MODES[t.mode] + ", which a plain code doesn't keep." : "");
+            return (t.code.startsWith("PolyTrackBE") ? "Better Editor code copied; only the Better Editor and NSWS read it" : "PolyTrack code copied") + " (" + subSize(t.code.length) + ")." + (t.mode !== "normal" ? " It plays in " + SUB_MODES[t.mode] + ", which a plain code doesn't keep." : "");
         });
         act("Save to My Tracks", "Saving\u2026", async () => {
             const tracks = window.__nswsTracks;
@@ -3238,7 +3238,8 @@
         c.appendChild(planRow);
 
         const danger = el("div", "nrc-acts");
-        const del = el("button", "button", "Delete");
+        const armed = ui.subsArm === s.id;
+        const del = el("button", "button" + (armed ? " armed" : ""), armed ? "Press again to delete for good" : "Delete");
         del.disabled = ui.subsBusy;
         del.addEventListener("click", () => {
             if (ui.subsArm !== s.id) {
@@ -3246,10 +3247,13 @@
                 ui.subsArm = s.id;
                 del.classList.add("armed");
                 del.textContent = "Press again to delete for good";
+                // The list may have been drawn again since, so the button on screen is looked up.
                 ui.subsArmTimer = setTimeout(() => {
                     ui.subsArm = null;
-                    del.classList.remove("armed");
-                    del.textContent = "Delete";
+                    for (const b of ui.subsDetailBox?.querySelectorAll("button.armed") ?? []) {
+                        b.classList.remove("armed");
+                        b.textContent = "Delete";
+                    }
                 }, 4000);
                 return;
             }

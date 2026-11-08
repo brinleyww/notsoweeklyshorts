@@ -58,19 +58,24 @@ const PACK_IDLE_MS = 180 * DAY_MS;
 const LIB_ID = /^[A-Za-z0-9_-]{6,24}$/;
 const LIB_TRACKS = 500;
 const LIB_BYTES = 30_000_000;
-const LIB_CODE_MAX = 2_000_000;
+// As big as a track a pack can carry, so a track that came in a pack can still be kept on the account.
+const LIB_CODE_MAX = 4_000_000;
 const LIB_BATCH = 20;
+// Characters of codes in one library/codes reply; the client asks again for the ones left out.
+const LIB_CODES_REPLY = 8_000_000;
 // Room for a track's own picture (mod/nsws_tracks.js keeps it under 20 KB).
 const LIB_META_MAX = 26_000;
 
 // Better Editor boards (Kodub can't check their blocks). Run ids sit above Kodub's, so the game's recordings
 // request can tell the two apart (main.bundle.js getRecordings).
 const BE_RUN_BASE = 8_000_000_000_000_000;
-const BE_MAX_FRAMES = 36_000_000;
+// The game's Recording.maxFrames; one entry over it makes the game throw away the whole board page.
+const BE_MAX_FRAMES = 5_999_999;
 const BE_MAX_RECORDING = 1_000_000;
 const BE_RUNS_PER_DAY = 300;
 const MAX_BOARD_PAGE = 100;
 const FAVS_PER_DAY = 300;
+const PLAYS_PER_DAY = 1000;
 
 const fail = (status, error) => ({ status, error });
 
@@ -555,10 +560,15 @@ export class TrackHub extends DurableObject {
         this.sql.exec(`UPDATE track_stats SET ${column} = MAX(0, ${column} + ?) WHERE track_id = ?`, by, trackId);
     }
 
-    played({ userId, trackId }) {
+    played({ userId, ipKey, trackId }) {
         if (!HEX64.test(trackId ?? "")) return fail(400, "Bad track.");
+        const keys = ["play:ip:" + ipKey, "play:u:" + userId];
+        if (this.overLimit(keys, PLAYS_PER_DAY)) return fail(429, "Too many tracks played today.");
         this.ctx.storage.transactionSync(() => {
-            if (this.sql.exec("INSERT INTO track_players (track_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", trackId, userId).rowsWritten > 0) this.bumpStats(trackId, "players", 1);
+            if (this.sql.exec("INSERT INTO track_players (track_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", trackId, userId).rowsWritten > 0) {
+                this.bumpStats(trackId, "players", 1);
+                this.countHit(keys);
+            }
         });
         return { ok: true };
     }
@@ -597,7 +607,7 @@ export class TrackHub extends DurableObject {
         amount = Math.max(1, Math.min(MAX_BOARD_PAGE, Math.floor(Number(amount)) || 20));
         const v = Number.isSafeInteger(view) && view > 0 && view < physics ? view : physics;
         const total = this.first("SELECT runs FROM be_counts WHERE track_id = ? AND physics = ?", trackId, v)?.runs ?? 0;
-        const entries = total
+        const entries = total && skip < total
             ? this.sql.exec("SELECT id, user_id, nickname, country, car_style, frames FROM be_runs WHERE track_id = ? AND physics = ? ORDER BY frames, created LIMIT ? OFFSET ?", trackId, v, amount, skip)
                 .toArray()
                 .map((r) => ({ id: BE_RUN_BASE + r.id, userId: r.user_id, nickname: r.nickname, frames: r.frames, carStyle: r.car_style, verifiedState: 0, countryCode: r.country ?? null }))
@@ -629,7 +639,7 @@ export class TrackHub extends DurableObject {
         if (typeof carStyle !== "string" || !carStyle || carStyle.length > 400) return fail(400, "Bad car.");
         const country = typeof countryCode === "string" && /^[A-Za-z]{2}$/.test(countryCode) ? countryCode : null;
         const keys = ["berun:ip:" + ipKey, "berun:u:" + userId];
-        if (this.overLimit(keys, BE_RUNS_PER_DAY)) return fail(429, "Too many runs sent today. Try again tomorrow.");
+        if (this.overLimit(keys, BE_RUNS_PER_DAY) || this.overBytes(ipKey, recording.length)) return fail(429, "Too many runs sent today. Try again tomorrow.");
         const old = this.first("SELECT id, frames, created FROM be_runs WHERE track_id = ? AND user_id = ? AND physics = ?", trackId, userId, physics);
         if (old && old.frames <= frames) {
             const p = this.bePosition(trackId, physics, old);
@@ -647,6 +657,7 @@ export class TrackHub extends DurableObject {
                 this.sql.exec("INSERT INTO be_counts (track_id, physics, runs) VALUES (?, ?, 1) ON CONFLICT (track_id, physics) DO UPDATE SET runs = runs + 1", trackId, physics);
             }
             this.countHit(keys);
+            this.countHit(["bytes:ip:" + ipKey], recording.length);
         });
         return { uploadId: BE_RUN_BASE + id, previousPosition: before, newPosition: this.bePosition(trackId, physics, { frames, created: now }) };
     }
@@ -668,9 +679,14 @@ export class TrackHub extends DurableObject {
     libraryCodes({ userId, ids }) {
         if (!Array.isArray(ids) || ids.length > LIB_BATCH) return fail(400, "Bad request.");
         const codes = {};
+        let chars = 0;
         for (const id of ids) {
             if (typeof id !== "string" || !LIB_ID.test(id)) continue;
-            if (!this.first("SELECT 1 AS x FROM library WHERE user_id = ? AND id = ?", userId, id)) continue;
+            const row = this.first("SELECT size FROM library WHERE user_id = ? AND id = ?", userId, id);
+            if (!row) continue;
+            // Twenty big codes in one reply would pass what a Durable Object can answer (32 MiB).
+            if (chars && chars + row.size > LIB_CODES_REPLY) break;
+            chars += row.size;
             codes[id] = this.getBlob("l", userId + ":" + id);
         }
         return { codes };
@@ -679,25 +695,29 @@ export class TrackHub extends DurableObject {
     libraryPut({ userId, ipKey, tracks }) {
         if (!Array.isArray(tracks) || !tracks.length || tracks.length > LIB_BATCH) return fail(400, "Bad request.");
         const usage = this.first("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM library WHERE user_id = ?", userId);
-        let count = usage.n, bytes = usage.bytes, fresh = 0;
+        let count = usage.n, bytes = usage.bytes;
         const rows = [];
+        const missing = [];
         for (const t of tracks) {
             if (!t || typeof t.id !== "string" || !LIB_ID.test(t.id)) return fail(400, "Bad request.");
             const old = this.first("SELECT size FROM library WHERE user_id = ? AND id = ?", userId, t.id);
             const code = typeof t.code === "string" ? t.code.trim() : null;
-            if (code != null && (!code.startsWith("PolyTrack") || code.length > LIB_CODE_MAX)) return fail(400, "One of those tracks can't be saved to your account (2 MB at most).");
-            if (code == null && !old) return fail(400, "Bad request.");
+            if (code != null && (!code.startsWith("PolyTrack") || code.length > LIB_CODE_MAX)) return fail(400, "One of those tracks can't be saved to your account (4 MB at most).");
+            // A meta-only update for a track another device deleted; the client sends it again with its code.
+            if (code == null && !old) {
+                missing.push(t.id);
+                continue;
+            }
             const meta = JSON.stringify(t.meta && typeof t.meta === "object" ? t.meta : {});
             if (meta.length > LIB_META_MAX) return fail(400, "Bad request.");
             if (!old) count++;
-            if (code != null) {
-                bytes += code.length - (old?.size ?? 0);
-                fresh += code.length;
-            }
+            if (code != null) bytes += code.length - (old?.size ?? 0);
             rows.push({ id: t.id, code, meta, size: code != null ? code.length : old.size, updated: Number.isSafeInteger(t.updated) ? t.updated : Date.now() });
         }
         if (count > LIB_TRACKS) return fail(409, `Your account holds ${LIB_TRACKS} tracks at most. Delete some first.`);
         if (bytes > LIB_BYTES) return fail(409, "Your account's track space is full (30 MB). Delete some tracks first.");
+        // Only growth counts, so saving the same track again and again from the editor never runs out.
+        const fresh = Math.max(0, bytes - usage.bytes);
         if (fresh && this.overBytes(ipKey, fresh)) return fail(429, "That's a lot of tracks for one day. Try again tomorrow.");
         this.ctx.storage.transactionSync(() => {
             for (const r of rows) {
@@ -711,7 +731,7 @@ export class TrackHub extends DurableObject {
             }
             if (fresh) this.countHit(["bytes:ip:" + ipKey], fresh);
         });
-        return { ok: true, used: bytes };
+        return { ok: true, used: bytes, missing };
     }
 
     libraryDelete({ userId, ids }) {

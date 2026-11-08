@@ -13099,7 +13099,9 @@
         let __nswsModeSink = null;
         let __nswsTMBase = "https://brinleyww.github.io/Better-Editor-PT/";
         function __nswsModesMessage(t) {
-            "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase);
+            "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase,
+            // tm_runtime.js reads the blocks file from TM_BASE when a car first needs it, which can be after the move.
+            null != self.TM_BASE && (self.TM_BASE = __nswsTMBase));
             const m = t?.data?.nswsModes;
             if (null == m || "object" != typeof m)
                 return !1;

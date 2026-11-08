@@ -2131,7 +2131,8 @@ async function handleBeMirror(request, url) {
     if (request.method !== "GET" && request.method !== "HEAD") return plain(405, "Method not allowed", "*");
     if (url.pathname === "/be") return Response.redirect(url.origin + "/be/" + url.search, 301);
     const rest = url.pathname.slice(4);
-    if (rest.split("/").some((p) => p === ".." || p === ".") || rest.includes("\\")) return plain(400, "Bad path", "*");
+    // An escaped slash could still climb out of Better-Editor-PT once GitHub decodes it.
+    if (rest.split("/").some((p) => p === ".." || p === ".") || rest.includes("\\") || /%(2f|5c)/i.test(rest)) return plain(400, "Bad path", "*");
     const headers = {};
     for (const h of ["if-none-match", "if-modified-since"]) if (request.headers.get(h)) headers[h] = request.headers.get(h);
     const upstream = await fetch(BE_SITE + rest + url.search, { method: request.method, headers, redirect: "follow" });
@@ -2266,11 +2267,12 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
             if (physics > ph.version + 1) return json({ error: "Bad physics version." }, origin, 400);
             return reply(await hub.beSubmit({ userId, ipKey, nickname, countryCode: body.countryCode, carStyle: body.carStyle, trackId: body.trackId, frames: body.frames, recording: body.recording, physics }));
         }
-        case "played": return reply(await hub.played({ userId, trackId: body.trackId }));
+        case "played": return reply(await hub.played({ userId, ipKey, trackId: body.trackId }));
         case "favourite": return reply(await hub.favourite({ userId, ipKey, trackId: body.trackId, on: body.on === true }));
         case "stats": return reply(await hub.trackStats({ userId, trackId: body.trackId }));
         case "club/create": return reply(await hub.createClub({ userId, ipKey, nickname, name: body.name, tag: body.tag, description: body.description }));
         case "club/get": {
+            if (trackReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);
             const club = await hub.getClub(body.code ?? clubId, userId);
             return reply(club && { club }, "No club has that code.");
         }

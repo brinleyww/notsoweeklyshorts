@@ -58470,6 +58470,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             if (C.get(this, Wh, "f").get(r) == a && C.get(this, Oh, "f").getUserProfile(e)?.token == i.token) {
                 const r = this.getRecordTime(e, t);
                 if (null == r || o.time.lessThan(r) || __nswsForce) {
+                    C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || keepRecordsOf(t);
                     C.get(this, Bh, "f").saveRecord(e, i.tokenHash, t, n, o.time, o.recording, C.get(this, Fh, "f").determinismState);
                     for (const e of C.get(this, Vh, "f"))
                         e()
@@ -58477,6 +58478,23 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
         }
         ;
+        // Tracks the game doesn't list (Custom Tracks, Better Editor and Cuppa races) that have PBs here, newest last:
+        // cleanUpRecords would otherwise delete those PBs on every load.
+        const keptRecordTracks = () => {
+            try {
+                const v = JSON.parse(localStorage.getItem("nswsKeptRecords") || "[]");
+                return Array.isArray(v) ? v : []
+            } catch (e) {
+                return []
+            }
+        }
+          , keepRecordsOf = id => {
+            try {
+                const v = keptRecordTracks().filter((x => x !== id));
+                v.push(id),
+                localStorage.setItem("nswsKeptRecords", JSON.stringify(v.slice(-300)))
+            } catch (e) {}
+        };
         const qh = class {
             constructor(e, t, n, i) {
                 Dh.add(this),
@@ -58505,6 +58523,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (null == a)
                     return null;
                 window.__nswsTraffic?.drivePb?.(t);
+                C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || keepRecordsOf(t);
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
                 const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
                 __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
@@ -58535,9 +58554,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     e()
             }
             cleanUpRecords() {
-                const e = C.get(this, Bh, "f").loadRecordTracks();
+                const e = C.get(this, Bh, "f").loadRecordTracks()
+                  , kept = new Set(keptRecordTracks());
                 for (const t of e)
-                    C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || C.get(this, Bh, "f").deleteAllRecordsForTrack(t)
+                    C.get(this, Gh, "f").isOfficialTrack(t) || C.get(this, Gh, "f").isCommunityTrack(t) || C.get(this, Gh, "f").isCustomTrack(t) || kept.has(t) || C.get(this, Bh, "f").deleteAllRecordsForTrack(t)
             }
             getRecordTime(e, t) {
                 const n = this.getRecord(e, t);
@@ -61227,6 +61247,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             getLeaderboardUserEntry(e, t, n) {
                 const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false" + window.__nswsTrackQuery(t); window.__nswsUserToken = encodeURIComponent(e);
+                // Kodub has no Better Editor runs; their board's own reply carries this profile's entry.
+                if (window.__nswsBEBoard?.(t))
+                    return this.getLeaderboard(e, t, 0, 1, !1).then((r => r.userEntry));
                 return new Promise(( (e, t) => {
                     const n = new XMLHttpRequest;
                     n.timeout = C.get(this, wu, "f"),
@@ -63334,7 +63357,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize(), physics: window.__nswsTM?.physics ?? 1 })
+                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize(), physics: window.__nswsTM?.physics ?? 1 }),
+                    signal: AbortSignal.timeout?.(2e4)
                 });
                 const d = await res.json().catch((() => null));
                 if (!res.ok || !d || d.error)

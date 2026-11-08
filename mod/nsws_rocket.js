@@ -1057,8 +1057,8 @@
         let root = null, step = -1, doneAt = 0, base = null, boostMs = 0, airMs = 0, lastAt = 0, finishTimer = 0;
         const STEPS = [
             {
-                title: "Rocket League week",
-                text: () => "This week your car can jump, double jump, flip, boost and air roll, like in Rocket League. This quick tutorial runs on the real track; restart afterwards for a clean run.",
+                title: "Rocket League mode",
+                text: () => "On this track your car can jump, double jump, flip, boost and air roll, like in Rocket League. This quick tutorial runs on the real track; restart afterwards for a clean run.",
                 anim: "intro",
                 manual: "Start"
             },
@@ -1117,7 +1117,7 @@
         }
         function render() {
             const s = STEPS[step];
-            root.querySelector(".count").textContent = step ? `${step} / ${STEPS.length - 1}` : "Week 11";
+            root.querySelector(".count").textContent = step ? `${step} / ${STEPS.length - 1}` : "Tutorial";
             root.querySelector("h2").textContent = s.title;
             root.querySelector(".say").innerHTML = s.text();
             root.querySelector(".anim").dataset.anim = s.anim;

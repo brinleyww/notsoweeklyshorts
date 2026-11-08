@@ -859,7 +859,13 @@ export class Organizer {
     if (!up) {
       if (!r.customTracks) return this.#tell(p, 'Custom tracks are off in this cup', 'bad');
       if (r.customPick === 'organizer') return this.#tell(p, 'Only the organizer adds tracks in this cup', 'bad');
-      if ([...this.#parts.keys()].some((k) => k.startsWith(`${p.u}:`))) return this.#tell(p, 'Wait for your last track to finish uploading', 'bad');
+      // A page sends all of one track's parts before the next on an ordered channel, so an older upload
+      // still open here lost a part (rate limit, reconnect) and can never finish.
+      for (const k of this.#parts.keys())
+        if (k.startsWith(`${p.u}:`)) {
+          this.#parts.delete(k);
+          this.#tell(p, "One of your tracks didn't arrive in full. Add it again", 'bad');
+        }
       up = { at: now, parts: Array(m.n).fill(null), got: 0 };
       this.#parts.set(key, up);
     }

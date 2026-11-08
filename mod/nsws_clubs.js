@@ -19,6 +19,7 @@
         campaigns: new Map(),
         progress: new Map(),
         myId12: null,
+        token: undefined,
         registered: false,
         pending: null,
         drawId: 0
@@ -63,7 +64,8 @@
         const t = T();
         let j;
         if (t?.api) {
-            j = await t.api(path, body, { method: body === undefined ? "GET" : "POST" });
+            // A campaign can be 4 MB; timing out early makes the player save a second copy.
+            j = await t.api(path, body, { method: body === undefined ? "GET" : "POST", timeout: /campaign\/save$/.test(path) ? 90000 : undefined });
         } else {
             const base = window.__nswsApiBase;
             if (!base) throw new Error("The NSWS server isn't set up on this page.");
@@ -236,10 +238,12 @@
         box.appendChild(b);
         const f = h("div", "nc-box-f");
         let closed = false;
+        const prev = document.activeElement;
         const close = () => {
             if (closed) return;
             closed = true;
             root.remove();
+            refocus(prev);
             opts?.onClose?.();
         };
         for (const a of actions || []) {
@@ -250,7 +254,7 @@
         }
         box.appendChild(f);
         root.appendChild(box);
-        for (const ev of ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "mousedown", "wheel", "keyup", "keypress"]) {
+        for (const ev of ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointerup", "pointermove", "mousedown", "mouseup", "mousemove", "click", "contextmenu", "wheel", "keyup", "keypress"]) {
             root.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
         }
         root.addEventListener("keydown", (e) => {
@@ -263,6 +267,19 @@
         document.body.appendChild(root);
         (box.querySelector("input,textarea") || box).focus();
         return close;
+    }
+
+    // Keys only stay away from the game while focus is inside the Custom Tracks screen, so focus must
+    // never be left on <body> after a redraw or a closed dialog.
+    function refocus(prev) {
+        const a = document.activeElement;
+        if (a && a !== document.body && a.isConnected) return;
+        if (prev && prev !== document.body && prev.isConnected) {
+            prev.focus({ preventScroll: true });
+            return;
+        }
+        const host = S.container?.closest?.(".nt-host");
+        if (host && !host.hidden && host.isConnected) host.focus({ preventScroll: true });
     }
 
     function confirmBox(title, text, okLabel) {
@@ -286,6 +303,9 @@
         injectCss();
         const id = ++S.drawId;
         const alive = () => id === S.drawId && S.container === c;
+        const focused = document.activeElement;
+        const hadFocus = c.contains(focused);
+        const focusKey = hadFocus ? focused.dataset?.nc : null;
         c.textContent = "";
         const root = h("div", "nc");
         root.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
@@ -296,6 +316,13 @@
             fn(root, v, alive);
         } catch (err) {
             root.appendChild(h("div", "nc-err", err?.message || String(err)));
+        }
+        if (hadFocus) {
+            const again = focusKey ? root.querySelector('[data-nc="' + focusKey + '"]') : null;
+            if (again) {
+                again.focus({ preventScroll: true });
+                try { again.setSelectionRange(again.value.length, again.value.length); } catch {}
+            } else refocus(null);
         }
     }
 
@@ -336,9 +363,11 @@
         }
         try {
             const j = await api("nsws/tracks/club/mine", { token: u.token });
+            if (user().token !== u.token) return;
             S.mine = Array.isArray(j.clubs) ? j.clubs : [];
             S.mineError = null;
         } catch (err) {
+            if (user().token !== u.token) return;
             S.mine = S.mine || [];
             S.mineError = err?.message || String(err);
         }
@@ -362,12 +391,29 @@
         return j.club;
     }
 
+    // Members read by id, so a club whose owner made a new invite code still opens; others need the code.
+    async function fetchClub(clubId, code) {
+        const token = user().token;
+        if (token && clubId) {
+            let j = null;
+            try {
+                j = await api("nsws/tracks/club/get", { token, clubId });
+            } catch (err) {
+                if (!code) throw err;
+            }
+            if (keepClub(j?.club)) return j.club;
+        }
+        if (!code) throw new Error("That club can't be found.");
+        return fetchClubByCode(code);
+    }
+
     function drawHome(root, v, alive) {
         top(root, "Clubs");
         root.appendChild(h("div", "nc-sub", "Clubs share campaigns of tracks. Join one with a code or link, or start your own."));
 
         root.appendChild(sec("Join a club"));
         const code = input(v.typed || "", 200, "Club code or link");
+        code.dataset.nc = "join";
         code.addEventListener("input", () => { v.typed = code.value; });
         const join = btn("Join", () => {
             const c = normCode(code.value);
@@ -485,7 +531,7 @@
         const club = S.clubs.get(v.clubId);
         if (!v.fetched || !club) {
             v.fetched = true;
-            const jobs = [v.code ? fetchClubByCode(v.code).then((c) => { v.clubId = c.id; }) : Promise.reject(new Error("That club can't be found."))];
+            const jobs = [fetchClub(v.clubId, v.code).then((c) => { v.clubId = c.id; v.code = c.code; })];
             if (S.mine === null) jobs.push(fetchMine());
             if (club) {
                 Promise.all(jobs).then(() => { if (alive()) draw(); }, () => {});
@@ -564,7 +610,7 @@
             });
             return;
         }
-        const me = S.myId12?.id || null;
+        const me = S.myId12?.token === user().token ? S.myId12.id : null;
         const order = { owner: 0, admin: 1, member: 2 };
         const sorted = list.slice().sort((a, b) => (order[a.role] ?? 3) - (order[b.role] ?? 3) || (a.joined || 0) - (b.joined || 0));
         for (const m of sorted) {
@@ -605,7 +651,7 @@
         S.members.delete(club.id);
         if (role === "owner" || role === "kick") {
             await fetchMine();
-            try { await fetchClubByCode(club.code); } catch {}
+            try { await fetchClub(club.id, club.code); } catch {}
         }
         draw();
     }
@@ -666,6 +712,12 @@
         draw();
     }
 
+    function countCampaigns(clubId, by) {
+        for (const c of [S.clubs.get(clubId), mineOf(clubId)]) {
+            if (c) c.campaignCount = Math.max(0, (c.campaignCount || 0) + by);
+        }
+    }
+
     function campKey(clubId, campaignId) {
         return clubId + "/" + campaignId;
     }
@@ -701,11 +753,12 @@
         if (!t?.code) throw new Error("That track couldn't be loaded.");
         const tr = T();
         if (!tr?.play) throw new Error("Custom Tracks didn't load, so tracks can't be played right now. Reload the page.");
-        S.progress.set(key, i);
         const ok = await tr.play(t.code, { mode: t.mode || "normal", start: true, intro: true, onExit: () => tr.openLibrary() });
         if (ok === false) {
             if (S.container) draw();
+            return;
         }
+        S.progress.set(key, i);
     }
 
     function drawCampaign(root, v, alive) {
@@ -771,6 +824,7 @@
                 await api("nsws/tracks/campaign/delete", { token: u.token, clubId: v.clubId, campaignId: v.campaignId });
                 S.campaigns.delete(key);
                 if (club?.campaigns) club.campaigns = club.campaigns.filter((c) => c.id !== v.campaignId);
+                countCampaigns(v.clubId, -1);
                 go({ type: "club", clubId: v.clubId, code: club?.code, tab: "campaigns", fetched: false });
                 toast("Campaign deleted");
             }));
@@ -853,8 +907,8 @@
             };
             const ctl = [
                 sel,
-                btn("\u25B2", () => move(i - 1), { small: true, disabled: i === 0, title: "Move up" }),
-                btn("\u25BC", () => move(i + 1), { small: true, disabled: i === d.tracks.length - 1, title: "Move down" }),
+                btn("Up", () => move(i - 1), { small: true, disabled: i === 0, title: "Move up" }),
+                btn("Down", () => move(i + 1), { small: true, disabled: i === d.tracks.length - 1, title: "Move down" }),
                 btn("Remove", () => {
                     d.tracks.splice(i, 1);
                     changed();
@@ -895,6 +949,7 @@
                 list.splice(at >= 0 ? at : list.length, 0, lite);
                 club.campaigns = list;
             }
+            if (!v.campaignId) countCampaigns(v.clubId, 1);
             v.dirty = false;
             go({ type: "campaign", clubId: v.clubId, campaignId: id, fetched: true });
             toast(v.campaignId ? "Campaign saved" : "Campaign created");
@@ -949,12 +1004,14 @@
                     if (tr?.importText) res = await tr.importText(text);
                     else res = { tracks: text.split(/\s+/).filter((s) => /^PolyTrack/.test(s)).map((code) => ({ code, mode: "normal" })) };
                     const list = res?.tracks || [];
+                    const unread = Array.isArray(res?.failed) ? res.failed : [];
                     if (!list.length) {
                         if (res?.club) throw new Error("That's a club code, not a track. Paste track codes or a track link.");
+                        if (unread.length) throw new Error(unread[0]?.error || "That track link couldn't be read.");
                         throw new Error("No track codes found in that text.");
                     }
                     const items = [];
-                    let failed = 0;
+                    let failed = unread.length;
                     for (const t of list) {
                         const info = await trackInfo(t.code, t.mode);
                         if (info) items.push(info);
@@ -973,7 +1030,7 @@
         if (cssDone) return;
         cssDone = true;
         const css = `
-.nc{color:var(--text-color,#fff);text-align:left;padding:2px 2px 18px;font-size:18px;}
+.nc{color:var(--text-color,#fff);text-align:left;padding:2px 14px 18px;font-size:18px;}
 .nc *{box-sizing:border-box;}
 .nc-top{display:flex;align-items:center;gap:12px;margin:2px 0 4px;}
 .nc-title{flex:1;min-width:0;font-size:30px;overflow-wrap:anywhere;}
@@ -1009,8 +1066,10 @@
 .nc .button.nc-btn,.nc-box .button.nc-btn{margin:0;font-size:18px;padding:6px 16px;}
 .nc .button.nc-btn.small{font-size:15px;padding:4px 11px;}
 .button.nc-primary{box-shadow:inset 0 -3px 0 #7272c2;}
-.nc-in{background:#192042;color:#fff;border:1px solid #3b477f;font:inherit;font-size:17px;padding:6px 9px;outline:none;border-radius:0;}
-.nc-in:focus{border-color:#8f8ff0;}
+.nc-in{box-sizing:border-box;margin:0;background:#192042;color:#fff;border:none;font:inherit;font-size:17px;font-weight:normal;text-indent:0;padding:7px 10px;outline:none;border-radius:0;clip-path:polygon(0 0,100% 0,calc(100% - 6px) 100%,0 100%);pointer-events:auto;}
+.nc-in:focus{box-shadow:inset 0 -2px 0 #7272c2;}
+.nc-in::placeholder{color:rgba(255,255,255,.3);opacity:1;}
+.nc-sel option{background:#192042;color:#fff;font-style:normal;}
 .nc input.nc-in{width:min(280px,52vw);}
 .nc textarea.nc-in,.nc-box textarea.nc-in{display:block;width:100%;resize:vertical;min-height:70px;}
 .nc-box input.nc-in{width:min(260px,50vw);}
@@ -1035,6 +1094,19 @@
     }
 
     function refreshHome() {
+        const token = user().token;
+        if (token !== S.token) {
+            // Another profile: nothing read for the last one may show, and its half-made edits can't be saved here.
+            if (S.token !== undefined) {
+                S.members.clear();
+                S.campaigns.clear();
+                S.myId12 = null;
+                if (S.view.type !== "join") S.view = { type: "home" };
+            }
+            S.token = token;
+            S.mine = null;
+            return;
+        }
         if (Date.now() - S.mineAt > 1500) S.mine = null;
     }
 
@@ -1044,12 +1116,12 @@
         t.registerTab({
             id: "clubs",
             label: "Clubs",
+            // showTab always calls onShow right after render, so drawing in both sent every request twice.
             render(container) {
                 S.container = container;
-                refreshHome();
-                draw();
             },
-            onShow() {
+            onShow(pane) {
+                if (pane) S.container = pane;
                 refreshHome();
                 draw();
             }
@@ -1073,8 +1145,7 @@
             return;
         }
         S.view = { type: "join", code: c, fetched: false };
-        T()?.openLibrary?.("clubs");
-        draw();
+        if (!T()?.openLibrary?.("clubs")) draw();
     }
 
     function open() {

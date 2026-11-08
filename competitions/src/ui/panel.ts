@@ -8,6 +8,7 @@ import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, t
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { beReady, ensureBE, isBE, site } from '../game.ts';
+import { UPLOAD_CHUNK } from '../protocol.ts';
 
 const MODE_LABEL: Record<TrackMode, string> = { normal: '', rocket: 'Rocket League', royale: 'Royale' };
 
@@ -615,7 +616,7 @@ export class Panel {
       try {
         const got = await lib.importText(text);
         if (got.club && !got.tracks?.length) return app.notify('That is a club code. Join the club in Custom Tracks, then add its tracks from My Tracks.', 'bad');
-        if (!got.tracks?.length) return app.notify("That isn't a track code, pack code or NSWS link.", 'bad');
+        if (!got.tracks?.length) return app.notify((got as { failed?: { error?: string }[] }).failed?.[0]?.error || "That isn't a track code, pack code or NSWS link.", 'bad');
         if (await this.#addTracks(got.tracks)) this.#trackCode = '';
       } catch (e) {
         app.notify((e as Error)?.message || "That link couldn't be read.", 'bad');
@@ -668,6 +669,7 @@ export class Panel {
     let room = app.org ? Infinity : Math.max(0, limit - (s.custom ?? []).filter((t) => t.by === app.me).length);
     let sent = 0,
       over = 0,
+      burst = 0,
       error: string | null = null;
     for (const t of items) {
       const c = String(t.code ?? '').trim();
@@ -675,6 +677,13 @@ export class Panel {
         over++;
         continue;
       }
+      // The organizer reads at most 40 messages a second from each page and drops the rest.
+      const parts = Math.ceil(c.length / UPLOAD_CHUNK);
+      if (!app.org && burst && burst + parts > 24) {
+        await new Promise((r) => setTimeout(r, 1500));
+        burst = 0;
+      }
+      burst += parts;
       const e = app.uploadTrack(c, t.mode as TrackMode);
       if (e) {
         error = e;

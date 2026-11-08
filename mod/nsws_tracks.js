@@ -54,7 +54,9 @@
                     this.nswsTMBase = window.__nswsSimBase || null;
                     simWorkers.add(this);
                     try {
-                        this.postMessage(modesMessage(this));
+                        const message = modesMessage(this);
+                        this.postMessage(message);
+                        this.__ntBase = message.nswsTMBase;
                     } catch {}
                 }
             }
@@ -102,13 +104,16 @@
                 changed = true;
             }
         }
-        if (!changed) return;
+        // The block base moves to the Worker mirror when github.io fails, after the game's workers were made.
         for (const w of simWorkers) {
+            const message = modesMessage(w);
+            if (!changed && w.__ntBase === message.nswsTMBase) continue;
             try {
-                w.postMessage(modesMessage(w));
+                w.postMessage(message);
+                w.__ntBase = message.nswsTMBase;
             } catch {}
         }
-        window.dispatchEvent(new CustomEvent("nsws-track-modes"));
+        if (changed) window.dispatchEvent(new CustomEvent("nsws-track-modes"));
     }
 
     function modeOf(trackId) {
@@ -272,40 +277,52 @@
         };
     }
 
-    async function ensureBE() {
+    // One download at a time (a second fetch wrapper would outlive the first and stay on window.fetch). Cancel
+    // answers false at once; the download goes on in the background.
+    let beLoad = null;
+    const beProgress = new Set();
+    function ensureBE() {
         const tm = window.__nswsTM;
-        if (!tm) throw new Error("This copy of the site can't load Better Editor blocks.");
-        if (tm.ready()) return true;
-        let done = false;
-        let cancelled = false;
+        if (!tm) return Promise.reject(new Error("This copy of the site can't load Better Editor blocks."));
+        if (tm.ready()) return Promise.resolve(true);
+        if (!beLoad) {
+            const unwatch = watchBlocks((got, total) => {
+                for (const fn of [...beProgress]) fn(got, total);
+            });
+            beLoad = Promise.resolve()
+                .then(() => tm.ensure())
+                .finally(() => {
+                    unwatch();
+                    beLoad = null;
+                });
+            beLoad.then(() => setTimeout(() => refreshThumbs().catch(() => {}), 0), () => {});
+        }
+        const load = beLoad;
         const body = el("div");
         const bar = el("div", "nt-pbar busy");
         const fill = el("div");
         bar.appendChild(fill);
         const sub = el("p", "nt-text dim", "Starting...");
         body.append(el("p", "nt-text", "Loading Better Editor blocks. The first time this downloads about 60 MB."), bar, sub);
-        const close = dialog({
-            title: "Better Editor track",
-            body,
-            actions: [{ label: "Cancel" }],
-            onClose: () => {
-                if (!done) cancelled = true;
-            },
-        });
-        const unwatch = watchBlocks((got, total) => {
+        const show = (got, total) => {
             bar.classList.toggle("busy", !total);
             if (total) fill.style.width = Math.min(100, (got / total) * 100).toFixed(1) + "%";
             sub.textContent = total && got >= total ? "Building the blocks..." : mb(got) + (total ? " of " + mb(total) : "") + " MB";
+        };
+        beProgress.add(show);
+        let close = null;
+        const cancelled = new Promise((resolve) => {
+            close = dialog({
+                title: "Better Editor track",
+                body,
+                actions: [{ label: "Cancel" }],
+                onClose: () => {
+                    beProgress.delete(show);
+                    resolve(false);
+                },
+            });
         });
-        try {
-            await tm.ensure();
-        } finally {
-            unwatch();
-            done = true;
-            close();
-        }
-        setTimeout(() => refreshThumbs().catch(() => {}), 0);
-        return !cancelled;
+        return Promise.race([load.then(() => true), cancelled]).finally(() => close());
     }
 
     async function preloadPhysics(base, version) {
@@ -479,23 +496,49 @@
 
     // Redraws thumbnails made by older versions (blurry 64 px ones); Better Editor ones once its blocks are loaded.
     let thumbsBusy = false;
+    let thumbsAgain = false;
     async function refreshThumbs() {
-        if (thumbsBusy) return;
+        if (thumbsBusy) {
+            thumbsAgain = true;
+            return;
+        }
         thumbsBusy = true;
+        let named = false;
         try {
             const changed = [];
             for (const t of [...(await loadAll()).values()]) {
-                if (t.thumbV === THUMB_V || typeof t.code !== "string" || (t.kind === "be" && !beReady())) continue;
+                const needId = t.kind === "be" && !t.trackId;
+                if ((t.thumbV === THUMB_V && !needId) || typeof t.code !== "string" || (t.kind === "be" && !beReady())) continue;
                 const loaded = stockParse(t.code, true);
                 const now = (await loadAll()).get(t.id);
                 if (!now) continue;
-                await putTrack({ ...now, thumb: (loaded.data && thumbOf(loaded.data)) || now.thumb || null, thumbV: THUMB_V });
+                // A Better Editor track saved before its blocks loaded has no track id (no board, stats or favourites).
+                let id = null;
+                if (!now.trackId && loaded.data) {
+                    try {
+                        id = loaded.data.getId() || null;
+                    } catch {}
+                }
+                // Older versions marked these redrawn without an id; rewriting one that still gets none would make two tabs echo forever.
+                if (now.thumbV === THUMB_V && !id) continue;
+                const next = { ...now, thumb: (loaded.data && thumbOf(loaded.data)) || now.thumb || null, thumbV: THUMB_V };
+                if (id) {
+                    next.trackId = id;
+                    if (next.sync === "ok") next.sync = "meta";
+                    named = true;
+                }
+                await putTrack(next);
                 changed.push(t.id);
                 await new Promise((r) => setTimeout(r, 0));
             }
             if (changed.length) emit({ type: "update", ids: changed });
         } finally {
             thumbsBusy = false;
+            if (named) schedulePush();
+            if (thumbsAgain) {
+                thumbsAgain = false;
+                setTimeout(() => refreshThumbs().catch(() => {}), 0);
+            }
         }
     }
 
@@ -549,28 +592,39 @@
         pushTimer = setTimeout(() => flush().catch(() => {}), 800);
     }
 
+    // The server refuses a code over 4 MB (LIB_CODE_MAX in proxy/src/trackhub.js) and with it the whole batch.
+    const LIB_CODE_MAX = 4_000_000;
     async function pushTracks(token, list, onServer) {
+        const tooBig = list.filter((t) => !(t.sync === "meta" && onServer.has(t.id)) && t.code.length > LIB_CODE_MAX);
+        list = list.filter((t) => !tooBig.includes(t));
         let batch = [], size = 0;
         const send = async () => {
             if (!batch.length) return;
-            await api("nsws/tracks/library/put", {
+            const res = await api("nsws/tracks/library/put", {
                 token,
                 tracks: batch.map((t) => ({ id: t.id, code: t.sync === "meta" && onServer.has(t.id) ? undefined : t.code, meta: remoteMeta(t), updated: t.updated || Date.now() })),
             });
-            for (const t of batch) {
-                const now = cache?.get(t.id);
-                if (now && now.updated === t.updated) await putTrack({ ...now, sync: "ok" });
+            const missing = new Set(Array.isArray(res?.missing) ? res.missing : []);
+            // After a profile switch the cache and database are the other account's, so this one re-sends later.
+            if (user().token === token) {
+                for (const t of batch) {
+                    const now = cache?.get(t.id);
+                    if (now && now.updated === t.updated) await putTrack({ ...now, sync: missing.has(t.id) ? "all" : "ok" });
+                }
+                if (missing.size) schedulePush();
             }
             batch = [];
             size = 0;
         };
         for (const t of list) {
-            const n = t.sync === "meta" && onServer.has(t.id) ? 0 : t.code.length;
+            // Metas count too: a 4 MB code plus 19 pictures would pass the Worker's 4.4 MB body limit.
+            const n = (t.sync === "meta" && onServer.has(t.id) ? 0 : t.code.length) + JSON.stringify(remoteMeta(t)).length;
             if (batch.length && (batch.length >= 20 || size + n > 3_500_000)) await send();
             batch.push(t);
             size += n;
         }
         await send();
+        if (tooBig.length) throw new Error((tooBig.length === 1 ? "\"" + (tooBig[0].name || "Untitled track") + "\" is" : tooBig.length + " tracks are") + " over 4 MB, so " + (tooBig.length === 1 ? "it stays" : "they stay") + " in this browser only.");
     }
 
     async function sendDeletes(token, key) {
@@ -580,20 +634,31 @@
     }
 
     // Uploads what changed here without reading the server's list.
-    async function flush() {
+    // Two uploads at once would send the same codes twice (they count against the daily byte limit), so a
+    // change made meanwhile waits for the running one.
+    let flushing = null;
+    function flush() {
         const { token } = user();
-        if (!token || !window.__nswsApiBase || syncing) return;
-        const key = await accountKey();
-        try {
-            await sendDeletes(token, key);
-            const tracks = await loadAll();
-            const out = [...tracks.values()].filter((t) => t.sync !== "ok" && t.code);
-            await pushTracks(token, out, new Set(out.filter((t) => t.sync === "meta").map((t) => t.id)));
-            syncError = null;
-        } catch (e) {
-            syncError = e.message || "Couldn't reach the NSWS server.";
+        if (!token || !window.__nswsApiBase) return Promise.resolve();
+        const busy = syncing || flushing;
+        if (busy) {
+            busy.then(schedulePush, schedulePush);
+            return Promise.resolve();
         }
-        emit({ type: "sync" }, false);
+        return (flushing = (async () => {
+            try {
+                const key = (await sha256("nsws-tracks:" + token)).slice(0, 16);
+                await sendDeletes(token, key);
+                const tracks = await loadAll();
+                if (cacheKey !== key) return;
+                const out = [...tracks.values()].filter((t) => t.sync !== "ok" && t.code);
+                await pushTracks(token, out, new Set(out.filter((t) => t.sync === "meta").map((t) => t.id)));
+                syncError = null;
+            } catch (e) {
+                syncError = e.message || "Couldn't reach the NSWS server.";
+            }
+            emit({ type: "sync" }, false);
+        })().finally(() => (flushing = null)));
     }
 
     // Brings this browser's copy in line with the account: the server wins, except for changes made here.
@@ -606,37 +671,57 @@
         return (syncing = (async () => {
             let changed = false;
             try {
-                const key = await accountKey();
+                if (flushing) await flushing;
+                const key = (await sha256("nsws-tracks:" + token)).slice(0, 16);
+                // Writes after a profile switch would land in the other account's database.
+                const moved = () => user().token !== token || cacheKey !== key;
                 const tracks = await loadAll();
+                if (moved()) return false;
                 await sendDeletes(token, key);
                 const remote = await api("nsws/tracks/library/list", { token });
+                // A 200 that isn't the list (a captive portal, say) would otherwise delete every synced track here.
+                if (!Array.isArray(remote?.tracks)) throw new Error("The NSWS server sent an answer this page can't read.");
+                if (moved()) return false;
+                const deleting = new Set(pendingDeletes(key));
                 const onServer = new Set();
                 const need = [];
-                for (const r of remote?.tracks || []) {
+                for (const r of remote.tracks) {
                     if (!r || typeof r.id !== "string") continue;
                     onServer.add(r.id);
+                    if (deleting.has(r.id)) continue;
                     const local = tracks.get(r.id);
                     if (local && (local.sync !== "ok" || (local.updated || 0) >= (r.updated || 0))) continue;
                     if (local && local.code && local.hash && local.hash === r.hash) {
-                        await putTrack({ ...local, ...r, code: local.code, thumb: local.thumb, sync: "ok" });
+                        await putTrack({ ...local, ...r, code: local.code, thumb: local.thumb, trackId: r.trackId || local.trackId || null, image: validImage(r.image), sync: "ok" });
                         changed = true;
                     } else need.push(r);
                 }
-                for (let i = 0; i < need.length; i += 20) {
+                for (let i = 0; i < need.length; ) {
                     const part = need.slice(i, i + 20);
                     const { codes } = await api("nsws/tracks/library/codes", { token, ids: part.map((r) => r.id) });
+                    if (moved()) return false;
+                    // One reply carries about 8 MB of codes (LIB_CODES_REPLY), so the ones after its last code are asked again.
+                    let next = part.length;
+                    for (let j = part.length - 1; j >= 0; j--) {
+                        if (typeof codes?.[part[j].id] === "string") {
+                            next = j + 1;
+                            break;
+                        }
+                    }
+                    i += next;
                     for (const r of part) {
                         const code = codes?.[r.id];
-                        if (typeof code !== "string" || !code) continue;
+                        if (typeof code !== "string" || !code || pendingDeletes(key).includes(r.id)) continue;
                         let thumb = null;
                         if (r.kind === "stock") {
                             const loaded = stockParse(code);
                             if (loaded.data) thumb = thumbOf(loaded.data);
                         }
-                        await putTrack({ ...r, code, thumb, sync: "ok" });
+                        await putTrack({ ...r, code, thumb, image: validImage(r.image), sync: "ok" });
                         changed = true;
                     }
                 }
+                if (moved()) return false;
                 for (const t of [...tracks.values()]) {
                     if (!onServer.has(t.id) && t.sync === "ok") {
                         await deleteTrack(t.id, true);
@@ -1024,7 +1109,19 @@
         return data ?? {};
     }
 
+    // A second Play while one is starting (a double click) would stack launch cards and start two races.
+    let starting = false;
     async function play(trackOrCode, opts = {}) {
+        if (starting) return false;
+        starting = true;
+        try {
+            return await playNow(trackOrCode, opts);
+        } finally {
+            starting = false;
+        }
+    }
+
+    async function playNow(trackOrCode, opts = {}) {
         let item = typeof trackOrCode === "string" ? { code: trackOrCode } : trackOrCode || {};
         if (typeof item.code === "string" && clean(item.code).startsWith(PACK_PREFIX)) {
             const first = (await readPack(item.code))?.tracks?.[0];
@@ -1194,7 +1291,7 @@
 .nt-host{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-family:ForcedSquare,Arial,sans-serif;font-style:italic;touch-action:none;pointer-events:auto;}
 .nt-host *{box-sizing:border-box;font-style:italic;}
 .nt-host[hidden],.nt-host [hidden]{display:none!important;}
-.nt-screen{z-index:100400;background:rgba(0,0,0,.55);align-items:stretch;}
+.nt-screen{z-index:100400;background:rgba(0,0,0,.55);align-items:stretch;outline:none;}
 .nt-modal{z-index:100500;background:rgba(0,0,0,.6);padding:12px;}
 .nt-host .button{font-size:18px;padding:7px 16px;line-height:1;white-space:nowrap;}
 .nt-host .button>img{width:20px;height:20px;margin:-4px 6px -4px 0;vertical-align:middle;pointer-events:none;}
@@ -1219,10 +1316,14 @@ input.nt-input,textarea.nt-area,select.nt-select{margin:0;padding:7px 10px;borde
 input.nt-input:focus,textarea.nt-area:focus,select.nt-select:focus{box-shadow:inset 0 -2px 0 #7272c2;}
 input.nt-input::placeholder,textarea.nt-area::placeholder{color:rgba(255,255,255,.3);opacity:1;}
 textarea.nt-area{display:block;width:100%;min-height:120px;resize:vertical;font-family:monospace;font-style:normal;font-size:13px;line-height:1.35;word-break:break-all;user-select:text;}
+textarea.nt-area.nt-prose{font-family:inherit;font-size:16px;word-break:normal;overflow-wrap:anywhere;}
 textarea.nt-area[readonly]{min-height:70px;max-height:140px;}
 select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-select option{background:#192042;color:#fff;font-style:normal;}
-.nt-check{width:20px;height:20px;margin:0;flex:none;accent-color:#7272c2;cursor:pointer;}
+.nt-check{appearance:none;-webkit-appearance:none;width:20px;height:20px;margin:0;flex:none;cursor:pointer;background:#192042;box-shadow:inset 0 0 0 2px rgba(255,255,255,.35);}
+.nt-check:hover{box-shadow:inset 0 0 0 2px rgba(255,255,255,.7);}
+.nt-check:checked{background:#7272c2;box-shadow:inset 0 0 0 2px #8f8ff0,inset 0 0 0 5px #192042;}
+.nt-check:focus-visible{outline:2px solid #fff;outline-offset:1px;}
 .nt-row{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid rgba(255,255,255,.08);}
 .nt-row.sel{background:rgba(114,114,194,.16);}
 .nt-row.pick{cursor:pointer;}
@@ -1265,7 +1366,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-brow>.nick:hover{text-decoration:underline;}
 .nt-brow>.time{font-variant-numeric:tabular-nums;}
 .nt-gbtn{padding:3px 10px;font:inherit;font-size:14px;font-style:italic;color:rgba(255,255,255,.75);background:#192042;border:0;cursor:pointer;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
-.nt-gbtn.on{color:#fff;background:#7272c2;}
+.nt-gbtn:not(:disabled):hover{color:#fff;background:#334b77;}
+.nt-gbtn.on{color:#fff;background:#334b77;box-shadow:inset 0 -2px 0 #7272c2;}
 .nt-gbtn:disabled{opacity:.3;cursor:default;}
 .nt-host .button.nt-bmore{display:block;margin:10px auto;}
 @media (max-width:760px){.nt-pbody{flex-direction:column;overflow:auto;}.nt-hero{flex:none;overflow:visible;}.nt-hero .nt-lthumb{width:min(260px,70vw);align-self:center;}.nt-board{flex:none;min-height:360px;}.nt-ptitle{font-size:28px;}}
@@ -1373,6 +1475,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (e.key === "Escape" && modals.length) {
                 e.preventDefault();
                 modals[modals.length - 1].cancel();
+            } else if (e.key === "Escape" && screen && !screen.root.hidden && screen.root.contains(node)) {
+                e.preventDefault();
+                closeLibrary();
             }
         });
         node.addEventListener("keyup", (e) => e.stopPropagation());
@@ -1461,7 +1566,11 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const box = el("div", "nt-dialog" + (wide ? " wide" : ""));
         if (title) box.appendChild(el("h3", null, title));
         const bodyEl = el("div", "nt-dbody");
-        if (typeof body === "string") bodyEl.appendChild(el("p", "nt-text", body));
+        if (typeof body === "string") {
+            const p = el("p", "nt-text", body);
+            p.style.whiteSpace = "pre-line";
+            bodyEl.appendChild(p);
+        }
         else if (body) bodyEl.appendChild(body);
         const bar = el("div", "nt-dactions");
         box.append(bodyEl, bar);
@@ -1554,13 +1663,22 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 
     function copyText(text) {
         const fallback = () => {
+            // The hidden textarea takes focus; without giving it back, Escape and keys would reach the game.
+            const had = document.activeElement;
             const area = el("textarea");
             area.value = text;
             area.style.cssText = "position:fixed;left:-9999px;top:0;";
             document.body.appendChild(area);
             area.select();
-            const ok = document.execCommand("copy");
-            area.remove();
+            let ok = false;
+            try {
+                ok = document.execCommand("copy");
+            } finally {
+                area.remove();
+                try {
+                    had?.focus?.({ preventScroll: true });
+                } catch {}
+            }
             if (!ok) throw new Error("copy failed");
         };
         const done = () => toast("Copied");
@@ -1661,22 +1779,32 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         throw new Error("That image couldn't be made small enough.");
     }
 
+    let openPage = null;
     function openTrackPage(track, opts = {}) {
         ensureCss();
+        // A double click on a row would stack two pages, and Escape would only close the top one.
+        openPage?.();
         let t = track;
         // Better Editor physics version being shown; null is the current one.
         let physicsView = Number.isSafeInteger(opts.physics) ? opts.physics : null;
         let older = [];
         const board = window.__nswsTrackBoard;
-        const online = !!board && !!t.trackId;
-        if (t.kind === "be" && t.trackId) (window.__nswsBEBoardIds ??= new Set()).add(t.trackId);
+        let online = false;
         let stats = null;
-        const me0 = user();
-        if (me0.token && TRACK_ID.test(t.trackId || ""))
-            api("nsws/tracks/stats", { token: me0.token, trackId: t.trackId }).then((s) => {
-                stats = s;
-                if (!closed) drawHero();
-            }, () => {});
+        // A Better Editor track gets its id once the blocks have loaded, so this can run again later.
+        const goOnline = () => {
+            if (online || !board || !t.trackId) return false;
+            online = true;
+            if (t.kind === "be") (window.__nswsBEBoardIds ??= new Set()).add(t.trackId);
+            const me0 = user();
+            if (me0.token && TRACK_ID.test(t.trackId || ""))
+                api("nsws/tracks/stats", { token: me0.token, trackId: t.trackId }).then((s) => {
+                    stats = s;
+                    if (!closed) drawHero();
+                }, () => {});
+            return true;
+        };
+        goOnline();
         const isCreator = () => {
             const nick = (user().nickname || "").trim().toLowerCase();
             return t.source === "editor" || (!!nick && (t.author || "").trim().toLowerCase() === nick);
@@ -1697,6 +1825,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             get(t.id).then((x) => {
                 if (x && !closed) {
                     t = x;
+                    if (goOnline()) loadBoard(false);
                     drawHero();
                 }
             }, () => {});
@@ -1704,6 +1833,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const close = () => {
             if (closed) return;
             closed = true;
+            if (openPage === close) openPage = null;
             unsub();
             host.remove();
             const i = modals.indexOf(entry);
@@ -1876,7 +2006,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const list = el("div", "nt-blist");
             boardEl.append(head, list);
             if (!online) {
-                list.appendChild(el("p", "nt-text dim nt-bmsg", "The leaderboard isn't available on this copy of the site."));
+                list.appendChild(el("p", "nt-text dim nt-bmsg", board && t.kind === "be" && !beReady() ? "The leaderboard shows once the Better Editor blocks have loaded. Press Play to load them." : "The leaderboard isn't available on this copy of the site."));
                 return;
             }
             if (t.kind === "be" && (older.length || physicsView)) {
@@ -2012,6 +2142,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 
         modals.push(entry);
         document.body.appendChild(host);
+        openPage = close;
         drawHero();
         drawBoard();
         loadBoard(false);
@@ -2245,6 +2376,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         }
 
         async function reload() {
+            state.token = user().token;
             try {
                 state.tracks = await list();
             } catch (e) {
@@ -2262,7 +2394,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         });
         let stale = true;
         pane.__ntShow = () => {
-            if (stale) {
+            // Switching profiles in the game changes whose My Tracks this is, without any change event.
+            if (stale || state.token !== user().token) {
                 stale = false;
                 reload();
             }
@@ -2470,7 +2603,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         }
 
         body.appendChild(section("NSWS link"));
-        body.appendChild(el("p", "nt-text dim", "A short link that opens these tracks in Import on NSWS" + (anyMode ? ", modes included." : ".") + " Links never expire."));
+        body.appendChild(el("p", "nt-text dim", "A short link that opens these tracks in Import on NSWS" + (anyMode ? ", modes included." : ".") + " A link nobody opens for 6 months is deleted."));
         const linkLine = el("div", "nt-line");
         const linkInput = input({ readOnly: true, placeholder: "Create a link to share" });
         const linkCopy = button("Copy", () => copyText(linkInput.value), { icon: "copy", disabled: true });
@@ -2548,14 +2681,18 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             body.appendChild(el("p", "nt-text dim", "Suggest this track for a future Not So Weekly Shorts week" + (t.mode !== "normal" ? ", raced in " + MODE_LABEL[t.mode] : "") + ". Race Control reviews every track; follow yours under Submit to Weekly Shorts in the Track Editor."));
             body.appendChild(el("p", "nt-text bad", "After you submit, you can't share this track any more, and you mustn't post it anywhere (code, link, video or screenshots). A submitted track that has been posted is disqualified."));
             const noteBox = input({ multiline: true, placeholder: "Anything Race Control should know (optional)", maxLength: 500 });
+            noteBox.classList.add("nt-prose");
             noteBox.style.minHeight = "60px";
             body.appendChild(noteBox);
             const subLine = el("div", "nt-line");
             const subStatus = el("p", "nt-text dim", "");
             subStatus.style.margin = "0 auto 0 0";
             const subBtn = button("Submit to Weekly Shorts", async () => {
-                if (!(await confirmBox("Submit \"" + t.name + "\" to Weekly Shorts? You won't be able to share it afterwards.", { title: "Submit track", ok: "Submit" }))) return;
                 subBtn.disabled = true;
+                if (!(await confirmBox("Submit \"" + t.name + "\" to Weekly Shorts? You won't be able to share it afterwards.", { title: "Submit track", ok: "Submit" }))) {
+                    subBtn.disabled = false;
+                    return;
+                }
                 subStatus.className = "nt-text dim";
                 subStatus.textContent = "Submitting...";
                 try {
