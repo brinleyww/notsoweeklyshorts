@@ -376,6 +376,32 @@ function renameRefused(ban, nickname) {
     return !!ban && !!ban.nick && nameKey(nickname) !== nameKey(ban.nick);
 }
 
+// A banned address can still play: reads and the game's own calls go through, and the upload, profile
+// and track routes refuse what a ban covers further on. Chat, cups and anything that publishes stay closed.
+const BANNED_POSTS = new Set(["/v6/leaderboard", "/v6/user", "/nsws/beat", "/nsws/macro",
+    ...["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view", "clips/rename", "clips/delete",
+        "refer/me", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync"].map((p) => TRAFFIC_PREFIX + p),
+    ...["board/submit", "played", "favourite", "stats", "campaign/get", "club/get", "club/mine",
+        "library/list", "library/codes", "library/put", "library/delete"].map((p) => "/nsws/tracks/" + p)]);
+
+function playsWhileBanned(request, url) {
+    if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") return false;
+    if (/^\/nsws\/(chat|cup|sock)(\/|$)/.test(url.pathname)) return false;
+    if (request.method === "GET" || request.method === "HEAD") return true;
+    return request.method === "POST" && BANNED_POSTS.has(url.pathname);
+}
+
+// A full ban on this account, or on the address it's playing from.
+async function uploadBanOf(userId, env, cfg) {
+    if (cfg.ipBan) return cfg.ipBan;
+    const ban = await accountBanOf(userId, env);
+    return ban && !ban.chat ? ban : null;
+}
+
+function bannedUpload(ban, origin) {
+    return json({ banned: true, account: !ban.ip, until: ban.until, reason: ban.reason, error: "You're banned, so your times aren't uploaded." }, origin, 403);
+}
+
 // Same shape as a real track id, but nobody without TRACK_SALT can work it out.
 // The week is part of it, so claiming the wrong week for a track only ever
 // reaches an empty board.
@@ -1163,8 +1189,8 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     const hash = await sha256Hex(token);
     observeNames(env, ctx, [{ userId: hash, nickname: form.get("nickname") }]);
     const ownerUpload = cfg.owner || await isOwner(token, cfg);
-    const accountBan = ownerUpload ? null : await accountBanOf(hash, env);
-    if (accountBan && !accountBan.chat) return json({ banned: true, account: true, until: accountBan.until, reason: accountBan.reason }, origin, 403);
+    const uploadBan = ownerUpload ? null : await uploadBanOf(hash, env, cfg);
+    if (uploadBan) return bannedUpload(uploadBan, origin);
     const read = readOptions(form);
     let body = track.hiddenId ? replaceFormValue(raw, "trackId", track.hiddenId) : raw;
     const uploadNick = form.get("nickname");
@@ -1362,9 +1388,16 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
     const token = form.get("userToken") ?? "";
     const nickname = form.get("nickname");
     if (nickname != null && findSlurs(nickname).length) return json({ nicknameBlocked: true }, origin, 422);
-    // 409 makes the game put the old name back, as for a taken name.
-    if (nickname != null && HEX64.test(token) && renameRefused(await accountBanOf(await sha256Hex(token), env), nickname)) {
-        return json({ nicknameTaken: true, banned: true }, origin, 409);
+    // 409 makes the game put the old name and country back, as for a taken name. A banned player may still change their car.
+    const ban = HEX64.test(token) ? cfg.ipBan ?? await accountBanOf(await sha256Hex(token), env) : null;
+    if (ban) {
+        if (nickname != null && renameRefused(ban, nickname)) return json({ nicknameTaken: true, banned: true }, origin, 409);
+        const current = await fetchUpstreamJson(cfg, request, "/v6/user", { version: form.get("version") || DEFAULT_VERSION, userToken: token }).catch(() => null);
+        const moved = !current
+            || (nickname != null && nameKey(current.nickname) !== nameKey(nickname))
+            || (form.get("countryCode") || null) !== (current.countryCode || null);
+        if (moved) return json({ nicknameTaken: true, banned: true }, origin, 409);
+        return withCors(await postUpstream(request, cfg, url.pathname, raw), origin);
     }
     const stub = accounts(env);
     if (stub && HEX64.test(token) && nickname != null && !doLimited()) {
@@ -1402,7 +1435,7 @@ async function chatRetag(env, retag) {
 
 // Sent as text/plain JSON, like the chat, so no preflight is needed. Everything but opening
 // a shared link needs the player's token; the account is its hash.
-async function handleAccounts(request, url, env, fromSite, origin) {
+async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
     if (!fromSite) return forbidden();
     const path = url.pathname.slice(TRAFFIC_PREFIX.length);
     if (!ACCOUNT_PATHS.has(path)) return plain(404, "Not found", origin);
@@ -1428,7 +1461,7 @@ async function handleAccounts(request, url, env, fromSite, origin) {
     switch (path) {
         case "names/check":
         case "names/claim":
-            if (renameRefused(await accountBanOf(userId, env), body.nickname)) result = { available: false, banned: true };
+            if (ipBan || renameRefused(await accountBanOf(userId, env), body.nickname)) result = { available: false, banned: true };
             else result = path === "names/check" ? await stub.checkName(userId, body.nickname) : await stub.claimName(userId, body.nickname);
             break;
         case "clips/list": result = { clips: await stub.listClips(userId) }; break;
@@ -1443,9 +1476,10 @@ async function handleAccounts(request, url, env, fromSite, origin) {
             const uid = HEX32.test(body.v ?? "") ? (await sha256Hex("nsws-chat:" + body.v)).slice(0, 16) : null;
             const { state, linked } = await stub.refState(userId, uid);
             await chatRetag(env, linked);
-            const ban = await accountBanOf(userId, env);
-            if (ban && linked) await env.CHAT?.get(env.CHAT.idFromName("global")).blockUser(userId, linked.uids, ban.until, ban.chat, ban.reason);
-            result = ban ? { ...state, ban: { until: ban.until, chat: ban.chat, reason: ban.reason } } : state;
+            const accountBan = await accountBanOf(userId, env);
+            if (accountBan && linked) await env.CHAT?.get(env.CHAT.idFromName("global")).blockUser(userId, linked.uids, accountBan.until, accountBan.chat, accountBan.reason);
+            const ban = accountBan && !accountBan.chat ? accountBan : ipBan ?? accountBan;
+            result = ban ? { ...state, ban: { until: ban.until, chat: ban.chat, reason: ban.reason, ip: !!ban.ip } } : state;
             break;
         }
         case "refer/redeem": {
@@ -2303,6 +2337,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
             const ph = await bePhysics();
             const board = await hub.beBoard({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip"), amount: url.searchParams.get("amount"), userId: url.searchParams.get("userTokenHash"), physics: ph.version, view: Number(url.searchParams.get("physics")) });
             if (Array.isArray(board?.older)) for (const o of board.older) o.ref = ph.old[o.physics] ?? null;
+            if (Array.isArray(board?.entries)) board.entries = board.entries.filter((e) => !isBanned(e, cfg));
             return reply(board);
         }
         if (path === "board/recordings") {
@@ -2331,6 +2366,8 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
     const clubId = body.clubId;
     switch (path) {
         case "board/submit": {
+            const ban = await uploadBanOf(userId, env, cfg);
+            if (ban) return bannedUpload(ban, origin);
             // Runs are kept on the physics they were driven on; a page loaded before a physics change can't add to the new board.
             const physics = Number.isSafeInteger(body.physics) ? body.physics : 1;
             let ph = await bePhysics();
@@ -2506,7 +2543,8 @@ export default {
         if (request.method !== "OPTIONS" && !OWNER_ROUTE.test(url.pathname)) {
             const ban = await ipBanOf(request, env);
             if (ban && !(await carriesOwnerKey(request, url, cfg))) {
-                return json({ banned: true, until: ban.until, reason: ban.reason }, request.headers.get("Origin") || "*", 403);
+                if (!playsWhileBanned(request, url)) return json({ banned: true, until: ban.until, reason: ban.reason }, request.headers.get("Origin") || "*", 403);
+                cfg.ipBan = { until: ban.until, chat: false, reason: ban.reason, ip: true };
             }
             await hideIpBannedNames(cfg, env);
         }
@@ -2569,7 +2607,7 @@ export default {
             if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind)\//.test(url.pathname)) {
                 if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
                 try {
-                    return await handleAccounts(request, url, env, fromSite, requestOrigin);
+                    return await handleAccounts(request, url, env, fromSite, requestOrigin, cfg.ipBan ?? null);
                 } catch (err) {
                     noteDoError(err);
                     console.error("accounts error:", err && err.message);

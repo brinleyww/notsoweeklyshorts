@@ -2833,7 +2833,7 @@
 
     function buildBans() {
         const root = el("div");
-        const message = card("Ban message", "list", "Optional. Goes with the next ban you press, and they see it on their ban screen.");
+        const message = card("Ban message", "list", "Optional. Goes with the next ban you press, and they see it in the ban notice.");
         const messageRow = el("div", "nrc-find");
         ui.bansReason = banInput("Ban message");
         ui.bansReason.maxLength = 200;
@@ -2923,7 +2923,7 @@
         ui.bansNoteBox.textContent = ui.bansNote || "";
         const list = ui.bansListBox;
         list.textContent = "";
-        const accounts = card("Banned accounts", "list", "Banned: runs off every board and all standings, no uploads, no chat, and a ban screen on their next visit. Chat only: they can't post in the chat. Neither can rename or delete the profile.");
+        const accounts = card("Banned accounts", "list", "Banned: they can still play, but their runs are off every board and all standings, nothing they drive uploads, no chat, and a notice on their next visit. Chat only: they can't post in the chat. Neither can change name or country, or delete or import a profile.");
         if (ui.bansError && !ui.bans) accounts.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) accounts.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!users.size) accounts.appendChild(el("div", "nrc-empty", "No account is banned."));
@@ -2938,7 +2938,7 @@
             return [b.userId.slice(0, 8), b.who || "", b.chat ? "Chat only" : "Banned", hidden, reason, fmt.date(b.at), b.until ? fmt.dateTime(b.until) : "Never", lift];
         })));
         list.appendChild(accounts);
-        const c = card("Banned addresses", "list", "A banned address can't reach leaderboards, uploads, chat or cups. Cups already running keep their connection until it drops. Hidden names, and the accounts that used them under any later name, are off every board and all standings until the ban ends.");
+        const c = card("Banned addresses", "list", "A banned address can still play and read leaderboards, but nothing it drives uploads, and it can't reach chat or cups, change a name or country, or delete or import a profile. Cups already running keep their connection until it drops. Hidden names, and the accounts that used them under any later name, are off every board and all standings until the ban ends.");
         if (ui.bansError && !ui.bans) c.appendChild(el("div", "nrc-empty", "Couldn't load the list. Press Refresh."));
         else if (!ui.bans) c.appendChild(el("div", "nrc-empty", "Loading…"));
         else if (!banned.size) c.appendChild(el("div", "nrc-empty", "Nobody is banned."));

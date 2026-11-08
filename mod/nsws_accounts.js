@@ -6,7 +6,7 @@
     const UNCLAIMED_KEY = "_nswsNameUnclaimed";
     const NAME_TAKEN = "This username is already taken. Please pick another one.";
     const NAME_BLOCKED = "That username isn't allowed. Please pick another one.";
-    const NAME_BANNED = "Your account is banned, so you can't change your username.";
+    const NAME_BANNED = "You're banned, so you can't change your username or country.";
     // Whether the last name refused was refused by the slur filter rather than for being taken.
     let lastBlocked = false;
     let lastBanned = false;

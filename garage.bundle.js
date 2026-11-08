@@ -368,7 +368,7 @@
                 __nswsNicknameBanned && (i.get(this, j, "f").disabled = !0);
                 const v = document.createElement("div");
                 v.className = "description",
-                v.textContent = __nswsNicknameBanned ? t.get("Your account is banned, so you can't change your username or delete this profile.") : t.get("Choose a nickname to be shown in the leaderboard. Your nickname can be changed at any time."),
+                v.textContent = __nswsNicknameBanned ? t.get("Your account is banned, so you can't change your username or country, or delete this profile.") :t.get("Choose a nickname to be shown in the leaderboard. Your nickname can be changed at any time."),
                 u.appendChild(v);
                 const w = document.createElement("div");
                 w.className = "box",
@@ -384,7 +384,8 @@
                 let y;
                 y = null == k ? "images/blank_flag.svg" : "images/countries/" + k.code + ".svg";
                 const C = document.createElement("button");
-                C.className = "button country-button";
+                C.className = "button country-button",
+                __nswsNicknameBanned && (C.disabled = !0);
                 const M = document.createElement("img");
                 M.src = y,
                 C.appendChild(M);

@@ -61504,6 +61504,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                     else if (422 == u.status)
                                         window.__nswsRunRejected?.(),
                                         c(new Error("Run failed the anti-cheat check"));
+                                    else if (403 == u.status && /"banned"/.test(u.responseText))
+                                        window.__nswsUploadRefused?.(u.responseText),
+                                        c(new Error("Banned"));
                                     else
                                         window.__nswsBusy?.fromXhr(u),
                                         c(Object.assign(new Error("Failed to connect to server"), {
@@ -63408,6 +63411,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     signal: AbortSignal.timeout?.(2e4)
                 });
                 const d = await res.json().catch((() => null));
+                d?.banned && window.__nswsUploadRefused?.(JSON.stringify(d));
                 if (!res.ok || !d || d.error)
                     throw new Error(d?.error || "Upload failed (" + res.status + ")");
                 return {

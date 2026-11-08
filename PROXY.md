@@ -944,10 +944,13 @@ raw name.
 
 ## IP bans
 
-`BANNED_NICKNAMES` hides a name from the boards. An IP ban refuses an address everything the Worker serves:
-leaderboards, uploads, chat, cups, accounts and beats get `403 {"banned": true, "until": <ms or null>, "reason": <text or null>}`. The site
-itself is static files on GitHub Pages, which the Worker can't block, so a banned player can still load the page and
-drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_traffic.js`), which is only there to say why.
+`BANNED_NICKNAMES` hides a name from the boards. A banned address can still play: GETs and the POSTs in `BANNED_POSTS`
+(`playsWhileBanned` in `worker.js`) go through with `cfg.ipBan` set, and everything else (chat, cups, sockets, track
+links, clubs, submissions) gets `403 {"banned": true, "until": <ms or null>, "reason": <text or null>}`. Of what goes
+through, uploads (`/v6/leaderboard`, Custom Tracks `board/submit`) get the same 403, profile saves that change the name
+or country get 409, and `names/check|claim` say banned. `refer/me` carries the ban (`ip: true`), so the page shows a
+notice once a visit (`showBanned` in `mod/nsws_traffic.js`, the game's own message box) and locks the profile like an
+account ban.
 
 - **The address is a hash:** `ipHash` in `worker.js`, the first 16 hex characters of
   `sha256("nsws-chat-ip:" + address)`. Raw addresses are never stored, though a hash of an IPv4 address can be
@@ -967,7 +970,7 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
   UPDATE sets that column, which would rewrite the index entry per beat. A lookup walks the index, so it reads
   every session with a hash; only the owner's click pays for that.
 - **Ban message:** optional, up to 200 characters, from the Bans tab or the Moderate menu. It is saved with the ban
-  and copied into the KV list (`[until, message]`), so a banned player sees it on the ban screen, within a few
+  and copied into the KV list (`[until, message]`), so a banned player sees it in the ban notice, within a few
   minutes like the ban itself. To change one, unban and ban again.
 - **Their runs:** the ban saves every name its address's sessions used (plus the name it was made on, up to 50) and
   copies them into the KV list (`[until, message, names]`). While it lasts, the Worker adds those names to
@@ -988,10 +991,12 @@ drive offline; the beat's 403 puts up a ban screen (`showBanned` in `mod/nsws_tr
 
 ## Account bans
 
-A ban on one account (its userId, `sha256(token)`), in two kinds. **Ban:** its runs leave every board, rank and
-standing (live and locked), its uploads get `403 {"banned": true, "account": true, ...}`, it can't post in the chat,
-and the page puts up the ban screen ("This account is banned"). **Chat ban:** it only can't post, react, edit or send
-files in the chat. Under either, the account can't take another name and the page won't rename or delete the profile.
+A ban on one account (its userId, `sha256(token)`), in two kinds. **Ban:** it can still play, but its runs leave every
+board, rank and standing (live and locked, Custom Tracks boards too), its uploads get `403 {"banned": true, "account": true, ...}`
+(the game keeps the PB on the device and shows a toast, `__nswsUploadRefused`), it can't post in the chat, and the
+page shows a notice once a visit. **Chat ban:** it only can't post, react, edit or send files in the chat. Under
+either, a profile save that changes the name or country gets 409 (the Worker compares with Kodub's copy), and the
+page locks the nickname box, the country button, Delete and Import.
 
 - **Where:** Race Control -> Bans -> "Find a player" (any part of any name, or a 64-character user id), or the chat's Moderate
   menu (Chat ban... / Ban account...), which finds the account through `chat_links`, so a chat that was never linked
@@ -1011,7 +1016,8 @@ files in the chat. Under either, the account can't take another name and the pag
 - **Timing:** a ban made in Race Control reaches the instance that saved it at once and the others within a few
   minutes; one made in the chat reaches every Worker instance within a few minutes, but the chat at once. The page
   learns it on its next `refer/me` (each visit, and now and then during a long one).
-- **Not covered:** a new profile (a fresh token) is a new account. Clearing site data undoes the page's locks, though the
+- **Not covered:** cups and real-time ghosts don't know accounts, so an account ban (unlike an IP ban) doesn't keep
+  anyone out of them. A new profile (a fresh token) is a new account. Clearing site data undoes the page's locks, though the
   Worker still refuses the old account's renames and uploads.
 
 ## Grinding stats
