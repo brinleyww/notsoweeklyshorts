@@ -793,6 +793,17 @@
         return (await loadAll()).get(id) || null;
     }
 
+    // A library track by its PolyTrack track id (all a clip keeps). Better Editor tracks saved before their blocks
+    // loaded have no id yet, so those are read once the blocks are here.
+    async function findByTrackId(trackId) {
+        if (!trackId) return null;
+        const all = await list();
+        const hit = all.find((t) => t.trackId === trackId);
+        if (hit || !all.some((t) => t.kind === "be" && !t.trackId)) return hit || null;
+        if (!beReady() && !(await ensureBE())) return null;
+        return all.find((t) => t.kind === "be" && !t.trackId && typeof t.code === "string" && parse(t.code).trackId === trackId) || null;
+    }
+
     function findExisting(tracks, info, hash) {
         for (const t of tracks.values()) {
             if (info.kind === "stock" && info.trackId ? t.trackId === info.trackId : t.hash === hash) return t;
@@ -2875,6 +2886,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         parseAsync,
         list,
         get,
+        findByTrackId,
         add,
         addMany,
         update,

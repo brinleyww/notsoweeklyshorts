@@ -1495,11 +1495,21 @@ window.__nswsAutoGhostNote = function(trackId) {
     }
     // Clips played together must be on the same track: the Watch view drives one track.
     function _playClipsNow(clips) {
+        const runs = _clipRuns(clips);
+        if (!runs) return;
+        watchingClip = true;
+        watchClipFunction(runs);
+        requestAnimationFrame(function() {
+            requestAnimationFrame(hideClipSkyOverlay);
+        });
+    }
+    // The Watch view's runs for some clips, or null once it has said why it can't.
+    function _clipRuns(clips) {
         const RecordingClass = window.__clipRecordingClass;
         const TimeClass = window.__clipTimeClass;
         if (!RecordingClass || !TimeClass) {
             _clipFailed("Engine not ready.");
-            return;
+            return null;
         }
         const pako = window.__clipPako?.Ay ?? window.__clipPako;
         const runs = [];
@@ -1512,7 +1522,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             const recording = RecordingClass.deserialize(b64);
             if (!recording) {
                 _clipFailed("Failed to deserialize clip recording.");
-                return;
+                return null;
             }
             let carStyle;
             try {
@@ -1523,7 +1533,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             const loaded = replayLoaderClass?.loadClip(recording, clip.frames);
             if (!loaded) {
                 _clipFailed("Failed to load clip.");
-                return;
+                return null;
             }
             runs.push({
                 recording: loaded.recording,
@@ -1533,11 +1543,26 @@ window.__nswsAutoGhostNote = function(trackId) {
                 isSelf: false
             });
         }
-        watchingClip = true;
-        watchClipFunction(runs);
+        return runs;
+    }
+    // Custom Tracks library tracks aren't in the game's track list, so their clips play on the library's copy.
+    async function _watchLibraryClips(trackId, clips) {
+        const lib = window.__nswsTracks;
+        const track = await Promise.resolve(lib?.findByTrackId?.(trackId)).catch(() => null);
+        if (!track) return false;
+        const runs = _clipRuns(clips);
+        if (!runs) return true;
+        const back = afterClipWatch;
+        afterClipWatch = null;
+        const ok = await lib.play(track, { watch: { runs }, onExit: () => back ? back() : openClipsMenu() }).catch(e => (console.error(e), false));
         requestAnimationFrame(function() {
             requestAnimationFrame(hideClipSkyOverlay);
         });
+        if (!ok) {
+            afterClipWatch = back;
+            _afterClipPlayback();
+        }
+        return true;
     }
     function _currentTrackId() {
         return window.__getCurrentTrack?.()?.getId?.() ?? null;
@@ -1567,6 +1592,8 @@ window.__nswsAutoGhostNote = function(trackId) {
     }
     async function watchClips(clips) {
         const trackId = clips[0].trackId;
+        if (trackId && null == window.__bw_trackCategory?.(trackId) && await _watchLibraryClips(trackId, clips))
+            return;
         if (!trackId || _currentTrackId() === trackId) {
             _playClipsNow(clips);
             return;
@@ -10750,7 +10777,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 l.get(this, fe, "f")[i] = 1e3 * a,
                                 l.get(this, ge, "f")[i] = 1e3 * a;
                             else {
-                                const {up: t, down: n} = this.getControls()
+                                const noEngine = !!self.TM?.hud?.of?.(this)?.noEngine
+                                  , {up: t0, down: n0} = this.getControls()
+                                  , t = t0 && !noEngine
+                                  , n = n0 && !(noEngine && !l.get(this, ie, "f").brakeLightEnabled)
                                   , r = 2 == i || 3 == i;
                                 n ? l.get(this, ie, "f").brakeLightEnabled ? l.get(this, ge, "f")[i] > 0 ? l.get(this, ge, "f")[i] = Math.max(0, l.get(this, ge, "f")[i] - 50 * e) : l.get(this, ge, "f")[i] < 0 && (l.get(this, ge, "f")[i] = Math.min(0, l.get(this, ge, "f")[i] + 50 * e)) : r && (l.get(this, fe, "f")[i] -= 25 * e,
                                 l.get(this, ge, "f")[i] -= 25 * e) : t && r && (l.get(this, fe, "f")[i] += 25 * e,
@@ -11320,7 +11350,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , t = .7 + Math.pow(Math.abs(e), 1 / 3) / 3
                       , n = null != l.get(this, ie, "f").wheelContact[0] || null != l.get(this, ie, "f").wheelContact[1] || null != l.get(this, ie, "f").wheelContact[2] || null != l.get(this, ie, "f").wheelContact[3]
                       , {up: i, down: r} = this.getControls()
-                      , a = this.hasStarted() && !this.hasFinished() && (i && !(r && l.get(this, ie, "f").brakeLightEnabled) || r && !l.get(this, ie, "f").brakeLightEnabled);
+                      , a = !self.TM?.hud?.of?.(this)?.noEngine && this.hasStarted() && !this.hasFinished() && (i && !(r && l.get(this, ie, "f").brakeLightEnabled) || r && !l.get(this, ie, "f").brakeLightEnabled);
                     let s;
                     s = n ? a ? t : Math.max(.7, t / 2) : a ? Math.max(.7, 1.15 * t) : Math.max(.7, t / 2),
                     window.__nswsAudioTap?.(this, 0, 0, s, Math.min(.285, s / 14)),
@@ -63417,11 +63447,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             };
             // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
             window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id));
+            let runPhysics = null;
             window.__nswsBESubmit = async (token, nickname, countryCode, carStyle, trackId, time, recording) => {
                 const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
                     method: "POST",
                     headers: { "Content-Type": "text/plain" },
-                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize(), physics: window.__nswsTM?.physics ?? 1 }),
+                    body: JSON.stringify({ userToken: token, nickname, countryCode, carStyle: carStyle.serialize(), trackId, frames: time.numberOfFrames, recording: recording.serialize(), physics: runPhysics ?? window.__nswsTM?.physics ?? 1 }),
                     signal: AbortSignal.timeout?.(2e4)
                 });
                 const d = await res.json().catch((() => null));
@@ -63444,6 +63475,25 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         return !1;
                     const e = await x.getLeaderboardUserEntry(w.getCurrentUserProfile().tokenHash, id, !0);
                     return null != e && !e.noReplay && null == S.getRecord(slot, id) && "Download" == await S.syncRecord(slot, id, e)
+                },
+                // A run driven somewhere else (a Test in the embedded editor), saved and uploaded like a race's PB.
+                // physics: the Better Editor physics version it was driven on.
+                saveRun: async (id, frames, recording, physics) => {
+                    const slot = w.profileSlot
+                      , time = new yt.A(frames)
+                      , rec = ie.A.deserialize(recording);
+                    if (null == rec || x.determinismState != Js.Ok || null == w.getCurrentUserProfile())
+                        return null;
+                    const pb = S.getRecordTime(slot, id);
+                    if (null != pb && !time.lessThan(pb))
+                        return { pb: !1 };
+                    null != physics && (window.__nswsBEPhysicsNow = physics);
+                    runPhysics = physics;
+                    try {
+                        return { pb: !0, upload: S.setRecord(slot, id, !1, time, rec) }
+                    } finally {
+                        runPhysics = null
+                    }
                 }
             };
             // For mod/competitions.js: Competitions run on the game's own multiplayer.

@@ -506,6 +506,10 @@
             startTest(m);
             return;
         }
+        if (m.type === "run" && !m.reqId) {
+            saveRun(m);
+            return;
+        }
         if (m.reqId && pending.has(m.reqId)) {
             const p = pending.get(m.reqId);
             pending.delete(m.reqId);
@@ -515,6 +519,23 @@
         }
         if (m.type === "changed") refreshList(true).then(() => refreshLive());
     });
+
+    // A finished Test in the editor is a run on that track, saved and uploaded like a race.
+    async function saveRun(m) {
+        const save = window.__nswsTrackBoard?.saveRun;
+        if (!save || typeof m.trackId !== "string" || !/^[0-9a-f]{64}$/.test(m.trackId) || !Number.isSafeInteger(m.frames) || m.frames <= 0 || typeof m.recording !== "string") return;
+        if (m.be) (window.__nswsBEBoardIds ??= new Set()).add(m.trackId);
+        const toast = window.__nswsTracks?.ui?.toast;
+        try {
+            const r = await save(m.trackId, m.frames, m.recording, Number.isSafeInteger(m.physics) && m.physics > 0 ? m.physics : null);
+            if (!r?.pb) return;
+            toast?.("New best saved");
+            await r.upload;
+        } catch (e) {
+            console.warn(e);
+            toast?.(e?.message || "Couldn't upload that run.");
+        }
+    }
 
     function createFrame() {
         build();
