@@ -63576,6 +63576,40 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const e = await x.getLeaderboardUserEntry(w.getCurrentUserProfile().tokenHash, id, !0);
                     return null != e && !e.noReplay && null == S.getRecord(slot, id) && "Download" == await S.syncRecord(slot, id, e)
                 },
+                // This device's PB when the board doesn't have it (its upload failed): sent again, as listed tracks' screens do.
+                // Without this a failed upload stays off the board and every slower run after it is never sent.
+                // entry: the board's own entry for this profile ({id, time} or {id, frames}), or null.
+                sync: async (id, entry) => {
+                    const slot = w.profileSlot
+                      , rec = S.getRecord(slot, id);
+                    if (x.determinismState != Js.Ok || null == rec || null == w.getCurrentUserProfile())
+                        return null;
+                    const frames = entry?.time?.numberOfFrames ?? entry?.frames;
+                    entry = null != entry && Number.isSafeInteger(entry.id) && Number.isSafeInteger(frames) ? {
+                        id: entry.id,
+                        time: new yt.A(frames),
+                        reverted: !0 === entry.reverted,
+                        noReplay: !0 === entry.noReplay
+                    } : null;
+                    if (null != entry && (rec.uploadId == entry.id || !rec.time.lessThan(entry.time)))
+                        return null;
+                    let physics = null;
+                    if (window.__nswsBEBoard?.(id))
+                        try {
+                            physics = JSON.parse(localStorage.getItem("nswsBEPhysics") || "{}")?.[id] ?? 1
+                        } catch (e) {
+                            physics = 1
+                        }
+                    // Read while the upload request is built, which happens before syncRecord first waits.
+                    runPhysics = physics;
+                    let job;
+                    try {
+                        job = S.syncRecord(slot, id, entry)
+                    } finally {
+                        runPhysics = null
+                    }
+                    return await job
+                },
                 // A run driven somewhere else (a Test in the embedded editor), saved and uploaded like a race's PB.
                 // physics: the Better Editor physics version it was driven on.
                 saveRun: async (id, frames, recording, physics) => {
