@@ -53315,14 +53315,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 value: "true"
             }], R.A.WheelInfo),
             C.get(this, ms, "m", Gs).call(this, "Wheel info size", [{
+                title: "Speedometer width",
+                value: "auto"
+            }, {
                 title: "25%",
                 value: "0.25"
             }, {
                 title: "50%",
                 value: "0.5"
-            }, {
-                title: "62.5%",
-                value: "0.625"
             }, {
                 title: "75%",
                 value: "0.75"
@@ -61913,7 +61913,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "0.625"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
