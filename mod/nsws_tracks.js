@@ -1355,6 +1355,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-thumb>img.photo{object-fit:cover;image-rendering:auto;}
 .nt-row.open{cursor:pointer;}
 .nt-row.open:hover{background:rgba(255,255,255,.05);}
+.nt-row.expanded,.nt-row.expanded:hover{background:#192042;border-bottom-color:transparent;}
+.nt-drop{overflow:hidden;background:#192042;border-bottom:1px solid rgba(255,255,255,.08);transition:height .28s ease-out;outline:none;}
+.nt-drop>.nt-pbody{height:min(440px,62vh);box-sizing:border-box;padding:6px 14px 14px;}
+.nt-drop .nt-hero .nt-lthumb{width:min(100%,150px);}
 .nt-pbar{position:relative;height:6px;margin:10px 0 4px;overflow:hidden;background:rgba(255,255,255,.15);}
 .nt-pbar>div{position:absolute;top:0;bottom:0;left:0;width:0;background:#7272c2;transition:width .2s;}
 .nt-pbar.busy>div{width:35%;transition:none;animation:ntLoad 1.1s linear infinite;}
@@ -1801,8 +1805,11 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     }
 
     let openPage = null;
+    // opts.anchor: a My Tracks row, which the page drops down under instead of covering the screen.
     function openTrackPage(track, opts = {}) {
         ensureCss();
+        if (!opts.anchor && !opts.overlay && track?.id && screen && !screen.root.hidden && screen.current === "tracks" && screen.panes.get("tracks")?.__ntOpen?.(track, opts)) return () => openPage?.();
+        const inline = !!opts.anchor;
         // A double click on a row would stack two pages, and Escape would only close the top one.
         openPage?.();
         let t = track;
@@ -1830,7 +1837,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const nick = (user().nickname || "").trim().toLowerCase();
             return t.source === "editor" || (!!nick && (t.author || "").trim().toLowerCase() === nick);
         };
-        const host = isolate(el("div", "nt-host nt-page"));
+        const host = inline ? el("div", "nt-drop") : isolate(el("div", "nt-host nt-page"));
         host.tabIndex = -1;
         const wrap = el("div", "nt-pwrap");
         const top = el("div", "nt-ptop");
@@ -1838,8 +1845,11 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const hero = el("div", "nt-hero");
         const boardEl = el("div", "nt-board");
         body.append(hero, boardEl);
-        wrap.append(top, body);
-        host.append(wrap);
+        if (inline) host.append(body);
+        else {
+            wrap.append(top, body);
+            host.append(wrap);
+        }
         let closed = false;
         const unsub = onChange(() => {
             if (!t.id) return;
@@ -1851,18 +1861,30 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 }
             }, () => {});
         });
-        const close = () => {
+        // instant: no folding away (the row it hangs under is gone).
+        const close = (instant) => {
             if (closed) return;
             closed = true;
             if (openPage === close) openPage = null;
             unsub();
-            host.remove();
             const i = modals.indexOf(entry);
             if (i >= 0) modals.splice(i, 1);
-            (screen && !screen.root.hidden ? screen.root : null)?.focus();
+            if (!inline) {
+                host.remove();
+                (screen && !screen.root.hidden ? screen.root : null)?.focus();
+                return;
+            }
+            opts.onClose?.();
+            if (instant === true || !host.isConnected) return void host.remove();
+            host.style.height = host.offsetHeight + "px";
+            void host.offsetHeight;
+            host.style.height = "0px";
+            const done = () => host.remove();
+            host.addEventListener("transitionend", done, { once: true });
+            setTimeout(done, 400);
         };
-        const entry = { host, cancel: close };
-        top.append(button("Back", close, { icon: "back" }), el("h2", null, "Track"));
+        const entry = { host, cancel: () => close() };
+        if (!inline) top.append(button("Back", () => close(), { icon: "back" }), el("h2", null, "Track"));
 
         let mapSrc;
         const mapImage = () => {
@@ -1948,7 +1970,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 }, { icon: "load", primary: !!t.image, title: "Use your own picture for this track; it goes with the track when you share it" }));
                 hero.appendChild(picBar);
             }
-            hero.append(el("div", "nt-ptitle", t.name || "Untitled track"), metaNode(t));
+            // Under its row, the row already names the track.
+            if (!inline) hero.append(el("div", "nt-ptitle", t.name || "Untitled track"), metaNode(t));
             const statsEl = el("div", "nt-pstats");
             const rec = myRecord();
             statsEl.append(el("span", null, "Your best"), el("span", null, rec ? fmtTime(rec.time.numberOfFrames) : "No time yet"));
@@ -2164,12 +2187,30 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         }
 
         modals.push(entry);
-        document.body.appendChild(host);
         openPage = close;
         drawHero();
         drawBoard();
         loadBoard(false);
-        host.focus();
+        if (!inline) {
+            document.body.appendChild(host);
+            host.focus();
+            return close;
+        }
+        // Drops down from the row, then stays its natural height (the board loads after).
+        opts.anchor.after(host);
+        opts.onMount?.(host);
+        host.style.height = "0px";
+        void host.offsetHeight;
+        host.style.height = body.offsetHeight + "px";
+        const opened = (e) => {
+            if (e && e.target !== host) return;
+            host.removeEventListener("transitionend", opened);
+            if (closed) return;
+            host.style.height = "";
+            host.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        };
+        host.addEventListener("transitionend", opened);
+        setTimeout(opened, 400);
         return close;
     }
 
@@ -2353,10 +2394,11 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             name.title = t.name || "";
             info.append(name, metaNode(t, "added " + when(t.added)));
             r.appendChild(info);
+            r.dataset.ntId = t.id;
             if (!state.selecting) {
                 r.classList.add("open");
-                r.title = "Open the track page";
-                r.addEventListener("click", () => openTrackPage(t));
+                r.title = "Show the leaderboard";
+                r.addEventListener("click", () => (drop.id === t.id ? drop.close?.() : dropDown(t, r)));
                 const actions = el("div", "nt-actions");
                 actions.append(
                     button("Play", () => play(t, { start: true, intro: true, onExit: () => openLibrary() }), { icon: "play", title: "Play" }),
@@ -2374,11 +2416,49 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             return r;
         }
 
+        // The track page that hangs under a row (openTrackPage with an anchor), and one asked for before its row was drawn
+        // (coming back from a race).
+        const drop = { id: null, node: null, close: null };
+        let wanted = null;
+        const rowOf = (id) => [...listEl.children].find((r) => r.dataset?.ntId === String(id)) || null;
+        function dropDown(t, r, opts = {}) {
+            const id = t.id;
+            r.classList.add("expanded");
+            const close = openTrackPage(t, {
+                ...opts,
+                anchor: r,
+                onMount: (node) => {
+                    drop.id = id;
+                    drop.node = node;
+                },
+                onClose: () => {
+                    rowOf(id)?.classList.remove("expanded");
+                    if (drop.id === id) drop.id = drop.node = drop.close = null;
+                },
+            });
+            if (drop.id === id) drop.close = close;
+        }
+        function mountWanted() {
+            if (!wanted || !state.loaded) return;
+            const w = wanted;
+            const r = rowOf(w.track.id);
+            wanted = null;
+            if (r && !state.selecting) dropDown(w.track, r, w.opts);
+            else openTrackPage(w.track, { ...w.opts, overlay: true });
+        }
+        pane.__ntOpen = (track, opts) => {
+            wanted = { track, opts };
+            mountWanted();
+            return true;
+        };
+
         function draw() {
             drawToolbar();
+            if (drop.node) drop.node.remove();
             listEl.replaceChildren();
             if (!state.loaded) return;
             if (!state.tracks.length) {
+                drop.close?.(true);
                 const empty = el("div", "nt-empty");
                 empty.appendChild(el("h3", null, "No custom tracks yet"));
                 empty.appendChild(el("p", null, "Use Import to paste an NSWS Track code, an NSWS track link, or a code from PolyTrack or the Better Editor. Tracks you save in the Track Editor or from a club campaign land here too."));
@@ -2393,6 +2473,15 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const visible = shown();
             if (!visible.length) listEl.appendChild(el("div", "nt-empty", "No tracks match."));
             for (const t of visible) listEl.appendChild(row(t));
+            // The open track page moves under its redrawn row, or goes with it.
+            if (drop.node) {
+                const r = rowOf(drop.id);
+                if (r && !state.selecting) {
+                    r.classList.add("expanded");
+                    r.after(drop.node);
+                } else drop.close?.(true);
+            }
+            mountWanted();
             foot.textContent =
                 (visible.length === state.tracks.length ? state.tracks.length + (state.tracks.length === 1 ? " track" : " tracks") : visible.length + " of " + state.tracks.length + " tracks") +
                 (memoryOnly ? ". This browser blocks saved site data, so tracks are kept only until you close the page." : syncNote() ? ". " + syncNote() : "");
