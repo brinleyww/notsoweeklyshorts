@@ -1120,6 +1120,16 @@
         return data ?? {};
     }
 
+    // A race's new PB upload still on its way, by track id: Back from a race reads the board at once, before it lands.
+    const pendingUploads = new Map();
+    addEventListener("nsws-new-pb", (e) => {
+        const d = e.detail;
+        if (!d?.track || typeof d.upload?.then !== "function") return;
+        const job = Promise.resolve(d.upload).catch(() => null);
+        pendingUploads.set(d.track, job);
+        job.then(() => pendingUploads.get(d.track) === job && pendingUploads.delete(d.track));
+    });
+
     // Your board run as your PB on this device when the device has none (before v11.83 every load deleted them).
     async function restoreBest(trackId, wait) {
         const r = window.__nswsTrackBoard?.restore;
@@ -1384,6 +1394,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-brow{display:grid;grid-template-columns:44px 30px minmax(0,1fr) auto auto;align-items:center;gap:10px;padding:5px 14px;font-size:18px;}
 .nt-brow:nth-child(odd){background:rgba(255,255,255,.04);}
 .nt-brow.me{background:rgba(114,114,194,.2);box-shadow:inset 3px 0 0 #8f8ff0;}
+.nt-brow.pick{cursor:pointer;}
+.nt-brow.pick:hover{background:rgba(255,255,255,.08);}
+.nt-brow.picked,.nt-brow.picked:hover{background:rgba(143,143,240,.28);}
 .nt-brow>.rank{text-align:right;color:rgba(255,255,255,.6);}
 .nt-brow>.rank.top{color:#fff;}
 .nt-brow .flag{display:block;width:26px;height:19px;}
@@ -1406,7 +1419,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-launch.on{opacity:1;pointer-events:auto;}
 .nt-lcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px;transform:translateY(14px) scale(.98);transition:transform .5s ease-out;}
 .nt-launch.on .nt-lcard{transform:none;}
-.nt-lthumb{width:min(340px,62vw);aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#212b58;clip-path:polygon(14px 0,100% 0,calc(100% - 14px) 100%,0 100%);}
+.nt-lthumb{width:min(340px,62vw);aspect-ratio:1;display:flex;align-items:center;justify-content:center;background:#212b58;}
 .nt-lthumb img{width:100%;height:100%;object-fit:contain;image-rendering:pixelated;}
 .nt-lthumb img.photo{object-fit:cover;image-rendering:auto;}
 .nt-lthumb img.env{width:40%;height:40%;}
@@ -1819,6 +1832,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         const board = window.__nswsTrackBoard;
         let online = false;
         let stats = null;
+        let resent = false;
         // A Better Editor track gets its id once the blocks have loaded, so this can run again later.
         const goOnline = () => {
             if (online || !board || !t.trackId) return false;
@@ -1895,19 +1909,26 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             return mapSrc;
         };
 
+        // Runs picked on the leaderboard, as PolyTrack's own play menu does: Play races them, Watch replays them (with
+        // none picked, both use your best).
         const ghosts = new Map();
         const playBtn = button("Play", () => start(), { icon: "play", primary: true });
         playBtn.classList.add("nt-pplay");
+        const watchBtn = button("Watch", () => watch(), { icon: "preview", title: "Replay the picked runs, or your best" });
         const playLabel = () => {
-            playBtn.lastChild.textContent = ghosts.size ? "Play vs " + ghosts.size + (ghosts.size === 1 ? " ghost" : " ghosts") : "Play";
+            const n = ghosts.size;
+            playBtn.lastChild.textContent = n ? "Play vs " + n + (n === 1 ? " ghost" : " ghosts") : "Play";
+            watchBtn.lastChild.textContent = n ? "Watch " + n + (n === 1 ? " run" : " runs") : "Watch your best";
+            watchBtn.disabled = !n && !myRecord()?.recording;
         };
         function toggleGhost(key, ghost, b) {
             if (ghosts.has(key)) ghosts.delete(key);
             else if (ghosts.size >= GHOSTS_MAX) {
-                toast("You can race " + GHOSTS_MAX + " ghosts at most.");
+                toast("You can pick " + GHOSTS_MAX + " runs at most.");
                 return;
             } else ghosts.set(key, ghost);
             b.classList.toggle("on", ghosts.has(key));
+            b.closest(".nt-brow")?.classList.toggle("picked", ghosts.has(key));
             playLabel();
         }
 
@@ -1980,14 +2001,14 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             hero.appendChild(statsEl);
             if (rec?.recording) {
                 const own = el("div", "nt-line");
-                const g = el("button", "nt-gbtn" + (ghosts.has("self") ? " on" : ""), "Ghost");
+                const g = el("button", "nt-gbtn" + (ghosts.has("self") ? " on" : ""), "Pick");
                 g.type = "button";
                 g.addEventListener("click", () => toggleGhost("self", { self: true }, g));
-                own.append(g, el("span", "nt-text dim", "Race your best as a ghost"));
+                own.append(g, el("span", "nt-text dim", "Your best, to race or watch with the others"));
                 hero.appendChild(own);
             }
             const acts = el("div", "nt-line");
-            acts.append(playBtn);
+            acts.append(playBtn, watchBtn);
             if (t.id) acts.append(button("Edit", () => openInEditor(t), { icon: "editor" }), button("Share", () => openShare([t]), { icon: "share" }));
             if (t.id) acts.append(button(t.favourite ? "Favourite" : "Favourite", async () => {
                 try {
@@ -2016,7 +2037,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             }
             const nick = el("span", "nick", e.nickname || "?");
             nick.title = "Open profile";
-            nick.addEventListener("click", () => {
+            nick.addEventListener("click", (ev) => {
+                ev.stopPropagation();
                 window.__nswsProfile?.open(e.nickname, { carStyle: e.carStyle, countryCode: e.countryCode });
                 const p = document.getElementById("nsws-profile");
                 if (p) p.style.zIndex = "100650";
@@ -2034,11 +2056,21 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             }
             const key = "e" + e.id;
             const can = !e.hidden && !e.noReplay && e.id > 0;
-            const g = el("button", "nt-gbtn" + (ghosts.has(key) ? " on" : ""), "Ghost");
+            const g = el("button", "nt-gbtn" + (ghosts.has(key) ? " on" : ""), "Pick");
             g.type = "button";
             g.disabled = !can;
-            g.title = can ? "Race against this run" : "This run has no replay";
-            g.addEventListener("click", () => toggleGhost(key, { id: e.id, nickname: e.nickname }, g));
+            g.title = can ? "Pick this run to race or watch" : "This run has no replay";
+            const pick = (ev) => {
+                ev.stopPropagation();
+                toggleGhost(key, { id: e.id, nickname: e.nickname, isSelf: !!e.isSelf }, g);
+            };
+            g.addEventListener("click", pick);
+            // The whole row picks it, as in PolyTrack's own leaderboard.
+            if (can) {
+                r.classList.add("pick");
+                r.classList.toggle("picked", ghosts.has(key));
+                r.addEventListener("click", pick);
+            }
             r.appendChild(g);
             return r;
         }
@@ -2093,12 +2125,16 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             loadingBoard = true;
             boardError = null;
             drawBoard();
+            let resend = false;
             try {
+                const landing = !more && pendingUploads.get(t.trackId);
+                if (landing) await Promise.race([landing, new Promise((res) => setTimeout(res, 8000))]);
                 const res = t.kind === "be" ? await bePage(more ? entries.length : 0) : await board.page(t.trackId, more ? entries.length : 0, BOARD_PAGE);
                 entries = more ? entries.concat(res.entries) : res.entries;
                 total = res.total;
                 if (!physicsView) userEntry = res.userEntry;
                 if (!more && !physicsView && userEntry && !myRecord()) restoreBest(t.trackId).then((ok) => ok && !closed && drawHero());
+                else resend = !more && !physicsView && !resent && !!myRecord();
             } catch (e) {
                 console.warn(e);
                 boardError = "Couldn't load the leaderboard. Check your connection and try again.";
@@ -2107,6 +2143,25 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             if (closed) return;
             drawBoard();
             drawHero();
+            if (resend) resendBest();
+        }
+
+        // A PB on this device that never reached the board (its upload failed) is sent again, once per page.
+        async function resendBest() {
+            if (!board.sync) return;
+            resent = true;
+            let r = null;
+            try {
+                r = await board.sync(t.trackId, userEntry);
+            } catch (e) {
+                console.warn(e);
+                if (!closed) toast("Your best time couldn't be sent to the leaderboard: " + (e?.message || "upload failed") + ". It will be tried again next time you open this track.");
+                return;
+            }
+            if (r === "Upload" && !closed) {
+                toast("Your best time was sent to the leaderboard.");
+                loadBoard(false);
+            }
         }
 
         // NSWS's own board for Better Editor tracks, read directly so it can show older physics versions.
@@ -2158,8 +2213,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             }
         }
 
-        async function start() {
-            playBtn.disabled = true;
+        // The picked runs as the game takes them (ghosts to race, or runs to watch).
+        async function pickedRuns(btn) {
+            btn.disabled = true;
             const list = [];
             try {
                 const picked = [...ghosts.values()];
@@ -2175,9 +2231,37 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 }
             } catch (e) {
                 console.warn(e);
-                toast("Couldn't load the ghosts, so you're racing alone.");
+                list.failed = true;
             }
-            playBtn.disabled = false;
+            btn.disabled = false;
+            return list;
+        }
+        const back = (opts) => {
+            const id = t.id;
+            openLibrary();
+            (id ? get(id) : Promise.resolve(null)).then((x) => openTrackPage(x || t, opts), () => openTrackPage(t, opts));
+        };
+
+        async function watch() {
+            let runs = await pickedRuns(watchBtn);
+            if (!ghosts.size) {
+                const rec = myRecord();
+                const me = board?.profile();
+                runs = rec?.recording ? [{ recording: rec.recording, carStyle: me?.carStyle, nickname: me?.nickname || "You", time: rec.time, isSelf: true }] : [];
+            }
+            playLabel();
+            if (!runs.length) {
+                toast(runs.failed ? "Couldn't load those runs. Check your connection and try again." : "Pick runs on the leaderboard to watch them.");
+                return;
+            }
+            if (runs.failed) toast("Some runs didn't load.");
+            await play(t, { watch: { runs }, onExit: () => back() });
+        }
+
+        async function start() {
+            const list = await pickedRuns(playBtn);
+            playLabel();
+            if (list.failed) toast("Couldn't load the ghosts, so you're racing alone.");
             const id = t.id;
             const back = () => {
                 openLibrary();

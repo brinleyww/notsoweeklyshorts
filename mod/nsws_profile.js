@@ -470,8 +470,18 @@
         try {
             scope = SCOPES.some(([id]) => id === localStorage.getItem(SCOPE_KEY)) ? localStorage.getItem(SCOPE_KEY) : "nsws";
         } catch {}
-        view = { nick, hint, overlay, top, scopes, body, bottom, scope, sets: {}, pending: new Set(), sort: "week", turn: DEFAULT_TURN, carStyle: hint.carStyle ?? null, countryCode: hint.countryCode ?? null };
+        view = { nick, hint, overlay, top, scopes, body, bottom, scope, sets: {}, pending: new Set(), sort: "week", turn: DEFAULT_TURN, carStyle: styleText(hint.carStyle), countryCode: hint.countryCode ?? null };
         load(view, false);
+    }
+
+    // A car style as its code: some boards (custom tracks) hand over the game's CarStyle object, which the thumbnail can't read.
+    function styleText(style) {
+        if (typeof style === "string") return style;
+        try {
+            return typeof style?.serialize === "function" ? style.serialize() : null;
+        } catch {
+            return null;
+        }
     }
 
     function scopeBar(v) {
@@ -511,7 +521,7 @@
         });
         if (v.closed) return;
         const found = await collect(v.nick, tracks, data);
-        if (found.latest?.carStyle) v.carStyle = found.latest.carStyle;
+        if (found.latest?.carStyle) v.carStyle = styleText(found.latest.carStyle) ?? v.carStyle;
         if (found.latest?.countryCode) v.countryCode = found.latest.countryCode;
         const weeks = await standings(v.nick, found.names, found.owner, tracks, data);
         await accountReq;
@@ -561,7 +571,7 @@
             const key = want.join(",") + "|" + style;
             if (shown === key) return;
             rendering = true;
-            window.__nswsCarThumb(style, want).then((src) => {
+            Promise.resolve().then(() => window.__nswsCarThumb(style, want)).then((src) => {
                 if (src) img.src = src;
                 shown = key;
             }).catch(() => {}).finally(() => {
