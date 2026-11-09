@@ -1044,6 +1044,31 @@ editor test drives.
 - **Older PBs:** a track that already had a PB when its stats began is marked `o`, and the share image
   shows its numbers with a `+`.
 
+## Settings presets
+
+Settings → Presets (`mod/nsws_presets.js`): each account has 3 named slots for its own settings and 3
+for presets other players shared. A preset is `{s, k, x}`: the game's settings by name (not Language),
+its key bindings by name, and the mod's own stored settings (clip/cup/ghost/PolyFX keys, Visual FX,
+controller bindings, chat on/font/media, PolyFX preset; never the ATO link). Loading one fills the
+Settings screen like Reset does, so it needs Apply; Cancel also undoes the mod settings it changed.
+
+`POST /nsws/presets/<route>`, text/plain JSON with `userToken` (except `get`):
+
+- `list` → `{own: [3], shared: [3]}`, each `null` or `{name, author, data, at}`.
+- `save {slot, name, data}` (own only), `rename {kind, slot, name}`, `delete {kind, slot}`; `kind` 0 =
+  own, 1 = shared. Each answers with the new list.
+- `share {kind, slot}` → `{code}`, 8 characters. The link is `__nswsShareBase + ?preset=CODE`.
+  `preset_shares` keeps its own copy, so a link keeps giving what was shared after the slot changes or
+  is deleted. The same name, author and data give the same code; 20 new codes an hour per account (429).
+  A shared-with-me preset keeps its original author.
+- `get {code}` → `{name, author, data}`, no token needed; `accept {code, slot}` copies a share into a
+  shared slot.
+- **Trust:** the Worker only checks shapes and sizes (names 24 characters, censored; data 16 KB). The
+  page takes a value only if the Settings screen offers it on that device (`settingChoices` in
+  main.bundle.js, filled by the row builders), so a shared preset can't set an Ultra shadow level a
+  weak GPU can't run or anything a button couldn't.
+- Banned addresses can list, save, load and accept presets but not share them.
+
 ## Player profiles
 
 Clicking a name on a leaderboard, in the standings or in the chat opens that player's profile

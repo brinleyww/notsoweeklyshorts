@@ -111,6 +111,48 @@ export const TAGS = {
     horseman: { kind: "grant" },
 };
 
+// Settings presets: 3 own slots (kind 0) and 3 slots for presets others shared (kind 1).
+// data = { s: game settings by name, k: key bindings by name, x: the mod's own stored settings };
+// the page checks every value against what its Settings screen offers before using it.
+const PRESET_SLOTS = 3;
+const PRESET_NAME_MAX = 24;
+const PRESET_DATA_MAX = 16_000;
+const PRESET_CODE = /^[A-HJ-NP-Za-km-z2-9]{8}$/;
+const PRESET_SHARES_PER_HOUR = 20;
+const PRESET_KEY = /^[A-Za-z0-9_]{1,48}$/;
+const PRESET_PARTS = { s: [160, 40], k: [80, 60], x: [40, 1000] };
+
+function presetName(value) {
+    const name = text(value, 200).replace(/[\p{Cc}\p{Cf}]/gu, "").replace(/\s+/g, " ").trim().slice(0, PRESET_NAME_MAX);
+    return name ? censor(name) : null;
+}
+
+function presetData(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const out = {};
+    for (const [part, [maxEntries, maxLength]] of Object.entries(PRESET_PARTS)) {
+        const source = value[part];
+        out[part] = {};
+        if (source == null) continue;
+        if (typeof source !== "object" || Array.isArray(source)) return null;
+        const entries = Object.entries(source);
+        if (entries.length > maxEntries) return null;
+        for (const [key, v] of entries) {
+            if (!PRESET_KEY.test(key)) return null;
+            if (part === "k") {
+                if (!Array.isArray(v) || v.length !== 2 || !v.every((b) => b === null || (typeof b === "string" && b.length <= maxLength))) return null;
+            } else if (typeof v !== "string" || v.length > maxLength) return null;
+            out[part][key] = v;
+        }
+    }
+    const json = JSON.stringify(out);
+    return json.length <= PRESET_DATA_MAX ? json : null;
+}
+
+function presetSlot(value) {
+    return Number.isInteger(value) && value >= 0 && value < PRESET_SLOTS ? value : null;
+}
+
 const GRIND_BATCH = /^[0-9a-f]{16}$/;
 const GRIND_DAY = /^\d{4}-\d{2}-\d{2}$/;
 const GRIND_IDS = 32;
@@ -285,6 +327,14 @@ export class Accounts extends DurableObject {
             id INTEGER PRIMARY KEY CHECK (id = 0), user_id TEXT NOT NULL, since INTEGER NOT NULL, before TEXT)`);
         // Grinding stats, one JSON row per account so a sync costs one row however many tracks it has.
         this.sql.exec("CREATE TABLE IF NOT EXISTS grind (user_id TEXT PRIMARY KEY, data TEXT NOT NULL) WITHOUT ROWID");
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS presets (
+            user_id TEXT NOT NULL, kind INTEGER NOT NULL, slot INTEGER NOT NULL, name TEXT NOT NULL, author TEXT,
+            data TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (user_id, kind, slot)) WITHOUT ROWID`);
+        // A link keeps its own copy, so it still gives what was shared after the slot changes.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS preset_shares (
+            id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, name TEXT NOT NULL,
+            author TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)`);
+        this.sql.exec("CREATE INDEX IF NOT EXISTS preset_shares_user ON preset_shares(user_id, at)");
         this.top = null;
         this.wrs = null;
         this.king = null;
@@ -1058,5 +1108,78 @@ export class Accounts extends DurableObject {
         if (!SHARE_ID.test(String(id))) return null;
         const row = this.sql.exec("SELECT code FROM shares WHERE id = ?", id).toArray()[0];
         return row ? { code: row.code } : null;
+    }
+
+    listPresets(userId) {
+        const own = Array(PRESET_SLOTS).fill(null), shared = Array(PRESET_SLOTS).fill(null);
+        for (const r of this.sql.exec("SELECT kind, slot, name, author, data, at FROM presets WHERE user_id = ?", userId)) {
+            const list = r.kind === 1 ? shared : own;
+            if (r.slot < PRESET_SLOTS) list[r.slot] = { name: r.name, author: r.author, data: JSON.parse(r.data), at: r.at };
+        }
+        return { own, shared };
+    }
+
+    savePreset(userId, slot, name, data) {
+        slot = presetSlot(slot);
+        name = presetName(name);
+        data = presetData(data);
+        if (slot == null || !name || !data) return { error: "bad" };
+        this.sql.exec(`INSERT INTO presets (user_id, kind, slot, name, author, data, at) VALUES (?, 0, ?, ?, NULL, ?, ?)
+            ON CONFLICT(user_id, kind, slot) DO UPDATE SET name = excluded.name, data = excluded.data, at = excluded.at`,
+            userId, slot, name, data, Date.now());
+        return this.listPresets(userId);
+    }
+
+    renamePreset(userId, kind, slot, name) {
+        slot = presetSlot(slot);
+        name = presetName(name);
+        if (slot == null || !name || (kind !== 0 && kind !== 1)) return { error: "bad" };
+        this.sql.exec("UPDATE presets SET name = ? WHERE user_id = ? AND kind = ? AND slot = ?", name, userId, kind, slot);
+        return this.listPresets(userId);
+    }
+
+    deletePreset(userId, kind, slot) {
+        slot = presetSlot(slot);
+        if (slot == null || (kind !== 0 && kind !== 1)) return { error: "bad" };
+        this.sql.exec("DELETE FROM presets WHERE user_id = ? AND kind = ? AND slot = ?", userId, kind, slot);
+        return this.listPresets(userId);
+    }
+
+    // Sharing the same preset again gives the same link. A shared-with-me preset keeps its author.
+    async sharePreset(userId, kind, slot) {
+        slot = presetSlot(slot);
+        if (slot == null || (kind !== 0 && kind !== 1)) return { error: "bad" };
+        const row = this.sql.exec("SELECT name, author, data FROM presets WHERE user_id = ? AND kind = ? AND slot = ?", userId, kind, slot).toArray()[0];
+        if (!row) return null;
+        const author = row.author || censor(this.nicknameOf(userId) || "A player");
+        const hash = await sha256Hex(JSON.stringify([row.name, author, row.data]));
+        const existing = this.sql.exec("SELECT id FROM preset_shares WHERE hash = ?", hash).toArray()[0];
+        if (existing) return { code: existing.id };
+        const recent = this.sql.exec("SELECT COUNT(*) AS n FROM preset_shares WHERE user_id = ? AND at > ?",
+            userId, Date.now() - 3_600_000).one().n;
+        if (recent >= PRESET_SHARES_PER_HOUR) return { error: "busy" };
+        let id;
+        do id = randomId(8, SHARE_ALPHABET);
+        while (this.sql.exec("SELECT 1 FROM preset_shares WHERE id = ?", id).toArray().length);
+        this.sql.exec("INSERT INTO preset_shares (id, hash, user_id, name, author, data, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            id, hash, userId, row.name, author, row.data, Date.now());
+        return { code: id };
+    }
+
+    getPresetShare(code) {
+        if (!PRESET_CODE.test(String(code))) return null;
+        const row = this.sql.exec("SELECT name, author, data FROM preset_shares WHERE id = ?", code).toArray()[0];
+        return row ? { name: row.name, author: row.author, data: JSON.parse(row.data) } : null;
+    }
+
+    acceptPreset(userId, code, slot) {
+        slot = presetSlot(slot);
+        if (slot == null || !PRESET_CODE.test(String(code))) return { error: "bad" };
+        const row = this.sql.exec("SELECT name, author, data FROM preset_shares WHERE id = ?", code).toArray()[0];
+        if (!row) return null;
+        this.sql.exec(`INSERT INTO presets (user_id, kind, slot, name, author, data, at) VALUES (?, 1, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, kind, slot) DO UPDATE SET name = excluded.name, author = excluded.author, data = excluded.data, at = excluded.at`,
+            userId, slot, row.name, row.author, row.data, Date.now());
+        return this.listPresets(userId);
     }
 }

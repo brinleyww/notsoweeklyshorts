@@ -973,6 +973,11 @@ window.__nswsAutoGhostNote = function(trackId) {
             setMenuVisible(!menuOpen);
         }
         window.__nswsToggleVisualFxMenu = toggleVisualFxMenu;
+        window.__nswsVisualFxReload = () => {
+            Object.assign(settings, loadVisualFxSettings());
+            for (const def of SLIDER_DEFS)
+                sliderRefs[def.key] && updateSlider(def.key);
+        };
 
         new MutationObserver(() => {
             if (menuOpen && !document.querySelector(".game-ui")) setMenuVisible(false);
@@ -53096,6 +53101,63 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, ks, "f").appendChild(bar);
             }
             )(),
+            window.__nswsPresets?.mount(C.get(this, ks, "f"), {
+                click: () => C.get(this, vs, "f").playUIClick(),
+                snapshot: () => {
+                    const pending = C.get(this, Ps, "f")
+                      , binds = C.get(this, Is, "f")
+                      , settings = C.get(this, bs, "f")
+                      , s = {}
+                      , k = {};
+                    for (const [id, value] of settings.getSettings())
+                        id !== R.A.Language && "string" == typeof R.A[id] && (s[R.A[id]] = pending.get(id) ?? value);
+                    for (const id of settings.defaultKeyBindings().keys()) {
+                        const pair = binds.get(id) ?? settings.getKeyBindings(id);
+                        k[KeyBind[id]] = [pair[0] ?? null, pair[1] ?? null];
+                    }
+                    return { s, k };
+                },
+                // Only values this screen offers are taken, so a shared preset can't set anything a button couldn't.
+                apply: data => {
+                    const pending = C.get(this, Ps, "f")
+                      , settings = C.get(this, bs, "f")
+                      , known = settings.defaultSettings()
+                      , knownBinds = settings.defaultKeyBindings()
+                      , binds = new Map(C.get(this, Is, "f"));
+                    const skipped = [];
+                    for (const [name, value] of Object.entries(data?.s ?? {})) {
+                        const id = R.A[name];
+                        if ("number" != typeof id || id === R.A.Language || !known.has(id) || "string" != typeof value)
+                            continue;
+                        const allowed = settingChoices.get(id)
+                          , number = parseFloat(value);
+                        if (null == allowed)
+                            continue;
+                        const ok = Array.isArray(allowed) ? allowed.includes(value) : Number.isFinite(number) && number >= allowed.min && number <= allowed.max;
+                        ok ? pending.set(id, value) : skipped.push(name);
+                    }
+                    for (const [name, pair] of Object.entries(data?.k ?? {})) {
+                        const id = KeyBind[name];
+                        const valid = Array.isArray(pair) && 2 == pair.length && pair.every(b => null === b || "string" == typeof b && /^[A-Za-z0-9+]{1,60}$/.test(b));
+                        "number" == typeof id && knownBinds.has(id) && valid && binds.set(id, pair.slice());
+                    }
+                    C.set(this, Is, binds, "f");
+                    settings.updateSettings(Array.from(pending));
+                    C.get(this, ws, "f").generateMeshes();
+                    const scroll = C.get(this, ks, "f").scrollTop;
+                    C.get(this, ms, "m", Ns).call(this);
+                    C.get(this, ks, "f").scrollTop = scroll;
+                    return skipped;
+                },
+                polyFx: {
+                    get: () => [getPolyFxPreset(), getStoredPolyFxColorCorrect()],
+                    set: (preset, colorCorrect) => {
+                        setPolyFxPreset(preset);
+                        setPolyFxColorCorrect(colorCorrect);
+                    },
+                    blocked: () => !!ultraBlockReason(C.get(this, ys, "f"))
+                }
+            }),
             C.get(this, ms, "m", Ds).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Language")),
             C.get(this, ms, "m", Gs).call(this, null, [{
                 title: "العربية",
@@ -53415,6 +53477,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , container = C.get(this, ks, "f");
                 const sliderRow = (title, key, stops, format) => {
                     const current = parseFloat(pending.get(key) ?? settings.getSetting(key));
+                    settingChoices.set(key, stops);
                     let index = 0;
                     for (let n = 1; n < stops.length; n++)
                         Math.abs(parseFloat(stops[n]) - current) < Math.abs(parseFloat(stops[index]) - current) && (index = n);
@@ -53971,6 +54034,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         Gs = function(e, t, n, i) {
             const r = C.get(this, Ps, "f").get(n) ?? C.get(this, bs, "f").getSetting(n)
               , a = document.createElement("div");
+            settingChoices.set(n, t.filter(o => !1 !== o.available).map(o => o.value));
             if (a.className = "setting",
             null != e) {
                 const t = document.createElement("p");
@@ -54005,6 +54069,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ,
         Fs = function(e, t, n=0, i=1) {
+            settingChoices.set(t, { min: n, max: i });
             let r = parseFloat(C.get(this, Ps, "f").get(t) ?? C.get(this, bs, "f").getSetting(t));
             Number.isNaN(r) && (r = 0);
             const a = document.createElement("div");
@@ -54080,6 +54145,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, ks, "f").appendChild(n)
         }
         ;
+        const settingChoices = new Map();
         const DEVICE_PRESET_STORAGE_KEY = "_nswsDevicePreset";
         const POLYFX_PRESET_STORAGE_KEY = "_polyfxGraphicsPreset";
         const DEVICE_PRESETS = [
@@ -54529,6 +54595,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Es, "f").className = "button cancel",
                 C.get(this, Es, "f").addEventListener("click", ( () => {
                     n.playUIClick(),
+                    window.__nswsPresets?.revert(),
                     r.updateSettings(Array.from(C.get(this, Rs, "f"))),
                     setPolyFxPreset(polyFxAtOpen),
                     setPolyFxColorCorrect(colorCorrectAtOpen),
@@ -54556,6 +54623,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     r.updateSettings(Array.from(C.get(this, Ps, "f"))),
                     r.saveSettings(),
                     r.setKeyBindings(Array.from(C.get(this, Is, "f"))),
+                    window.__nswsPresets?.commit(),
                     a.generateMeshes(),
                     t.language = r.getSetting(R.A.Language),
                     o()
@@ -54563,7 +54631,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 )),
                 c.appendChild(C.get(this, Ms, "f")),
                 window.addEventListener("keydown", C.set(this, _s, (e => {
-                    "Escape" == e.code && (r.updateSettings(Array.from(C.get(this, Rs, "f"))),
+                    "Escape" == e.code && !window.__nswsPresets?.dialogOpen() && (window.__nswsPresets?.revert(),
+                    r.updateSettings(Array.from(C.get(this, Rs, "f"))),
                     setPolyFxPreset(polyFxAtOpen),
                     setPolyFxColorCorrect(colorCorrectAtOpen),
                     a.generateMeshes(),
@@ -54576,6 +54645,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             dispose() {
                 refreshDevicePresetBar = null,
                 refreshColorCorrectRow = null,
+                window.__nswsPresets?.closed(),
                 C.get(this, As, "f").removeChild(C.get(this, Ss, "f")),
                 window.removeEventListener("keydown", C.get(this, _s, "f"))
             }
@@ -58126,7 +58196,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             hasChosenDevicePreset() || autoPickDevicePreset(C.get(this, bc, "f"), d, r) ? (C.get(this, vc, "m", Yc).call(this),
                             C.get(this, vc, "m", Qc).call(this),
                             flushGraphicsNote(),
-                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsTracksOnLoad?.() || window.__nswsOtctOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
+                            window.__nswsClipsOnLoad?.() || window.__nswsCompetitionsOnLoad?.() || window.__nswsTracksOnLoad?.() || window.__nswsOtctOnLoad?.() || window.__nswsPresetsOnLoad?.() || window.__nswsFirstLaunchStart?.()) : (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }

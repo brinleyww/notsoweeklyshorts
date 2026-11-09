@@ -224,6 +224,9 @@
 
     const nameOf = id => inputName(binds[id].find(Boolean)) || "(not bound)";
     window.__nswsGamepad = {
+        reload() {
+            binds = loadBinds();
+        },
         // A race's controls (main.bundle.js); what the controller holds is written into the new one.
         controls(c) {
             controls = c;

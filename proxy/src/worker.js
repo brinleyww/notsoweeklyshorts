@@ -380,7 +380,8 @@ function renameRefused(ban, nickname) {
 // and track routes refuse what a ban covers further on. Chat, cups and anything that publishes stay closed.
 const BANNED_POSTS = new Set(["/v6/leaderboard", "/v6/user", "/nsws/beat", "/nsws/macro",
     ...["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view", "clips/rename", "clips/delete",
-        "refer/me", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync"].map((p) => TRAFFIC_PREFIX + p),
+        "refer/me", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync", "presets/list", "presets/save", "presets/rename",
+        "presets/delete", "presets/get", "presets/accept"].map((p) => TRAFFIC_PREFIX + p),
     ...["board/submit", "played", "favourite", "stats", "campaign/get", "club/get", "club/mine",
         "library/list", "library/codes", "library/put", "library/delete"].map((p) => "/nsws/tracks/" + p)]);
 
@@ -1409,7 +1410,8 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 }
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
-    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync"]);
+    "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync",
+    "presets/list", "presets/save", "presets/rename", "presets/delete", "presets/share", "presets/get", "presets/accept"]);
 const HEX32 = /^[0-9a-f]{32}$/;
 
 // The chat only learns about a tag change here, so its players' next messages show the new tag.
@@ -1443,6 +1445,10 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
     if (path === "share/get") {
         const share = await stub.getShare(body?.id);
         return share ? json(share, origin) : plain(404, "Not found", origin);
+    }
+    if (path === "presets/get") {
+        const preset = await stub.getPresetShare(body?.code);
+        return preset ? json(preset, origin) : plain(404, "Not found", origin);
     }
     if (!HEX64.test(body?.userToken ?? "")) return plain(400, "Bad request", origin);
     const userId = await sha256Hex(body.userToken);
@@ -1485,6 +1491,12 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
             break;
         }
         case "grind/sync": result = await stub.syncGrind(userId, body.id, body.add); break;
+        case "presets/list": result = await stub.listPresets(userId); break;
+        case "presets/save": result = await stub.savePreset(userId, body.slot, body.name, body.data); break;
+        case "presets/rename": result = await stub.renamePreset(userId, body.kind, body.slot, body.name); break;
+        case "presets/delete": result = await stub.deletePreset(userId, body.kind, body.slot); break;
+        case "presets/share": result = await stub.sharePreset(userId, body.kind, body.slot); break;
+        case "presets/accept": result = await stub.acceptPreset(userId, body.code, body.slot); break;
         case "tags/buy":
         case "tags/equip": {
             const changed = path === "tags/buy" ? await stub.buyTag(userId, body.tag) : await stub.equipTag(userId, body.tag ?? null);
@@ -2593,7 +2605,7 @@ export default {
                     return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
                 }
             }
-            if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind)\//.test(url.pathname)) {
+            if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind|presets)\//.test(url.pathname)) {
                 if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin, cfg.ipBan ?? null);
