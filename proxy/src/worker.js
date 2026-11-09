@@ -2250,7 +2250,7 @@ async function handleBeMirror(request, url) {
 // A 4 MB pack or campaign plus the JSON around it.
 const MAX_TRACKS_BODY = 4_400_000;
 const MAX_TRACKS_SMALL_BODY = 16_384;
-const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put", "board/submit"]);
+const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put", "board/submit", "clip-track/put"]);
 // Reads an address may make in a minute; only there to stop sweeps of club codes and ids.
 const TRACK_READS_PER_MIN = 60;
 // Packs never change, so an instance keeps the small ones it has read.
@@ -2344,6 +2344,10 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
         if (path === "board/recordings") {
             return reply(await hub.beRecordings(String(url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
         }
+        // A clip's track, for a player watching the clip without having it.
+        if (path === "clip-track") {
+            return reply(await hub.clipTrackGet({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip") }), "That clip's track isn't kept on the server.");
+        }
         if ((m = /^club\/([0-9A-Za-z]{6}|[0-9A-Za-z]{12})$/.exec(path))) {
             const club = await hub.getClub(m[1]);
             return reply(club && { club }, "No club has that code.");
@@ -2380,6 +2384,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
         case "played": return reply(await hub.played({ userId, ipKey, trackId: body.trackId }));
         case "favourite": return reply(await hub.favourite({ userId, ipKey, trackId: body.trackId, on: body.on === true }));
         case "stats": return reply(await hub.trackStats({ userId, trackId: body.trackId }));
+        case "clip-track/put": return reply(await hub.clipTrackPut({ userId, ipKey, trackId: body.trackId, code: body.code, mode: body.mode }));
         case "club/create": return reply(await hub.createClub({ userId, ipKey, nickname, name: body.name, tag: body.tag, description: body.description }));
         case "club/get": {
             if (trackReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);

@@ -76,6 +76,11 @@ const BE_RUNS_PER_DAY = 300;
 const MAX_BOARD_PAGE = 100;
 const FAVS_PER_DAY = 300;
 const PLAYS_PER_DAY = 1000;
+// Clip tracks: the code of a custom track a clip was driven on, so anyone can watch the clip without having the track.
+// This hub can't read track codes, so it keeps a few candidates per track and the page checks the id of what it gets.
+const CLIP_TRACK_CANDIDATES = 3;
+const CLIP_TRACK_MAX = LIB_CODE_MAX;
+const CLIP_TRACKS_PER_DAY = 200;
 
 const fail = (status, error) => ({ status, error });
 
@@ -168,6 +173,11 @@ export class TrackHub extends DurableObject {
         this.sql.exec("CREATE TABLE IF NOT EXISTS track_players (track_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
         this.sql.exec("CREATE TABLE IF NOT EXISTS track_favs (track_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
         this.sql.exec("CREATE TABLE IF NOT EXISTS track_stats (track_id TEXT PRIMARY KEY, players INTEGER NOT NULL, favs INTEGER NOT NULL, runs INTEGER NOT NULL)");
+        // Clip tracks; each code is in blobs (kind "c", ref "<track_id>:<hash>"). clip_track_users says which candidate each
+        // account sent, so a code many players had beats one a single account made up.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS clip_tracks (track_id TEXT NOT NULL, hash TEXT NOT NULL, mode TEXT NOT NULL, size INTEGER NOT NULL,
+            created INTEGER NOT NULL, used INTEGER NOT NULL, uploaders INTEGER NOT NULL, PRIMARY KEY (track_id, hash))`);
+        this.sql.exec("CREATE TABLE IF NOT EXISTS clip_track_users (track_id TEXT NOT NULL, user_id TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
         this.prunedDay = -1;
     }
 
@@ -592,6 +602,62 @@ export class TrackHub extends DurableObject {
         const s = this.first("SELECT players, favs FROM track_stats WHERE track_id = ?", trackId);
         const mine = userId ? !!this.first("SELECT 1 AS x FROM track_favs WHERE track_id = ? AND user_id = ?", trackId, userId) : false;
         return { players: s?.players ?? 0, favourites: s?.favs ?? 0, favourite: mine };
+    }
+
+    // ---- clip tracks ----
+
+    async clipTrackPut({ userId, ipKey, trackId, code, mode }) {
+        if (!HEX64.test(trackId ?? "")) return fail(400, "Bad track.");
+        code = typeof code === "string" ? code.trim() : "";
+        if (!code.startsWith("PolyTrack") || code.length > CLIP_TRACK_MAX) return fail(400, "That track can't be kept with its clips (4 MB at most).");
+        const hash = (await sha256Hex(code)).slice(0, 32);
+        const mine = this.first("SELECT hash FROM clip_track_users WHERE track_id = ? AND user_id = ?", trackId, userId);
+        if (mine?.hash === hash && this.first("SELECT 1 AS x FROM clip_tracks WHERE track_id = ? AND hash = ?", trackId, hash)) return { ok: true };
+        const keys = ["cliptrack:ip:" + ipKey, "cliptrack:u:" + userId];
+        if (this.overLimit(keys, CLIP_TRACKS_PER_DAY)) return fail(429, "Too many clip tracks today. Try again tomorrow.");
+        const known = this.first("SELECT 1 AS x FROM clip_tracks WHERE track_id = ? AND hash = ?", trackId, hash);
+        let evict = null;
+        if (!known) {
+            const rows = this.sql.exec("SELECT hash, uploaders FROM clip_tracks WHERE track_id = ? ORDER BY uploaders ASC, used ASC", trackId).toArray();
+            if (rows.length >= CLIP_TRACK_CANDIDATES) {
+                // Only a code that a single account vouches for gives way; one others had too stays.
+                if (rows[0].uploaders > 1) return { ok: true, kept: false };
+                evict = rows[0].hash;
+            }
+            if (this.overBytes(ipKey, code.length)) return fail(429, "That's a lot of tracks for one day. Try again tomorrow.");
+        }
+        const now = Date.now();
+        this.ctx.storage.transactionSync(() => {
+            if (evict) {
+                this.dropBlob("c", trackId + ":" + evict);
+                this.sql.exec("DELETE FROM clip_tracks WHERE track_id = ? AND hash = ?", trackId, evict);
+                this.sql.exec("DELETE FROM clip_track_users WHERE track_id = ? AND hash = ?", trackId, evict);
+            }
+            if (!known) {
+                this.sql.exec("INSERT INTO clip_tracks (track_id, hash, mode, size, created, used, uploaders) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    trackId, hash, modeOf(mode), code.length, now, now);
+                this.putBlob("c", trackId + ":" + hash, code);
+                this.countHit(["bytes:ip:" + ipKey], code.length);
+            }
+            if (mine && mine.hash !== evict) this.sql.exec("UPDATE clip_tracks SET uploaders = MAX(0, uploaders - 1) WHERE track_id = ? AND hash = ?", trackId, mine.hash);
+            this.sql.exec("INSERT INTO clip_track_users (track_id, user_id, hash) VALUES (?, ?, ?) ON CONFLICT (track_id, user_id) DO UPDATE SET hash = excluded.hash",
+                trackId, userId, hash);
+            this.sql.exec("UPDATE clip_tracks SET uploaders = uploaders + 1 WHERE track_id = ? AND hash = ?", trackId, hash);
+            this.countHit(keys);
+        });
+        return { ok: true, kept: true };
+    }
+
+    // The skip-th candidate, most vouched for first; the page asks for the next one when a code isn't the clip's track.
+    clipTrackGet({ trackId, skip }) {
+        if (!HEX64.test(trackId ?? "")) return fail(400, "Bad track.");
+        const at = Math.max(0, Math.min(CLIP_TRACK_CANDIDATES, Math.floor(Number(skip)) || 0));
+        const rows = this.sql.exec("SELECT hash, mode, used FROM clip_tracks WHERE track_id = ? ORDER BY uploaders DESC, created ASC", trackId).toArray();
+        const row = rows[at];
+        if (!row) return null;
+        const now = Date.now();
+        if (row.used < now - DAY_MS) this.sql.exec("UPDATE clip_tracks SET used = ? WHERE track_id = ? AND hash = ?", now, trackId, row.hash);
+        return { code: this.getBlob("c", trackId + ":" + row.hash), mode: row.mode, more: rows.length > at + 1 };
     }
 
     // ---- Better Editor leaderboards (same shapes as Kodub's leaderboard, recordings and upload replies) ----

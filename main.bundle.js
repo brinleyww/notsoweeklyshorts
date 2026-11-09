@@ -1165,6 +1165,10 @@ window.__nswsAutoGhostNote = function(trackId) {
         if (_clipToken() !== token) return;
         cloudClips.clips = (Array.isArray(list?.clips) ? list.clips : []).filter(c => c && typeof c.id === "string" && Number.isFinite(c.frames));
         cloudClips.loaded = true;
+        const keep = window.__nswsTracks?.keepClipTrack;
+        if (keep) (async () => {
+            for (const id of new Set(cloudClips.clips.map(c => c.trackId).filter(Boolean))) await keep(id).catch(() => {});
+        })();
     }
     // The account's clips, then any still waiting on this device, oldest first.
     function _menuClips() {
@@ -1360,6 +1364,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             window.__nswsTraffic?.event("clips");
             const saved = showClipSavedNotification();
             if (copyLink) _copyClipLink(clip, saved);
+            else _keepClipTrack(trackId);
             syncClips().catch(() => {});
         } else {
             alert("Failed to save clip: storage is full. Try deleting some old clips, then try again.");
@@ -1449,7 +1454,19 @@ window.__nswsAutoGhostNote = function(trackId) {
     }
     // Safari and Firefox only allow clipboard access during the key press or click, and the link
     // comes back from the proxy later, so the clipboard is handed a promise of it.
+    // A custom track goes to the server with its clips, so players without the track can still watch them.
+    function _keepClipTrack(trackId) {
+        const lib = window.__nswsTracks;
+        if (!trackId || !lib?.keepClipTrack) return;
+        const fallback = () => {
+            const track = window.__getCurrentTrack?.();
+            if (track?.getId?.() !== trackId) return null;
+            return track.toExportString({ name: getTrackNameById(trackId) || "Clip track", author: null, lastModified: null });
+        };
+        lib.keepClipTrack(trackId, fallback).catch(() => {});
+    }
     function _copyClipLink(clip, notification) {
+        _keepClipTrack(clip.trackId);
         const link = Promise.resolve().then(() => window.__nswsAccounts.call("clips/share", {
             userToken: _clipToken(),
             code: toClipExport(clip)
@@ -1553,7 +1570,9 @@ window.__nswsAutoGhostNote = function(trackId) {
     // Custom Tracks library tracks aren't in the game's track list, so their clips play on the library's copy.
     async function _watchLibraryClips(trackId, clips) {
         const lib = window.__nswsTracks;
-        const track = await Promise.resolve(lib?.findByTrackId?.(trackId)).catch(() => null);
+        let track = await Promise.resolve(lib?.findByTrackId?.(trackId)).catch(() => null);
+        if (track) _keepClipTrack(trackId);
+        else track = await Promise.resolve(lib?.fetchClipTrack?.(trackId)).catch(() => null);
         if (!track) return false;
         const runs = _clipRuns(clips);
         if (!runs) return true;
@@ -1606,6 +1625,10 @@ window.__nswsAutoGhostNote = function(trackId) {
         const previousWatchFn = watchClipFunction;
         if (!window.__bw_selectTrackById?.(trackId)) {
             const trackLabel = getTrackNameById(trackId) || trackId;
+            if (null == window.__bw_trackCategory?.(trackId) && !window.__nswsTracks?.isKnown?.(trackId)) {
+                _clipFailed((clips.length > 1 ? "These clips' track" : "This clip's track") + " isn't on this device, and the server doesn't have a copy of it yet. Ask whoever made the clip to copy its link again, then try watching again.");
+                return;
+            }
             _clipFailed((clips.length > 1 ? "These clips are" : "This clip is") + " for a different track (" + trackLabel + ") that isn't in your track list right now. Open that track yourself, then try watching again.");
             return;
         }
@@ -1991,6 +2014,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             if (!clip) return;
             closeLegacyPanel();
             _fullClip(clip).then(function(full) {
+                _keepClipTrack(full.trackId);
                 createBoxDisplay(toClipExport(full));
             }, showLoadFailed);
         });
@@ -2014,6 +2038,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             // One link id per clip; the proxy hands back the same id for a clip it already has.
             Promise.all(clips.map(function(clip) {
                 return _fullClip(clip).then(function(full) {
+                    _keepClipTrack(full.trackId);
                     return window.__nswsAccounts.call("clips/share", {
                         userToken: _clipToken(),
                         code: toClipExport(full)

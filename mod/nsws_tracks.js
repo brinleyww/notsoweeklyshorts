@@ -804,6 +804,66 @@
         return all.find((t) => t.kind === "be" && !t.trackId && typeof t.code === "string" && parse(t.code).trackId === trackId) || null;
     }
 
+    // Clip tracks: the code of a custom track kept on the server for its clips, so anyone can watch a clip without
+    // having its track. Sent when a clip is made or shared; `fallback` gives the game's own copy of the track.
+    const CLIP_TRACKS_SENT = "nswsClipTracks";
+    let lastPlayed = null;
+    const sentClipTracks = () => {
+        try {
+            const v = JSON.parse(localStorage.getItem(CLIP_TRACKS_SENT) || "[]");
+            return Array.isArray(v) ? v : [];
+        } catch {
+            return [];
+        }
+    };
+    async function keepClipTrack(trackId, fallback) {
+        const me = user();
+        if (!me.token || !TRACK_ID.test(trackId || "") || isKnown(trackId)) return false;
+        const key = me.token.slice(0, 8) + trackId.slice(0, 24);
+        if (sentClipTracks().includes(key)) return true;
+        let code = null;
+        let mode = modeOf(trackId);
+        // Never findByTrackId here: it may load Better Editor's blocks, with a dialog.
+        const all = await list().catch(() => []);
+        const mine = all.find((t) => t.trackId === trackId)
+            || (beReady() ? all.find((t) => t.kind === "be" && !t.trackId && typeof t.code === "string" && parse(t.code).trackId === trackId) : null);
+        if (mine?.code) {
+            code = mine.code;
+            mode = mine.mode || mode;
+        } else if (lastPlayed?.trackId === trackId) {
+            code = lastPlayed.code;
+            mode = lastPlayed.mode;
+        } else {
+            try {
+                code = typeof fallback === "function" ? fallback() : null;
+            } catch {}
+        }
+        if (typeof code !== "string" || !code) return false;
+        const r = await api("nsws/tracks/clip-track/put", { token: me.token, trackId, code: clean(code), mode: normMode(mode) }).catch(() => null);
+        if (!r?.ok) return false;
+        try {
+            localStorage.setItem(CLIP_TRACKS_SENT, JSON.stringify([...sentClipTracks(), key].slice(-500)));
+        } catch {}
+        return true;
+    }
+
+    // The server's copy of a clip's track, as { code, mode, name }, once its code reads back as that very track.
+    async function fetchClipTrack(trackId) {
+        if (!TRACK_ID.test(trackId || "") || isKnown(trackId)) return null;
+        for (let skip = 0; skip < 3; skip++) {
+            const r = await api("nsws/tracks/clip-track?trackId=" + trackId + "&skip=" + skip).catch(() => null);
+            if (typeof r?.code !== "string") return null;
+            let info = await parseAsync(r.code);
+            if (info.ok && info.kind === "be" && !info.trackId) {
+                if (!beReady() && !(await ensureBE().catch(() => false))) return null;
+                info = parse(info.code);
+            }
+            if (info.ok && info.trackId === trackId) return { code: info.code, mode: normMode(r.mode), name: info.name, author: info.author };
+            if (!r.more) return null;
+        }
+        return null;
+    }
+
     function findExisting(tracks, info, hash) {
         for (const t of tracks.values()) {
             if (info.kind === "stock" && info.trackId ? t.trackId === info.trackId : t.hash === hash) return t;
@@ -1232,6 +1292,7 @@
             }
         }
         intro?.finish(ok);
+        if (ok && info.trackId) lastPlayed = { trackId: info.trackId, code: info.code, mode };
         if (ok && !opts.watch) notePlayed(info.trackId);
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
@@ -3060,6 +3121,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         list,
         get,
         findByTrackId,
+        keepClipTrack,
+        fetchClipTrack,
         add,
         addMany,
         update,
