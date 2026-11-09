@@ -63393,13 +63393,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ));
                 let loading = null
                   , ready = !1
-                  , physics = 1;
+                  , physics = 1
+                  , query = "";
                 const from = async b => {
                     self.TM_BASE = b;
-                    const version = fetch(b + "physics.json", { cache: "no-cache" }).then((r => r.ok ? r.json() : null)).then((j => Number.isSafeInteger(j?.version) && j.version > 0 ? j.version : 1)).catch((() => 1));
-                    if (!self.TM_DATA && (await script(b + "tm_parts.js"), !self.TM_DATA))
+                    // The files go by physics.json's version: the site's files stay cached for 10 minutes, and a run on a
+                    // cached older tm_runtime.js would be saved as the new version, so its ghost would fail later.
+                    physics = await fetch(b + "physics.json", { cache: "no-cache" }).then((r => r.ok ? r.json() : null)).then((j => Number.isSafeInteger(j?.version) && j.version > 0 ? j.version : 1)).catch((() => 1));
+                    query = "?p=" + physics;
+                    window.__nswsSimWorkersSync?.();
+                    if (!self.TM_DATA && (await script(b + "tm_parts.js" + query), !self.TM_DATA))
                         throw new Error("Couldn't load " + b + "tm_parts.js");
-                    if (!self.TM && (await script(b + "tm_runtime.js"), !self.TM))
+                    if (!self.TM && (await script(b + "tm_runtime.js" + query), !self.TM))
                         throw new Error("Couldn't load " + b + "tm_runtime.js");
                     // tm_water.js only draws (physics is in tm_runtime.js) and reaches three.js by the Better Editor's short export names.
                     if (!self.TM.water) {
@@ -63414,15 +63419,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             gPd: THREE.Texture,
                             V9B: THREE.MeshBasicMaterial
                         };
-                        await script(b + "tm_water.js").catch((e => console.warn(e)))
+                        await script(b + "tm_water.js" + query).catch((e => console.warn(e)))
                     }
-                    self.TM.water && !self.TM.vehicles && await script(b + "tm_vehicles.js").catch((e => console.warn(e)));
-                    self.TM.water && !self.TM.hud && await script(b + "tm_hud.js").catch((e => console.warn(e)));
+                    self.TM.water && !self.TM.vehicles && await script(b + "tm_vehicles.js" + query).catch((e => console.warn(e)));
+                    self.TM.water && !self.TM.hud && await script(b + "tm_hud.js" + query).catch((e => console.warn(e)));
                     self.TM.hud?.setWheels(window.__nswsSettingBoolean?.("WheelInfo") === true);
                     self.TM.hud?.setWheelsSize?.(parseFloat(window.__nswsSetting?.("WheelInfoScale")));
                     await u;
-                    await self.TM.load();
-                    physics = await version
+                    await self.TM.load()
                 };
                 return {
                     get base() {
@@ -63430,6 +63434,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     },
                     get physics() {
                         return physics
+                    },
+                    get query() {
+                        return query
                     },
                     ready: () => ready,
                     ensure: () => loading ?? (loading = (async () => {

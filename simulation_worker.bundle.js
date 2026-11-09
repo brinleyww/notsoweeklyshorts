@@ -11160,8 +11160,8 @@
                 return !0;
             try {
                 self.TM_BASE = __nswsTMBase;
-                self.TM_DATA || importScripts(__nswsTMBase + "tm_parts.js");
-                self.TM || importScripts(__nswsTMBase + "tm_runtime.js");
+                self.TM_DATA || importScripts(__nswsTMBase + "tm_parts.js" + __nswsTMQuery);
+                self.TM || importScripts(__nswsTMBase + "tm_runtime.js" + __nswsTMQuery);
                 const TM = self.TM;
                 if (!co.has(TM.parts[0].i)) {
                     TM.addEnum(Za);
@@ -13098,7 +13098,10 @@
         };
         let __nswsModeSink = null;
         let __nswsTMBase = "https://brinleyww.github.io/Better-Editor-PT/";
+        // The page's physics version tag for those files (?p=N), so the worker runs the same physics the page loaded.
+        let __nswsTMQuery = "";
         function __nswsModesMessage(t) {
+            "string" == typeof t?.data?.nswsTMQuery && /^(\?p=\d{1,6})?$/.test(t.data.nswsTMQuery) && (__nswsTMQuery = t.data.nswsTMQuery);
             "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase,
             // tm_runtime.js reads the blocks file from TM_BASE when a car first needs it, which can be after the move.
             null != self.TM_BASE && (self.TM_BASE = __nswsTMBase));

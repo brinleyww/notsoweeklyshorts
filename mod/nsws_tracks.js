@@ -41,8 +41,9 @@
         const nswsModes = { rocket, royale };
         // Ids set back to Normal; a worker that can't remove ids just ignores this list.
         if (clearedModes.size) nswsModes.normal = [...clearedModes];
-        // Where the worker loads Better Editor's blocks from, when a track with them arrives.
-        return { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base };
+        // Where the worker loads Better Editor's blocks from, when a track with them arrives. A worker of its own (older
+        // physics) loads a fixed commit; the others tag the files with the page's physics version.
+        return { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
     }
 
     const NativeWorker = window.Worker;
@@ -56,7 +57,7 @@
                     try {
                         const message = modesMessage(this);
                         this.postMessage(message);
-                        this.__ntBase = message.nswsTMBase;
+                        this.__ntBase = message.nswsTMBase + message.nswsTMQuery;
                     } catch {}
                 }
             }
@@ -107,14 +108,15 @@
         // The block base moves to the Worker mirror when github.io fails, after the game's workers were made.
         for (const w of simWorkers) {
             const message = modesMessage(w);
-            if (!changed && w.__ntBase === message.nswsTMBase) continue;
+            if (!changed && w.__ntBase === message.nswsTMBase + message.nswsTMQuery) continue;
             try {
                 w.postMessage(message);
-                w.__ntBase = message.nswsTMBase;
+                w.__ntBase = message.nswsTMBase + message.nswsTMQuery;
             } catch {}
         }
         if (changed) window.dispatchEvent(new CustomEvent("nsws-track-modes"));
     }
+    window.__nswsSimWorkersSync = () => registerModes([]);
 
     function modeOf(trackId) {
         return modeRegistry.get(trackId) || "normal";
