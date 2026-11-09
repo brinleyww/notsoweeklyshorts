@@ -19,6 +19,7 @@
     // Keep in step with TAGS in proxy/src/accounts.js (ids, costs, referral counts, hours and bingos).
     const TAGS = [
         { id: "king", label: "NSWS KING", group: "king" },
+        { id: "discord", label: "DISCORD", group: "server", need: "Connect your Discord account and join the Not So Weekly Shorts server." },
         { id: "bingo", label: "BINGO", group: "bingo", bingos: 1 },
         { id: "dauber", label: "DAUBER", group: "bingo", bingos: 5 },
         { id: "fullhouse", label: "FULL HOUSE", group: "bingo", bingos: 15 },
@@ -60,6 +61,7 @@
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
         ["king", "NSWS King", "Only one player can wear it: whoever holds the most WRs over every NSWS week. It moves to whoever takes the lead (a tie keeps the current King)."],
+        ["server", "Discord server", "Connect your Discord account, then join the NSWS server. The tag shows up once you're in."],
         ["bingo", "Bingo", "Earned with bingos on the weekly bingo card (a full row, column or diagonal). BLACKOUT needs every square of one card."],
         ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
         ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
@@ -95,7 +97,13 @@
 .nsws-tag.t-king{background:linear-gradient(90deg,#662edb,#0202b8,#662edb);background-size:200% 100%;color:#ffd76a;box-shadow:inset 0 -2px #ffd76a;animation:nsws-tag-slide 3s linear infinite;}
 .nsws-tag.t-king::before{content:"";flex-shrink:0;width:.95em;height:.68em;background:currentColor;clip-path:polygon(0 100%,0 18%,26% 58%,50% 0,74% 58%,100% 18%,100% 100%);}
 .nsws-tag>.wr{margin-left:.05em;padding-left:.4em;border-left:1px solid currentColor;font-variant-numeric:tabular-nums;}
-.nsws-tag.t-cupchamp{background:linear-gradient(180deg,#2f4aa8,#192042);color:#ffd26b;box-shadow:inset 0 -2px #ffd26b;}
+.nsws-tag.t-discord{background:linear-gradient(110deg,transparent 38%,rgba(255,255,255,.4) 48%,transparent 58%) 0 0/250% 100% no-repeat,linear-gradient(180deg,#7983ff,#4b55d6 55%,#3c45b8);text-shadow:0 1px 0 rgba(20,24,90,.6);box-shadow:inset 0 1px rgba(255,255,255,.35),inset 0 -2px rgba(20,24,90,.45);animation:nsws-tag-glint 5s ease-in-out infinite;}
+.nsws-tag.t-discord::before{content:"";flex-shrink:0;width:.9em;height:.78em;background:currentColor;clip-path:polygon(0 0,100% 0,100% 70%,46% 70%,22% 100%,26% 70%,0 70%);}
+.nsws-tags .bar>.head>.button+.button{margin-left:6px;}
+.nsws-tags .preview>.info>.button+.button{margin-left:6px;}
+.nsws-tags .preview>.info>a.button{display:inline-block;text-decoration:none;}
+.nsws-tag.t-cupchamp{background:linear-gradient(110deg,transparent 38%,rgba(255,226,140,.45) 48%,transparent 58%) 0 0/250% 100% no-repeat,linear-gradient(180deg,#3b5ee0,#22308a 55%,#141c52);color:#ffd96b;text-shadow:0 1px 0 #0b1033,0 0 6px rgba(255,210,107,.45);box-shadow:inset 0 0 0 1px rgba(255,214,110,.75),inset 0 -3px #e2a92a;animation:nsws-tag-glint 4s ease-in-out infinite;}
+.nsws-tag.t-cupchamp::before{content:"";flex-shrink:0;width:.8em;height:.86em;background:linear-gradient(180deg,#fff2b8,#ffd96b 45%,#d99a1e);clip-path:polygon(0 0,100% 0,100% 12%,90% 12%,86% 38%,64% 56%,58% 74%,76% 82%,76% 100%,24% 100%,24% 82%,42% 74%,36% 56%,14% 38%,10% 12%,0 12%);}
 .nsws-tag.t-pumpkin{background:#e8700c;color:#2a1000;box-shadow:inset 0 -2px #4f8a25;}
 .nsws-tag.t-haunted{background:#2b1a4d;color:#b7ff7a;text-shadow:0 0 6px rgba(160,255,90,.7);}
 .nsws-tag.t-horseman{background:#0d0a12;color:#ff8a1e;box-shadow:inset 0 0 0 1px #ff8a1e;text-shadow:0 0 5px rgba(255,138,30,.8);}
@@ -104,17 +112,21 @@
 .nsws-tag.t-dauber{background:linear-gradient(100deg,#7a2fd6,#d13bbd);}
 .nsws-tag.t-fullhouse{background:#12805c;}
 .nsws-tag.t-jackpot{background:linear-gradient(180deg,#ffe07a,#e0a400);color:#2b1d00;}
-.nsws-tag.t-cardshark{background:#0f2a4a;color:#7fd6ff;box-shadow:inset 0 -2px #7fd6ff;}
-.nsws-tag.t-blackout{background:#000;color:#fff;box-shadow:inset 0 0 0 1px #ffc94a;}
-.nsws-tag.t-blackout>.ball{background:#ffc94a;}
+.nsws-tag.t-cardshark{background:radial-gradient(130% 160% at 50% 0,#22a06a,#0f5a3b 55%,#083823);color:#fff;text-shadow:0 1px 0 #03180f;box-shadow:inset 0 0 0 1px #d9b45a,inset 0 0 0 2.5px #083823,inset 0 0 0 3px rgba(217,180,90,.55);}
+.nsws-tag.t-cardshark::after{content:"\\2660";margin-left:.05em;font-family:Arial,sans-serif;font-style:normal;color:#e8c46a;text-shadow:0 1px 0 #03180f;}
+.nsws-tag.t-cardshark>.ball{border-radius:.18em;background:#fff;color:#c8102e;box-shadow:inset 0 0 0 .08em #c9c9c9,1px 1px 0 rgba(0,0,0,.35);transform:rotate(-8deg);}
+.nsws-tag.t-blackout{background:linear-gradient(110deg,transparent 38%,rgba(255,201,74,.5) 48%,transparent 58%) 0 0/250% 100% no-repeat,radial-gradient(120% 140% at 50% 120%,#2a2110,#000 60%);color:#fff;text-shadow:0 0 6px rgba(255,201,74,.7);box-shadow:inset 0 0 0 1px #ffc94a,inset 0 0 10px rgba(255,201,74,.3);animation:nsws-tag-glint 3.5s ease-in-out infinite;}
+.nsws-tag.t-blackout>.ball{background:radial-gradient(circle at 35% 30%,#fff3c4,#ffc94a 55%,#c98a12);box-shadow:0 0 7px rgba(255,201,74,.85);}
 .nsws-tag>.h{margin-right:.05em;padding-right:.4em;border-right:1px solid currentColor;opacity:.75;font-variant-numeric:tabular-nums;}
 .nsws-tag.t-firstlaps{background:#3d5f86;}
 .nsws-tag.t-regular{background:#1d7f74;}
 .nsws-tag.t-grinder{background:linear-gradient(100deg,#e2661b,#a83a0b);}
 .nsws-tag.t-veteran{background:#4e5d2c;color:#eef3c9;}
 .nsws-tag.t-roadwarrior{background:#24272f;color:#fff;box-shadow:inset 0 -2px #ffd400;}
-.nsws-tag.t-centurion{background:linear-gradient(180deg,#9b1c2a,#5e0d18);color:#ffd76a;}
+.nsws-tag.t-centurion{background:repeating-linear-gradient(90deg,rgba(0,0,0,.18) 0 1px,rgba(255,255,255,.07) 1px 2px,transparent 2px 6px),linear-gradient(180deg,#c42636,#8a1222 50%,#5a0a15);color:#ffdf80;text-shadow:0 1px 0 #3a0008,0 0 5px rgba(255,200,90,.35);box-shadow:inset 0 2px #f0c24f,inset 0 3px #7a0d1a,inset 0 -2px #f0c24f,inset 0 -3px #7a0d1a;}
+.nsws-tag.t-centurion::after{content:"";flex-shrink:0;width:.85em;height:.8em;margin-left:.05em;background:linear-gradient(180deg,#ffe9a3,#e0a832);clip-path:polygon(50% 0,62% 30%,96% 34%,70% 56%,80% 92%,50% 72%,20% 92%,30% 56%,4% 34%,38% 30%);}
 .nsws-tag.t-lifer{background:linear-gradient(90deg,#3a1fa8,#1db3d8,#7b2ff0,#3a1fa8);background-size:300% 100%;text-shadow:0 0 5px rgba(255,255,255,.6);animation:nsws-tag-rainbow 6s linear infinite;}
+@keyframes nsws-tag-glint{0%{background-position:100% 0,0 0;}45%,100%{background-position:0 0,0 0;}}
 @keyframes nsws-tag-shine{from{background-position:0 0;}to{background-position:166.667% 0;}}
 @keyframes nsws-tag-slide{from{background-position:0 0;}to{background-position:200% 0;}}
 @keyframes nsws-tag-rainbow{from{background-position:0 0;}to{background-position:150% 0;}}
@@ -300,6 +312,7 @@
         if (tag.group === "king") return "Held by whoever has the most WRs (first place on a board) over every NSWS week.";
         if (tag.group === "shop") return "Bought in the referral shop for " + requirement(tag) + ".";
         if (tag.group === "discord") return tag.need + " Given out by the owner.";
+        if (tag.group === "server") return "In the NSWS Discord server, with Discord connected to NSWS.";
         if (tag.hours) return "Played NSWS for " + tag.hours + (tag.hours === 1 ? " hour." : " hours.");
         if (tag.blackout) return "Marked every square of one weekly bingo card.";
         if (tag.bingos) return "Made " + bingosText(tag.bingos) + " on the weekly bingo cards.";
@@ -363,6 +376,7 @@
         { kind: "bingo", has: (t) => t.bingos > 0 },
         { kind: "hours", has: (t) => t.hours > 0 },
         { kind: "halloween", has: (t) => t.group === "halloween" },
+        { kind: "discord", has: (t) => t.group === "server" },
     ];
 
     function earnedKind(tag) {
@@ -416,6 +430,7 @@
             const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
                 : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"
                 : kind.kind === "halloween" ? "Halloween: the " + top.label + " tag is yours"
+                : kind.kind === "discord" ? "You're in the NSWS Discord server: the DISCORD tag is yours"
                 : "You marked a whole bingo card: the BLACKOUT tag is yours";
             lines.push(what + ". Wear it from Garage → Tags.");
         }
@@ -547,7 +562,23 @@
                 if (++tries < 40) setTimeout(tick, 3000);
                 return;
             }
-            redeemPending().catch(() => {}).finally(() => loadState().catch(() => {}));
+            redeemPending().catch(() => {}).finally(() => loadState().then(() => checkDiscord(false)).catch(() => {}));
+            window.addEventListener("focus", discordReturned);
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "visible") discordReturned();
+            });
+            const apiOrigin = (() => {
+                try {
+                    return new URL(API).origin;
+                } catch {
+                    return null;
+                }
+            })();
+            window.addEventListener("message", (e) => {
+                if (e.origin !== apiOrigin || typeof e.data?.nswsDiscord !== "string") return;
+                discordStarted = Date.now();
+                loadState().then(() => checkDiscord(false)).catch(() => {});
+            });
             // Hours and streaks change while playing, so a long visit re-reads them now and then.
             setInterval(() => {
                 if (document.visibilityState === "visible") loadState().catch(() => {});
@@ -568,6 +599,7 @@
         if (tag.blackout) return "Whole card";
         if (tag.bingos) return Math.min(state?.bingo?.total ?? 0, tag.bingos) + " / " + bingosText(tag.bingos);
         if (tag.group === "discord") return "Owner only";
+        if (tag.group === "server") return state?.discord ? "Join the server" : "Connect Discord";
         if (tag.group === "halloween") return "Halloween 2026";
         return "Use a code";
     }
@@ -581,6 +613,12 @@
     function needText(tag) {
         if (tag.group === "shop") return "Costs " + requirement(tag) + " from the referral shop. You get a point for every friend you refer.";
         if (tag.group === "discord") return tag.need + " Only the owner can give this one out.";
+        if (tag.group === "server") {
+            const linked = state?.discord;
+            if (!linked) return "Connect your Discord account, then join the Not So Weekly Shorts server. The tag shows up as soon as you're in.";
+            if (!linked.inGuild) return "Discord is connected as " + linked.name + ". Join the Not So Weekly Shorts server to get the tag: it shows up here as soon as you're in.";
+            return "You're in the NSWS server as " + linked.name + ". It stays yours while Discord is connected.";
+        }
         if (tag.group === "king") {
             if (owns(tag.id)) return "You hold the most WRs on NSWS (" + wrsText(state.wrs) + "), so you're the King. If someone takes the lead, the tag moves to them.";
             const king = state?.king;
@@ -624,6 +662,159 @@
                 : data?.error === "locked" ? "You don't have that tag yet." : "Couldn't save that. Try again in a moment.";
             renderGarage();
         }
+    }
+
+    const DISCORD_INVITE = "https://discord.gg/v5xrXSfvtE";
+    const DISCORD_CHECK_MS = 10_000;
+    // A sign-in started this long ago may still be finishing in another window or the browser.
+    const DISCORD_PENDING_MS = 15 * 60_000;
+    let discordStarted = 0;
+    let discordChecked = 0;
+    let discordChecking = null;
+
+    function discordNote(text) {
+        if (!garage) return;
+        garage.note = text;
+        renderGarage();
+    }
+
+    // The window is opened before the request, while the click still counts, or browsers block it.
+    // The desktop app sends every new window to the system browser instead.
+    async function connectDiscord() {
+        const token = profileToken();
+        if (!token || garage?.busy) return;
+        const desktop = !!window.electron?.captureHidden;
+        let popup = null;
+        if (!desktop) {
+            try {
+                popup = window.open("", "nsws-discord", "popup,width=520,height=820");
+            } catch {}
+        }
+        if (garage) garage.discordLink = null;
+        discordNote("Opening Discord…");
+        const { status, data } = await api("discord/start", { userToken: token, back: location.origin + location.pathname });
+        if (status !== 200 || typeof data?.url !== "string") {
+            try {
+                popup?.close();
+            } catch {}
+            discordNote(status === 404 ? "Connecting Discord isn't switched on yet." : "Couldn't reach the server. Try again in a moment.");
+            return;
+        }
+        discordStarted = Date.now();
+        if (popup && !popup.closed) {
+            popup.location.href = data.url;
+            discordNote("Finish in the Discord window, then come back here.");
+        } else if (desktop) {
+            window.open(data.url, "_blank");
+            discordNote("Finish in your browser, then come back here.");
+        } else {
+            if (garage) garage.discordLink = data.url;
+            discordNote("Your browser blocked the Discord window. Press Open Discord.");
+        }
+    }
+
+    // Asks the Worker to look at the server again; it only does once every 10 seconds per account.
+    function checkDiscord(force) {
+        const token = profileToken();
+        if (!token || !state?.discord || state.discord.inGuild) return Promise.resolve();
+        if (discordChecking) return discordChecking;
+        if (!force && Date.now() - discordChecked < DISCORD_CHECK_MS) return Promise.resolve();
+        discordChecked = Date.now();
+        discordChecking = api("discord/check", { userToken: token }).then(({ status, data }) => {
+            if (status === 200) {
+                setState(data);
+                if (force && !data?.discord?.inGuild) discordNote("You're not in the NSWS server yet. Join it, then come back.");
+            } else if (data?.error === "relink") {
+                discordNote("Discord wants you to connect again. Press Connect Discord.");
+            } else if (force) {
+                discordNote("Couldn't check with Discord. Try again in a moment.");
+            }
+        }).finally(() => {
+            discordChecking = null;
+        });
+        return discordChecking;
+    }
+
+    function discordReturned() {
+        if (!profileToken()) return;
+        const pending = Date.now() - discordStarted < DISCORD_PENDING_MS;
+        if (pending && !state?.discord?.inGuild) {
+            loadState().then(() => checkDiscord(false)).catch(() => {});
+        } else if (state?.discord && !state.discord.inGuild) {
+            checkDiscord(false).catch(() => {});
+        }
+    }
+
+    async function disconnectDiscord() {
+        const token = profileToken();
+        if (!token || !garage || garage.busy) return;
+        garage.busy = true;
+        discordNote("Disconnecting…");
+        const { status, data } = await api("discord/unlink", { userToken: token });
+        if (!garage) return;
+        garage.busy = false;
+        if (status === 200) {
+            garage.note = "Discord is disconnected.";
+            setState(data);
+        } else {
+            discordNote("Couldn't disconnect. Try again in a moment.");
+        }
+    }
+
+    function discordActions(view, tag) {
+        const linked = state.discord;
+        const actions = [];
+        if (!linked) {
+            if (view.discordLink) {
+                const open = el("a", "button", "Open Discord");
+                open.href = view.discordLink;
+                open.target = "_blank";
+                open.rel = "noopener";
+                open.addEventListener("click", () => {
+                    discordStarted = Date.now();
+                    view.discordLink = null;
+                    discordNote("Finish in the Discord tab, then come back here.");
+                });
+                actions.push(open);
+            } else {
+                actions.push(button("Connect Discord", () => connectDiscord()));
+            }
+            return actions;
+        }
+        if (!linked.inGuild) {
+            const join = el("a", "button", "Join the NSWS server");
+            join.href = DISCORD_INVITE;
+            join.target = "_blank";
+            join.rel = "noopener";
+            join.addEventListener("click", () => {
+                window.__nswsUIClick?.();
+                discordStarted = Date.now();
+                discordNote("Once you've joined, come back here and the tag shows up.");
+            });
+            actions.push(join, button("I've joined", () => checkDiscord(true)));
+        } else if (state.equipped !== tag.id) {
+            actions.push(button("Wear it", () => act(view, "equip", tag.id)));
+        } else {
+            actions.push(button("Take it off", () => act(view, "equip", null)));
+        }
+        const armed = view.armed === "discord-unlink";
+        const off = button(armed ? "Click again to disconnect" : "Disconnect", () => {
+            if (!armed) {
+                disarm(view);
+                view.armed = "discord-unlink";
+                view.armTimer = setTimeout(() => {
+                    disarm(view);
+                    renderGarage();
+                }, ARM_MS);
+                renderGarage();
+                return;
+            }
+            disarm(view);
+            disconnectDiscord();
+        });
+        if (armed) off.classList.add("armed");
+        actions.push(off);
+        return actions;
     }
 
     function mountGarage(panel) {
@@ -692,6 +883,15 @@
             + (state.pending ? " · " + state.pending + " waiting for their first run" : "")
             + " · " + hoursText(state.hours ?? 0) + " h played");
         head.append(points, sub, button("Referrals", () => openReferrals()));
+        if (!state.discord?.inGuild) {
+            head.appendChild(button(state.discord ? "Join Discord" : "Connect Discord", () => {
+                view.selected = "discord";
+                view.note = "";
+                disarm(view);
+                if (!state.discord) connectDiscord();
+                else renderGarage();
+            }));
+        }
         view.bar.appendChild(head);
 
         const list = el("div", "list");
@@ -741,7 +941,12 @@
         const info = el("div", "info");
         info.appendChild(el("div", "need", selected ? needText(selected) : "No tag next to your name."));
         let action = null;
-        if (!selected) {
+        if (selected?.group === "server") {
+            for (const a of discordActions(view, selected)) {
+                if (a.tagName === "BUTTON") a.disabled = view.busy;
+                info.appendChild(a);
+            }
+        } else if (!selected) {
             if (state.equipped != null) action = button("Wear no tag", () => act(view, "equip", null));
         } else if (state.equipped === selected.id) {
             action = button("Take it off", () => act(view, "equip", null));

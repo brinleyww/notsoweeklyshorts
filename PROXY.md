@@ -661,7 +661,8 @@ belong to the account, not the device. `mod/nsws_tags.js` draws them; `TAGS` in
   confirmed referrals. Discord tags (`NSWS WINNER`, `CLEAN SWEEP`,
   `MAPPO BUILDER`, `YOUTUBER`, `AUTHOR TIME`, `OG`) only the owner gives, on Race
   Control's Tags tab, by nickname; that tab can also add or take bonus points.
-  Nothing syncs with Discord itself.
+  Nothing syncs with Discord itself. The `DISCORD` tag is different: it comes by itself to players
+  who connect Discord and are in the NSWS server (below, "Discord").
 - **Wearing one.** Garage → Tags lists every tag with what it needs and previews
   it on a nameplate and a chat line. One tag at a time; buying puts it on.
 - **The chat.** The chat only knows a player by the hash of their visitor id.
@@ -905,6 +906,34 @@ An account is the userId (SHA-256 of the token); the token is never stored.
   `blobs` rows. Each address may store 30 MB of codes a day across packs, campaigns and
   submissions. Rate limits are daily counters in the `limits` table (yesterday's rows are dropped
   on the first hit of a day). Every filtered column is indexed and every list has a LIMIT.
+
+## Discord
+
+`src/discord.js`. A player connects their Discord account from Garage → Tags (Connect Discord) and
+gets the `DISCORD` tag once that Discord account is in the NSWS server.
+
+- **Sign-in.** `POST /nsws/discord/start` (`{userToken, back}`, site only) stores a one-time `state`
+  for the account in `Accounts.discord_states` (15 minutes, one per account) and returns Discord's
+  authorize link (scopes `identify guilds.members.read`, redirect `<worker>/nsws/discord/callback`).
+  The page opens it in a popup it opened during the click; a blocked popup gets an Open Discord link,
+  and the desktop app opens it in the system browser. Discord sends the player to the callback, the
+  only route here that takes no Origin: it uses the `state` once, trades the code for tokens, reads
+  `/users/@me` and `/users/@me/guilds/<DISCORD_GUILD_ID>/member`, and answers with a small page
+  (connected / join the server / cancelled / ran out / failed) that posts `{nswsDiscord}` to the game
+  window and closes itself when it can.
+- **Joining later.** Until the account is seen in the server, `discord_links` keeps its OAuth tokens.
+  The page calls `POST /nsws/discord/check` on load, when its tab gets focus again, and from the
+  I've joined button; the Worker asks Discord at most once every 5 s per account and refreshes an
+  expired token (a refresh token works once, so the new pair is saved even when the look fails).
+  A dead token answers 409 `relink`. Once the player is in, `in_guild` is set, the tokens are
+  deleted and the tag is theirs; leaving the server later doesn't take it away.
+- **One to one.** A Discord account linked to a second NSWS account moves there; the first loses the
+  tag. `POST /nsws/discord/unlink` disconnects and takes the tag off if it was worn.
+- `refer/me` and the other tag replies carry `discord: {name, inGuild} | null`. Config:
+  `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DISCORD_INVITE` in wrangler.toml and the secret
+  `DISCORD_CLIENT_SECRET`; without all three the routes answer 404 and the page says connecting
+  isn't switched on yet. The Discord application must list the callback URL as a redirect.
+  `DISCORD_API` / `DISCORD_AUTHORIZE` point at a fake Discord for local tests.
 
 ## Feedback
 

@@ -20,6 +20,8 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const MIN_KEPT_TRACKS = 20;
 const MAX_KEPT_TRACKS = 5000;
 const TAG_COUNTS_MS = 6 * 3600_000;
+const DISCORD_STATE = /^[A-Za-z0-9]{32}$/;
+const DISCORD_STATE_MS = 15 * 60_000;
 const SHARE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
 // Names that compare equal: case, width variants and spacing are ignored, so "Bob",
 // "BOB" and "B o b" are one name.
@@ -69,7 +71,8 @@ const TOP_TTL_MS = 60_000;
 // who has played that long, "bingo" to anyone with that many bingos in all, "blackout" to anyone who
 // marked a whole card, "king" to the one player holding the most WRs, "shop" is bought with referral
 // points, and "grant" only the owner hands out. "haunted" belongs to anyone with a bingo on the Halloween
-// card, "pumpkin" to both sides of a referral made during the event.
+// card, "pumpkin" to both sides of a referral made during the event. "discord" to anyone whose linked
+// Discord account has been seen in the NSWS server.
 export const TAGS = {
     king: { kind: "king" },
     bingo: { kind: "bingo", bingos: 1 },
@@ -109,6 +112,7 @@ export const TAGS = {
     haunted: { kind: "haunted" },
     pumpkin: { kind: "pumpkin" },
     horseman: { kind: "grant" },
+    discord: { kind: "discord" },
 };
 
 // Settings presets: 3 own slots (kind 0) and 3 slots for presets others shared (kind 1).
@@ -335,6 +339,12 @@ export class Accounts extends DurableObject {
             id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, user_id TEXT NOT NULL, name TEXT NOT NULL,
             author TEXT NOT NULL, data TEXT NOT NULL, at INTEGER NOT NULL)`);
         this.sql.exec("CREATE INDEX IF NOT EXISTS preset_shares_user ON preset_shares(user_id, at)");
+        // One Discord account per NSWS account and the other way round. The OAuth tokens are only kept
+        // until the player is seen in the server (in_guild), to look again after they join.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS discord_links (
+            user_id TEXT PRIMARY KEY, discord_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, in_guild INTEGER NOT NULL,
+            at INTEGER NOT NULL, checked INTEGER NOT NULL, access TEXT, refresh TEXT, expires INTEGER) WITHOUT ROWID`);
+        this.sql.exec("CREATE TABLE IF NOT EXISTS discord_states (state TEXT PRIMARY KEY, user_id TEXT NOT NULL, back TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID");
         this.top = null;
         this.wrs = null;
         this.king = null;
@@ -654,7 +664,74 @@ export class Accounts extends DurableObject {
         if (counts.pumpkin > 0 || (joined?.confirmed != null && joined.at >= HALLOWEEN.from && joined.at < HALLOWEEN.until)) owned.add("pumpkin");
         for (const r of this.sql.exec("SELECT tag FROM tag_bought WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
         for (const r of this.sql.exec("SELECT tag FROM tag_grants WHERE user_id = ?", userId)) if (isTag(r.tag)) owned.add(r.tag);
+        if (this.discordOf(userId)?.inGuild) owned.add("discord");
         return owned;
+    }
+
+    discordOf(userId) {
+        const row = this.sql.exec("SELECT name, in_guild FROM discord_links WHERE user_id = ?", userId).toArray()[0];
+        return row ? { name: row.name, inGuild: !!row.in_guild } : null;
+    }
+
+    // A sign-in through Discord carries only state back, so state is what says whose account it was.
+    discordStart(userId, state, back) {
+        const now = Date.now();
+        this.sql.exec("DELETE FROM discord_states WHERE user_id = ? OR at < ?", userId, now - DISCORD_STATE_MS);
+        this.sql.exec("INSERT INTO discord_states (state, user_id, back, at) VALUES (?, ?, ?, ?)", state, userId, back, now);
+        return { ok: true };
+    }
+
+    discordTake(state) {
+        if (!DISCORD_STATE.test(state ?? "")) return null;
+        const row = this.sql.exec("SELECT user_id, back, at FROM discord_states WHERE state = ?", state).toArray()[0];
+        if (!row) return null;
+        this.sql.exec("DELETE FROM discord_states WHERE state = ?", state);
+        return Date.now() - row.at < DISCORD_STATE_MS ? { userId: row.user_id, back: row.back } : null;
+    }
+
+    // tokens: { access, refresh, expires } while the player isn't in the server yet. A Discord account
+    // linked to another NSWS account before moves here, and that account loses the tag.
+    discordSave(userId, discordId, name, inGuild, tokens) {
+        const retags = [];
+        const before = this.sql.exec("SELECT user_id FROM discord_links WHERE discord_id = ? AND user_id != ?", String(discordId), userId).toArray()[0]?.user_id;
+        this.ctx.storage.transactionSync(() => {
+            if (before) this.sql.exec("DELETE FROM discord_links WHERE user_id = ?", before);
+            const keep = inGuild ? null : tokens;
+            const now = Date.now();
+            this.sql.exec(`INSERT OR REPLACE INTO discord_links (user_id, discord_id, name, in_guild, at, checked, access, refresh, expires)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, userId, String(discordId), text(name, 64), inGuild ? 1 : 0, now, now,
+                keep?.access ?? null, keep?.refresh ?? null, keep?.expires ?? null);
+        });
+        if (before) retags.push(this.changed(before).retag);
+        const changed = this.changed(userId);
+        retags.push(changed.retag);
+        return { state: changed.state, retags };
+    }
+
+    discordTokens(userId) {
+        const row = this.sql.exec("SELECT in_guild, checked, access, refresh, expires FROM discord_links WHERE user_id = ?", userId).toArray()[0];
+        if (!row) return null;
+        return { inGuild: !!row.in_guild, checked: row.checked, access: row.access, refresh: row.refresh, expires: row.expires };
+    }
+
+    // After a look at the server: tokens are the refreshed ones, if Discord gave new ones.
+    discordChecked(userId, inGuild, tokens) {
+        if (!this.discordOf(userId)) return { error: "missing" };
+        if (inGuild) {
+            this.sql.exec("UPDATE discord_links SET in_guild = 1, checked = ?, access = NULL, refresh = NULL, expires = NULL WHERE user_id = ?", Date.now(), userId);
+        } else if (tokens) {
+            this.sql.exec("UPDATE discord_links SET checked = ?, access = ?, refresh = ?, expires = ? WHERE user_id = ?",
+                Date.now(), tokens.access, tokens.refresh, tokens.expires, userId);
+        } else {
+            this.sql.exec("UPDATE discord_links SET checked = ? WHERE user_id = ?", Date.now(), userId);
+        }
+        return this.changed(userId);
+    }
+
+    discordUnlink(userId) {
+        this.sql.exec("DELETE FROM discord_links WHERE user_id = ?", userId);
+        if (this.tagProfile(userId).equipped === "discord") this.setEquipped(userId, null);
+        return this.changed(userId);
     }
 
     // How many accounts own each tag, by the same rules as ownedTags. It reads whole tables, so it is
@@ -690,6 +767,7 @@ export class Accounts extends DurableObject {
         for (const table of ["tag_bought", "tag_grants"]) {
             for (const r of this.sql.exec(`SELECT user_id, tag FROM ${table}`)) if (isTag(r.tag)) owners[r.tag].add(r.user_id);
         }
+        for (const r of this.sql.exec("SELECT user_id FROM discord_links WHERE in_guild = 1")) owners.discord.add(r.user_id);
         const counts = Object.fromEntries(Object.entries(owners).map(([id, set]) => [id, set.size]));
         this.sql.exec("INSERT OR REPLACE INTO tag_counts (id, at, data) VALUES (0, ?, ?)", Date.now(), JSON.stringify(counts));
         return counts;
@@ -730,6 +808,7 @@ export class Accounts extends DurableObject {
             equipped: profile.equipped && owned.has(profile.equipped) ? profile.equipped : null,
             referredBy: by ? { nickname: this.nicknameOf(by) || "a player" } : null,
             top: this.topRecruiters(),
+            discord: this.discordOf(userId),
         };
     }
 

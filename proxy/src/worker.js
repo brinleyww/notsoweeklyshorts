@@ -14,6 +14,7 @@ import { censor, findSlurs } from "./chatfilter.js";
 import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
 import { TrackHub } from "./trackhub.js";
 import { Feedback, MAX_FEEDBACK_BODY } from "./feedback.js";
+import { handleDiscord, DISCORD_PREFIX, DISCORD_POSTS } from "./discord.js";
 
 export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub, Feedback };
 
@@ -383,7 +384,7 @@ const BANNED_POSTS = new Set(["/v6/leaderboard", "/v6/user", "/nsws/beat", "/nsw
         "refer/me", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync", "presets/list", "presets/save", "presets/rename",
         "presets/delete", "presets/get", "presets/accept"].map((p) => TRAFFIC_PREFIX + p),
     ...["board/submit", "played", "favourite", "stats", "campaign/get", "club/get", "club/mine",
-        "library/list", "library/codes", "library/put", "library/delete"].map((p) => "/nsws/tracks/" + p)]);
+        "library/list", "library/codes", "library/put", "library/delete"].map((p) => "/nsws/tracks/" + p), ...DISCORD_POSTS]);
 
 function playsWhileBanned(request, url) {
     if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") return false;
@@ -2577,6 +2578,18 @@ export default {
                     noteDoError(err);
                     console.error("cup error:", err && err.message);
                     return doLimited() ? busy(requestOrigin) : plain(500, "Competitions failed", requestOrigin);
+                }
+            }
+            if (url.pathname.startsWith(DISCORD_PREFIX)) {
+                if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
+                try {
+                    return await handleDiscord(request, url, env, {
+                        stub: accounts(env), json, plain, forbidden, corsHeaders, sha256Hex, readSmallBody, chatRetag, fromSite, origin: requestOrigin, cfg,
+                    });
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("discord error:", err && err.message);
+                    return doLimited() ? busy(requestOrigin) : plain(500, "Discord linking failed", requestOrigin);
                 }
             }
             if (url.pathname === "/nsws/macro" && request.method === "POST") {
