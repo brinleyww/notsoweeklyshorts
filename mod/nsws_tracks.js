@@ -867,9 +867,10 @@
     }
 
     function findExisting(tracks, info, hash) {
-        for (const t of tracks.values()) {
-            if (info.kind === "stock" && info.trackId ? t.trackId === info.trackId : t.hash === hash) return t;
-        }
+        // A stock track's id is its blocks alone, so a copy saved under another name ("Unnamed Track (2)") is its own entry.
+        for (const t of tracks.values()) if (t.hash === hash) return t;
+        if (info.kind !== "stock" || !info.trackId) return null;
+        for (const t of tracks.values()) if (t.trackId === info.trackId && t.name === info.name) return t;
         return null;
     }
 
@@ -2756,8 +2757,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 seen.add(info.code);
                 let existing = null;
                 if (info.ok) {
-                    if (info.kind === "stock") existing = [...library.values()].find((x) => x.trackId === info.trackId) || null;
-                    else existing = [...library.values()].find((x) => x.code === info.code) || null;
+                    existing = [...library.values()].find((x) => x.code === info.code || (info.kind === "stock" && info.trackId && x.trackId === info.trackId && x.name === info.name)) || null;
                 }
                 next.push({ info, mode: t.mode, image: validImage(t.image), on: info.ok, existing });
             }
