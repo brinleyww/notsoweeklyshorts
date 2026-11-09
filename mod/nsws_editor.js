@@ -27,6 +27,7 @@
     const MIRROR_KEY = "nswsEditorMirror";
     const MIRROR_FOR_MS = 7 * 86400000;
     const COPIED_KEY = "nswsEditorCopied";
+    const DUPES_KEY = "nswsEditorCopiedDupes";
     const COPY_MAX_CODE = 400000;
     const MODES = [
         { id: "normal", label: "Normal", help: "Normal: stock PolyTrack driving." },
@@ -648,6 +649,17 @@
             const kept = {};
             for (const t of all) if (done[t.id]) kept[t.id] = done[t.id];
             done = kept;
+            // Editors before bridge version 4 skipped a track whose name they already had (and it was marked copied), so
+            // My Tracks entries sharing a name go over once more; the editor now numbers them.
+            let redo = false;
+            try {
+                redo = bridgeVersion >= 4 && !localStorage.getItem(DUPES_KEY);
+            } catch {}
+            if (redo) {
+                const count = new Map();
+                for (const t of all) count.set(t.name, (count.get(t.name) || 0) + 1);
+                for (const t of all) if (count.get(t.name) > 1) delete done[t.id];
+            }
             const todo = all.filter((t) => typeof t.code === "string" && t.code.length <= COPY_MAX_CODE && done[t.id] !== mark(t));
             let added = false;
             for (let i = 0; i < todo.length; i += 20) {
@@ -672,6 +684,10 @@
                 } catch {}
                 if (full) break;
             }
+            if (redo)
+                try {
+                    localStorage.setItem(DUPES_KEY, "1");
+                } catch {}
             if (added) await refreshList(false);
         })()
             .catch(() => {})
