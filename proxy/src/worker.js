@@ -1231,20 +1231,12 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
         }
         const carStyle = (form.get("carStyle") ?? "").slice(0, 256);
         const effort = { drivenMs: effortParam(url.searchParams.get("nswsDriven")), tries: effortParam(url.searchParams.get("nswsTries")) };
-        const lobby = (url.searchParams.get("nswsLobby") || "").toUpperCase();
         if (prep.revert && state === "valid" && frames >= prep.revert.hidden_frames) {
-            const run = { track: trackId, week: track.week, userId: hash, nickname, frames, keep: recording, carStyle, ...effort };
-            // A lobby PB waits for the owner's review, which only runs that reach Kodub get.
-            return revertedUpload(request, env, cfg, origin, track, read, anti, LOBBY_CODE.test(lobby) ? { ...run, frames: prep.revert.hidden_frames } : run);
+            return revertedUpload(request, env, cfg, origin, track, read, anti,
+                { track: trackId, week: track.week, userId: hash, nickname, frames, keep: recording, carStyle, ...effort });
         }
         await anti.expect({ track: trackId, userId: hash, frames, state });
-        check = { recording, nickname, state, hold: null, carStyle, effort };
-        if (LOBBY_CODE.test(lobby)) {
-            check.hold = await anti.lobbyHold({
-                track: trackId, week: track.week, userId: hash, nickname, frames, lobby,
-                carStyle: (form.get("carStyle") ?? "").slice(0, 256), recording,
-            });
-        }
+        check = { recording, nickname, state, carStyle, effort };
     }
 
     let before = await loadView(cfg, request, track, read).catch(() => null);
@@ -1276,13 +1268,10 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
             keep: check.recording, carStyle: check.carStyle, ...check.effort, played: await played,
             flags: await inputFlags(check.recording, frames, check.effort).catch(() => null),
         });
-        if (check.hold != null) await anti.lobbyUploaded(check.hold, uploadId);
         if (track.week === HALLOWEEN.week && trackId === HALLOWEEN.horsemanTrack && check.state === "valid"
             && HALLOWEEN.horsemanFrames != null && frames <= HALLOWEEN.horsemanFrames) {
             ctx.waitUntil(accounts(env)?.beatHorseman(hash).catch(() => {}));
         }
-    } else if (check?.hold != null) {
-        await anti.lobbyDiscard(check.hold);
     }
     if (!response.ok || !result || typeof result !== "object" || !Number.isSafeInteger(result.newPosition)) {
         return new Response(text, {

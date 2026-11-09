@@ -32,11 +32,6 @@ app.onLeave = (message) => leave(message);
 
 site.__nswsCupRoom = () => layer.hub.room();
 site.__nswsCupLeave = (message) => leave(message);
-// Personal bests set in a cup upload with the cup code, so Race Control holds them for review.
-site.__nswsLobbyTag = () => {
-  const room = layer.hub.room();
-  return room ? '&nswsLobby=' + room.code : '';
-};
 (site as unknown as { __nswsCupKeysPanel: () => void }).__nswsCupKeysPanel = () => layer.keys.open();
 
 site.__nswsCupApp = {

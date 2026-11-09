@@ -163,7 +163,7 @@ hold it at `leaderPoints(s) + 1`.
   or the cup; finish window after the first finish) or time attack (its length); countdown; break.
 - **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times
   a multiplier with a minimum; optionally ended when every racer is ready.
-- **Players:** late joiners, spectator free camera, bumper cars, PB uploads (held for review).
+- **Players:** late joiners, spectator free camera, bumper cars, PB uploads (straight onto the leaderboards, like a PB set outside a cup).
 - **Presets:** save, copy as text, import from text. Presets saved by the old cup mode (PolyCup) are
   imported once and translated.
 

@@ -894,7 +894,7 @@ export class Panel {
       toggle('lateJoin', 'Late joiners race', 'Newcomers can take a grid slot'),
       toggle('freecam', 'Spectator free camera', 'Let spectators fly around'),
       toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
-      toggle('uploads', 'Upload PBs', 'Cup PBs go to the leaderboards (held for review)'),
+      toggle('uploads', 'Upload PBs', 'Cup PBs go on the leaderboards'),
     );
     return [
       lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules'),

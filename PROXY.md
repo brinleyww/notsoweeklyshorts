@@ -803,17 +803,14 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   8-player cup is about 1.5 requests a second while everyone races and about 0.1 between rounds.
   Spectating and live timing send nothing of their own. The room rejects more than 60 frames a second
   from one socket.
-- **Cup PBs go to the owner:** with "Upload leaderboard times" on in a cup's rules, a personal best set
-  in a cup is uploaded with `&nswsLobby=<code>` (`window.__nswsLobbyTag`). It goes through the normal
-  replay check and is put on hold (`lobby_runs` in the `AntiCheat` Durable Object) before it is sent to
-  Kodub, so other players never see it until the owner verifies it; the player still gets their own
-  entry back. Race Control -> Anti-cheat -> "Lobby PBs to review" lists them: **Watch** plays the run in
-  the game (`window.__nswsWatchRun`), **Verify** puts it on the boards, **Hide** keeps it off (it then
-  shows under "Hidden from the boards", where Allow puts it up). The recording is dropped after either.
-  **Verify all** (`/nsws/anticheat/lobby/all`, click twice) verifies every PB still waiting, not only
-  the ones listed.
-  While a held PB waits, the player is missing from the public board (Kodub keeps one run per player).
-  A cup with player collisions never saves or uploads a time, so nothing from it reaches this queue.
+- **Cup PBs go on the boards:** with "Upload PBs" on in a cup's rules (the default), a personal best set
+  in a cup is uploaded like any other run: the normal replay check, then Kodub, and it shows on the
+  boards at once. If the upload fails it is queued and retried like any other PB.
+  Until 2026-11-08 cup PBs were held (`lobby_runs` in the `AntiCheat` Durable Object) until the owner
+  verified them in Race Control -> Anti-cheat -> "Lobby PBs to review". Nothing is added there any
+  more, and the Durable Object puts any still waiting up when it starts; the card only shows if one is
+  left. Ones the owner hid stay hidden (Allow under "Hidden from the boards" puts them up).
+  A cup with player collisions never saves or uploads a time.
   Cup finishes are checked on the organizer's page instead: each racer's finish carries its replay,
   which the organizer runs through the game's own physics (`competitions/README.md`).
 
@@ -1129,7 +1126,7 @@ The page side is `mod/nsws_offline.js`. `__nswsBusy` remembers `until` and tells
 any normal reply (a beat, a chat connect, a queued upload) clears it early. A PB whose upload got a
 busy, 5xx or no reply goes in a queue (`_nswsUploadQueue`) and is sent through the game's own
 `syncRecord` once the server is back. While busy, one queued upload is still tried every 10
-minutes. Lobby runs are never queued.
+minutes. Cup PBs are queued too.
 
 A queued run remembers when it was set (and its time, so a later record on that track never takes the
 date) and its upload sends `nswsAchievedAt`. The Worker notes each spell in which it refused uploads

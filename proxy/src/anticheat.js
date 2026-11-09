@@ -80,8 +80,8 @@ export class AntiCheat extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS queue (
             qid INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, track TEXT NOT NULL, week INTEGER,
             user_id TEXT, nickname TEXT, frames INTEGER NOT NULL, recording TEXT, added INTEGER NOT NULL)`);
-        // Personal bests set in a multiplayer lobby, kept for the owner to watch. state: review |
-        // verified | hidden. The recording is dropped once the owner has decided.
+        // Personal bests once held from cups for the owner to review (no longer added). state: review |
+        // verified | hidden; hidden ones stay off the boards.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS lobby_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, upload_id INTEGER, track TEXT NOT NULL, week INTEGER,
             user_id TEXT, nickname TEXT, frames INTEGER NOT NULL, lobby TEXT, car_style TEXT, recording TEXT,
@@ -195,6 +195,8 @@ export class AntiCheat extends DurableObject {
             this.sql.exec(`CREATE TRIGGER IF NOT EXISTS lobby_tally_move AFTER UPDATE OF state ON lobby_runs
                 WHEN OLD.state IS NOT NEW.state BEGIN ${bump(lobby("OLD"), -1)} ${bump(lobby("NEW"), 1)} END`);
             this.sql.exec(`CREATE TRIGGER IF NOT EXISTS lobby_tally_drop AFTER DELETE ON lobby_runs BEGIN ${bump(lobby("OLD"), -1)} END`);
+            // Cup PBs go straight on the boards now; any still waiting from the old review go up.
+            this.sql.exec("UPDATE lobby_runs SET state = 'verified', recording = NULL, at = ? WHERE state = 'review'", Date.now());
             if (!fresh) return;
             this.sql.exec("INSERT INTO tallies (k, n) SELECT 'run|' || source || '|' || state, COUNT(*) FROM runs GROUP BY source, state");
             this.sql.exec("INSERT INTO tallies (k, n) SELECT 'lobby|' || state, COUNT(*) FROM lobby_runs GROUP BY state");
@@ -555,35 +557,6 @@ export class AntiCheat extends DurableObject {
         if (row.user_id) keys.push(row.user_id + "|" + row.frames);
         if (row.upload_id != null) keys.push("#" + row.upload_id);
         return keys;
-    }
-
-    // A lobby PB stays off the boards from before it is uploaded until the owner verifies it.
-    async lobbyHold(r) {
-        const id = this.sql.exec(`INSERT INTO lobby_runs (upload_id, track, week, user_id, nickname, frames, lobby, car_style, recording, at)
-            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-            r.track, r.week, r.userId, r.nickname, r.frames, r.lobby, r.carStyle, r.recording, Date.now()).one().id;
-        this.touch(r.track);
-        this.boards.get(r.track)?.holds.add(r.userId + "|" + r.frames);
-        return id;
-    }
-
-    async lobbyUploaded(id, uploadId) {
-        if (!Number.isSafeInteger(uploadId)) return;
-        const row = this.sql.exec("SELECT track FROM lobby_runs WHERE id = ?", id).toArray()[0];
-        if (!row) return;
-        this.sql.exec("UPDATE lobby_runs SET upload_id = ? WHERE id = ?", uploadId, id);
-        this.touch(row.track);
-        this.boards.get(row.track)?.holds.add("#" + uploadId);
-    }
-
-    // The upload never reached Kodub, so there is nothing to review.
-    async lobbyDiscard(id) {
-        const row = this.sql.exec("SELECT * FROM lobby_runs WHERE id = ?", id).toArray()[0];
-        if (!row) return;
-        this.sql.exec("DELETE FROM lobby_runs WHERE id = ?", id);
-        this.touch(row.track);
-        const holds = this.boards.get(row.track)?.holds;
-        if (holds) for (const key of this.holdKeys(row)) holds.delete(key);
     }
 
     unhold(row) {

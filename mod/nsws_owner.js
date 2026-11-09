@@ -1477,9 +1477,10 @@
         return box;
     }
 
-    // Personal bests set in multiplayer lobbies, held off the boards until verified here. Watch plays
-    // the uploaded run, then comes back to this tab.
+    // Cup PBs once waited here before going on the boards. They go straight up now, so this only shows
+    // if an old one is somehow still waiting. Watch plays the uploaded run, then comes back to this tab.
     function renderLobbyRuns(body, a, before) {
+        if (!(a.lobby || []).length) return;
         const counts = Object.fromEntries((a.lobbyCounts || []).map((c) => [c.state, c.n]));
         const box = card("Lobby PBs to review", "multiplayer",
             "Personal bests set in multiplayer lobbies stay off the boards until you Verify them (the player still sees their own). Watch each one, then Verify it to put it up or Hide it for good. " +

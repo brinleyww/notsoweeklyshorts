@@ -58635,7 +58635,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bh, "f").saveRecord(e, a.tokenHash, t, null, i, r, C.get(this, Fh, "f").determinismState);
                 markBEPhysics(t);
                 const s = await C.get(this, Dh, "m", Hh).call(this, e, t, n, i, r).catch((__nswsErr => (console.warn(__nswsErr),
-                __nswsErr?.nswsRetry && !window.__nswsLobbyTag?.(t) && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
+                __nswsErr?.nswsRetry && window.__nswsUploadQueue?.add(e, t, __nswsSetAt, i.numberOfFrames),
                 null)));
                 for (const e of C.get(this, Vh, "f"))
                     e();
@@ -61508,7 +61508,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         else {
                             window.__nswsTraffic?.event("uploads", r);
                             const __nswsWeek = window.__nswsTrackWeek(r)
-                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsLobbyTag?.(r) ?? "") + (window.__nswsUploadQueue?.achievedTag?.(r, s.numberOfFrames) ?? "") + (window.__nswsTraffic?.driveTag?.(r) ?? ""));
+                              , o = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard" + (null == __nswsWeek ? "" : "?nswsWeek=" + __nswsWeek + (window.__nswsUploadQueue?.achievedTag?.(r, s.numberOfFrames) ?? "") + (window.__nswsTraffic?.driveTag?.(r) ?? ""));
                             let d = "version=0.6.2&userToken=" + encodeURIComponent(e) + "&nickname=" + encodeURIComponent(t) + (null == n ? "" : "&countryCode=" + encodeURIComponent(n)) + "&carStyle=" + i.serialize() + "&trackId=" + r + "&frames=" + s.numberOfFrames.toString() + "&recording=" + h;
                             null != a && (d += "&onlyVerified=false");
                             const u = new XMLHttpRequest;

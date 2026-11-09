@@ -270,7 +270,6 @@ export const site = window as unknown as {
   __nswsMessageBox?: { show(text: string, button: string, callback: null): void };
   __nswsOwner?: { check(): Promise<boolean>; token(): Promise<string | null> };
   __nswsUIClick?: () => void;
-  __nswsLobbyTag?: (trackId: string) => string;
   __nswsCupRoom?: () => { code: string; secret: string | null } | null;
   __nswsCupLeave?: (message: string) => void;
   __nswsCupApp?: unknown;
