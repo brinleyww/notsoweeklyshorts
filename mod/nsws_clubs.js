@@ -13,6 +13,7 @@
         mine: null,
         mineError: null,
         mineAt: 0,
+        wearing: null,
         clubs: new Map(),
         byCode: new Map(),
         members: new Map(),
@@ -366,6 +367,10 @@
             if (user().token !== u.token) return;
             S.mine = Array.isArray(j.clubs) ? j.clubs : [];
             S.mineError = null;
+            if ("wearing" in j) {
+                S.wearing = j.wearing || null;
+                window.__nswsClubTag?.setMine(mineOf(S.wearing)?.tag || null, u.nickname);
+            }
         } catch (err) {
             if (user().token !== u.token) return;
             S.mine = S.mine || [];
@@ -437,6 +442,7 @@
                 const label = r.querySelector(".nc-label");
                 label.textContent = c.name || "Club";
                 if (c.tag) label.appendChild(h("span", "nc-tag", " [" + c.tag + "]"));
+                if (c.tag && S.wearing === c.id) r.querySelector(".nc-ctl").prepend(chip("Tag in use", "nc-chip-strong"));
                 r.classList.add("click");
                 r.addEventListener("click", () => openClub(c));
                 root.appendChild(r);
@@ -552,6 +558,8 @@
         const codeText = h("span", "nc-code", club.code || "");
         root.appendChild(row("Club code", [codeText, btn("Copy code", () => copy(club.code, "Code"), { small: true }), btn("Copy link", () => copy(clubLink(club.code), "Link"), { small: true })], "Friends join with the code or by opening the link."));
 
+        if (role) drawWear(root, club);
+
         const tabs = [["campaigns", "Campaigns"], ["members", "Members"]];
         if (role === "owner") tabs.push(["settings", "Settings"]);
         if (!tabs.some((t) => t[0] === v.tab)) v.tab = "campaigns";
@@ -571,6 +579,28 @@
         if (v.tab === "members") drawMembers(body, club, role, alive);
         else if (v.tab === "settings") drawSettings(body, club);
         else drawCampaignList(body, club, role);
+    }
+
+    function drawWear(root, club) {
+        root.appendChild(sec("Club tag"));
+        if (!club.tag) {
+            root.appendChild(row("Use the club tag", null, mineOf(club.id)?.role === "owner" ? "Give the club a tag in Settings first." : "This club has no tag yet."));
+            return;
+        }
+        const on = S.wearing === club.id;
+        const nick = user().nickname;
+        root.appendChild(row(on ? "You're using [" + club.tag + "]" : "Use [" + club.tag + "] as your tag",
+            btn(on ? "Stop using" : "Use tag", () => wear(on ? null : club), { primary: !on }),
+            "Shows [" + club.tag + "] " + nick + " on names and " + club.tag + " on the back of your car. One club's tag at a time."));
+    }
+
+    async function wear(club) {
+        const u = needUser();
+        const j = await api("nsws/tracks/club/wear", { token: u.token, clubId: club ? club.id : null });
+        S.wearing = j.wearing || null;
+        window.__nswsClubTag?.setMine(j.tag || null, u.nickname);
+        draw();
+        toast(j.tag ? "Now using [" + j.tag + "]" : "Club tag off");
     }
 
     function drawCampaignList(root, club, role) {
@@ -630,6 +660,10 @@
                 if (!(await confirmBox("Leave club", "Leave " + (club.name || "this club") + "? You can join again with the code.", "Leave"))) return;
                 const u = needUser();
                 await api("nsws/tracks/club/leave", { token: u.token, clubId: club.id });
+                if (S.wearing === club.id) {
+                    S.wearing = null;
+                    window.__nswsClubTag?.setMine(null, u.nickname);
+                }
                 await fetchMine();
                 go({ type: "home" });
                 toast("Left the club");
@@ -690,6 +724,10 @@
             if (!(await confirmBox("Delete club", "Delete " + (club.name || "this club") + " with all its campaigns and members? This can't be undone. Tracks saved in My Tracks stay.", "Delete"))) return;
             const u = needUser();
             await api("nsws/tracks/club/delete", { token: u.token, clubId: club.id });
+            if (S.wearing === club.id) {
+                S.wearing = null;
+                window.__nswsClubTag?.setMine(null, u.nickname);
+            }
             S.clubs.delete(club.id);
             S.byCode.delete(club.code);
             await fetchMine();
@@ -1101,6 +1139,7 @@
                 S.members.clear();
                 S.campaigns.clear();
                 S.myId12 = null;
+                S.wearing = null;
                 if (S.view.type !== "join") S.view = { type: "home" };
             }
             S.token = token;

@@ -4525,7 +4525,8 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 const place = rows.indexOf(r) + 1;
                 row.pos.textContent = String(place);
                 row.chip.style.background = colorOf(r.run);
-                row.name.textContent = r.run.settings.nickname ?? "";
+                if (window.__nswsClubTag) window.__nswsClubTag.name(row.name, r.run.settings.nickname ?? "");
+                else row.name.textContent = r.run.settings.nickname ?? "";
                 row.d.classList.toggle("focus", r.i === focus);
                 let gap = "";
                 if (null != r.finished) gap = r === lead ? formatTime(r.finished) : "+" + ((r.finished - lead.finished) / 1000).toFixed(3);
@@ -4615,7 +4616,11 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                     const d = el("div", "", this.feed);
                     const pos = el("span", "pos", d);
                     el("i", "", d).style.background = colorOf(r.x.run);
-                    el("span", "name", d).textContent = r.x.run.settings.nickname ?? "";
+                    {
+                        const nm = el("span", "name", d);
+                        if (window.__nswsClubTag) window.__nswsClubTag.name(nm, r.x.run.settings.nickname ?? "");
+                        else nm.textContent = r.x.run.settings.nickname ?? "";
+                    }
                     el("span", "time", d).textContent = formatTime(r.x.frames);
                     el("span", "gap", d).textContent = r.x.gap;
                     pos.textContent = r.x.place + ordinal(r.x.place);

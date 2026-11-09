@@ -10485,6 +10485,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 dispose() {
                     window.__nswsRocketFx?.dispose(this),
+                    window.__nswsClubTag?.drop(this),
                     l.set(this, Fe, !0, "f"),
                     l.get(this, G, "m", Oe).call(this),
                     l.get(this, Ae, "f").scene.remove(l.get(this, X, "f").camera),
@@ -10589,6 +10590,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         countryCode: e,
                         name: t
                     }, "f"),
+                    this.__ctagVer = 0,
                     l.get(this, G, "m", We).call(this))
                 }
                 getCarStyle() {
@@ -10778,7 +10780,12 @@ window.__nswsAutoGhostNote = function(trackId) {
                     (t || l.get(this, ie, "f").frames % 50 == 0) ? l.get(this, $, "f")?.call(this, l.get(this, ie, "f")) : l.get(this, ie, "f").frames % 25 == 0 && l.get(this, $, "f") && window.__nswsCarSample?.(l.get(this, ie, "f"))
                 }
                 update(e) {
-                    if (this.__rocketFx && window.__nswsRocketFx?.update(this, e),
+                    // Club tags (mod/nsws_clubtag.js): the nametag and the text on the back follow list and body changes.
+                    const clubTag = window.__nswsClubTag;
+                    if (clubTag && (this.__ctagVer !== clubTag.version || this.__ctagBody !== l.get(this, we, "f")) && (this.__ctagVer = clubTag.version,
+                    this.__ctagBody = l.get(this, we, "f"),
+                    clubTag.car(this, l.get(this, we, "f"), l.get(this, ye, "f")?.name ?? null, (() => l.get(this, G, "m", We).call(this)))),
+                    this.__rocketFx && window.__nswsRocketFx?.update(this, e),
                     this.__audioCulled || l.get(this, G, "m", Xe).call(this),
                     l.get(this, De, "f")?.update(e),
                     self.TM?.water && self.__nswsTMThree && self.TM.water.update(this, l.get(this, Ae, "f"), e, l.get(this, ie, "f"), self.__nswsTMThree),
@@ -11149,7 +11156,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                         null == l.get(this, ye, "f").countryCode ? (r = 0,
                         a = 0) : (r = n * (4 / 3),
                         a = 10);
-                        const s = t.measureText(l.get(this, ye, "f").name).width;
+                        const shown = window.__nswsClubTag?.label(l.get(this, ye, "f").name) ?? l.get(this, ye, "f").name
+                          , s = t.measureText(shown).width;
                         if (e.width = r + a + s + 20,
                         e.height = n + 20,
                         null != l.get(this, ye, "f").countryCode) {
@@ -11165,7 +11173,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                         t.fillRect(0, 0, e.width, e.height),
                         t.fillStyle = "rgba(255,255,255,0.9)",
                         t.font = i,
-                        t.fillText(l.get(this, ye, "f").name, 10 + r + a, n - 5);
+                        t.fillText(shown, 10 + r + a, n - 5);
                         const o = new THREE.Texture(e);
                         o.needsUpdate = !0;
                         const h = .4
@@ -54942,7 +54950,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             const x = document.createElement("span");
             // The name opens the player's profile (mod/nsws_profile.js); the rest of the row still picks the ghost.
             if (x.className = "name nsws-profile-link",
-            x.textContent = t,
+            window.__nswsClubTag ? window.__nswsClubTag.name(x, t) : x.textContent = t,
             x.addEventListener("click", (ev => {
                 if (!window.__nswsProfile) return;
                 ev.stopPropagation(),

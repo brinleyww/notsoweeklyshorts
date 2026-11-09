@@ -709,7 +709,8 @@
         toast = document.createElement("div");
         toast.id = "nsws-chat-toast";
         const who = document.createElement("b");
-        who.textContent = m.nick;
+        if (window.__nswsClubTag) window.__nswsClubTag.name(who, m.nick);
+        else who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
         const text = lineText(m);
         toast.append(who, m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ", text.length > 90 ? text.slice(0, 90) + "..." : text);
@@ -2011,7 +2012,8 @@
             const nick = document.createElement("span");
             nick.className = "nick";
             nick.style.color = color;
-            nick.textContent = m.nick;
+            if (window.__nswsClubTag) window.__nswsClubTag.name(nick, m.nick);
+            else nick.textContent = m.nick;
             if (window.__nswsProfile) {
                 nick.classList.add("link");
                 nick.title = "View profile";
@@ -2180,7 +2182,8 @@
         const nick = document.createElement("span");
         nick.className = "nick";
         nick.style.color = nickColor(m.uid);
-        nick.textContent = m.nick;
+        if (window.__nswsClubTag) window.__nswsClubTag.name(nick, m.nick);
+        else nick.textContent = m.nick;
         preview.appendChild(nick);
         appendText(preview, lineText(m), m.pings);
         const tip = document.createElement("div");
@@ -2719,7 +2722,8 @@
         if (m.id != null) line.dataset.id = String(m.id);
         line.className = "line";
         const who = document.createElement("b");
-        who.textContent = m.nick;
+        if (window.__nswsClubTag) window.__nswsClubTag.name(who, m.nick);
+        else who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
         line.append(who, lineText(m));
         line.addEventListener("animationend", () => line.remove());

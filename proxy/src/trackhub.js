@@ -40,6 +40,7 @@ const MAX_CAMPAIGN_CODE = 1_000_000;
 const MAX_CAMPAIGN_TOTAL = 4_000_000;
 const MEMBERS_LIST = 500;
 const CLUBS_PER_DAY = 5;
+const WEARS_PER_DAY = 60;
 const JOINS_PER_DAY = 60;
 const CLUB_EDITS_PER_DAY = 200;
 const MAX_SUBMISSION = 2_000_000;
@@ -132,6 +133,8 @@ export class TrackHub extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS members (club_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL,
             joined INTEGER NOT NULL, PRIMARY KEY (club_id, user_id))`);
         this.sql.exec("CREATE INDEX IF NOT EXISTS members_user ON members(user_id)");
+        // The one club whose tag each player shows before their name and on their car.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS worn_tags (user_id TEXT PRIMARY KEY, club_id TEXT NOT NULL, at INTEGER NOT NULL)");
         // summary: the tracks' [{name, author, mode, trackId}] as JSON, so a club page never reads the codes.
         this.sql.exec(`CREATE TABLE IF NOT EXISTS campaigns (id TEXT PRIMARY KEY, club_id TEXT NOT NULL, name TEXT NOT NULL,
             created INTEGER NOT NULL, updated INTEGER NOT NULL, summary TEXT NOT NULL)`);
@@ -374,14 +377,47 @@ export class TrackHub extends DurableObject {
         this.ctx.storage.transactionSync(() => {
             this.sql.exec("DELETE FROM members WHERE club_id = ? AND user_id = ?", club.id, userId);
             this.sql.exec("UPDATE clubs SET member_count = MAX(0, member_count - 1) WHERE id = ?", club.id);
+            this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", userId, club.id);
         });
         return { ok: true };
+    }
+
+    wornClub(userId) {
+        return this.first(`SELECT w.club_id, c.tag FROM worn_tags w JOIN clubs c ON c.id = w.club_id
+            JOIN members m ON m.club_id = w.club_id AND m.user_id = w.user_id WHERE w.user_id = ?`, userId);
     }
 
     myClubs({ userId }) {
         const clubs = this.sql.exec(`SELECT c.id, c.code, c.name, c.tag, m.role, c.member_count, c.campaign_count FROM members m
             JOIN clubs c ON c.id = m.club_id WHERE m.user_id = ? ORDER BY m.joined LIMIT ?`, userId, JOINED_MAX + OWNED_MAX).toArray();
-        return { clubs: clubs.map((c) => ({ id: c.id, code: c.code, name: c.name, tag: c.tag, role: c.role, memberCount: c.member_count, campaignCount: c.campaign_count })) };
+        const worn = this.wornClub(userId);
+        return {
+            clubs: clubs.map((c) => ({ id: c.id, code: c.code, name: c.name, tag: c.tag, role: c.role, memberCount: c.member_count, campaignCount: c.campaign_count })),
+            wearing: worn?.tag ? worn.club_id : null
+        };
+    }
+
+    // clubId null takes the tag off.
+    wearTag({ userId, clubId }) {
+        const keys = ["wear:u:" + userId];
+        if (this.overLimit(keys, WEARS_PER_DAY)) return fail(429, "You've changed your club tag a lot today. Try again tomorrow.");
+        this.countHit(keys);
+        if (clubId == null) {
+            this.sql.exec("DELETE FROM worn_tags WHERE user_id = ?", userId);
+            return { wearing: null, tag: null };
+        }
+        const { club, error } = this.clubFor(userId, clubId);
+        if (error) return error;
+        if (!club.tag) return fail(409, "This club has no tag yet. Its owner can add one in Settings.");
+        this.sql.exec("INSERT OR REPLACE INTO worn_tags (user_id, club_id, at) VALUES (?, ?, ?)", userId, club.id, Date.now());
+        return { wearing: club.id, tag: club.tag };
+    }
+
+    // Every worn tag with the full account id, for the Worker to put current names on; never sent to a page as is.
+    wornTags() {
+        return this.sql.exec(`SELECT w.user_id, c.tag FROM worn_tags w JOIN clubs c ON c.id = w.club_id
+            JOIN members m ON m.club_id = w.club_id AND m.user_id = w.user_id WHERE c.tag != '' LIMIT 20000`).toArray()
+            .map((r) => [r.user_id, r.tag]);
     }
 
     members({ userId, clubId }) {
@@ -426,6 +462,7 @@ export class TrackHub extends DurableObject {
             this.ctx.storage.transactionSync(() => {
                 this.sql.exec("DELETE FROM members WHERE club_id = ? AND user_id = ?", club.id, target.user_id);
                 this.sql.exec("UPDATE clubs SET member_count = MAX(0, member_count - 1) WHERE id = ?", club.id);
+                this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", target.user_id, club.id);
             });
         } else if (role === "owner") {
             if (this.memberships(target.user_id).owned >= OWNED_MAX) return fail(409, `${target.name} already owns ${OWNED_MAX} clubs.`);
@@ -447,6 +484,7 @@ export class TrackHub extends DurableObject {
             this.sql.exec("DELETE FROM campaign_tracks WHERE campaign_id IN (SELECT id FROM campaigns WHERE club_id = ?)", club.id);
             this.sql.exec("DELETE FROM campaigns WHERE club_id = ?", club.id);
             this.sql.exec("DELETE FROM members WHERE club_id = ?", club.id);
+            this.sql.exec("DELETE FROM worn_tags WHERE club_id = ?", club.id);
             this.sql.exec("DELETE FROM clubs WHERE id = ?", club.id);
         });
         return { ok: true };

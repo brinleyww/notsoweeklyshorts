@@ -2282,7 +2282,28 @@ function keepPack(key, value) {
     packCache.set(key, value);
 }
 
-async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
+const CLUB_TAGS_CACHE_S = 120;
+const clubTagsKey = new Request("https://nsws-club-tags.invalid/v1");
+
+// Nickname -> worn club tag, with the names read from Accounts now, so a rename carries the tag and nobody can put one on another name.
+async function clubTags(env, cfg, hub, ctx, origin) {
+    const hit = await cacheMatch(clubTagsKey);
+    if (hit) return withCors(hit, origin);
+    const worn = await hub.wornTags();
+    const stub = accounts(env);
+    const names = worn.length && stub ? await stub.currentNames(worn.map((w) => w[0])) : [];
+    const tagOf = new Map(worn);
+    const tags = {};
+    for (const [userId, nickname] of names) {
+        if (cfg.bannedUsers.has(userId) || cfg.banned.has(normalizeNickname(nickname))) continue;
+        tags[nickname] = tagOf.get(userId);
+    }
+    const response = cachedJson({ tags }, CLUB_TAGS_CACHE_S);
+    ctx.waitUntil(caches.default.put(clubTagsKey, response.clone()).catch(() => {}));
+    return withCors(response, origin);
+}
+
+async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx) {
     const path = url.pathname.slice(TRACKS_PREFIX.length);
     const admin = path.startsWith("admin/");
     // Race Control's owner routes check the owner's key themselves, so they work from anywhere.
@@ -2349,6 +2370,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
         if (path === "clip-track") {
             return reply(await hub.clipTrackGet({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip") }), "That clip's track isn't kept on the server.");
         }
+        if (path === "club/tags") return clubTags(env, cfg, hub, ctx, origin);
         if ((m = /^club\/([0-9A-Za-z]{6}|[0-9A-Za-z]{12})$/.exec(path))) {
             const club = await hub.getClub(m[1]);
             return reply(club && { club }, "No club has that code.");
@@ -2394,6 +2416,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin) {
         }
         case "club/join": return reply(await hub.joinClub({ userId, ipKey, nickname, code: body.code }));
         case "club/leave": return reply(await hub.leaveClub({ userId, clubId }));
+        case "club/wear": return reply(await hub.wearTag({ userId, clubId: body.clubId ?? null }));
         case "club/mine": return reply(await hub.myClubs({ userId }));
         case "club/members": return reply(await hub.members({ userId, clubId }));
         case "club/update": return reply(await hub.updateClub({ userId, clubId, name: body.name, tag: body.tag, description: body.description, newCode: body.newCode === true }));
@@ -2606,7 +2629,7 @@ export default {
             if (url.pathname.startsWith(TRACKS_PREFIX)) {
                 const origin = requestOrigin || "*";
                 try {
-                    return await handleTracks(request, url, env, cfg, fromSite, requestOrigin);
+                    return await handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx);
                 } catch (err) {
                     noteDoError(err);
                     console.error("tracks error:", err && err.message);

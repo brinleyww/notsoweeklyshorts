@@ -614,6 +614,20 @@ export class Accounts extends DurableObject {
         return this.sql.exec("SELECT nickname FROM names WHERE user_id = ? ORDER BY at DESC LIMIT 1", userId).toArray()[0]?.nickname ?? null;
     }
 
+    // [userId, current nickname] for each account that has claimed a name.
+    currentNames(userIds) {
+        const ids = [...new Set((Array.isArray(userIds) ? userIds : []).filter((id) => HEX64.test(id ?? "")))];
+        const latest = new Map();
+        for (let i = 0; i < ids.length; i += 90) {
+            const part = ids.slice(i, i + 90);
+            const rows = this.sql.exec(`SELECT user_id, nickname, at FROM names WHERE user_id IN (${part.map(() => "?").join(",")})`, ...part).toArray();
+            for (const r of rows) {
+                if (!latest.has(r.user_id) || r.at > latest.get(r.user_id).at) latest.set(r.user_id, r);
+            }
+        }
+        return [...latest.values()].map((r) => [r.user_id, r.nickname]);
+    }
+
     // Every account keeps one code for good, so a link posted anywhere keeps working.
     // ref_expired holds the codes that ran out while codes still changed every 10 minutes.
     refCode(userId) {
