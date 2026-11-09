@@ -63077,34 +63077,27 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     trackId: C.get(this, tf, "f").getId()
                 }
             }
-            // The focused car's controls for the input display, minus any press shorter
-            // than 50 ms (a frame is 1 ms). The car still makes those presses; the display
-            // just doesn't light them up. A car state carries the controls the recording
-            // has for the frame before it.
+            // The focused car's controls for the input display, every press included. A car
+            // state carries the controls the recording has for the frame before it.
             getDisplayedControls() {
                 const {car: e, settings: t} = C.get(this, uf, "f")[C.get(this, df, "f")]
                   , n = {
                     ...e.getControls()
                 }
                   , i = e.getTime().numberOfFrames - 1;
-                if (window.__nswsShortPresses) {
-                    // A tap can fall between two screen frames. A gap over 250 ms is a seek, not playback.
-                    const s = this.shortPressFrame;
-                    if (s?.run === t && s.frame === i)
-                        return s.controls;
-                    if (s?.run === t && i > s.frame && i - s.frame <= 250)
-                        for (const r of ["up", "right", "down", "left"])
-                            for (let a = s.frame + 1; !n[r] && a < i; a++)
-                                n[r] = t.recording.getPressLength(r, a) > 0;
-                    this.shortPressFrame = {
-                        run: t,
-                        frame: i,
-                        controls: n
-                    };
-                    return n
-                }
-                for (const r of ["up", "right", "down", "left"])
-                    n[r] && t.recording.getPressLength(r, i) < 50 && (n[r] = !1);
+                // A tap can fall between two screen frames. A gap over 250 ms is a seek, not playback.
+                const s = this.shortPressFrame;
+                if (s?.run === t && s.frame === i)
+                    return s.controls;
+                if (s?.run === t && i > s.frame && i - s.frame <= 250)
+                    for (const r of ["up", "right", "down", "left"])
+                        for (let a = s.frame + 1; !n[r] && a < i; a++)
+                            n[r] = t.recording.getPressLength(r, a) > 0;
+                this.shortPressFrame = {
+                    run: t,
+                    frame: i,
+                    controls: n
+                };
                 return n
             }
             dispose() {
