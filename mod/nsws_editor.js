@@ -490,6 +490,7 @@
         if (!m || m.nsws !== "be") return;
         if (m.type === "ready") {
             bridgeVersion = Number(m.version) || 0;
+            bridgeStore = typeof m.store === "string" && m.store ? m.store : null;
             if (!ready) onReady();
             return;
         }
@@ -518,7 +519,11 @@
             p.resolve(m);
             return;
         }
-        if (m.type === "changed") refreshList(true).then(() => refreshLive());
+        if (m.type === "changed")
+            refreshList(true).then(() => {
+                refreshLive();
+                copyLibrary();
+            });
     });
 
     // A finished Test in the editor is a run on that track, saved and uploaded like a race.
@@ -629,10 +634,11 @@
     }
 
     let bridgeVersion = 0;
+    let bridgeStore = null;
     let libWatch = null;
     let copying = null;
     const mark = (t) => t.hash || String(t.updated || t.code.length);
-    // Copies My Tracks into the editor's own Custom tracks (its Load list), each version once, so one deleted there stays deleted.
+    // Keeps My Tracks and the editor's own Custom tracks (its Load list) the same, both ways.
     function copyLibrary() {
         if (!ready || bridgeVersion < 3 || !lib()) return;
         if (copying) {
@@ -640,7 +646,194 @@
             return;
         }
         copying = { again: false };
-        (async () => {
+        (bridgeVersion >= 5 && bridgeStore ? syncBoth() : copyOnce())
+            .catch((e) => console.warn("[Editor sync]", e))
+            .finally(() => {
+                const again = copying?.again;
+                copying = null;
+                if (again) copyLibrary();
+            });
+    }
+
+    // Links: {[editor store id]: {[editor track name]: {a: account, id: My Tracks id, e: editor code digest, h: My Tracks hash, d?: a second
+    // name for an entry already linked}}}. A track missing on one side of a link was deleted there, so the other side's goes too.
+    const LINKS_KEY = "nswsEditorLinks";
+    const digest = async (s) => {
+        const b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
+        return Array.from(b.slice(0, 12), (x) => x.toString(16).padStart(2, "0")).join("");
+    };
+    async function syncBoth() {
+        const T = lib();
+        const synced = (await T.whenSynced?.()) !== false;
+        if (!ready) return;
+        const token = T.user?.().token || "";
+        const acct = token ? (await digest("nsws-editor:" + token)).slice(0, 12) : "";
+        let reply = await request("list");
+        if (!reply?.loaded || !Array.isArray(reply.tracks) || reply.store !== bridgeStore) return;
+        let all = await T.list();
+        const gone = new Set();
+        if ((T.user?.().token || "") !== token) return;
+        let allLinks = {};
+        try {
+            allLinks = JSON.parse(localStorage.getItem(LINKS_KEY)) || {};
+        } catch {}
+        const links = (allLinks[bridgeStore] ??= {});
+        const save = () => {
+            try {
+                localStorage.setItem(LINKS_KEY, JSON.stringify(allLinks));
+            } catch {}
+        };
+        const readEditor = async (r) => {
+            const out = new Map();
+            for (const e of r.tracks) if (e && typeof e.name === "string" && typeof e.code === "string") out.set(e.name, { ...e, sig: await digest(e.code) });
+            return out;
+        };
+        let editor = await readEditor(reply);
+        const byId = new Map(all.map((t) => [t.id, t]));
+        const mine = Object.entries(links).filter(([, l]) => l.a === acct);
+        // An empty My Tracks that the server couldn't confirm is more likely a wiped browser copy than everything deleted.
+        // (A wiped editor comes back with a new store id, so it has no links.)
+        const libraryGone = !all.length && mine.length > 2 && !synced;
+        let editorWrites = false;
+        let changed = false;
+
+        for (const [name, l] of mine) {
+            const e = editor.get(name);
+            const t = l.id ? byId.get(l.id) : null;
+            if (!l.id) {
+                // A track My Tracks couldn't take: tried again once it is saved differently.
+                if (!e || e.sig !== l.e) delete links[name];
+                continue;
+            }
+            if (!e && !t) {
+                delete links[name];
+            } else if (!e) {
+                delete links[name];
+                if (!l.d && !Object.values(links).some((o) => o.a === acct && o.id === l.id && !o.d)) {
+                    await T.remove(l.id);
+                    gone.add(l.id);
+                    changed = true;
+                }
+            } else if (!t) {
+                if (libraryGone) continue;
+                delete links[name];
+                const r = await request("delete", { name });
+                if (r?.ok) {
+                    editorWrites = true;
+                    editor.delete(name);
+                } else links[name] = l;
+            } else if (!l.d) {
+                const editorNew = e.sig !== l.e;
+                const libraryNew = t.hash !== l.h;
+                if (editorNew && (!libraryNew || (e.saveTime || 0) >= (t.updated || 0))) {
+                    try {
+                        const next = await T.replaceCode(t.id, e.code);
+                        l.e = e.sig;
+                        l.h = next.hash;
+                        changed = true;
+                    } catch (err) {
+                        console.warn("[Editor sync]", err);
+                    }
+                } else if (libraryNew) {
+                    const r = await request("put", { name, code: t.code });
+                    if (r?.ok) {
+                        l.h = t.hash;
+                        l.e = null;
+                        editorWrites = true;
+                    } else if (r?.gone) delete links[name];
+                }
+            }
+        }
+        save();
+
+        // Pairs up tracks that are on both sides already (copied before this sync existed, or opened with Edit).
+        const linkedNames = new Set(Object.keys(links));
+        const linkedIds = new Set(Object.values(links).filter((l) => l.a === acct && l.id).map((l) => l.id));
+        all = all.filter((t) => !gone.has(t.id));
+        const freeLib = all.filter((t) => !linkedIds.has(t.id));
+        const nameFits = (en, tn) => en === tn || (en.startsWith(tn + " (") && /^ \(\d+\)$/.test(en.slice(tn.length)));
+        // Better Editor entries saved before NSWS had the blocks have no track id; the editor reads it.
+        const libIds = new Map(freeLib.filter((t) => t.trackId).map((t) => [t.id, t.trackId]));
+        const noId = freeLib.filter((t) => !t.trackId && typeof t.code === "string" && t.code.length <= COPY_MAX_CODE);
+        if (noId.length && [...editor.keys()].some((n) => !linkedNames.has(n))) {
+            for (let i = 0; i < noId.length; i += 20) {
+                const part = noId.slice(i, i + 20);
+                const r = await request("ids", { codes: part.map((t) => t.code) }).catch(() => null);
+                part.forEach((t, j) => r?.ids?.[j] && libIds.set(t.id, r.ids[j]));
+            }
+        }
+        for (const exact of [true, false]) {
+            for (const [name, e] of editor) {
+                if (linkedNames.has(name)) continue;
+                e.flat ??= await digest(e.code.replace(/\s+/g, ""));
+                const t = freeLib.find((t) => !linkedIds.has(t.id) && (exact ? name === t.name : nameFits(name, t.name)) && ((e.id && libIds.get(t.id) === e.id) || (t.hash || "").startsWith(e.flat)));
+                if (!t) continue;
+                links[name] = { a: acct, id: t.id, e: e.sig, h: t.hash };
+                linkedNames.add(name);
+                linkedIds.add(t.id);
+            }
+        }
+
+        // My Tracks entries the editor doesn't have yet.
+        const toCopy = all.filter((t) => !linkedIds.has(t.id) && typeof t.code === "string" && t.code.length <= COPY_MAX_CODE);
+        for (let i = 0; i < toCopy.length; i += 20) {
+            const batch = toCopy.slice(i, i + 20);
+            const r = await request("copy", { tracks: batch.map((t) => ({ code: t.code })) });
+            if (!r?.ok) break;
+            let full = false;
+            batch.forEach((t, j) => {
+                const res = r.results?.[j];
+                if (!res || res.full) {
+                    full = true;
+                    return;
+                }
+                if (!res.ok || linkedNames.has(res.name)) return;
+                links[res.name] = { a: acct, id: t.id, e: null, h: t.hash };
+                linkedNames.add(res.name);
+                linkedIds.add(t.id);
+                if (!res.existed) {
+                    editorWrites = true;
+                    if (t.mode && t.mode !== "normal") setMode(res.name, t.mode);
+                }
+            });
+            save();
+            if (full) break;
+        }
+
+        // Editor tracks My Tracks doesn't have yet (saved in this editor).
+        for (const [name, e] of editor) {
+            if (linkedNames.has(name)) continue;
+            if ((T.user?.().token || "") !== token) break;
+            let t = null;
+            try {
+                t = await T.add(e.code, { mode: modeOf(name), source: "editor" });
+            } catch (err) {
+                console.warn("[Editor sync]", err);
+            }
+            links[name] = t ? { a: acct, id: t.id, e: e.sig, h: t.hash, ...(linkedIds.has(t.id) ? { d: 1 } : {}) } : { a: acct, id: null, e: e.sig };
+            linkedNames.add(name);
+            if (t) {
+                linkedIds.add(t.id);
+                changed = true;
+            }
+        }
+
+        // What the editor wrote reads back as its own code, which the links compare against next time.
+        if (editorWrites || Object.values(links).some((l) => l.a === acct && l.e == null && l.id)) {
+            reply = await request("list");
+            if (reply?.loaded && Array.isArray(reply.tracks)) {
+                editor = await readEditor(reply);
+                for (const [name, l] of Object.entries(links)) if (l.a === acct && l.e == null && editor.has(name)) l.e = editor.get(name).sig;
+            }
+        }
+        save();
+        if (editorWrites) await refreshList(false);
+        return changed;
+    }
+
+    // Editors before bridge version 5: My Tracks goes in, each version once.
+    async function copyOnce() {
+        {
             let done = {};
             try {
                 done = JSON.parse(localStorage.getItem(COPIED_KEY)) || {};
@@ -689,13 +882,7 @@
                     localStorage.setItem(DUPES_KEY, "1");
                 } catch {}
             if (added) await refreshList(false);
-        })()
-            .catch(() => {})
-            .finally(() => {
-                const again = copying?.again;
-                copying = null;
-                if (again) copyLibrary();
-            });
+        }
     }
 
     let editorOpen = false;

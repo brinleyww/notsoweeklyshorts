@@ -935,6 +935,34 @@
         return next;
     }
 
+    // The entry's track saved again in the editor: same entry (folder, favourite, picture), new blocks.
+    async function replaceCode(id, code) {
+        const info = await parseAsync(code);
+        if (!info.ok) throw new Error(info.error);
+        const track = await get(id);
+        if (!track) throw new Error("That track isn't in My Tracks any more.");
+        const hash = await sha256(info.code);
+        if (hash === track.hash) return track;
+        let thumb = null;
+        if (info.kind === "stock") {
+            const loaded = stockParse(info.code);
+            if (loaded.data) thumb = thumbOf(loaded.data);
+        }
+        const { thumbV: _v, ...rest } = track;
+        const next = { ...rest, code: info.code, kind: info.kind, name: info.name, author: info.author, trackId: info.trackId, env: info.env, hash, thumb, updated: Date.now(), sync: "all" };
+        await putTrack(next);
+        schedulePush();
+        emit({ type: "update", ids: [id] });
+        setTimeout(() => refreshThumbs().catch(() => {}), 0);
+        return next;
+    }
+
+    // Settles once this page has read the account's list from the server (or tried to): false when that failed.
+    function whenSynced() {
+        if (!user().token || !window.__nswsApiBase) return Promise.resolve(true);
+        return Promise.resolve(syncing || (lastSync ? null : sync())).then(() => !syncError, () => false);
+    }
+
     async function remove(id) {
         await deleteTrack(id);
         emit({ type: "remove", ids: [id] });
@@ -3128,6 +3156,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         add,
         addMany,
         update,
+        replaceCode,
+        whenSynced,
         remove,
         setMode,
         markSubmitted,
