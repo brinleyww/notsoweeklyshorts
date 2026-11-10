@@ -9,7 +9,7 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Tags"], ["bans", "Bans"], ["subs", "Submissions"], ["feedback", "Feedback"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Roles"], ["bans", "Bans"], ["subs", "Submissions"], ["feedback", "Feedback"]];
     const SUB_FILTERS = [["new", "New"], ["planned", "Planned"], ["rejected", "Rejected"], ["all", "All"]];
     const SUB_MODES = { normal: "Normal", rocket: "Rocket League", royale: "Royale" };
     const SUB_EMPTY = {
@@ -2642,7 +2642,7 @@
 
     function buildTags() {
         const root = el("div");
-        const find = card("Find a player", "list", "Type any part of a player's name (or a name they used before) to give or take Discord tags, or to add bonus points.");
+        const find = card("Find a player", "list", "Type any part of a player's name (or a name they used before) to give or take Discord roles, or to add bonus points.");
         const search = playerSearch({
             placeholder: "A few letters of their name",
             query: ui.tagsQuery,
@@ -2658,7 +2658,7 @@
         root.appendChild(find);
         ui.tagsLists = el("div");
         root.appendChild(ui.tagsLists);
-        root.appendChild(el("div", "nrc-foot", "Owner only. Discord tags go with the Discord roles; giving one here doesn't change anything on Discord. A player earns a referral point once the friend who used their code uploads a run on an NSWS track."));
+        root.appendChild(el("div", "nrc-foot", "Owner only. Discord roles here match the roles in the Discord server; giving one here doesn't change anything on Discord. A player earns a referral point once the friend who used their code uploads a run on an NSWS track."));
         return root;
     }
 
@@ -2673,7 +2673,7 @@
                 + (st.bonus ? " (" + (st.bonus > 0 ? "+" : "") + num(st.bonus) + " bonus)" : "")
                 + (st.referredBy ? " · joined with " + st.referredBy.nickname + "'s code" : "")));
             const wearing = el("div", "line", "Wearing:");
-            wearing.appendChild(st.equipped ? tagChip(st.equipped) : el("span", null, "no tag"));
+            wearing.appendChild(st.equipped ? tagChip(st.equipped) : el("span", null, "no role"));
             box.appendChild(wearing);
             const owned = el("div", "line", "Has:");
             if (!st.owned.length) owned.appendChild(el("span", null, "nothing yet"));
@@ -2716,7 +2716,7 @@
         box.textContent = "";
         if (!ui.tags) {
             box.appendChild(el("div", "nrc-empty", ui.tagsError
-                ? (ui.tagsError.status === 404 ? "The Worker hasn't been deployed with tags yet." : "Couldn't load tags.")
+                ? (ui.tagsError.status === 404 ? "The Worker hasn't been deployed with roles yet." : "Couldn't load roles.")
                 : "Loading…"));
             return;
         }
@@ -2726,14 +2726,14 @@
         tiles.appendChild(tile("Codes used", num(t.referrals), num(t.referrals - t.confirmed) + " still waiting for a first run"));
         tiles.appendChild(tile("Referral points earned", num(t.confirmed)));
         const popular = t.bought[0] ? window.__nswsTags?.catalog.find((c) => c.id === t.bought[0].tag)?.label ?? t.bought[0].tag : null;
-        tiles.appendChild(tile("Tags bought", num(t.bought.reduce((n, b) => n + b.count, 0)), popular ? "Most popular: " + popular : "None yet"));
-        tiles.appendChild(tile("Discord tags given", num(t.grants.length)));
+        tiles.appendChild(tile("Roles bought", num(t.bought.reduce((n, b) => n + b.count, 0)), popular ? "Most popular: " + popular : "None yet"));
+        tiles.appendChild(tile("Discord roles given", num(t.grants.length)));
         box.appendChild(tiles);
         const grid = el("div", "nrc-grid2");
-        const given = card("Discord tags given", "trophy");
+        const given = card("Discord roles given", "trophy");
         if (!t.grants.length) given.appendChild(el("div", "nrc-empty", "None yet."));
         else {
-            given.appendChild(table([["Player", "name"], ["Tag"], ["Given", "num"], [""]], t.grants.map((g) => {
+            given.appendChild(table([["Player", "name"], ["Role"], ["Given", "num"], [""]], t.grants.map((g) => {
                 const take = el("button", "button", "Take away");
                 take.style.cssText = "margin:0;font-size:13px;padding:4px 10px;";
                 take.addEventListener("click", async () => {
