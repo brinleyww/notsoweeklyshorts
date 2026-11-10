@@ -1502,8 +1502,11 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-brow>.rank{text-align:right;color:rgba(255,255,255,.6);}
 .nt-brow>.rank.top{color:#fff;}
 .nt-brow .flag{display:block;width:26px;height:19px;}
-.nt-brow>.nick{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;}
-.nt-brow>.nick:hover{text-decoration:underline;}
+.nt-brow>.nick{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nt-brow>.nick>span{cursor:pointer;}
+.nt-brow>.nick>span:hover{text-decoration:underline;}
+.nt-brow>.check{width:14px;height:14px;visibility:hidden;pointer-events:none;}
+.nt-brow.picked>.check{visibility:visible;}
 .nt-brow>.time{font-variant-numeric:tabular-nums;}
 .nt-gbtn{padding:3px 10px;font:inherit;font-size:14px;font-style:italic;color:rgba(255,255,255,.75);background:#192042;border:0;cursor:pointer;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);}
 .nt-gbtn:not(:disabled):hover{color:#fff;background:#334b77;}
@@ -2029,8 +2032,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 toast("You can pick " + GHOSTS_MAX + " runs at most.");
                 return;
             } else ghosts.set(key, ghost);
-            b.classList.toggle("on", ghosts.has(key));
-            b.closest(".nt-brow")?.classList.toggle("picked", ghosts.has(key));
+            b.classList.toggle(b.classList.contains("nt-brow") ? "picked" : "on", ghosts.has(key));
             playLabel();
         }
 
@@ -2137,14 +2139,17 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 f.onerror = () => f.remove();
                 flag.appendChild(f);
             }
-            const nick = el("span", "nick", e.nickname || "?");
-            nick.title = "Open profile";
-            nick.addEventListener("click", (ev) => {
+            // Only the name's own text opens the profile: its cell is as wide as the row, and the row picks the run.
+            const nick = el("span", "nick");
+            const name = el("span", null, e.nickname || "?");
+            name.title = "Open profile";
+            name.addEventListener("click", (ev) => {
                 ev.stopPropagation();
                 window.__nswsProfile?.open(e.nickname, { carStyle: e.carStyle, countryCode: e.countryCode });
                 const p = document.getElementById("nsws-profile");
                 if (p) p.style.zIndex = "100650";
             });
+            nick.appendChild(name);
             r.append(flag, nick, el("span", "time", e.hidden ? "hidden" : fmtTime(e.time.numberOfFrames)));
             if (physicsView) {
                 const ref = older.find((o) => o.physics === physicsView)?.ref;
@@ -2158,22 +2163,17 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             }
             const key = "e" + e.id;
             const can = !e.hidden && !e.noReplay && e.id > 0;
-            const g = el("button", "nt-gbtn" + (ghosts.has(key) ? " on" : ""), "Pick");
-            g.type = "button";
-            g.disabled = !can;
-            g.title = can ? "Pick this run to race or watch" : "This run has no replay";
-            const pick = (ev) => {
-                ev.stopPropagation();
-                toggleGhost(key, { id: e.id, nickname: e.nickname, isSelf: !!e.isSelf }, g);
-            };
-            g.addEventListener("click", pick);
-            // The whole row picks it, as in PolyTrack's own leaderboard.
+            // The whole row picks the run and a tick marks it, as in PolyTrack's own leaderboard.
+            const check = el("img", "check");
+            check.src = "images/checkmark.svg";
+            check.alt = "";
+            r.appendChild(check);
+            r.title = can ? "Pick this run to race or watch" : "This run has no replay";
             if (can) {
                 r.classList.add("pick");
                 r.classList.toggle("picked", ghosts.has(key));
-                r.addEventListener("click", pick);
+                r.addEventListener("click", () => toggleGhost(key, { id: e.id, nickname: e.nickname, isSelf: !!e.isSelf }, r));
             }
-            r.appendChild(g);
             return r;
         }
 
