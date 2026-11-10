@@ -659,13 +659,13 @@
     function tagSection(v, body) {
         const a = v.account;
         if (a === undefined) return;
-        body.appendChild(el("div", "sec", "Tags"));
+        body.appendChild(el("div", "sec", "Roles"));
         if (!a || a.error) {
-            body.appendChild(el("p", "note", a?.slow ? "Lots of profiles were looked up in a row. Wait a minute, then try Refresh." : "Tags and account stats can't be read right now."));
+            body.appendChild(el("p", "note", a?.slow ? "Lots of profiles were looked up in a row. Wait a minute, then try Refresh." : "Roles and account stats can't be read right now."));
             return;
         }
         if (!a.found) {
-            body.appendChild(el("p", "note", "No NSWS account goes by this name, so there are no tags or account stats to show."));
+            body.appendChild(el("p", "note", "No NSWS account goes by this name, so there are no roles or account stats to show."));
             return;
         }
         const wrap = el("div", "tags");
@@ -676,7 +676,7 @@
             if (id === worn) chip.classList.add("wearing");
             wrap.appendChild(chip);
         }
-        if (!wrap.childNodes.length) wrap.appendChild(el("span", "note", "No tags yet."));
+        if (!wrap.childNodes.length) wrap.appendChild(el("span", "note", "No roles yet."));
         body.appendChild(wrap);
         body.appendChild(el("div", "sec", "On NSWS"));
         const line = (label, value) => {

@@ -69,8 +69,8 @@ function escapeHtml(s) {
 }
 
 const RESULTS = {
-    joined: ["Discord connected", "You're in the NSWS server, so the DISCORD tag is yours. Wear it from Garage → Tags."],
-    linked: ["One more step", "Join the Not So Weekly Shorts server to get the DISCORD tag. Once you're in, go back to NSWS and it shows up by itself."],
+    joined: ["Discord connected", "You're in the NSWS server, so the DISCORD role is yours. Wear it from Garage → Roles."],
+    linked: ["One more step", "Join the Not So Weekly Shorts server to get the DISCORD role. Once you're in, go back to NSWS and it shows up by itself."],
     cancelled: ["Not connected", "You didn't let NSWS see your Discord account, so nothing changed."],
     expired: ["Link ran out", "That sign-in link is old or was used already. Go back to NSWS and press Connect Discord again."],
     failed: ["Couldn't connect", "Discord didn't answer properly. Go back to NSWS and try again in a moment."],

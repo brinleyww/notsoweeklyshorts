@@ -591,7 +591,7 @@
         const nick = user().nickname;
         root.appendChild(row(on ? "You're using [" + club.tag + "]" : "Use [" + club.tag + "] as your tag",
             btn(on ? "Stop using" : "Use tag", () => wear(on ? null : club), { primary: !on }),
-            "Shows [" + club.tag + "] " + nick + " on names and " + club.tag + " on the back of your car. One club's tag at a time."));
+            "Shows [" + club.tag + "] " + nick + " on names and " + club.tag + " on top of your car. One club's tag at a time."));
     }
 
     async function wear(club) {

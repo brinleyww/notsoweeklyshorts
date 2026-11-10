@@ -885,7 +885,7 @@
             tile("Bingos in all", String(state.bingo.total) + (state.bingo.blackouts ? " · " + state.bingo.blackouts + " blackout" + (state.bingo.blackouts === 1 ? "" : "s") : "")),
         );
         const nextTag = (window.__nswsTags?.catalog ?? []).find((t) => t.bingos > state.bingo.total);
-        const tagTile = tile(nextTag ? "Next tag" : "Bingo tags", "");
+        const tagTile = tile(nextTag ? "Next role" : "Bingo roles", "");
         const v = tagTile.lastChild;
         if (nextTag) {
             v.append(window.__nswsTags.chip(nextTag.id) ?? "", " at " + nextTag.bingos);
@@ -941,7 +941,7 @@
             "Squares mark themselves as you finish runs, on any device with this profile. Restarts and unfinished runs never count.",
             week === HALLOWEEN()?.week ? "Medal squares need one run inside that medal's time on this card. Medals from before don't count here." : "Medal squares need one run inside that medal's time on this card. Medals from before only count on a week's first card.",
             "A full row, column or diagonal is a bingo, struck out in red. The free square in the middle counts for you.",
-            "Once you have a bingo you can start a new card for the same week. Bingos from every card add up to bingo tags for the chat.",
+            "Once you have a bingo you can start a new card for the same week. Bingos from every card add up to bingo roles for the chat.",
         ]) steps.appendChild(el("li", null, step));
         how.appendChild(steps);
         body.appendChild(how);

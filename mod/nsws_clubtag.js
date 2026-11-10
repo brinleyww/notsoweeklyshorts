@@ -1,4 +1,4 @@
-// Club tags worn by players (picked in a club's page): "[TAG] Name" wherever names are drawn, and the tag on the back of the car.
+// Club tags worn by players (picked in a club's page): "[TAG] Name" wherever names are drawn, and the tag on top of the car.
 (function () {
     "use strict";
     const CACHE_KEY = "nswsClubTags";
@@ -112,12 +112,26 @@
         return n ? of(n) : null;
     }
 
-    // ---- the tag on the back of a car ----
+    // ---- the tag on top of a car ----
 
-    // Width over height of the text plate.
-    const PLATE = 3.2;
+    // Width over depth of the text.
+    const PLATE = 2;
+    // Where the tag lies on each body model, read from the chase camera: height, z (front is +z), tilt towards the
+    // rear in degrees and width. Two more numbers add a patch of body paint under it (width, depth) where stickers
+    // or a wing would be in the way. Fixed spots, because one ray against a detailed body takes about 20 ms.
+    const SPOTS = {
+        Body: [0.072, -1.37, 11, 0.52],
+        BodyRally: [0.343, -2.04, 7.3, 0.8],
+        BodyRallyLow: [0.343, -2.04, 9.3, 0.8],
+        BodyCybertruck: [0.538, -2.03, 7, 0.84],
+        BodyNascar: [0.306, -1.86, 4.2, 0.5, 0.94, 0.27],
+        BodyNascarLow: [0.306, -1.86, 4.2, 0.5, 0.94, 0.27],
+        BodyF1: [0.182, -1.77, 0, 0.5, 0.66, 0.28],
+        BodyF1Low: [0.182, -1.77, 0, 0.5, 0.66, 0.28],
+        BodyFrame: [0.136, -1.175, 0, 0.48],
+        BodyPengu: [1.502, -0.3, 40.3, 0.32]
+    };
     const textures = new Map();
-    const placements = new WeakMap();
     const decals = new WeakMap();
 
     function texture(T, tag) {
@@ -125,43 +139,32 @@
         if (t) return t;
         const c = document.createElement("canvas");
         c.width = 512;
-        c.height = 512 / PLATE;
+        c.height = Math.round(512 / PLATE);
         // The game's three.js build has no CanvasTexture.
         t = new T.Texture(c);
         t.colorSpace = T.SRGBColorSpace;
-        t.anisotropy = 4;
+        t.anisotropy = 8;
         const draw = () => {
             const g = c.getContext("2d");
             if (!g) return;
+            g.setTransform(1, 0, 0, 1, 0, 0);
             g.clearRect(0, 0, c.width, c.height);
-            let size = Math.round(c.height * 0.82);
-            const font = (s) => "italic bold " + s + "px ForcedSquare, Arial, sans-serif";
-            g.font = font(size);
-            const w = g.measureText(tag).width;
-            if (w > c.width - 36) {
-                size = Math.floor(size * (c.width - 36) / w);
-                g.font = font(size);
-            }
-            // A dark backing keeps the tag readable over a busy livery.
-            const tw = Math.min(c.width, g.measureText(tag).width + size * 0.5);
-            const th = Math.min(c.height, size * 1.05);
-            const x0 = (c.width - tw) / 2, y0 = (c.height - th) / 2, k = th * 0.22;
-            g.fillStyle = "rgba(12,16,34,0.78)";
-            g.beginPath();
-            g.moveTo(x0 + k, y0);
-            g.lineTo(x0 + tw, y0);
-            g.lineTo(x0 + tw - k, y0 + th);
-            g.lineTo(x0, y0 + th);
-            g.closePath();
-            g.fill();
-            g.textAlign = "center";
-            g.textBaseline = "middle";
+            g.font = "italic bold 200px ForcedSquare, Arial, sans-serif";
             g.lineJoin = "round";
-            g.lineWidth = Math.max(6, size * 0.12);
+            const m = g.measureText(tag);
+            const high = m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+            if (!(m.width > 0 && high > 0)) return;
+            // The letters fill the plate's depth and a long tag is squeezed sideways: the camera sees it nearly edge-on.
+            const sy = (c.height - 44) / high;
+            const sx = Math.min(sy, (c.width - 44) / m.width);
+            g.translate(c.width / 2, (c.height + (m.actualBoundingBoxAscent - m.actualBoundingBoxDescent) * sy) / 2);
+            g.scale(sx, sy);
+            g.textAlign = "center";
+            g.lineWidth = 22 / sy;
             g.strokeStyle = "rgba(0,0,0,0.85)";
-            g.strokeText(tag, c.width / 2, c.height / 2 + 4);
+            g.strokeText(tag, 0, 0);
             g.fillStyle = "#fff";
-            g.fillText(tag, c.width / 2, c.height / 2 + 4);
+            g.fillText(tag, 0, 0);
             t.needsUpdate = true;
         };
         draw();
@@ -170,71 +173,14 @@
         return t;
     }
 
-    // Where the text sits on a body: rays from behind find a flat, upright part of the rear (front is +z).
-    function placement(T, mesh) {
-        const geo = mesh.geometry;
-        if (placements.has(geo)) return placements.get(geo);
-        let out = null;
-        try {
-            if (!geo.boundingBox) geo.computeBoundingBox();
-            const b = geo.boundingBox;
-            const probe = new T.Mesh(geo, new T.MeshBasicMaterial({ side: T.DoubleSide }));
-            probe.updateMatrixWorld(true);
-            const ray = new T.Raycaster();
-            const dir = new T.Vector3(0, 0, 1);
-            const hitAt = (x, y) => {
-                ray.set(new T.Vector3(x, y, b.min.z - 1), dir);
-                const h = ray.intersectObject(probe, false)[0];
-                if (!h?.face) return null;
-                const n = h.face.normal.clone().normalize();
-                if (n.z > 0) n.negate();
-                return { p: h.point, n };
-            };
-            const height = b.max.y - b.min.y;
-            const halfWidth = (b.max.x - b.min.x) / 2;
-            // Each edge of the plate must still lie on the surface, not hang over a gap or a step.
-            const fits = (c, w) => [[-1, 0], [1, 0], [0, -1], [0, 1]].every(([sx, sy]) => {
-                const h = hitAt(sx * w / 2, c.y + sy * w / PLATE / 2);
-                return h && Math.abs(h.p.clone().sub(c.p).dot(c.n)) < 0.05;
-            });
-            // The biggest plate wins (a tailgate over a small bumper), then the lower spot (a bumper over a rear window).
-            let best = null;
-            for (let f = 0.2; f <= 0.8; f += 0.075) {
-                const y = b.min.y + height * f;
-                const c = hitAt(0, y);
-                if (!c || c.n.z > -0.6) continue;
-                c.y = y;
-                let w = Math.min(0.7, halfWidth * 1.1);
-                while (w >= 0.24 && !fits(c, w)) w *= 0.8;
-                c.w = Math.max(w, 0.24);
-                if (!best || c.w > best.w + 0.03) best = c;
-            }
-            if (best) {
-                const w = best.w;
-                const n = best.n;
-                const up = new T.Vector3(0, 1, 0);
-                const x = new T.Vector3().crossVectors(up, n).normalize();
-                const y = new T.Vector3().crossVectors(n, x).normalize();
-                out = {
-                    pos: best.p.clone().addScaledVector(n, 0.008),
-                    quat: new T.Quaternion().setFromRotationMatrix(new T.Matrix4().makeBasis(x, y, n)),
-                    w
-                };
-            }
-            probe.material.dispose();
-        } catch {
-            out = null;
-        }
-        placements.set(geo, out);
-        return out;
-    }
-
     function dropDecal(car) {
         const d = decals.get(car);
         if (!d) return;
-        d.mesh.parent?.remove(d.mesh);
-        d.mesh.geometry.dispose();
-        d.mesh.material.dispose();
+        d.group.parent?.remove(d.group);
+        d.text.geometry.dispose();
+        d.text.material.dispose();
+        // The patch wears the body's own material, which is not ours to dispose.
+        d.cover?.geometry.dispose();
         decals.delete(car);
     }
 
@@ -256,25 +202,39 @@
         const nick = nameTag ?? (c.__userControls ? myNick() : null);
         const tag = nick ? of(nick) : null;
         const old = decals.get(c);
-        if (old && old.tag === tag && old.mesh.parent === body) return;
+        if (old && old.tag === tag && old.group.parent === body) return;
         dropDecal(c);
-        if (!tag || !T || !body?.geometry) return;
-        const at = placement(T, body);
-        if (!at) return;
+        const spot = SPOTS[body?.name];
+        if (!tag || !T || !spot) return;
+        const [y, z, tilt, w, coverW, coverD] = spot;
+        const a = tilt * Math.PI / 180;
+        const group = new T.Group();
+        group.name = "NSWSClubTag";
+        group.position.set(0, y, z);
+        // Flat on the body with the top of the letters towards the front, so it reads from behind.
+        group.quaternion.setFromRotationMatrix(new T.Matrix4().makeBasis(
+            new T.Vector3(-1, 0, 0), new T.Vector3(0, Math.sin(a), Math.cos(a)), new T.Vector3(0, Math.cos(a), -Math.sin(a))));
+        const paint = coverW ? (Array.isArray(body.material) ? body.material : [body.material]).find((m) => m.name === "MainPlain") : null;
+        let cover = null;
+        if (paint) {
+            cover = new T.Mesh(new T.PlaneGeometry(coverW, coverD), paint);
+            cover.castShadow = false;
+            cover.receiveShadow = true;
+            group.add(cover);
+        }
         const mat = new T.MeshBasicMaterial({
             // alphaTest: setOpacity(1) turns transparent off, which would show the canvas's empty pixels as black.
             map: texture(T, tag), transparent: true, alphaTest: 0.25, depthWrite: false,
             polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2
         });
         if (c.__opacity != null && c.__opacity < 1) mat.opacity = c.__opacity;
-        const mesh = new T.Mesh(new T.PlaneGeometry(at.w, at.w / PLATE), mat);
-        mesh.name = "NSWSClubTag";
-        mesh.castShadow = false;
-        mesh.receiveShadow = false;
-        mesh.position.copy(at.pos);
-        mesh.quaternion.copy(at.quat);
-        body.add(mesh);
-        decals.set(c, { tag, mesh });
+        const text = new T.Mesh(new T.PlaneGeometry(w, w / PLATE), mat);
+        text.castShadow = false;
+        text.receiveShadow = false;
+        text.position.z = 0.003;
+        group.add(text);
+        body.add(group);
+        decals.set(c, { tag, group, text, cover });
     }
 
     window.__nswsClubTag = {

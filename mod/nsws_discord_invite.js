@@ -120,7 +120,7 @@
         box.appendChild(card);
 
         const text = el("p", null, "Want to join the Not So Weekly Shorts Discord?");
-        text.appendChild(el("small", null, "New weeks, cups and results go there first. Connect Discord under Tags in the Garage to get the DISCORD tag."));
+        text.appendChild(el("small", null, "New weeks, cups and results go there first. Connect Discord under Roles in the Garage to get the DISCORD role."));
         box.appendChild(text);
 
         const row = el("div", "row");

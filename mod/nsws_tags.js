@@ -1,6 +1,7 @@
-// Name tags shown next to a player's name in the chat. They are earned by referring friends to
+// Name tags shown next to a player's name in the chat (players see them called roles; the code and
+// the Worker still say tag). They are earned by referring friends to
 // the site or given out by the owner. The Worker (proxy/src/accounts.js) decides who owns what;
-// this file only draws them: in the chat, the garage's Tags tab, the Referrals window and Race Control.
+// this file only draws them: in the chat, the garage's Roles tab, the Referrals window and Race Control.
 (function () {
     const API = window.__nswsApiBase;
     const VISITOR_KEY = "nsws_visitor";
@@ -61,12 +62,12 @@
     const BY_ID = new Map(TAGS.map((t) => [t.id, t]));
     const GROUPS = [
         ["king", "NSWS King", "Only one player can wear it: whoever holds the most WRs over every NSWS week. It moves to whoever takes the lead (a tie keeps the current King)."],
-        ["server", "Discord server", "Connect your Discord account, then join the NSWS server. The tag shows up once you're in."],
+        ["server", "Discord server", "Connect your Discord account, then join the NSWS server. The role shows up once you're in."],
         ["bingo", "Bingo", "Earned with bingos on the weekly bingo card (a full row, column or diagonal). BLACKOUT needs every square of one card."],
         ["hours", "Hours played", "Unlocked by playing. Time counts while NSWS is open and focused, on every device with this profile."],
-        ["shop", "Referral shop", "Bought with referral points. A tag you buy is yours for good."],
+        ["shop", "Referral shop", "Bought with referral points. A role you buy is yours for good."],
         ["earned", "Referral rewards", "Free once you get there."],
-        ["discord", "Discord tags", "Only the owner gives these out, to go with the Discord roles."],
+        ["discord", "Discord roles", "Only the owner gives these out, to match the roles in the Discord server."],
         ["halloween", "Halloween", "Halloween 2026 only. You keep them for good, but they can't be earned after the event."],
     ];
 
@@ -419,20 +420,20 @@
         }
         const king = next.owned.includes("king");
         if (king && !seen?.king) {
-            lines.push("You hold the most WRs on NSWS (" + wrsText(next.wrs ?? 0) + "): you're the NSWS KING. Wear the tag from Garage → Tags.");
+            lines.push("You hold the most WRs on NSWS (" + wrsText(next.wrs ?? 0) + "): you're the NSWS KING. Wear the role from Garage → Roles.");
         } else if (!king && seen?.king) {
-            lines.push((next.king ? next.king.nickname + " holds more WRs now" : "You no longer hold the most WRs") + ", so the NSWS KING tag has moved on.");
+            lines.push((next.king ? next.king.nickname + " holds more WRs now" : "You no longer hold the most WRs") + ", so the NSWS KING role has moved on.");
         }
         for (const kind of EARNED) {
             const fresh = earned.filter((t) => kind.has(t) && !seenIds.includes(t.id));
             const top = fresh[fresh.length - 1];
             if (!top) continue;
-            const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " tag is yours"
-                : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " tag is yours"
-                : kind.kind === "halloween" ? "Halloween: the " + top.label + " tag is yours"
-                : kind.kind === "discord" ? "You're in the NSWS Discord server: the DISCORD tag is yours"
-                : "You marked a whole bingo card: the BLACKOUT tag is yours";
-            lines.push(what + ". Wear it from Garage → Tags.");
+            const what = kind.kind === "hours" ? "You've played " + hoursText(next.hours) + " hours of NSWS: the " + top.hours + "H " + top.label + " role is yours"
+                : kind.kind === "bingo" ? "You've made " + bingosText(next.bingo?.total ?? top.bingos) + ": the " + top.label + " role is yours"
+                : kind.kind === "halloween" ? "Halloween: the " + top.label + " role is yours"
+                : kind.kind === "discord" ? "You're in the NSWS Discord server: the DISCORD role is yours"
+                : "You marked a whole bingo card: the BLACKOUT role is yours";
+            lines.push(what + ". Wear it from Garage → Roles.");
         }
         storageSet(SEEN_KEY + next.code, JSON.stringify({ earned: earned.map((t) => t.id), refAt: Math.max(latestRef, seen?.refAt ?? 0), king }));
         if (lines.length) toast(lines.join(" "));
@@ -520,7 +521,7 @@
         const { status, data } = await api("refer/redeem", { userToken: token, code });
         if (status === 200 && data?.ok) {
             setState(data.state);
-            return { ok: true, text: "You joined with " + data.referrer + "'s code! The REFERRED tag is yours: wear it from Garage → Tags." };
+            return { ok: true, text: "You joined with " + data.referrer + "'s code! The REFERRED role is yours: wear it from Garage → Roles." };
         }
         if (data?.error && REDEEM_ERRORS[data.error]) return { ok: false, text: REDEEM_ERRORS[data.error] };
         if (status === 404) return { ok: false, text: "Referrals aren't switched on yet.", keep: true };
@@ -615,12 +616,12 @@
         if (tag.group === "discord") return tag.need + " Only the owner can give this one out.";
         if (tag.group === "server") {
             const linked = state?.discord;
-            if (!linked) return "Connect your Discord account, then join the Not So Weekly Shorts server. The tag shows up as soon as you're in.";
-            if (!linked.inGuild) return "Discord is connected as " + linked.name + ". Join the Not So Weekly Shorts server to get the tag: it shows up here as soon as you're in.";
+            if (!linked) return "Connect your Discord account, then join the Not So Weekly Shorts server. The role shows up as soon as you're in.";
+            if (!linked.inGuild) return "Discord is connected as " + linked.name + ". Join the Not So Weekly Shorts server to get the role: it shows up here as soon as you're in.";
             return "You're in the NSWS server as " + linked.name + ". It stays yours while Discord is connected.";
         }
         if (tag.group === "king") {
-            if (owns(tag.id)) return "You hold the most WRs on NSWS (" + wrsText(state.wrs) + "), so you're the King. If someone takes the lead, the tag moves to them.";
+            if (owns(tag.id)) return "You hold the most WRs on NSWS (" + wrsText(state.wrs) + "), so you're the King. If someone takes the lead, the role moves to them.";
             const king = state?.king;
             return "Hold more WRs (first place on a board) than anyone else, counting every NSWS week. Only one player can wear it, and a tie keeps the current King. "
                 + (king ? "The King is " + king.nickname + " with " + wrsText(king.wrs) + "." : "Nobody holds it yet.")
@@ -655,11 +656,11 @@
         view.busy = false;
         if (status === 200) {
             view.note = kind === "buy" ? "Bought! It's yours for good. Press Wear it to put it on."
-                : tag ? "You're wearing it. It shows in the chat on your next message." : "No tag now.";
+                : tag ? "You're wearing it. It shows in the chat on your next message." : "No role now.";
             setState(data);
         } else {
             view.note = data?.error === "points" ? "You don't have enough points for that."
-                : data?.error === "locked" ? "You don't have that tag yet." : "Couldn't save that. Try again in a moment.";
+                : data?.error === "locked" ? "You don't have that role yet." : "Couldn't save that. Try again in a moment.";
             renderGarage();
         }
     }
@@ -789,7 +790,7 @@
             join.addEventListener("click", () => {
                 window.__nswsUIClick?.();
                 discordStarted = Date.now();
-                discordNote("Once you've joined, come back here and the tag shows up.");
+                discordNote("Once you've joined, come back here and the role shows up.");
             });
             actions.push(join, button("I've joined", () => checkDiscord(true)));
         } else if (state.equipped !== tag.id) {
@@ -846,7 +847,7 @@
             view.failed = null;
             renderGarage();
             loadState().catch((err) => {
-                view.failed = err.status === 404 ? "Tags aren't switched on yet." : "Couldn't load your tags.";
+                view.failed = err.status === 404 ? "Roles aren't switched on yet." : "Couldn't load your roles.";
                 renderGarage();
             });
         };
@@ -867,7 +868,7 @@
         view.plate.textContent = "";
 
         if (!state) {
-            const msg = el("div", "msg", view.failed || "Loading your tags…");
+            const msg = el("div", "msg", view.failed || "Loading your roles…");
             if (view.failed) msg.append(el("br"), button("Retry", view.refresh));
             view.bar.appendChild(msg);
             view.preview.style.display = view.plate.style.display = "none";
@@ -904,7 +905,7 @@
             renderGarage();
         };
         const none = el("button", "item" + (view.selected === null ? " selected" : "") + (state.equipped == null ? " on" : ""));
-        none.append(el("span", "none", "No tag"), el("span", "req", state.equipped == null ? "Wearing" : ""));
+        none.append(el("span", "none", "No role"), el("span", "req", state.equipped == null ? "Wearing" : ""));
         none.addEventListener("click", () => pick(null));
         list.appendChild(none);
         for (const [group, title, desc] of GROUPS) {
@@ -939,7 +940,7 @@
         view.preview.appendChild(chat);
 
         const info = el("div", "info");
-        info.appendChild(el("div", "need", selected ? needText(selected) : "No tag next to your name."));
+        info.appendChild(el("div", "need", selected ? needText(selected) : "No role next to your name."));
         let action = null;
         if (selected?.group === "server") {
             for (const a of discordActions(view, selected)) {
@@ -947,7 +948,7 @@
                 info.appendChild(a);
             }
         } else if (!selected) {
-            if (state.equipped != null) action = button("Wear no tag", () => act(view, "equip", null));
+            if (state.equipped != null) action = button("Wear no role", () => act(view, "equip", null));
         } else if (state.equipped === selected.id) {
             action = button("Take it off", () => act(view, "equip", null));
         } else if (owns(selected.id)) {
@@ -1084,9 +1085,9 @@
         theirs.appendChild(el("h2", null, "Got a code from a friend?"));
         if (state?.referredBy) {
             theirs.appendChild(el("p", "sub", "Every profile can use one code."));
-            theirs.appendChild(el("p", "note good", "You joined with " + state.referredBy.nickname + "'s code. The REFERRED tag is yours."));
+            theirs.appendChild(el("p", "note good", "You joined with " + state.referredBy.nickname + "'s code. The REFERRED role is yours."));
         } else {
-            theirs.appendChild(el("p", "sub", "Type it in to give them a point. You get the REFERRED tag."));
+            theirs.appendChild(el("p", "sub", "Type it in to give them a point. You get the REFERRED role."));
             const row = el("div", "row");
             const input = el("input");
             input.type = "text";
@@ -1149,8 +1150,8 @@
             "Send a friend your link or code. It never changes.",
             "They open the link or type the code in (one code per profile).",
             "You get a point once they finish a run on any NSWS track, and we'll tell you when they do.",
-            "Spend points on tags in Garage → Tags. Your tag shows next to your name in the chat.",
-            "Referring 5, 15 and 30 players unlocks free reward tags.",
+            "Spend points on roles in Garage → Roles. Your role shows next to your name in the chat.",
+            "Referring 5, 15 and 30 players unlocks free reward roles.",
         ]) steps.appendChild(el("li", null, step));
         how.appendChild(steps);
         lower.appendChild(how);

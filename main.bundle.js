@@ -10780,7 +10780,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     (t || l.get(this, ie, "f").frames % 50 == 0) ? l.get(this, $, "f")?.call(this, l.get(this, ie, "f")) : l.get(this, ie, "f").frames % 25 == 0 && l.get(this, $, "f") && window.__nswsCarSample?.(l.get(this, ie, "f"))
                 }
                 update(e) {
-                    // Club tags (mod/nsws_clubtag.js): the nametag and the text on the back follow list and body changes.
+                    // Club tags (mod/nsws_clubtag.js): the nametag and the text on top of the car follow list and body changes.
                     const clubTag = window.__nswsClubTag;
                     if (clubTag && (this.__ctagVer !== clubTag.version || this.__ctagBody !== l.get(this, we, "f")) && (this.__ctagVer = clubTag.version,
                     this.__ctagBody = l.get(this, we, "f"),

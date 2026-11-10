@@ -1169,7 +1169,7 @@
                     icon: "images/car_body.svg",
                     panel: i.get(this, bodyPanel, "f")
                 }, ...(window.__nswsTags ? [{
-                    title: "Tags",
+                    title: "Roles",
                     icon: "images/tag.svg",
                     panel: __nswsTagsPanel
                 }] : [])];

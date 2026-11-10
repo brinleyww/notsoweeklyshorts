@@ -148,7 +148,7 @@
         copyLink.disabled = !link;
         body.appendChild(line("Invite someone new", "You both get PUMPKIN once they upload a run.", copyLink));
 
-        body.appendChild(el("h2", null, "Tags you can only earn during this event"));
+        body.appendChild(el("h2", null, "Roles you can only earn during this event"));
         for (const id of TAG_IDS) {
             const tag = window.__nswsTags?.catalog?.find((t) => t.id === id);
             if (!tag) continue;
