@@ -14172,14 +14172,18 @@
                     i = f);
                     const held = self.TM.fxSkip(e.id, t.HEAPU8);
                     if (null != held)
-                        return new Uint8Array(held)
+                        return self.TM.fxRecord?.(e.id, held, !0),
+                        new Uint8Array(held)
                 }
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
                 tm && self.TM.fxStep(e.id, t.HEAPU8, t.HEAPU8.slice(n, n + s).buffer),
                 __royaleStep(e.id),
                 __collideStep(e),
                 __rocketStep(e, i);
-                return new Uint8Array(t.HEAPU8.buffer,n,s)
+                const out = new Uint8Array(t.HEAPU8.buffer,n,s);
+                // Runs are recorded from the state's controls: the keys pressed, not the ones Better Editor's effects changed.
+                tm && self.TM.fxRecord?.(e.id, out);
+                return out
             }
             function a(e, i) {
                 return stepCar(e, i).slice().buffer

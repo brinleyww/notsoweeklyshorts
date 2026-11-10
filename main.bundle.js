@@ -6382,8 +6382,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                     try {
                         this.renderFrame(e)
                     } catch (err) {
-                        if (!window.__nswsGraphicsFailed?.(err))
+                        // The error screen shows only where the error is thrown again (here), so the stack goes to the
+                        // console, and the first lines of it into the message the error screen shows.
+                        console.error("Rendering failed:", err?.stack ?? err);
+                        if (!window.__nswsGraphicsFailed?.(err)) {
+                            try {
+                                err instanceof Error && "string" == typeof err.stack && !err.__nswsWhere && (err.__nswsWhere = !0,
+                                err.message += " | at " + err.stack.split("\n").filter((l => /^\s*at /.test(l))).slice(0, 4).map((l => l.trim().slice(3))).join(" < "))
+                            } catch (e) {}
                             throw err
+                        }
                     }
                 }
                 renderFrame(e) {
