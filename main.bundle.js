@@ -59957,7 +59957,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, wd, "f").setInert(!0),
                 setTimeout(( () => {
                     if (null != C.get(this, Sd, "f")) {
-                        const e = C.get(this, Sd, "f").call(this);
+                        let e;
+                        try {
+                            e = C.get(this, Sd, "f").call(this)
+                        } catch (err) {
+                            // A screen that fails to open must not leave the fade up and every later screen change waiting on it.
+                            t.style.opacity = "0",
+                            C.get(this, wd, "f").setInert(!1),
+                            C.set(this, Sd, null, "f");
+                            throw err
+                        }
                         null == e ? (t.style.opacity = "0",
                         C.get(this, wd, "f").setInert(!1),
                         C.set(this, Sd, null, "f")) : e.finally(( () => {
@@ -63434,12 +63443,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     self.TM.hud?.setWheels(window.__nswsSettingBoolean?.("WheelInfo") === true);
                     self.TM.hud?.setWheelsSize?.(parseFloat(window.__nswsSetting?.("WheelInfoScale")));
                     await u;
-                    await self.TM.load()
+                    await self.TM.load();
+                    // The physics workers read the page's copy of the block file (mod/nsws_tracks.js sends them its address).
+                    window.__nswsSimWorkersSync?.()
                 };
                 return {
                     get base() {
                         return base
                     },
+                    blocksUrl: () => self.TM?.blocksUrl?.() ?? null,
                     get physics() {
                         return physics
                     },
@@ -63545,15 +63557,28 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ))
             }
             ;
+            // The menu at once (no fade: one is already running), saying the track couldn't start, then back to where the race came from.
+            const failedStart = onExit => {
+                for (const el of document.querySelectorAll("#ui > .game-ui, #ui > .touch-controls-ui"))
+                    el.remove();
+                Q = new gh(p,v,A,m,y,b,E,w,S,h,l,e,n,r,x,t,!1,"This track couldn't be started.\n\nIf it is your own track, open it in the editor and check that it has a start.",_,C,W,j,K,q);
+                try {
+                    onExit?.()
+                } catch (e) {
+                    console.error(e)
+                }
+            };
             window.__bw_returnToMenu = () => M(!1, null);
             // Races a parsed track at once, with no track screen and local records only. onExit runs when the race is left
             // (the main menu is showing then).
-            window.__nswsRaceTrack = (meta, data, onExit, ghosts) => (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
+            window.__nswsRaceTrack = (meta, data, onExit, ghosts) => !!data?.hasStartingPoint?.() && (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
             !0);
             // Replays runs of a parsed track, then calls done. tmBase gives them a simulation of their own that loads
             // Better Editor's blocks from there: an older commit, for runs driven on older physics.
             let ownSim = null;
             window.__nswsWatchTrack = (meta, data, runs, done, tmBase) => {
+                if (!data?.hasStartingPoint?.())
+                    return !1;
                 ownSim?.dispose(),
                 ownSim = null;
                 if (tmBase) {
@@ -63784,7 +63809,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         position: x.getLeaderboardUserEntry(w.getCurrentUserProfile().tokenHash, n.getId(), u).then((e => null != e && e.id == k.uploadId ? e.position : null)).catch((e => (console.warn(e),
                         null))),
                         recording: k.recording
-                    } : null,
+                    } : null;
+                    try {
                     Q = new ts(p,f,v,A,m,b,h,l,w,S,e,r,s,E,T,y,t,n,i,a,_,c,!0,(e => {
                         let t;
                         switch (e) {
@@ -63816,7 +63842,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             gameMode: t
                         })
                     }
-                    )),
+                    ))
+                    } catch (err) {
+                        // Without this, a track the game can't start leaves a race on screen with no car to drive.
+                        if (null != c)
+                            throw err;
+                        console.error("Failed to start the track: ", err),
+                        failedStart(onExit)
+                    }
                     P.PM()
                 }
                 ))))

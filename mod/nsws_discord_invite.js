@@ -61,7 +61,8 @@
         if (document.visibilityState !== "visible") return false;
         const menu = document.querySelector(".menu-ui > .main-buttons-container");
         if (!menu || menu.classList.contains("hidden") || !menu.offsetParent) return false;
-        return !document.querySelector("dialog[open], .device-preset-ui, #nrc-overlay");
+        // The editor and Custom Tracks cover the menu without hiding it, and a prompt over them takes the keyboard from an editor test.
+        return !document.querySelector("dialog[open], .device-preset-ui, #nrc-overlay, #nsws-editor:not(.hidden), .nt-host:not([hidden])");
     }
 
     function waitForMenu() {

@@ -328,6 +328,26 @@
         }
     }
 
+    function focusFrame() {
+        if (!frame || !host || host.classList.contains("hidden") || dialogClose) return;
+        try {
+            frame.focus();
+        } catch {}
+    }
+
+    // The mode picked up here goes to the track's My Tracks entry at once, when it has one.
+    function pushMode(name, mode) {
+        const T = lib();
+        let id = null;
+        try {
+            id = JSON.parse(localStorage.getItem(LINKS_KEY))?.[bridgeStore]?.[name]?.id || null;
+        } catch {}
+        if (!T?.update || !id) return;
+        T.get(id)
+            .then((t) => t && (t.mode || "normal") !== mode && T.update(id, { mode }))
+            .catch(() => {});
+    }
+
     function stopAll(node) {
         for (const type of ["keydown", "keyup", "keypress"]) node.addEventListener(type, (e) => e.stopPropagation());
         for (const type of ["touchstart", "touchmove", "touchend", "touchcancel", "pointerdown", "pointermove", "pointerup", "mousedown", "mouseup", "wheel", "contextmenu"])
@@ -347,7 +367,10 @@
         // Focus can stay on a game button behind the overlay, and its key events would never pass through host.
         for (const type of ["keydown", "keyup", "keypress"])
             window.addEventListener(type, (e) => {
-                if (host && !host.classList.contains("hidden") && !host.contains(e.target)) e.stopImmediatePropagation();
+                if (!host || host.classList.contains("hidden") || host.contains(e.target)) return;
+                e.stopImmediatePropagation();
+                // Focus that drifted to the page behind (a popup that closed, say) leaves the editor and its test drive deaf to the keyboard.
+                if (type === "keydown" && !document.querySelector("dialog[open], .nt-host:not([hidden])")) focusFrame();
             }, true);
         host.addEventListener("keydown", (e) => {
             if (e.key === "Escape" || e.code === "Escape") {
@@ -373,10 +396,10 @@
                 setMode(t.name, m.id);
                 renderMode();
                 syncMode();
+                pushMode(t.name, m.id);
             });
             seg.appendChild(b);
         }
-        const save = button("Save to My Tracks", (e, b) => saveToLibrary(b), "images/save.svg", true);
         const send = button("Submit to Weekly Shorts", () => openSubmit(), "images/share.svg");
         const auto = el("div", "nse-seg");
         const autoBtn = el("button", null, "Autosave");
@@ -387,7 +410,9 @@
             setAutosave(!autosaveOn());
         });
         auto.appendChild(autoBtn);
-        bar.append(back, seg, auto, el("div", "gap"), save, send);
+        bar.append(back, seg, auto, el("div", "gap"), send);
+        // A click up here takes the keyboard from the editor below; its shortcuts get it back unless a dialog opened.
+        bar.addEventListener("click", () => setTimeout(focusFrame, 0));
 
         const info = el("div", "nse-info");
         const help = el("div", "nse-help");
@@ -647,6 +672,7 @@
         }
         copying = { again: false };
         (bridgeVersion >= 5 && bridgeStore ? syncBoth() : copyOnce())
+            .then((report) => report && tellSaved(report))
             .catch((e) => console.warn("[Editor sync]", e))
             .finally(() => {
                 const again = copying?.again;
@@ -655,8 +681,17 @@
             });
     }
 
-    // Links: {[editor store id]: {[editor track name]: {a: account, id: My Tracks id, e: editor code digest, h: My Tracks hash, d?: a second
-    // name for an entry already linked}}}. A track missing on one side of a link was deleted there, so the other side's goes too.
+    // The editor's Save is the only save: what it put in My Tracks (or couldn't) shows in the bar.
+    function tellSaved(report) {
+        if (!host || host.classList.contains("hidden")) return;
+        const bad = report.failed[0];
+        if (bad) note('"' + bad.name + "\" is saved in the editor, but My Tracks couldn't take it" + (bad.error ? ": " + bad.error : "."), "bad");
+        else if (report.saved.length) note(report.saved.length === 1 ? 'Saved "' + report.saved[0] + '" to My Tracks.' : "Saved " + report.saved.length + " tracks to My Tracks.", "good");
+    }
+
+    // Links: {[editor store id]: {[editor track name]: {a: account, id: My Tracks id, e: editor code digest, h: My Tracks hash, m: the mode
+    // both sides last agreed on, f?: digest of a save My Tracks refused, d?: a second name for an entry already linked}}}. A track missing
+    // on one side of a link was deleted there, so the other side's goes too.
     const LINKS_KEY = "nswsEditorLinks";
     const digest = async (s) => {
         const b = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
@@ -695,7 +730,20 @@
         // (A wiped editor comes back with a new store id, so it has no links.)
         const libraryGone = !all.length && mine.length > 2 && !synced;
         let editorWrites = false;
-        let changed = false;
+        const report = { saved: [], failed: [] };
+        // The mode is set in two places (the bar here, the track's page in My Tracks): whichever moved since they last agreed wins.
+        const agreeMode = async (name, l, t) => {
+            const here = modeOf(name);
+            const there = MODES.some((m) => m.id === t.mode) ? t.mode : "normal";
+            let now = here;
+            if (here !== there) {
+                if (l.m === undefined ? there !== "normal" : here === l.m) {
+                    setMode(name, there);
+                    now = there;
+                } else await T.update(t.id, { mode: here });
+            }
+            l.m = now;
+        };
 
         for (const [name, l] of mine) {
             const e = editor.get(name);
@@ -712,7 +760,6 @@
                 if (!l.d && !Object.values(links).some((o) => o.a === acct && o.id === l.id && !o.d)) {
                     await T.remove(l.id);
                     gone.add(l.id);
-                    changed = true;
                 }
             } else if (!t) {
                 if (libraryGone) continue;
@@ -730,9 +777,12 @@
                         const next = await T.replaceCode(t.id, e.code);
                         l.e = e.sig;
                         l.h = next.hash;
-                        changed = true;
+                        delete l.f;
+                        if (next.hash !== t.hash) report.saved.push(name);
                     } catch (err) {
                         console.warn("[Editor sync]", err);
+                        if (l.f !== e.sig) report.failed.push({ name, error: err?.message });
+                        l.f = e.sig;
                     }
                 } else if (libraryNew) {
                     const r = await request("put", { name, code: t.code });
@@ -742,6 +792,7 @@
                         editorWrites = true;
                     } else if (r?.gone) delete links[name];
                 }
+                if (links[name] === l) await agreeMode(name, l, t).catch((err) => console.warn("[Editor sync]", err));
             }
         }
         save();
@@ -807,15 +858,14 @@
             let t = null;
             try {
                 t = await T.add(e.code, { mode: modeOf(name), source: "editor" });
+                report.saved.push(name);
             } catch (err) {
                 console.warn("[Editor sync]", err);
+                report.failed.push({ name, error: err?.message });
             }
-            links[name] = t ? { a: acct, id: t.id, e: e.sig, h: t.hash, ...(linkedIds.has(t.id) ? { d: 1 } : {}) } : { a: acct, id: null, e: e.sig };
+            links[name] = t ? { a: acct, id: t.id, e: e.sig, h: t.hash, m: modeOf(name), ...(linkedIds.has(t.id) ? { d: 1 } : {}) } : { a: acct, id: null, e: e.sig };
             linkedNames.add(name);
-            if (t) {
-                linkedIds.add(t.id);
-                changed = true;
-            }
+            if (t) linkedIds.add(t.id);
         }
 
         // What the editor wrote reads back as its own code, which the links compare against next time.
@@ -828,7 +878,7 @@
         }
         save();
         if (editorWrites) await refreshList(false);
-        return changed;
+        return report;
     }
 
     // Editors before bridge version 5: My Tracks goes in, each version once.
@@ -1048,16 +1098,6 @@
         }
     }
 
-    async function saveToLibrary(b) {
-        // Disabled from the first await: two adds of one new track at once both miss each other and make two entries.
-        busy(b, async () => {
-            const t = await need();
-            if (!t) return;
-            await lib().add(t.code, { mode: modeOf(t.name), source: "editor" });
-            note('Saved "' + t.name + '" to My Tracks.', "good");
-        });
-    }
-
     function dialog(title, body, actions) {
         closeDialog();
         const dim = el("div", "nse-dim");
@@ -1254,7 +1294,7 @@
     function open(track) {
         const wasLoaded = !!frame;
         show();
-        note(wasLoaded ? "" : "Unsaved work stays in the editor until you close or reload this page" + (autosaveOn() ? "; autosave is on." : ". Turn on Autosave, or use the editor's Save, to keep it."));
+        note(wasLoaded ? "" : "The editor's Save keeps your track and puts it in My Tracks. Unsaved work is lost when you close or reload this page" + (autosaveOn() ? "; autosave is on." : "; Autosave can save for you."));
         const code = typeof track === "string" ? track : track?.code;
         if (typeof code !== "string" || !code) return;
         pendingImport = { code, mode: typeof track === "object" ? track.mode : null };

@@ -13105,6 +13105,9 @@
             "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase,
             // tm_runtime.js reads the blocks file from TM_BASE when a car first needs it, which can be after the move.
             null != self.TM_BASE && (self.TM_BASE = __nswsTMBase));
+            // The page's own copy of the block file. Without it tm_runtime.js downloads the file again here, and the car
+            // stays frozen at the start until that is done.
+            "string" == typeof t?.data?.nswsTMBin && t.data.nswsTMBin.startsWith("blob:") && (self.TM_BIN_URL = t.data.nswsTMBin);
             const m = t?.data?.nswsModes;
             if (null == m || "object" != typeof m)
                 return !1;

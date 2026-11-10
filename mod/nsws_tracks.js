@@ -42,9 +42,14 @@
         // Ids set back to Normal; a worker that can't remove ids just ignores this list.
         if (clearedModes.size) nswsModes.normal = [...clearedModes];
         // Where the worker loads Better Editor's blocks from, when a track with them arrives. A worker of its own (older
-        // physics) loads a fixed commit; the others tag the files with the page's physics version.
-        return { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
+        // physics) loads a fixed commit; the others tag the files with the page's physics version, and read the block
+        // file from the page's copy (nswsTMBin) once the page has it.
+        const message = { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
+        const bin = worker?.nswsTMBase ? null : window.__nswsTM?.blocksUrl?.();
+        if (bin) message.nswsTMBin = bin;
+        return message;
     }
+    const sentKey = (message) => message.nswsTMBase + message.nswsTMQuery + (message.nswsTMBin || "");
 
     const NativeWorker = window.Worker;
     if (typeof NativeWorker === "function") {
@@ -57,7 +62,7 @@
                     try {
                         const message = modesMessage(this);
                         this.postMessage(message);
-                        this.__ntBase = message.nswsTMBase + message.nswsTMQuery;
+                        this.__ntBase = sentKey(message);
                     } catch {}
                 }
             }
@@ -108,10 +113,10 @@
         // The block base moves to the Worker mirror when github.io fails, after the game's workers were made.
         for (const w of simWorkers) {
             const message = modesMessage(w);
-            if (!changed && w.__ntBase === message.nswsTMBase + message.nswsTMQuery) continue;
+            if (!changed && w.__ntBase === sentKey(message)) continue;
             try {
                 w.postMessage(message);
-                w.__ntBase = message.nswsTMBase + message.nswsTMQuery;
+                w.__ntBase = sentKey(message);
             } catch {}
         }
         if (changed) window.dispatchEvent(new CustomEvent("nsws-track-modes"));
@@ -1277,6 +1282,11 @@
         const loaded = stockParse(info.code, true);
         if (!hooks?.openTrack || loaded.error) {
             await ui.alert(loaded.error || "The game is still loading. Try again in a moment.", "Can't play this track");
+            return false;
+        }
+        // The game can't put a car on a track with no start, and says so with its error screen.
+        if (typeof loaded.data.hasStartingPoint === "function" && !loaded.data.hasStartingPoint()) {
+            await ui.alert("This track has no start block yet. Open it in the editor and add one.", "Can't play this track");
             return false;
         }
         const restoring = opts.watch || isKnown(info.trackId) ? null : restoreBest(info.trackId, 3000);
@@ -2468,6 +2478,12 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     // keepMenu: a race is about to replace the main menu, so its buttons stay hidden.
     function closeLibrary(keepMenu) {
         if (!screen || screen.root.hidden) return;
+        // Focus left on a button in here would keep every key from the game: this screen stops keys at its edge.
+        if (screen.root.contains(document.activeElement)) {
+            try {
+                document.activeElement.blur();
+            } catch {}
+        }
         screen.root.hidden = true;
         if (keepMenu !== true) window.__nswsMainMenu?.show();
     }
