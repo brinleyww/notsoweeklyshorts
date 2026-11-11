@@ -1239,7 +1239,7 @@
         for (const s of list) {
             const item = el("div", "nse-sub");
             const top = el("div");
-            top.append(el("span", null, s.name || "Untitled"), el("span", "st-" + s.status, s.status === "planned" && s.week ? "Planned for week " + s.week : STATUS[s.status] || s.status || ""));
+            top.append(el("span", null, s.name || "Untitled"), el("span", "st-" + s.status, s.status === "planned" && s.week ? "Planned for week " + s.week + (s.slot ? ", map " + s.slot : "") : STATUS[s.status] || s.status || ""));
             const sub = el("div", "dim");
             sub.append(el("span", null, s.created ? new Date(s.created).toLocaleDateString() : ""), el("span", null, s.ownerNote ? "Race Control: " + s.ownerNote : ""));
             item.append(top, sub);

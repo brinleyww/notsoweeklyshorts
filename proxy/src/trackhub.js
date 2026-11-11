@@ -48,7 +48,8 @@ const MAX_NOTE = 500;
 const SUBMITS_PER_DAY = 3;
 const SUBMITS_WAITING = 10;
 const MY_SUBMISSIONS = 50;
-const ADMIN_LIST = 200;
+const ADMIN_LIST = 1000;
+const MAX_SLOT = 99;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 // Storage is counted in bytes too: what one address may store a day (links, campaigns, submissions),
@@ -147,6 +148,12 @@ export class TrackHub extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS subs_user ON submissions(user_id, status)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS subs_status ON submissions(status, created)");
         this.sql.exec("CREATE INDEX IF NOT EXISTS subs_created ON submissions(created)");
+        // slot: the map number a planned track gets in its week (week 12, map 5).
+        try {
+            this.sql.exec("SELECT slot FROM submissions LIMIT 0");
+        } catch {
+            this.sql.exec("ALTER TABLE submissions ADD COLUMN slot INTEGER");
+        }
         // Daily counters for the rate limits, keyed like "pack:ip:<hash>". Day = UTC days since 1970.
         this.sql.exec("CREATE TABLE IF NOT EXISTS limits (day INTEGER NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (day, key))");
         // Each account's My Tracks; the code is in blobs (kind "l", ref "<user_id>:<id>").
@@ -851,9 +858,9 @@ export class TrackHub extends DurableObject {
     }
 
     mySubmissions({ userId }) {
-        const rows = this.sql.exec("SELECT id, name, mode, status, week, created, owner_note FROM submissions WHERE user_id = ? ORDER BY created DESC LIMIT ?",
+        const rows = this.sql.exec("SELECT id, name, mode, status, week, slot, created, owner_note FROM submissions WHERE user_id = ? ORDER BY created DESC LIMIT ?",
             userId, MY_SUBMISSIONS).toArray();
-        return { submissions: rows.map((s) => ({ id: s.id, name: s.name, mode: s.mode, status: s.status, week: s.week, created: s.created, ownerNote: s.owner_note })) };
+        return { submissions: rows.map((s) => ({ id: s.id, name: s.name, mode: s.mode, status: s.status, week: s.week, slot: s.slot ?? null, created: s.created, ownerNote: s.owner_note })) };
     }
 
     adminSubmissions(status) {
@@ -869,7 +876,7 @@ export class TrackHub extends DurableObject {
         return { submission: { ...submissionView(row), code: this.getBlob("s", row.id) } };
     }
 
-    adminSetStatus(id, { status, week, ownerNote }) {
+    adminSetStatus(id, { status, week, slot, ownerNote }) {
         const row = HUB_ID.test(id ?? "") ? this.first("SELECT * FROM submissions WHERE id = ?", id) : null;
         if (!row) return fail(404, "That submission was deleted.");
         if (!STATUSES.has(status)) return fail(400, "Unknown status.");
@@ -879,9 +886,16 @@ export class TrackHub extends DurableObject {
             else if (Number.isInteger(Number(week)) && Number(week) >= 1 && Number(week) <= 9999) planned = Number(week);
             else return fail(400, "The week must be a whole number.");
         }
+        let map = row.slot ?? null;
+        if (slot !== undefined) {
+            if (slot === null || slot === "") map = null;
+            else if (Number.isInteger(Number(slot)) && Number(slot) >= 1 && Number(slot) <= MAX_SLOT) map = Number(slot);
+            else return fail(400, `The map number must be a whole number from 1 to ${MAX_SLOT}.`);
+        }
+        if (status !== "planned" || planned == null) map = null;
         const note = ownerNote === undefined ? row.owner_note : cleanLines(String(ownerNote ?? ""), MAX_NOTE);
-        this.sql.exec("UPDATE submissions SET status = ?, week = ?, owner_note = ? WHERE id = ?", status, planned, note, row.id);
-        return { submission: submissionView({ ...row, status, week: planned, owner_note: note }) };
+        this.sql.exec("UPDATE submissions SET status = ?, week = ?, slot = ?, owner_note = ? WHERE id = ?", status, planned, map, note, row.id);
+        return { submission: submissionView({ ...row, status, week: planned, slot: map, owner_note: note }) };
     }
 
     adminDelete(id) {
@@ -898,6 +912,6 @@ function submissionView(s) {
     return {
         id: s.id, name: s.name, author: s.author, trackId: s.track_id, env: s.env, mode: s.mode, note: s.note,
         nickname: s.nickname, userId12: s.user_id.slice(0, 12), created: s.created, status: s.status, week: s.week,
-        ownerNote: s.owner_note, size: s.size,
+        slot: s.slot ?? null, ownerNote: s.owner_note, size: s.size,
     };
 }

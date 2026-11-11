@@ -1195,7 +1195,71 @@
         T()?.openLibrary?.("clubs");
     }
 
-    window.__nswsClubs = { openJoin, open };
+    // Race Control's "add all to a club campaign": tracks go into the club's campaigns named base, base 2, ... (25 tracks
+    // and 4 MB each), after the last track already there; tracks already in one of them are left out.
+    async function fillCampaigns({ code, base, tracks, progress }) {
+        const u = needUser();
+        const club = keepClub((await api("nsws/tracks/club/get", { token: u.token, code })).club);
+        if (!club) throw new Error("No club has the code " + code + ".");
+        if (club.role !== "owner" && club.role !== "admin") throw new Error("Only the owner and admins of " + (club.name || "that club") + " can change its campaigns.");
+        const named = (n) => (n === 1 ? base : base + " " + n);
+        const camps = [];
+        for (let n = 1; n <= 20; n++) {
+            const c = (club.campaigns || []).find((x) => x.name === named(n));
+            if (!c) break;
+            progress?.("Reading " + c.name + "…");
+            const full = await fetchCampaign(club.id, c.id);
+            camps.push({ id: c.id, name: c.name, tracks: (full.tracks || []).slice(), changed: false });
+        }
+        const size = (list) => list.reduce((n, t) => n + t.code.length, 0);
+        let free = 20 - (club.campaigns || []).length;
+        let added = 0, dup = 0, big = 0, full = 0;
+        for (const t of tracks) {
+            if (!t?.code) continue;
+            if (camps.some((c) => c.tracks.some((x) => x.code === t.code || (t.trackId && x.trackId === t.trackId)))) {
+                dup++;
+                continue;
+            }
+            if (t.code.length > 1000000) {
+                big++;
+                continue;
+            }
+            let c = camps[camps.length - 1];
+            if (!c || c.tracks.length >= MAX_TRACKS || size(c.tracks) + t.code.length > 4000000) {
+                if (free <= 0) {
+                    full++;
+                    continue;
+                }
+                free--;
+                c = { id: null, name: named(camps.length + 1), tracks: [], changed: true };
+                camps.push(c);
+            }
+            c.tracks.push({ code: t.code, mode: t.mode || "normal", name: (t.name || "").slice(0, 64), author: (t.author || "").slice(0, 64), trackId: t.trackId || null });
+            c.changed = true;
+            added++;
+        }
+        const saved = [];
+        for (const c of camps) {
+            if (!c.changed) continue;
+            progress?.("Saving " + c.name + " (" + plural(c.tracks.length, "track") + ")…");
+            const body = { token: u.token, clubId: club.id, name: c.name, tracks: c.tracks };
+            if (c.id) body.campaignId = c.id;
+            const j = await api("nsws/tracks/campaign/save", body);
+            const id = j.campaign?.id || c.id;
+            if (!c.id) countCampaigns(club.id, 1);
+            if (id) S.campaigns.set(campKey(club.id, id), Object.assign({ id, name: c.name, updated: Date.now() }, j.campaign || {}, { tracks: c.tracks }));
+            c.id = id;
+            saved.push(c.name);
+        }
+        if (saved.length) {
+            try {
+                keepClub((await api("nsws/tracks/club/get", { token: u.token, clubId: club.id })).club);
+            } catch {}
+        }
+        return { club: club.name || code, added, dup, big, full, saved };
+    }
+
+    window.__nswsClubs = { openJoin, open, fillCampaigns };
 
     function start() {
         if (register()) return;

@@ -2340,7 +2340,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
         if (!m[2]) return reply(await hub.adminSubmission(m[1]));
         if (request.method !== "POST") return json({ error: "Method not allowed." }, origin, 405);
         if (m[2] === "delete") return reply(await hub.adminDelete(m[1]));
-        return reply(await hub.adminSetStatus(m[1], { status: body.status, week: body.week, ownerNote: body.ownerNote }));
+        return reply(await hub.adminSetStatus(m[1], { status: body.status, week: body.week, slot: body.slot, ownerNote: body.ownerNote }));
     }
 
     const ip = request.headers.get("CF-Connecting-IP") || "";

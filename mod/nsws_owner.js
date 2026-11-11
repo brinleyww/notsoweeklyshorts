@@ -12,8 +12,14 @@
     const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Roles"], ["bans", "Bans"], ["subs", "Submissions"], ["feedback", "Feedback"]];
     const SUB_FILTERS = [["new", "New"], ["planned", "Planned"], ["rejected", "Rejected"], ["all", "All"]];
     const SUB_MODES = { normal: "Normal", rocket: "Rocket League", royale: "Royale" };
+    // Maps in a week, for the map number picker.
+    const PLAN_MAPS = 5;
+    const SUB_TRACKS_KEPT = 12;
+    // Add all rejected tracks goes to this club (https://notweeklyshorts.github.io/?club=7NUE4M).
+    const REJECT_CLUB = "7NUE4M";
+    const REJECT_CAMPAIGN = "Rejected tracks";
     const SUB_EMPTY = {
-        new: "No new submissions. Players send tracks with Send to Race Control in the track editor.",
+        new: "No new submissions. Players send tracks with Submit to Weekly Shorts in the track editor.",
         planned: "Nothing planned yet.",
         rejected: "Nothing rejected.",
         all: "Nobody has sent a track yet.",
@@ -194,6 +200,17 @@
 .nrc-table .poll,.nrc-table .tabs{margin-left:8px;font-size:12px;color:rgba(255,255,255,.5);}
 .nrc-table tr.pick{cursor:pointer;}
 .nrc-table tr.sel td{background:rgba(179,193,255,.1);}
+.nrc-table tr.nrc-subdetail td,.nrc-table tr.nrc-subdetail:hover td{white-space:normal;padding:2px 0 16px;background:none;font-variant-numeric:normal;}
+.nrc-subbox{position:sticky;left:0;}
+.nrc-plan .nrc-toggle{flex-wrap:wrap;margin-top:10px;}
+.nrc-plan .nrc-toggle .button{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nrc-plan .nrc-toggle .button.taken{color:rgba(255,255,255,.6);}
+.nrc-plan .nrc-toggle .button:disabled{opacity:.5;pointer-events:none;}
+.nrc-planlab{font-size:15px;color:rgba(255,255,255,.55);}
+.nrc-planinfo{display:block;margin-top:8px;font-size:13px;color:rgba(255,255,255,.55);line-height:1.35;align-self:center;}
+.nrc-acts .nrc-planinfo{margin-top:0;}
+.nrc-acts .button.armed.del{color:${BAD};}
+.nrc-plan .nrc-acts .button.armed{color:${GOLD};box-shadow:inset 0 -3px 0 ${GOLD};}
 .nrc-pollacts{display:flex;gap:8px;flex-wrap:wrap;}
 .nrc-pollacts .button{font-size:18px;}
 .nrc-find .button{margin:0;font-size:18px;padding:7px 16px;}
@@ -600,7 +617,7 @@
         tagsFound: null,
         tagsNote: "",
         tagsBusy: false,
-        subs: null,
+        subsAll: null,
         subsError: null,
         subsFilter: "new",
         subsNew: null,
@@ -613,7 +630,14 @@
         subsArm: null,
         subsArmTimer: 0,
         subsRoot: null,
-        subsCodes: new Map(),
+        subsTracks: new Map(),
+        subsToggleBox: null,
+        subsToolsBox: null,
+        subsListBox: null,
+        subsDetailBox: null,
+        subsNoteBox: null,
+        subsPlanArm: null,
+        subsResume: null,
     };
 
     async function post(path, extra) {
@@ -757,7 +781,7 @@
             ui.bans ??= cacheGet("bans");
             if (!ui.bans) loads.push(loadBans);
         } else if (ui.tab === "subs") {
-            if (!ui.subs && ui.subsLoading !== ui.subsFilter) loads.push(loadSubs);
+            if (!ui.subsLoading && (!ui.subsAll || Date.now() - (ui.fetchedAt.subs || 0) > 15000)) loads.push(loadSubs);
         } else if (ui.tab === "feedback") {
             if (!window.__nswsFeedback?.inbox.loaded()) loads.push(loadFeedback);
         } else {
@@ -2997,28 +3021,49 @@
         if (b) b.textContent = ui.subsNew ? "Submissions (" + num(ui.subsNew) + ")" : "Submissions";
     }
 
+    // Every submission comes in one list (no codes), so switching between New, Planned and Rejected needs no request.
     async function loadSubs() {
-        const filter = ui.subsFilter;
         const ticket = ++ui.subsTicket;
-        ui.subsLoading = filter;
+        ui.subsLoading = true;
         try {
-            const data = await post("tracks/admin/submissions?status=" + filter, { status: filter });
+            const data = await post("tracks/admin/submissions?status=all", { status: "all" });
             if (ticket !== ui.subsTicket) return;
             const list = Array.isArray(data?.submissions) ? data.submissions : [];
-            ui.subs = { filter, list };
+            list.sort((a, b) => (b.created || 0) - (a.created || 0));
+            ui.subsAll = list;
             ui.fetchedAt.subs = Date.now();
             ui.subsError = null;
-            if (filter === "new") ui.subsNew = list.length;
-            else if (filter === "all") ui.subsNew = list.filter((s) => s.status === "new").length;
+            ui.subsNew = list.filter((s) => s.status === "new").length;
             if (ui.subsPick && !list.some((s) => s.id === ui.subsPick)) ui.subsPick = null;
         } catch (err) {
             if (ticket !== ui.subsTicket) return;
             ui.subsError = err;
         } finally {
-            if (ticket === ui.subsTicket) ui.subsLoading = null;
+            if (ticket === ui.subsTicket) ui.subsLoading = false;
         }
         subsLabel();
         if (ui.overlay && ui.tab === "subs") renderSubLists();
+    }
+
+    function subsCounts() {
+        const n = { new: 0, planned: 0, rejected: 0, all: 0 };
+        for (const s of ui.subsAll || []) {
+            n.all++;
+            if (n[s.status] != null) n[s.status]++;
+        }
+        return n;
+    }
+
+    function byPlan(a, b) {
+        return (a.week ?? 1e9) - (b.week ?? 1e9) || (a.slot ?? 1e9) - (b.slot ?? 1e9) || (b.created || 0) - (a.created || 0);
+    }
+
+    // What the open filter shows: newest first, Planned in week and map order.
+    function subsRows() {
+        if (!ui.subsAll) return null;
+        const f = ui.subsFilter;
+        const rows = f === "all" ? ui.subsAll.slice() : ui.subsAll.filter((s) => s.status === f);
+        return f === "planned" ? rows.sort(byPlan) : rows;
     }
 
     function subsProblem(err) {
@@ -3030,14 +3075,18 @@
     }
 
     function subSize(n) {
-        if (!n) return "\u2013";
+        if (!n) return "–";
         if (n < 1024) return n + " B";
         if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + " KB";
         return (n / 1048576).toFixed(1) + " MB";
     }
 
+    function planText(s) {
+        return "Week " + s.week + (s.slot ? ", map " + s.slot : "");
+    }
+
     function subStatus(s) {
-        if (s.status === "planned") return s.week ? "Week " + s.week : "Planned";
+        if (s.status === "planned") return s.week ? planText(s) : "Planned";
         if (s.status === "rejected") return "Rejected";
         return "New";
     }
@@ -3052,13 +3101,47 @@
         return top + 1;
     }
 
-    async function subCode(s) {
-        if (ui.subsCodes.has(s.id)) return ui.subsCodes.get(s.id);
-        const data = await post("tracks/admin/submission/" + encodeURIComponent(s.id), {});
-        const code = data?.submission?.code;
-        if (typeof code !== "string" || !code) throw "That submission has no track code.";
-        ui.subsCodes.set(s.id, code);
-        return code;
+    function weekLineup(week, except) {
+        return (ui.subsAll || []).filter((x) => x.status === "planned" && x.week === week && x.id !== except);
+    }
+
+    function freeSlot(week, except) {
+        const taken = new Set(weekLineup(week, except).map((x) => x.slot));
+        for (let n = 1; n <= PLAN_MAPS; n++) if (!taken.has(n)) return n;
+        return null;
+    }
+
+    // A planned track keeps its week and map; a new one gets the first free map from the coming week on.
+    function planDefault(s) {
+        if (s.status === "planned" && s.week) return { week: s.week, slot: s.slot ?? null };
+        let week = nextWeek();
+        for (let i = 0; i < 50 && freeSlot(week, s.id) == null; i++) week++;
+        return { week, slot: freeSlot(week, s.id) };
+    }
+
+    // The track's own code and mode: submissions are NSWS Track codes now (older ones are plain PolyTrack codes).
+    // Fetched once per submission, as soon as its row is opened, so Play and Copy don't wait.
+    function subTrack(s) {
+        let job = ui.subsTracks.get(s.id);
+        if (job) return job;
+        job = (async () => {
+            const data = await post("tracks/admin/submission/" + encodeURIComponent(s.id), {});
+            const code = data?.submission?.code;
+            if (typeof code !== "string" || !code) throw "That submission has no track code.";
+            if (code.startsWith("NSWSPack1")) {
+                if (!window.__nswsTracks?.readPack) throw "Custom tracks haven't loaded yet. Try again in a moment.";
+                const first = (await window.__nswsTracks.readPack(code))?.tracks?.[0];
+                if (!first) throw "That submission's NSWS Track code couldn't be read.";
+                return { code: first.code, mode: first.mode || s.mode || "normal", nsws: code };
+            }
+            return { code, mode: s.mode || "normal", nsws: null };
+        })();
+        ui.subsTracks.set(s.id, job);
+        while (ui.subsTracks.size > SUB_TRACKS_KEPT) ui.subsTracks.delete(ui.subsTracks.keys().next().value);
+        job.catch(() => {
+            if (ui.subsTracks.get(s.id) === job) ui.subsTracks.delete(s.id);
+        });
+        return job;
     }
 
     async function copyText(text) {
@@ -3080,12 +3163,19 @@
         return ok;
     }
 
+    function subsWorking(text) {
+        ui.subsNote = text;
+        if (ui.subsNoteBox) {
+            ui.subsNoteBox.textContent = text;
+            ui.subsNoteBox.hidden = !text;
+        }
+    }
+
     async function subAction(working, run) {
         if (ui.subsBusy) return;
         ui.subsBusy = true;
-        ui.subsNote = working;
-        for (const b of ui.subsDetailBox?.querySelectorAll("button") ?? []) b.disabled = true;
-        if (ui.subsNoteBox) ui.subsNoteBox.textContent = working;
+        for (const b of ui.subsRoot?.querySelectorAll("button") ?? []) b.disabled = true;
+        subsWorking(working);
         try {
             ui.subsNote = (await run()) || "";
         } catch (err) {
@@ -3095,41 +3185,40 @@
         if (ui.overlay && ui.tab === "subs") renderSubLists();
     }
 
-    // Submissions are NSWS Track codes now (older ones are plain PolyTrack codes): the track's own code and mode.
-    async function subTrack(s) {
-        const code = await subCode(s);
-        if (code.startsWith("NSWSPack1")) {
-            const first = (await window.__nswsTracks?.readPack?.(code))?.tracks?.[0];
-            if (!first) throw "That submission's NSWS Track code couldn't be read.";
-            return { code: first.code, mode: first.mode || s.mode || "normal", nsws: code };
-        }
-        return { code, mode: s.mode || "normal", nsws: null };
-    }
-
     function subTrackLike(s, code) {
         return { id: null, code, kind: code.startsWith("PolyTrackBE") ? "be" : "stock", name: s.name || "", author: s.author || "", trackId: s.trackId || null, env: s.env ?? null, mode: s.mode || "normal", source: "import" };
     }
 
-    async function setSubStatus(s, status, week) {
+    // When the open submission leaves the list on screen, the one after it opens.
+    function pickAfter(rows, at) {
+        const left = rows.filter((_, i) => i !== at);
+        const next = at >= 0 ? left[Math.min(at, left.length - 1)] : null;
+        ui.subsPick = next ? next.id : null;
+        ui.subsArm = ui.subsPlanArm = null;
+        if (next) subTrack(next).catch(() => {});
+        return next;
+    }
+
+    async function setSubStatus(s, status, week, slot) {
         const ownerNote = (ui.subsDraft.note || "").trim().slice(0, 500);
-        const change = { status, week: status === "planned" ? week : null, ownerNote };
+        const change = { status, week: status === "planned" ? week : null, slot: status === "planned" ? slot ?? null : null, ownerNote };
         await post("tracks/admin/submission/" + encodeURIComponent(s.id) + "/status", change);
-        const was = s.status;
-        Object.assign(s, change);
-        if (ui.subsNew != null) {
-            if (was === "new" && status !== "new") ui.subsNew = Math.max(0, ui.subsNew - 1);
-            else if (was !== "new" && status === "new") ui.subsNew++;
+        // A list that was on its way may be older than this change.
+        if (ui.subsLoading) {
+            ui.subsTicket++;
+            ui.subsLoading = false;
         }
+        const rows = subsRows() || [];
+        const at = rows.findIndex((x) => x.id === s.id);
+        for (const x of new Set([s, ui.subsAll?.find((y) => y.id === s.id)])) if (x) Object.assign(x, change);
+        ui.subsNew = (ui.subsAll || []).filter((x) => x.status === "new").length;
         subsLabel();
-        const filter = ui.subs?.filter;
-        if (filter && filter !== "all" && filter !== status) {
-            ui.subs.list = ui.subs.list.filter((x) => x !== s);
-            ui.subsPick = null;
-        }
+        const next = ui.subsFilter !== "all" && ui.subsFilter !== status ? pickAfter(rows, at) : null;
         const name = s.name || "The track";
-        if (status === "planned") return name + " is planned for week " + week + ". The player sees that in My submissions.";
-        if (status === "rejected") return name + " was rejected." + (ownerNote ? " The player sees your note." : "");
-        return name + " is back in New.";
+        const then = next ? " Next up: " + (next.name || "Untitled") + "." : "";
+        if (status === "planned") return name + " is planned for week " + week + (change.slot ? ", map " + change.slot : "") + ". The player sees that in My submissions." + then;
+        if (status === "rejected") return name + " was rejected." + (ownerNote ? " The player sees your note." : "") + then;
+        return name + " is back in New." + then;
     }
 
     function subsInput(placeholder, value) {
@@ -3138,36 +3227,107 @@
         return input;
     }
 
+    const tracksText = (n) => num(n) + (n === 1 ? " track" : " tracks");
+
+    // Every rejected track into the club's campaign (then "... 2" and on, 25 each); ones already there are skipped.
+    async function addRejectedToClub() {
+        const clubs = window.__nswsClubs;
+        if (!clubs?.fillCampaigns) throw "Clubs haven't loaded yet. Try again in a moment.";
+        const list = (ui.subsAll || []).filter((s) => s.status === "rejected").sort((a, b) => (a.created || 0) - (b.created || 0));
+        if (!list.length) return "Nothing is rejected.";
+        const tracks = new Array(list.length).fill(null);
+        let done = 0, failed = 0, next = 0;
+        const worker = async () => {
+            while (next < list.length) {
+                const i = next++;
+                const s = list[i];
+                try {
+                    const t = await subTrack(s);
+                    tracks[i] = { code: t.code, mode: t.mode, name: s.name || "", author: s.author || "", trackId: s.trackId || null };
+                } catch {
+                    failed++;
+                }
+                subsWorking("Getting the tracks (" + ++done + " of " + list.length + ")…");
+            }
+        };
+        await Promise.all([worker(), worker(), worker()]);
+        const r = await clubs.fillCampaigns({ code: REJECT_CLUB, base: REJECT_CAMPAIGN, tracks: tracks.filter(Boolean), progress: subsWorking });
+        const bits = [r.added ? tracksText(r.added) + " added to " + r.club + " (" + r.saved.join(", ") + ")" : "Nothing new to add to " + r.club];
+        if (r.dup) bits.push(tracksText(r.dup) + (r.dup === 1 ? " was" : " were") + " in the campaign already");
+        if (r.big) bits.push(tracksText(r.big) + " too big for a campaign (1 MB at most)");
+        if (r.full) bits.push(tracksText(r.full) + " left out: the club has 20 campaigns");
+        if (failed) bits.push(tracksText(failed) + " couldn't be read");
+        return bits.join(". ") + ".";
+    }
+
     function buildSubs() {
         const root = el("div");
-        const head = card("Track submissions", "list", "Tracks players sent with Send to Race Control in the track editor. Plan one for a future week or reject it; the player sees the status and your note under My submissions. Click a row for its actions.");
-        head.appendChild(toggle(SUB_FILTERS, ui.subsFilter, (key) => {
-            if (ui.subsFilter === key) return;
-            ui.subsFilter = key;
-            ui.subs = null;
-            ui.subsError = null;
-            ui.subsPick = null;
-            ui.subsNote = "";
-            renderSubLists();
-            loadSubs();
-        }));
+        const head = card("Track submissions", "list", "Tracks players sent with Submit to Weekly Shorts in the track editor. Click a row to open it; ↑ and ↓ move through the list. Plan a track for a week and map number or reject it; the player sees the status and your note under My submissions.");
+        ui.subsToggleBox = el("div");
+        ui.subsToolsBox = el("div", "nrc-acts");
+        head.append(ui.subsToggleBox, ui.subsToolsBox);
         ui.subsNoteBox = el("div", "nrc-sub");
         ui.subsNoteBox.style.margin = "12px 0";
-        ui.subsDetailBox = el("div");
         ui.subsListBox = el("div");
-        root.append(head, ui.subsNoteBox, ui.subsDetailBox, ui.subsListBox);
+        root.append(head, ui.subsNoteBox, ui.subsListBox);
         return root;
     }
 
-    function renderSubDetail() {
+    function renderSubsHead() {
+        const n = subsCounts();
+        const options = SUB_FILTERS.map(([key, label]) => [key, ui.subsAll && key !== "all" && n[key] ? label + " (" + num(n[key]) + ")" : label]);
+        ui.subsToggleBox.textContent = "";
+        ui.subsToggleBox.appendChild(toggle(options, ui.subsFilter, (key) => {
+            if (ui.subsFilter === key) return;
+            ui.subsFilter = key;
+            ui.subsPick = ui.subsArm = ui.subsPlanArm = null;
+            ui.subsNote = "";
+            renderSubLists();
+        }));
+        const tools = ui.subsToolsBox;
+        tools.textContent = "";
+        tools.hidden = !(ui.subsFilter === "rejected" && n.rejected);
+        if (tools.hidden) return;
+        const b = el("button", "button", "Add all " + num(n.rejected) + " to the club campaign");
+        b.title = "Puts every rejected track into the campaign “" + REJECT_CAMPAIGN + "” of club " + REJECT_CLUB + " (then “" + REJECT_CAMPAIGN + " 2” and on, 25 tracks each). Tracks already there are skipped, so pressing it again only adds new ones.";
+        b.disabled = ui.subsBusy;
+        b.addEventListener("click", () => subAction("Getting the tracks…", addRejectedToClub));
+        tools.appendChild(b);
+        tools.appendChild(el("span", "nrc-planinfo", "Club " + REJECT_CLUB + ", campaign “" + REJECT_CAMPAIGN + "”. Already added ones are skipped."));
+    }
+
+    function pickSub(s, keyboard) {
+        ui.subsPick = ui.subsPick === s.id && !keyboard ? null : s.id;
+        ui.subsNote = "";
+        ui.subsArm = ui.subsPlanArm = null;
+        if (ui.subsPick) subTrack(s).catch(() => {});
+        renderSubLists();
+        ui.subsDetailBox?.scrollIntoView({ block: "nearest" });
+        ui.subsListBox.querySelector("tr.sel")?.scrollIntoView({ block: "nearest" });
+    }
+
+    function subsKey(e) {
+        if (ui.tab !== "subs" || (e.key !== "ArrowDown" && e.key !== "ArrowUp") || e.altKey || e.ctrlKey || e.metaKey) return false;
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return false;
+        const rows = subsRows();
+        if (!rows?.length || ui.subsBusy) return false;
+        const at = rows.findIndex((s) => s.id === ui.subsPick);
+        const to = at < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)));
+        if (rows[to].id !== ui.subsPick) pickSub(rows[to], true);
+        return true;
+    }
+
+    function renderSubDetail(s) {
         const box = ui.subsDetailBox;
         box.textContent = "";
-        const s = ui.subs?.list.find((x) => x.id === ui.subsPick);
-        if (!s) return;
-        if (ui.subsDraft.id !== s.id) ui.subsDraft = { id: s.id, week: String(s.week || nextWeek()), note: s.ownerNote || "" };
+        if (ui.subsDraft.id !== s.id) {
+            const d = planDefault(s);
+            ui.subsDraft = { id: s.id, week: String(d.week), slot: d.slot, note: s.ownerNote || "" };
+        }
         const draft = ui.subsDraft;
-        const sent = [s.author ? "by " + s.author : "", "sent by " + (s.nickname || "someone"), s.created ? fmt.dateTime(s.created) : ""].filter(Boolean).join(" \u00b7 ");
-        const c = card(s.name || "Untitled track", null, sent + " \u00b7 " + (SUB_MODES[s.mode] || "Normal") + " \u00b7 " + subStatus(s));
+        const sent = [s.author ? "by " + s.author : "", "sent by " + (s.nickname || "someone"), s.created ? fmt.dateTime(s.created) : ""].filter(Boolean).join(" · ");
+        const c = card(s.name || "Untitled track", null, sent + " · " + (SUB_MODES[s.mode] || "Normal") + " · " + subStatus(s));
         if (s.note) {
             const note = el("div", "nrc-subnote");
             note.append(el("b", null, "Their note"), document.createTextNode(s.note));
@@ -3182,32 +3342,39 @@
             acts.appendChild(b);
             return b;
         };
-        act("Play", "Getting the track\u2026", async () => {
+        act("Play", "Getting the track…", async () => {
             const tracks = window.__nswsTracks;
             if (!tracks?.play) throw "Custom tracks haven't loaded yet. Try again in a moment.";
             const t = await subTrack(s);
+            // Leaving the race comes back here, on this submission.
+            ui.subsResume = { filter: ui.subsFilter, pick: s.id };
             close();
-            await tracks.play(t.code, { mode: t.mode });
+            let ok = false;
+            try {
+                ok = await tracks.play(t.code, { mode: t.mode, start: true, onExit: resumeSubs });
+            } finally {
+                if (!ok) resumeSubs();
+            }
         });
-        act("Copy code", "Getting the code\u2026", async () => {
+        act("Copy code", "Getting the code…", async () => {
             const t = await subTrack(s);
             const code = t.nsws || t.code;
             if (!(await copyText(code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
             return (t.nsws ? "NSWS Track code copied, " + SUB_MODES[t.mode] + " mode included" : "Code copied") + " (" + subSize(code.length) + ")." + (!t.nsws && t.mode !== "normal" ? " Mode isn't kept in a plain code: it's " + SUB_MODES[t.mode] + "." : "");
         });
-        act("Copy PolyTrack code", "Getting the code\u2026", async () => {
+        act("Copy PolyTrack code", "Getting the code…", async () => {
             const t = await subTrack(s);
             if (!(await copyText(t.code))) throw "Couldn't reach the clipboard. Try again with the page focused.";
             return (t.code.startsWith("PolyTrackBE") ? "Better Editor code copied; only the Better Editor and NSWS read it" : "PolyTrack code copied") + " (" + subSize(t.code.length) + ")." + (t.mode !== "normal" ? " It plays in " + SUB_MODES[t.mode] + ", which a plain code doesn't keep." : "");
         });
-        act("Save to My Tracks", "Saving\u2026", async () => {
+        act("Save to My Tracks", "Saving…", async () => {
             const tracks = window.__nswsTracks;
             if (!tracks?.add) throw "Custom tracks haven't loaded yet. Try again in a moment.";
             const t = await subTrack(s);
             const saved = await tracks.add(t.code, { mode: t.mode, source: "import" });
             return "Saved \"" + (saved?.name || s.name || "the track") + "\" to My Tracks.";
         });
-        act("Open in editor", "Getting the track\u2026", async () => {
+        act("Open in editor", "Getting the track…", async () => {
             const editor = window.__nswsEditor;
             if (!editor?.open) throw "The track editor hasn't loaded yet. Try again in a moment.";
             const t = await subTrack(s);
@@ -3225,49 +3392,7 @@
         noteRow.appendChild(noteInput);
         c.appendChild(noteRow);
 
-        const planRow = el("div", "nrc-find");
-        planRow.style.cssText = "margin-top:8px;flex-wrap:wrap;";
-        const weekInput = subsInput("Week", draft.week);
-        weekInput.className = "small";
-        weekInput.type = "number";
-        weekInput.min = "1";
-        weekInput.step = "1";
-        weekInput.inputMode = "numeric";
-        const plan = el("button", "button");
-        const planLabel = () => {
-            const n = parseInt(draft.week, 10);
-            plan.textContent = n > 0 ? "Plan for week " + n : "Plan for week\u2026";
-        };
-        planLabel();
-        weekInput.addEventListener("input", () => {
-            draft.week = weekInput.value;
-            planLabel();
-        });
-        plan.disabled = ui.subsBusy;
-        plan.addEventListener("click", () => {
-            const week = parseInt(draft.week, 10);
-            if (!(week > 0 && week < 10000)) {
-                ui.subsNote = "Type the week number first.";
-                if (ui.subsNoteBox) ui.subsNoteBox.textContent = ui.subsNote;
-                weekInput.focus();
-                return;
-            }
-            subAction("Saving\u2026", () => setSubStatus(s, "planned", week));
-        });
-        planRow.append(weekInput, plan);
-        if (s.status !== "rejected") {
-            const reject = el("button", "button", "Reject");
-            reject.disabled = ui.subsBusy;
-            reject.addEventListener("click", () => subAction("Saving\u2026", () => setSubStatus(s, "rejected", null)));
-            planRow.appendChild(reject);
-        }
-        if (s.status !== "new") {
-            const back = el("button", "button", "Move back to New");
-            back.disabled = ui.subsBusy;
-            back.addEventListener("click", () => subAction("Saving\u2026", () => setSubStatus(s, "new", null)));
-            planRow.appendChild(back);
-        }
-        c.appendChild(planRow);
+        c.appendChild(planBox(s));
 
         const danger = el("div", "nrc-acts");
         const armed = ui.subsArm === s.id;
@@ -3282,7 +3407,7 @@
                 // The list may have been drawn again since, so the button on screen is looked up.
                 ui.subsArmTimer = setTimeout(() => {
                     ui.subsArm = null;
-                    for (const b of ui.subsDetailBox?.querySelectorAll("button.armed") ?? []) {
+                    for (const b of ui.subsDetailBox?.querySelectorAll("button.armed.del") ?? []) {
                         b.classList.remove("armed");
                         b.textContent = "Delete";
                     }
@@ -3291,59 +3416,191 @@
             }
             clearTimeout(ui.subsArmTimer);
             ui.subsArm = null;
-            subAction("Deleting\u2026", async () => {
+            subAction("Deleting…", async () => {
                 await post("tracks/admin/submission/" + encodeURIComponent(s.id) + "/delete", {});
-                if (ui.subs) ui.subs.list = ui.subs.list.filter((x) => x !== s);
-                ui.subsCodes.delete(s.id);
-                ui.subsPick = null;
-                if (s.status === "new" && ui.subsNew) ui.subsNew--;
+                const rows = subsRows() || [];
+                const at = rows.findIndex((x) => x.id === s.id);
+                if (ui.subsAll) ui.subsAll = ui.subsAll.filter((x) => x.id !== s.id);
+                ui.subsTracks.delete(s.id);
+                const next = pickAfter(rows, at);
+                ui.subsNew = (ui.subsAll || []).filter((x) => x.status === "new").length;
                 subsLabel();
-                return "Deleted " + (s.name || "the submission") + ".";
+                return "Deleted " + (s.name || "the submission") + "." + (next ? " Next up: " + (next.name || "Untitled") + "." : "");
             });
         });
+        del.classList.add("del");
         danger.appendChild(del);
         c.appendChild(danger);
         box.appendChild(c);
-        box.lastChild.style.marginBottom = "14px";
+    }
+
+    // Week number, then a map number picked from the week's lineup (taken ones show their track).
+    function planBox(s) {
+        const draft = ui.subsDraft;
+        const wrap = el("div", "nrc-plan");
+        const weekRow = el("div", "nrc-find");
+        weekRow.style.cssText = "margin-top:8px;align-items:center;";
+        const weekInput = subsInput("Week", draft.week);
+        weekInput.className = "small";
+        weekInput.type = "number";
+        weekInput.min = "1";
+        weekInput.step = "1";
+        weekInput.inputMode = "numeric";
+        weekInput.title = "Week";
+        weekRow.append(el("span", "nrc-planlab", "Week"), weekInput);
+        const dyn = el("div");
+        wrap.append(weekRow, dyn);
+
+        const draw = () => {
+            dyn.textContent = "";
+            const week = parseInt(draft.week, 10);
+            const okWeek = week > 0 && week < 10000;
+            const lineup = okWeek ? weekLineup(week, s.id) : [];
+            const maps = el("div", "nrc-toggle");
+            const top = Math.max(PLAN_MAPS, draft.slot || 0, ...lineup.map((x) => x.slot || 0));
+            for (let n = 1; n <= top; n++) {
+                const here = lineup.filter((x) => x.slot === n);
+                const b = el("button", "button" + (draft.slot === n ? " on" : "") + (here.length ? " taken" : ""), "Map " + n + (here.length ? ": " + (here[0].name || "Untitled") + (here.length > 1 ? " +" + (here.length - 1) : "") : ""));
+                b.title = here.length ? "Map " + n + " of week " + week + ": " + here.map((x) => x.name || "Untitled").join(", ") : "Map " + n + " is free";
+                b.disabled = ui.subsBusy || !okWeek;
+                b.addEventListener("click", () => {
+                    draft.slot = draft.slot === n ? null : n;
+                    ui.subsPlanArm = null;
+                    draw();
+                });
+                maps.appendChild(b);
+            }
+            const none = el("button", "button" + (draft.slot == null ? " on" : ""), "No number");
+            none.disabled = ui.subsBusy || !okWeek;
+            none.addEventListener("click", () => {
+                draft.slot = null;
+                ui.subsPlanArm = null;
+                draw();
+            });
+            maps.appendChild(none);
+            dyn.appendChild(maps);
+            const loose = lineup.filter((x) => !x.slot);
+            if (okWeek) dyn.appendChild(el("div", "nrc-planinfo", (lineup.length ? "Week " + week + " has " + tracksText(lineup.length) + " planned" : "Nothing planned for week " + week + " yet") + (loose.length ? "; without a map number: " + loose.map((x) => x.name || "Untitled").join(", ") : "") + "."));
+
+            const row = el("div", "nrc-acts");
+            const slot = draft.slot ?? null;
+            const clash = okWeek && slot ? lineup.filter((x) => x.slot === slot) : [];
+            const armKey = s.id + ":" + week + ":" + slot;
+            const armed = clash.length && ui.subsPlanArm === armKey;
+            const plan = el("button", "button" + (armed ? " armed" : ""), !okWeek ? "Plan for week…" : armed ? "Press again: map " + slot + " has " + (clash[0].name || "a track") : "Plan for week " + week + (slot ? ", map " + slot : ""));
+            plan.disabled = ui.subsBusy;
+            plan.addEventListener("click", () => {
+                const w = parseInt(draft.week, 10);
+                if (!(w > 0 && w < 10000)) {
+                    subsWorking("Type the week number first.");
+                    weekInput.focus();
+                    return;
+                }
+                const sl = draft.slot ?? null;
+                const taken = sl ? weekLineup(w, s.id).some((x) => x.slot === sl) : false;
+                const key = s.id + ":" + w + ":" + sl;
+                if (taken && ui.subsPlanArm !== key) {
+                    ui.subsPlanArm = key;
+                    draw();
+                    return;
+                }
+                ui.subsPlanArm = null;
+                subAction("Saving…", () => setSubStatus(s, "planned", w, sl));
+            });
+            row.appendChild(plan);
+            if (s.status !== "rejected") {
+                const reject = el("button", "button", "Reject");
+                reject.disabled = ui.subsBusy;
+                reject.addEventListener("click", () => subAction("Saving…", () => setSubStatus(s, "rejected", null, null)));
+                row.appendChild(reject);
+            }
+            if (s.status !== "new") {
+                const back = el("button", "button", "Move back to New");
+                back.disabled = ui.subsBusy;
+                back.addEventListener("click", () => subAction("Saving…", () => setSubStatus(s, "new", null, null)));
+                row.appendChild(back);
+            }
+            dyn.appendChild(row);
+        };
+
+        weekInput.addEventListener("input", () => {
+            draft.week = weekInput.value;
+            const w = parseInt(draft.week, 10);
+            // Another week starts on its first free map.
+            if (w > 0 && w < 10000) draft.slot = s.status === "planned" && s.week === w ? s.slot ?? null : freeSlot(w, s.id);
+            ui.subsPlanArm = null;
+            draw();
+        });
+        weekInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") dyn.querySelector(".nrc-acts .button")?.click();
+        });
+        draw();
+        return wrap;
     }
 
     function renderSubLists() {
         if (!ui.subsRoot) return;
+        renderSubsHead();
         ui.subsNoteBox.textContent = ui.subsNote || "";
         ui.subsNoteBox.hidden = !ui.subsNote;
         const list = ui.subsListBox;
         list.textContent = "";
-        const rows = ui.subs?.filter === ui.subsFilter ? ui.subs.list : null;
+        ui.subsDetailBox = null;
+        const rows = subsRows();
         if (ui.subsError && !rows) {
             list.appendChild(el("div", "nrc-empty", ui.subsError.status === 403 ? "This profile isn't the owner, so submissions stay closed." : "Couldn't load submissions. " + (ui.subsError.reason ? ui.subsError.reason + " " : "") + "Press Refresh."));
-        } else if (!rows) {
-            list.appendChild(el("div", "nrc-empty", "Loading\u2026"));
-        } else if (!rows.length) {
-            list.appendChild(el("div", "nrc-empty", SUB_EMPTY[ui.subsFilter] || SUB_EMPTY.all));
-        } else {
-            list.appendChild(table([["Track", "name"], ["Author", "name"], ["Sent by", "name"], ["Mode"], ["Scenery"], ["Sent", "num"], ["Size", "num"], ["Note", "name"], ["Status"]], rows.map((s) => {
-                const who = el("span", null, s.nickname || "\u2013");
-                if (s.userId12) who.appendChild(el("span", "tabs", s.userId12.slice(0, 8)));
-                const note = el("span", null, s.note || "");
-                note.title = s.note || "";
-                const status = el("span", null, subStatus(s));
-                if (s.status === "planned") status.style.color = ACCENT;
-                else if (s.status === "rejected") status.style.color = "rgba(255,255,255,.45)";
-                return [s.name || "Untitled", s.author || "\u2013", who, SUB_MODES[s.mode] || "Normal", s.env != null && s.env !== "" ? String(s.env) : "\u2013", s.created ? fmt.dateTime(s.created) : "\u2013", subSize(s.size), note, status];
-            })));
-            list.querySelectorAll("tbody tr").forEach((tr, i) => {
-                const s = rows[i];
-                tr.className = "pick" + (s.id === ui.subsPick ? " sel" : "");
-                tr.title = "Click for actions";
-                tr.addEventListener("click", () => {
-                    ui.subsPick = ui.subsPick === s.id ? null : s.id;
-                    ui.subsNote = "";
-                    renderSubLists();
-                    if (ui.subsPick) ui.subsDetailBox.scrollIntoView({ block: "nearest", behavior: "smooth" });
-                });
-            });
+            return;
         }
-        renderSubDetail();
+        if (!rows) {
+            list.appendChild(el("div", "nrc-empty", "Loading…"));
+            return;
+        }
+        if (!rows.length) {
+            list.appendChild(el("div", "nrc-empty", SUB_EMPTY[ui.subsFilter] || SUB_EMPTY.all));
+            return;
+        }
+        const headers = [["Track", "name"], ["Author", "name"], ["Sent by", "name"], ["Mode"], ["Scenery"], ["Sent", "num"], ["Size", "num"], ["Note", "name"], ["Status"]];
+        const wrap = table(headers, rows.map((s) => {
+            const who = el("span", null, s.nickname || "–");
+            if (s.userId12) who.appendChild(el("span", "tabs", s.userId12.slice(0, 8)));
+            const note = el("span", null, s.note || "");
+            note.title = s.note || "";
+            const status = el("span", null, subStatus(s));
+            if (s.status === "planned") status.style.color = ACCENT;
+            else if (s.status === "rejected") status.style.color = "rgba(255,255,255,.45)";
+            return [s.name || "Untitled", s.author || "–", who, SUB_MODES[s.mode] || "Normal", s.env != null && s.env !== "" ? String(s.env) : "–", s.created ? fmt.dateTime(s.created) : "–", subSize(s.size), note, status];
+        }));
+        list.appendChild(wrap);
+        const trs = wrap.querySelectorAll("tbody tr");
+        trs.forEach((tr, i) => {
+            const s = rows[i];
+            tr.className = "pick" + (s.id === ui.subsPick ? " sel" : "");
+            tr.title = "Click for actions";
+            tr.addEventListener("click", () => pickSub(s, false));
+        });
+        // The open submission's actions drop down right under its row.
+        const at = rows.findIndex((s) => s.id === ui.subsPick);
+        if (at < 0) return;
+        const detail = el("tr", "nrc-subdetail");
+        const td = el("td");
+        td.colSpan = headers.length;
+        ui.subsDetailBox = el("div", "nrc-subbox");
+        td.appendChild(ui.subsDetailBox);
+        detail.appendChild(td);
+        trs[at].after(detail);
+        // A wide table scrolls sideways; the actions stay in view.
+        if (wrap.clientWidth) ui.subsDetailBox.style.maxWidth = wrap.clientWidth + "px";
+        renderSubDetail(rows[at]);
+    }
+
+    function resumeSubs() {
+        const r = ui.subsResume;
+        ui.subsResume = null;
+        if (!r || ui.overlay) return;
+        ui.tab = "subs";
+        ui.subsFilter = r.filter;
+        ui.subsPick = r.pick;
+        open();
     }
 
     function renderSubsTab(body) {
@@ -3431,6 +3688,11 @@
     }
 
     function onKey(e) {
+        if (subsKey(e)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return;
+        }
         if (e.code === "Escape" || e.key === "Escape") {
             e.preventDefault();
             e.stopImmediatePropagation();
@@ -3448,14 +3710,17 @@
         ui.annRoot = ui.annLive = ui.annList = ui.annStatus = null;
         ui.tagsRoot = ui.tagsWho = ui.tagsLists = null;
         ui.bansRoot = null;
-        ui.subsRoot = ui.subsNoteBox = ui.subsDetailBox = ui.subsListBox = null;
-        ui.subs = ui.subsError = ui.subsLoading = ui.subsPick = ui.subsArm = null;
+        ui.subsRoot = ui.subsNoteBox = ui.subsDetailBox = ui.subsListBox = ui.subsToggleBox = ui.subsToolsBox = null;
+        ui.subsError = ui.subsPick = ui.subsArm = ui.subsPlanArm = null;
+        ui.subsLoading = false;
         ui.subsTicket++;
         ui.subsFilter = "new";
         ui.subsNote = "";
         ui.subsBusy = false;
-        ui.subsDraft = {};
-        ui.subsCodes.clear();
+        if (!ui.subsResume) {
+            ui.subsDraft = {};
+            ui.subsTracks.clear();
+        }
         clearTimeout(ui.subsArmTimer);
         ui.annArmed = false;
         clearTimeout(ui.annArmTimer);
