@@ -232,6 +232,7 @@
 #nsws-chat-toast{position:fixed;z-index:91;max-width:320px;padding:8px 12px 8px 10px;border-left:3px solid #f0b232;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;overflow-wrap:anywhere;transition:opacity .6s;}
 #nsws-chat-toast.out{opacity:0;}
 #nsws-chat.tucked,#nsws-chat-feed.tucked{display:none!important;}
+body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:not(.hidden)) #nsws-chat-toast{z-index:10001;}
 #nsws-chat-feed{position:fixed;z-index:89;display:flex;flex-direction:column;gap:4px;width:min(380px,calc(100vw - 24px));font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-style:var(--nsws-chat-font-style);font-size:15px;line-height:1.25;color:var(--text-color,#fff);pointer-events:none;}
 #nsws-chat-feed .line{align-self:flex-start;max-width:100%;padding:5px 10px;background:rgba(25,32,66,.9);overflow-wrap:anywhere;animation:nsws-feed-fade 12s ease both;}
 #nsws-chat-feed.typing .line{animation:none;}
