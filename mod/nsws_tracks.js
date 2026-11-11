@@ -2028,8 +2028,8 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         };
         function toggleGhost(key, ghost, b) {
             if (ghosts.has(key)) ghosts.delete(key);
-            else if (ghosts.size >= GHOSTS_MAX) {
-                toast("You can pick " + GHOSTS_MAX + " runs at most.");
+            else if (ghosts.size >= GHOSTS_MAX && !window.__nswsWatchUnlimited?.()) {
+                toast("You can pick " + GHOSTS_MAX + " runs at most." + (window.__nswsUltraBlocked?.() ? "" : " Unlimited watch cars in Settings lifts this."));
                 return;
             } else ghosts.set(key, ghost);
             b.classList.toggle(b.classList.contains("nt-brow") ? "picked" : "on", ghosts.has(key));

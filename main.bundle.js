@@ -10013,7 +10013,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.CpSplits = 40] = "CpSplits",
                 e[e.CpsCounter = 41] = "CpsCounter",
                 e[e.WheelInfo = 42] = "WheelInfo",
-                e[e.WheelInfoScale = 43] = "WheelInfoScale"
+                e[e.WheelInfoScale = 43] = "WheelInfoScale",
+                e[e.WatchUnlimited = 44] = "WatchUnlimited"
             }(i || (i = {}));
             const r = i
         }
@@ -53282,6 +53283,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
             }], R.A.AutoGhost),
+            // Off: 5 runs at once on custom tracks. On: no limit, and every picked run loads to its end before Watch plays.
+            C.get(this, ms, "m", Gs).call(this, "Unlimited watch cars", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true",
+                available: !ultraBlockReason(C.get(this, ys, "f"))
+            }], R.A.WatchUnlimited),
             C.get(this, ms, "m", Gs).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Default camera"), [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Default"),
                 value: "false"
@@ -54366,6 +54376,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             return ultraBlockCache = null;
         }
         window.__nswsUltraBlocked = () => !!ultraBlockCache;
+        // Unlimited watch cars is never on for a device that Ultra is blocked on, whatever its saved setting says.
+        window.__nswsWatchUnlimited = () => window.__nswsSettingBoolean?.("WatchUnlimited") === !0 && void 0 !== ultraBlockCache && null == ultraBlockCache;
         // Ultra can be more than a weak GPU or a small amount of memory can take: a render throws, the
         // WebGL context is lost (the canvas goes black or white), or the whole tab crashes. Each case
         // lowers the graphics one step instead of leaving the game broken.
@@ -55042,7 +55054,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ;
         // Each ghost is a whole car to simulate and draw, so Low performance mode keeps it to 10.
-        const nswsGhostLimit = () => keyBindSettings?.getSettingBoolean(R.A.LowPerformanceMode) ? 10 : 1 / 0;
+        const nswsGhostLimit = () => keyBindSettings?.getSettingBoolean(R.A.LowPerformanceMode) && !window.__nswsWatchUnlimited?.() ? 10 : 1 / 0;
         const Lo = class {
             constructor(e, t, n, i, r, a, s, o, l, c, h) {
                 Xs.add(this),
@@ -61963,7 +61975,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -63135,6 +63147,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     null != e.carId && (C.get(this, Zp, "f").deleteCar(e.carId),
                     e.carId = null),
                     e.car.dispose();
+                C.get(this, Zp, "f").release?.();
                 C.get(this, mf, "f").dispose(),
                 C.get(this, Af, "f").dispose(),
                 C.get(this, vf, "f").dispose(),
@@ -63420,6 +63433,47 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , ready = !1
                   , physics = 1
                   , query = "";
+                // The block file (~80 MB) changes only with the blocks, yet each Better Editor deploy gives it a new ETag, so
+                // browsers downloaded it again after every one. Cache Storage keeps it by tm_parts.js's hash of it instead.
+                const cachedBlocks = async load => {
+                    const hash = self.TM_DATA?.hash
+                      , url = (self.TM_BASE || "") + "models/tm_blocks.bin";
+                    if (!hash || !self.caches)
+                        return load();
+                    const key = location.origin + "/nsws-be-blocks/" + hash + "-" + self.TM_DATA.binBytes;
+                    let cache = null
+                      , hit = null;
+                    try {
+                        cache = await caches.open("nsws-be-blocks"),
+                        hit = await cache.match(key) ?? null
+                    } catch (e) {}
+                    const real = window.fetch
+                      , mine = function(input) {
+                        if (String(input?.url ?? input) !== url)
+                            return real.apply(this, arguments);
+                        if (hit)
+                            return Promise.resolve(hit);
+                        return real.apply(this, arguments).then((r => {
+                            r.ok && cache && cache.put(key, r.clone()).then(( () => cache.keys())).then((keys => Promise.all(keys.filter((k => k.url !== key)).map((k => cache.delete(k)))))).catch((e => console.warn(e)));
+                            return r
+                        }
+                        ))
+                    };
+                    window.fetch = mine;
+                    try {
+                        return await load()
+                    } catch (e) {
+                        if (!hit)
+                            throw e;
+                        console.warn(e),
+                        await cache.delete(key).catch(( () => {}
+                        )),
+                        hit = null;
+                        return await load()
+                    } finally {
+                        window.fetch === mine && (window.fetch = real)
+                    }
+                };
                 const from = async b => {
                     self.TM_BASE = b;
                     // The files go by physics.json's version: the site's files stay cached for 10 minutes, and a run on a
@@ -63451,7 +63505,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     self.TM.hud?.setWheels(window.__nswsSettingBoolean?.("WheelInfo") === true);
                     self.TM.hud?.setWheelsSize?.(parseFloat(window.__nswsSetting?.("WheelInfoScale")));
                     await u;
-                    await self.TM.load();
+                    await cachedBlocks(() => self.TM.load());
                     // The physics workers read the page's copy of the block file (mod/nsws_tracks.js sends them its address).
                     window.__nswsSimWorkersSync?.()
                 };
@@ -63584,6 +63638,75 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // Replays runs of a parsed track, then calls done. tmBase gives them a simulation of their own that loads
             // Better Editor's blocks from there: an older commit, for runs driven on older physics.
             let ownSim = null;
+            // Watch's replays spread over a few physics workers. Each car builds its own collision mesh before its first
+            // frame (about a second on a big Better Editor track), and one worker set every car up in turn.
+            const watchSims = (base, runs, data) => {
+                const n = runs?.length ?? 0;
+                // Each worker holds its own copy of the blocks (~100 MB on Better Editor tracks).
+                const mem = navigator.deviceMemory
+                  , mobile = !!navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "");
+                let low = !0;
+                try {
+                    low = window.__nswsSettingBoolean?.("LowPerformanceMode") === !0 && !window.__nswsWatchUnlimited?.() || mobile || "number" == typeof mem && mem < 4
+                } catch (e) {}
+                const be = null != self.TM && !!data?.hasExtendedParts?.()
+                  , most = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 4) - 2))
+                  , k = low ? 1 : Math.min(most, be ? n : Math.ceil(n / 4));
+                if (k < 2)
+                    return base;
+                const sims = [base]
+                  , cars = new Map
+                  , tmBase = base.__nswsTMBase ?? null;
+                let made = 0
+                  , next = 0
+                  , track = null
+                  , save = null;
+                const simAt = j => {
+                    for (; sims.length <= j; ) {
+                        window.__nswsSimBase = tmBase;
+                        try {
+                            sims.push(new Lu.A(!1,d,t))
+                        } finally {
+                            window.__nswsSimBase = null
+                        }
+                    }
+                    return sims[j]
+                };
+                return {
+                    createCar(p, vertices, offset, trackData, recording, update) {
+                        // A Better Editor track's save string is deflated each time it is asked for.
+                        track !== trackData && (track = trackData,
+                        save = trackData.toSaveString());
+                        const s = simAt(made++ % k)
+                          , r = s.createCar(p, vertices, offset, {
+                            toSaveString: () => save
+                        }, recording, update)
+                          , id = next++;
+                        cars.set(id, {
+                            s,
+                            id: r.id
+                        });
+                        return {
+                            id,
+                            carState: r.carState
+                        }
+                    },
+                    startCar(id, frames) {
+                        const c = cars.get(id);
+                        c && c.s.startCar(c.id, frames)
+                    },
+                    deleteCar(id) {
+                        const c = cars.get(id);
+                        c && (cars.delete(id),
+                        c.s.deleteCar(c.id))
+                    },
+                    release() {
+                        for (const s of sims.splice(1))
+                            s.dispose();
+                        cars.clear()
+                    }
+                }
+            };
             window.__nswsWatchTrack = (meta, data, runs, done, tmBase) => {
                 if (!data?.hasStartingPoint?.())
                     return !1;
@@ -63592,7 +63715,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (tmBase) {
                     window.__nswsSimBase = tmBase;
                     try {
-                        ownSim = new Lu.A(!1,d,t)
+                        ownSim = new Lu.A(!1,d,t),
+                        ownSim.__nswsTMBase = tmBase
                     } finally {
                         window.__nswsSimBase = null
                     }
@@ -63866,7 +63990,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 o.trigger(( () => {
                     P.pS(),
                     Q.dispose(),
-                    Q = new Rf(sim ?? f,v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
+                    Q = new Rf(watchSims(sim ?? f, i, t),v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
                         if (watchingClip) {
                             showClipSkyOverlay(),
                             watchingClip = false,

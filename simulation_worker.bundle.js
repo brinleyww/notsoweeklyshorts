@@ -13423,8 +13423,9 @@
                     }(s)
                 }
             }
-            for (const t of jo)
-                i(t);
+            // Messages from before the physics was ready run at the end, once everything below is defined: a CreateCar
+            // run here met __RL before its initialisation (a worker made just before a Watch).
+            const queued = jo.splice(0);
             function r(e, i, r, s, n, rocketVersion) {
                 const tmCar = null == self.TM ? null : (__tmAddProxies(),
                 self.TM.prepareCar(e, i, r, s, ( (t, e, i) => Ao(t).tiles.rotated(e, i))));
@@ -14295,6 +14296,8 @@
                     i.post()
                 }
             }
+            for (const t of queued)
+                i(t)
         }
         ))
     }

@@ -4199,8 +4199,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             const P = car.getPosition();
             const pivot = this.pivot.copy(P).addScaledVector(this.up, 0.6);
             if (!this.enabled) {
-                this.holding = false;
-                this.showWaiting(stalled);
+                const ready = this.exporting ? 1 : this.loadAll(runs);
+                this.holding = ready < 1;
+                this.showWaiting(stalled || this.holding, ready < 1 ? ready : null);
                 if (!o.isSpectator()) this.viewer.apply(o.render.camera, pivot, o.render.camera === car.cameraCockpit);
                 ghostLod(runs.map((r) => r.car), car, o.render.camera, this.clock());
                 return;
@@ -4259,19 +4260,46 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             if (planner.preloaded) return 1;
             const now = performance.now();
             const need = Math.round((this.o.totalTime?.() ?? 0) * 1000) - 1;
-            const loaded = Math.min(...runs.map((r) => r.replay.getLastFrame().numberOfFrames));
-            const pr = planner.pre ??= { loaded: -1, planned: -1, since: now };
-            if (loaded !== pr.loaded || planner.plannedTo !== pr.planned) {
-                pr.loaded = loaded;
+            const frames = runs.map((r) => r.replay.getLastFrame().numberOfFrames);
+            const loaded = Math.min(...frames);
+            const sum = frames.reduce((a, b) => a + b, 0);
+            const pr = planner.pre ??= { sum: -1, planned: -1, since: now };
+            if (sum !== pr.sum || planner.plannedTo !== pr.planned) {
+                pr.sum = sum;
                 pr.planned = planner.plannedTo;
                 pr.since = now;
             }
-            if (loaded >= need && planner.done || now - pr.since > 4000) {
+            // Better Editor cars spend seconds building their collision before their first frame.
+            if (loaded >= need && planner.done || now - pr.since > (sum > 0 ? 4000 : 30000)) {
                 planner.preloaded = true;
                 return 1;
             }
             const end = (planner.path.finish ?? planner.total) + 4;
             return clamp(0.5 * clamp(loaded / Math.max(1, need), 0, 1) + 0.5 * clamp(planner.plannedTo / end, 0, 1), 0, 0.99);
+        }
+
+        // Unlimited watch cars (window.__nswsWatchUnlimited): playback waits until every replay has loaded to its end.
+        // 0..1, 1 once loaded; 30 s with no replay moving on plays what there is.
+        loadAll(runs) {
+            if (this.allLoaded || !window.__nswsWatchUnlimited?.()) return 1;
+            const now = performance.now();
+            const need = Math.round((this.o.totalTime?.() ?? 0) * 1000) - 1;
+            let sum = 0, min = Infinity;
+            for (const r of runs) {
+                const f = r.replay.getLastFrame().numberOfFrames;
+                sum += f;
+                if (f < min) min = f;
+            }
+            const st = this.loadState ??= { sum: -1, since: now };
+            if (sum !== st.sum) {
+                st.sum = sum;
+                st.since = now;
+            }
+            if (min >= need || now - st.since > 30000) {
+                this.allLoaded = true;
+                return 1;
+            }
+            return clamp(sum / Math.max(1, need * runs.length), 0, 0.99);
         }
 
         // Shows the spinner while playback waits: for every replay to load and the edit to be
