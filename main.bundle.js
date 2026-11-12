@@ -430,6 +430,11 @@ window.__nswsAutoGhostNote = function(trackId) {
     // Every other car in a race: chosen opponents, your own ghost, and multiplayer players. Lasts
     // until pressed again or the page reloads.
     let ghostsHidden = false;
+    // Hidden ghosts take their skid marks and drift smoke with them. Set only when the toggle changes, so a cup hiding
+    // a car (which also uses effectsHidden) is not undone every frame.
+    const ghostFx = (car) => {
+        if ((car.__ghostFx ?? false) !== ghostsHidden) car.effectsHidden = car.__ghostFx = ghostsHidden;
+    };
     const CUP_CHAT_KEYBIND_STORAGE_KEY = "_cupChatKeyBind";
     const DEFAULT_CUP_CHAT_KEYBIND = "KeyY";
     function getCupChatKeyBind() {
@@ -46935,6 +46940,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 e.car.update(n)
                             }
                             e.hasEnded || e.car.setVisible(!ghostsHidden),
+                            ghostFx(e.car),
                             e.hasEnded || ghostsHidden || C.get(this, Ba, "f").isEnabled ? e.car.audioVolume = 0 : e.car.audioVolume = C.get(this, Oa, "f")
                         }
                     cupCarsHook?.(this, n);
@@ -46961,6 +46967,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     for (const e of C.get(this, Ra, "f").values()) {
                         if (e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
+                        ghostFx(e.car),
                         e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
                         e.bufferedCarStates.length > 0) {
@@ -46999,6 +47006,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         e.car.audioCulled = !!e.car.__cupHidden || null != loud && !loud.has(e),
                         e.car.isPaused = !1,
                         e.car.setVisible(!ghostsHidden),
+                        ghostFx(e.car),
                         e.car.audioVolume = ghostsHidden ? 0 : C.get(this, Oa, "f"),
                         quiet(e.car) ? (e.car.setVisible(!1), e.car.leaveMarks(n)) : e.car.update(n);
                     // Not So Weekly Shorts: other racers and bots are culled off screen and drawn simpler when small,
