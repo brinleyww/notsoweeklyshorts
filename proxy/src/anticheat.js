@@ -59,6 +59,7 @@ export class AntiCheat extends DurableObject {
         ctx.blockConcurrencyWhile(async () => {
             this.migrate();
             await this.recheckRocket();
+            await this.clearFirstRunFlags();
         });
     }
 
@@ -172,6 +173,21 @@ export class AntiCheat extends DurableObject {
         this.sql.exec("DELETE FROM rejects WHERE week = 11 AND reason = 'no-finish'");
         await this.ctx.storage.put("recheck-rocket-1", true);
         await this.kick();
+    }
+
+    // Flags set before first runs were let off.
+    async clearFirstRunFlags() {
+        if (await this.ctx.storage.get("first-run-flags-1")) return;
+        this.sql.exec(`UPDATE runs SET flags = NULL WHERE flags != '' AND user_id IS NOT NULL AND NOT EXISTS
+            (SELECT 1 FROM runs p WHERE p.track = runs.track AND p.user_id = runs.user_id AND p.id < runs.id)`);
+        await this.ctx.storage.put("first-run-flags-1", true);
+    }
+
+    // A player's first finish on a track is never flagged: no tries and little driving time are normal then.
+    // Only asked for a run that set off a flag, so a clean upload reads nothing more.
+    firstOnTrack(track, userId, id) {
+        if (!userId) return false;
+        return !this.sql.exec("SELECT 1 FROM runs WHERE track = ? AND user_id = ? AND id < ? LIMIT 1", track, userId, id).toArray().length;
     }
 
     // The dashboard's totals. Counting the tables on every refresh read every row each time, which
@@ -445,7 +461,7 @@ export class AntiCheat extends DurableObject {
         if (Number.isSafeInteger(r.uploadId) && r.uploadId > 0) {
             const now = Date.now();
             this.saveRun(r.track, r.week, entry, r.state, "proxy", null, now, r);
-            if (r.flags) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
+            if (r.flags && !this.firstOnTrack(r.track, r.userId, r.uploadId)) this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", r.flags, r.uploadId);
             this.keepRecording(r.track, r.userId, r.uploadId, r.keep, r.carStyle);
             // Beat the hidden run: Kodub dropped it, so there is nothing left to stand in for.
             const gone = this.sql.exec("DELETE FROM reverts WHERE track = ? AND user_id = ? AND hidden_id != ?", r.track, r.userId ?? "", r.uploadId);
@@ -723,7 +739,7 @@ export class AntiCheat extends DurableObject {
     // a write, and the place is kept in one key, so a scan writes about one row a step however clean the runs are.
     async scanFlags() {
         const after = (await this.ctx.storage.get(FLAG_SCAN_KEY)) ?? 0;
-        const rows = this.sql.exec("SELECT id, frames, flags, source, state, driven_ms, tries FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, SCAN_RUNS).toArray();
+        const rows = this.sql.exec("SELECT id, track, user_id, frames, flags, source, state, driven_ms, tries FROM runs WHERE id > ? ORDER BY id LIMIT ?", after, SCAN_RUNS).toArray();
         const todo = rows.filter((r) => r.flags == null && r.source !== "owner" && r.state !== "invalid" && r.id < HELD_RUN_BASE);
         const reads = [];
         for (let i = 0; i < todo.length; i += CHECK_BATCH) reads.push(this.fetchRecordings(todo.slice(i, i + CHECK_BATCH).map((r) => r.id)));
@@ -732,7 +748,7 @@ export class AntiCheat extends DurableObject {
         for (const r of todo) {
             const recording = found.get(r.id);
             const flags = recording ? await inputFlags(recording, r.frames, { drivenMs: r.driven_ms, tries: r.tries }).catch(() => "") : "";
-            if (!flags) continue;
+            if (!flags || this.firstOnTrack(r.track, r.user_id, r.id)) continue;
             this.sql.exec("UPDATE runs SET flags = ? WHERE id = ?", flags, r.id);
             flagged++;
         }

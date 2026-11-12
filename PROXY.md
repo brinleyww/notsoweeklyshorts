@@ -266,6 +266,9 @@ reads a run's key presses and stores why they look machine-made in `runs.flags` 
 owner cleared it). A run is flagged for 3+ presses under 10 ms, more than 15 key changes a second, or 40%+ of
 20+ presses the same length. The reset key doesn't count, since Royale tracks press it for a few ms on every run.
 On 2,200 real runs from weeks 1-10, 2 were flagged. Careful edits that only move a press by a few ms set off nothing.
+A player's first finish on a track is never flagged (no earlier run of theirs on that track in `runs`): no tries and
+little driving time are normal then. That lookup only happens for a run that set off a rule, so clean uploads read nothing
+more. Flags already on first runs were cleared once when the Durable Object started (`first-run-flags-1`).
 
 Flags hide nothing. Race Control's Anti-cheat tab lists them under Suspicious runs, and Clear removes a flag. New
 uploads are flagged at upload; "Scan older runs" goes through the rest 40 at a time (5 Kodub reads at once, since
