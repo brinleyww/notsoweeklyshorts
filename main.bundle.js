@@ -55273,6 +55273,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     b.appendChild(e)
                 } else {
                     const e = document.createElement("img");
+                    // Pixel-sharp scaling is for small map pictures blown up; a big picture shrunk that way comes out jagged.
+                    e.onload = () => {
+                        const w = e.clientWidth || 310
+                          , h = e.clientHeight || 210;
+                        Math.min(w / e.naturalWidth, h / e.naturalHeight) < 1 && (e.style.imageRendering = "auto")
+                    }
+                    ,
                     e.src = d,
                     b.appendChild(e)
                 }
@@ -59111,6 +59118,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
+        // Week 12's thumbnails are pictures, not pixel maps: never pixel-sharp scaling, on any screen.
+        document.head.appendChild(Object.assign(document.createElement("style"), { textContent: 'img[src*="thumbnails/week12_"] { image-rendering: auto !important; }' }));
 
         const __nswsWeekKey = (chunks, masks) => {
             const _x = (h1, h2) => {
