@@ -1255,6 +1255,8 @@
         hideTimer = null;
         if (!frame) createFrame();
         host.classList.remove("hidden");
+        // The game stops drawing under the editor (RenderManager.update in main.bundle.js).
+        window.__nswsEditorCovering = true;
         post({ type: "pause", paused: false });
         let settings = null;
         try {
@@ -1286,6 +1288,7 @@
             } catch {}
         }
         host.classList.add("hidden");
+        window.__nswsEditorCovering = false;
         autosave();
         // Hidden on the same site, the editor would keep drawing its whole track behind the game (BE's nsws_bridge.js).
         post({ type: "pause", paused: true });

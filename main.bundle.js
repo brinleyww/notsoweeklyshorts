@@ -6379,6 +6379,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     i.get(this, k, "f").clear()
                 }
                 update(e) {
+                    // The Custom Tracks Editor covers the whole page and draws its own frames.
+                    if (window.__nswsEditorCovering) return;
                     try {
                         this.renderFrame(e)
                     } catch (err) {
