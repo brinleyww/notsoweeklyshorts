@@ -209,6 +209,10 @@
 .nrc-planlab{font-size:15px;color:rgba(255,255,255,.55);}
 .nrc-planinfo{display:block;margin-top:8px;font-size:13px;color:rgba(255,255,255,.55);line-height:1.35;align-self:center;}
 .nrc-acts .nrc-planinfo{margin-top:0;}
+.nrc-acts .nrc-planlab{align-self:center;font-size:13px;}
+.nrc-weeks{flex-wrap:wrap;}
+.nrc-acts .nrc-weeks .button{font-size:13px;padding:5px 11px;}
+.nrc-weeks .button:disabled{opacity:.5;pointer-events:none;}
 .nrc-acts .button.armed.del{color:${BAD};}
 .nrc-plan .nrc-acts .button.armed{color:${GOLD};box-shadow:inset 0 -3px 0 ${GOLD};}
 .nrc-pollacts{display:flex;gap:8px;flex-wrap:wrap;}
@@ -620,6 +624,8 @@
         subsAll: null,
         subsError: null,
         subsFilter: "new",
+        // Weeks the Planned list shows (0 = no week); empty shows every week. Kept until the page reloads.
+        subsWeeks: new Set(),
         subsNew: null,
         subsTicket: 0,
         subsLoading: null,
@@ -3063,7 +3069,23 @@
         if (!ui.subsAll) return null;
         const f = ui.subsFilter;
         const rows = f === "all" ? ui.subsAll.slice() : ui.subsAll.filter((s) => s.status === f);
-        return f === "planned" ? rows.sort(byPlan) : rows;
+        if (f !== "planned") return rows;
+        const weeks = ui.subsWeeks;
+        return (weeks.size ? rows.filter((s) => weeks.has(s.week || 0)) : rows).sort(byPlan);
+    }
+
+    // Weeks with planned tracks and how many each, plus picked weeks that have none left.
+    function plannedWeeks() {
+        const count = new Map();
+        for (const s of ui.subsAll || []) if (s.status === "planned") count.set(s.week || 0, (count.get(s.week || 0) || 0) + 1);
+        for (const w of ui.subsWeeks) if (!count.has(w)) count.set(w, 0);
+        return [...count].sort((a, b) => (a[0] || 1e9) - (b[0] || 1e9));
+    }
+
+    function weeksText(weeks) {
+        const names = [...weeks].sort((a, b) => (a || 1e9) - (b || 1e9)).map((w) => (w ? String(w) : "no week"));
+        const list = names.length > 1 ? names.slice(0, -1).join(", ") + " or " + names[names.length - 1] : names[0];
+        return names[0] === "no week" ? list : "week " + list;
     }
 
     function subsProblem(err) {
@@ -3213,10 +3235,13 @@
         for (const x of new Set([s, ui.subsAll?.find((y) => y.id === s.id)])) if (x) Object.assign(x, change);
         ui.subsNew = (ui.subsAll || []).filter((x) => x.status === "new").length;
         subsLabel();
-        const next = ui.subsFilter !== "all" && ui.subsFilter !== status ? pickAfter(rows, at) : null;
+        // It leaves the list when its filter (or the Planned week picker) no longer shows it.
+        const gone = at >= 0 && !(subsRows() || []).some((x) => x.id === s.id);
+        const next = gone ? pickAfter(rows, at) : null;
         const name = s.name || "The track";
         const then = next ? " Next up: " + (next.name || "Untitled") + "." : "";
-        if (status === "planned") return name + " is planned for week " + week + (change.slot ? ", map " + change.slot : "") + ". The player sees that in My submissions." + then;
+        const hidden = gone && status === "planned" && ui.subsFilter === "planned" ? " Week " + week + " isn't one of the weeks shown." : "";
+        if (status === "planned") return name + " is planned for week " + week + (change.slot ? ", map " + change.slot : "") + ". The player sees that in My submissions." + hidden + then;
         if (status === "rejected") return name + " was rejected." + (ownerNote ? " The player sees your note." : "") + then;
         return name + " is back in New." + then;
     }
@@ -3286,6 +3311,11 @@
         }));
         const tools = ui.subsToolsBox;
         tools.textContent = "";
+        if (ui.subsFilter === "planned" && (n.planned || ui.subsWeeks.size)) {
+            tools.hidden = false;
+            weekPicker(tools);
+            return;
+        }
         tools.hidden = !(ui.subsFilter === "rejected" && n.rejected);
         if (tools.hidden) return;
         const b = el("button", "button", "Add all " + num(n.rejected) + " to the club campaign");
@@ -3294,6 +3324,31 @@
         b.addEventListener("click", () => subAction("Getting the tracks…", addRejectedToClub));
         tools.appendChild(b);
         tools.appendChild(el("span", "nrc-planinfo", "Club " + REJECT_CLUB + ", campaign “" + REJECT_CAMPAIGN + "”. Already added ones are skipped."));
+    }
+
+    // Click a week to see only it, more weeks to add them, All weeks to see everything again.
+    function weekPicker(tools) {
+        const picked = ui.subsWeeks;
+        const box = el("div", "nrc-toggle nrc-weeks");
+        const pick = (change) => {
+            change();
+            ui.subsNote = "";
+            ui.subsArm = ui.subsPlanArm = null;
+            if (!(subsRows() || []).some((s) => s.id === ui.subsPick)) ui.subsPick = null;
+            renderSubLists();
+        };
+        const all = el("button", "button" + (picked.size ? "" : " on"), "All weeks");
+        all.disabled = ui.subsBusy;
+        all.addEventListener("click", () => picked.size && pick(() => picked.clear()));
+        box.appendChild(all);
+        for (const [w, c] of plannedWeeks()) {
+            const b = el("button", "button" + (picked.has(w) ? " on" : ""), (w ? "Week " + w : "No week") + " (" + num(c) + ")");
+            b.title = picked.has(w) ? "Stop showing " + weeksText([w]) : picked.size ? "Show " + weeksText([w]) + " too" : "Show only " + weeksText([w]);
+            b.disabled = ui.subsBusy;
+            b.addEventListener("click", () => pick(() => (picked.has(w) ? picked.delete(w) : picked.add(w))));
+            box.appendChild(b);
+        }
+        tools.append(el("span", "nrc-planlab", "Weeks"), box);
     }
 
     function pickSub(s, keyboard) {
@@ -3556,7 +3611,8 @@
             return;
         }
         if (!rows.length) {
-            list.appendChild(el("div", "nrc-empty", SUB_EMPTY[ui.subsFilter] || SUB_EMPTY.all));
+            const weeks = ui.subsFilter === "planned" && ui.subsWeeks.size;
+            list.appendChild(el("div", "nrc-empty", weeks ? "Nothing planned for " + weeksText(ui.subsWeeks) + "." : SUB_EMPTY[ui.subsFilter] || SUB_EMPTY.all));
             return;
         }
         const headers = [["Track", "name"], ["Author", "name"], ["Sent by", "name"], ["Mode"], ["Scenery"], ["Sent", "num"], ["Size", "num"], ["Note", "name"], ["Status"]];
