@@ -1534,6 +1534,8 @@ function readTrackSync(t) {
     const v = p?.mountainVertices;
     const o = p?.mountainOffset;
     if (!HEX64.test(t?.id ?? "") || !Number.isSafeInteger(t.week)) return null;
+    // A Better Editor track: this simulation has none of its blocks, so its runs are taken as they come.
+    if (p?.trusted === "be") return { id: t.id, week: t.week, payload: { trusted: "be", physics: Number.isSafeInteger(p.physics) ? p.physics : null } };
     if (typeof p?.trackData !== "string" || !p.trackData || !Array.isArray(v) || v.length > 200_000) return null;
     if (!v.every(Number.isFinite) || ![o?.x, o?.y, o?.z].every(Number.isFinite)) return null;
     return { id: t.id, week: t.week, payload: { trackData: p.trackData, mountainVertices: v, mountainOffset: { x: o.x, y: o.y, z: o.z } } };

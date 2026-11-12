@@ -59092,6 +59092,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             tracks: [{ id: "75d1e81d2964e64a61163891f057f0f9cd9f825ed13ba5155664bb975fa2c8e7", name: "1 - 4 seasons", short: "4Sea", author: "TD_blox & Xav", env: "Winter", thumb: "tracks/community/thumbnails/week11_3.png", rocket: true }, { id: "8a35fa08981d6aff50ed71d7f0a9869bbfc46cea3ec77a31694d8cc80c35a716", name: "2 - PRECISION MAPPENG", short: "Prec", author: "Cookedbyapringle", env: "Desert", thumb: "tracks/community/thumbnails/week11_5.png", notice: "Respawn after collecting each checkpoint to progress." }, { id: "4ec25597eb1d3fdd83bc463a9a6cf60c85b0792150763487c388c9cde43a6ea0", name: "3 - Launch Control", short: "Lnch", author: "BonnieBeans", env: "Summer", thumb: "tracks/community/thumbnails/week11_1.png", rocket: true }, { id: "cbe44e38c0e7c7db1360dc80cf1aebeb219fc2baff237b2e6587221c1f0dfb93", name: "4 - Solaris", short: "Solar", author: "HummusHere & cheesebob", env: "Desert", thumb: "tracks/community/thumbnails/week11_2.png", rocket: true }, { id: "bac8cd4a54aaa720038c0a2e1dc7ecb3349d4316b16707db8bc649b275ab714b", name: "5 - Flying Dreams", short: "Dream", author: "Forty, Shovelfish, Hero", env: "Summer", thumb: "tracks/community/thumbnails/week11_4.png", rocket: true }]
         },
         {
+            week: 12,
+            chunks: ["2f4799fec223647d", "766c2723cbf12c0c", "783498e532d4fe85", "3b1123e5c96fbe6f"],
+            masks: ["7b563c818dee24e8", "cfd277d5d7ed5f9d", "1468f2c00c698c69", "c79ffeec7b777e24"],
+            file: "tracks/community/week12.track",
+            // Better Editor tracks. They race on this Better Editor commit's physics, whichever version is live.
+            be: { physics: 25, commit: "042ac1313cc1023fd90e4ddb32008b2cb946f962" },
+            tracks: [{ id: "0a2bf0951b1b6a9beb7b1036d830d18a185ccdd991b771c8b023ae4410894880", name: "1 - Summer 1 Retextured", short: "S1Re", author: "Kodub", env: "Summer", thumb: "tracks/community/thumbnails/week12_1.png" }, { id: "8fa80b47833c3d28cfd32682071bc12abc2430a7faacf66324ced57a827e32e8", name: "2 - Technical stadium", short: "TStad", author: "Schemzboi", env: "Summer", thumb: "tracks/community/thumbnails/week12_2.png" }, { id: "75daa5f5afea15106549e1752dec82ca1b64343958094fb0753a00f365fd7d9e", name: "3 - Secret Tunnel", short: "Tunl", author: "🐭Simo_900 (1nd)😫", env: "Summer", thumb: "tracks/community/thumbnails/week12_3.png" }, { id: "69c659490aca789231d6ebff499fa9735c2c4558815cd5be1d73b4d1ae15779e", name: "4 - Icy Precision", short: "Icy", author: "person", env: "Winter", thumb: "tracks/community/thumbnails/week12_4.png" }, { id: "03b6cf96283eb894e12dc65140c390fd30d181718c9c06c585b7986a6437fe69", name: "5 - MEGA EASY OBBY ROBLOX", short: "Obby", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/week12_5.png" }]
+        },
+        {
             week: 1031,
             label: "Halloween",
             event: { from: Date.UTC(2026, 9, 31, 0, 0), until: Date.UTC(2026, 10, 5, 5, 41) },
@@ -59189,6 +59198,17 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         window.addEventListener("nsws-track-modes", () => {
             null != window.__nswsSceneTrackId && window.__nswsRocket?.retrack?.(!!window.__nswsRocketTrack(window.__nswsSceneTrackId))
         });
+        // A Better Editor week's pinned Better Editor for one of its tracks: { physics, commit, base }, else null.
+        window.__nswsWeekBE = trackId => {
+            for (const w of __nswsWeeks)
+                for (const p of __nswsPartsOf(w))
+                    for (const t of p.tracks || [])
+                        if (t.id === trackId) {
+                            const be = t.be || p.be || w.be;
+                            return be ? { physics: be.physics, commit: be.commit, base: window.__nswsApiBase + "be@" + be.commit + "/" } : null;
+                        }
+            return null;
+        };
         window.__nswsNoMedals = trackId => __nswsWeeks.some(w => __nswsPartsOf(w).some(p => (p.tracks || []).some(t => t.id === trackId && t.noMedals)));
         window.__nswsTracksForWeek = function(week) {
             const w = (window.__nswsWeeks || []).find(w => w.week === week);
@@ -59202,7 +59222,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const t = (p.tracks || []).find(t => t.id === trackId);
                     if (!t) continue;
                     const container = await window.__nswsLoadTrackContainer(p.file);
-                    const parsed = TrackDataModule.A.fromExportString(container[t.contentId ?? t.id]);
+                    const raw = container[t.contentId ?? t.id];
+                    raw?.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure();
+                    const parsed = raw && TrackDataModule.A.fromExportString(raw);
+                    // The Worker can't simulate Better Editor blocks, so it takes these tracks' runs as they come.
+                    if (parsed?.trackData.hasExtendedParts?.())
+                        return { id: trackId, week: w.week, payload: { trusted: "be", physics: (t.be || p.be || w.be)?.physics ?? null } };
                     const payload = parsed && window.__nswsVerifyPayload(parsed.trackData);
                     return payload ? { id: trackId, week: w.week, payload } : null;
                 }
@@ -59258,6 +59283,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 const container = await window.__nswsLoadTrackContainer(e.weekRef.file);
                                 const raw = container[e.weekRef.id];
                                 if (null == raw) throw new Error("Track not found in week container");
+                                raw.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure();
                                 const parsed = TrackDataModule.A.fromExportString(raw);
                                 if (null == parsed) throw new Error("Failed to decrypt track");
                                 return { trackMetadata: parsed.trackMetadata, trackData: parsed.trackData };
@@ -61631,7 +61657,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 if (window.__nswsBEBoard?.(r) && this.determinismState == Js.Ok && !window.__nswsMacro?.locked())
                     return window.__nswsBESubmit(e, t, n, i, r, s, o);
                 return new Promise(( (l, c) => {
-                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(r))
+                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(r) && null == window.__nswsTrackWeek(r))
                         c(new Error("Submit not allowed"));
                     else {
                         const h = o.serialize();
@@ -63638,6 +63664,32 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // Replays runs of a parsed track, then calls done. tmBase gives them a simulation of their own that loads
             // Better Editor's blocks from there: an older commit, for runs driven on older physics.
             let ownSim = null;
+            // A Better Editor week races on its own Better Editor commit. Only once the live one has other physics do its
+            // races and replays need simulations of their own, which load that commit (kept for the rest of the visit).
+            const pinnedSims = new Map
+              , simsFor = data => {
+                let be = null;
+                try {
+                    be = null != self.TM && data?.hasExtendedParts?.() ? window.__nswsWeekBE?.(data.getId()) : null
+                } catch (e) {}
+                if (null == be || window.__nswsTM?.physics === be.physics)
+                    return null;
+                let s = pinnedSims.get(be.base);
+                if (null == s) {
+                    window.__nswsSimBase = be.base;
+                    try {
+                        s = {
+                            p: new Lu.A(!0,d,t),
+                            f: new Lu.A(!1,d,t)
+                        }
+                    } finally {
+                        window.__nswsSimBase = null
+                    }
+                    s.p.__nswsTMBase = s.f.__nswsTMBase = be.base,
+                    pinnedSims.set(be.base, s)
+                }
+                return s
+            };
             // Watch's replays spread over a few physics workers. Each car builds its own collision mesh before its first
             // frame (about a second on a big Better Editor track), and one worker set every car up in turn.
             const watchSims = (base, runs, data) => {
@@ -63736,7 +63788,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return !0
             };
             // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
-            window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id));
+            window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id)) && null == window.__nswsTrackWeek?.(id);
             let runPhysics = null;
             window.__nswsBESubmit = async (token, nickname, countryCode, carStyle, trackId, time, recording) => {
                 const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
@@ -63942,8 +63994,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         null))),
                         recording: k.recording
                     } : null;
+                    const pinned = simsFor(n);
                     try {
-                    Q = new ts(p,f,v,A,m,b,h,l,w,S,e,r,s,E,T,y,t,n,i,a,_,c,!0,(e => {
+                    Q = new ts(pinned?.p ?? p,pinned?.f ?? f,v,A,m,b,h,l,w,S,e,r,s,E,T,y,t,n,i,a,_,c,!0,(e => {
                         let t;
                         switch (e) {
                         case "kicked":
@@ -63990,7 +64043,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 o.trigger(( () => {
                     P.pS(),
                     Q.dispose(),
-                    Q = new Rf(watchSims(sim ?? f, i, t),v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
+                    Q = new Rf(watchSims(sim ?? simsFor(t)?.f ?? f, i, t),v,e,t,n,A,m,h,l,b,r,i,( (e, t, n, i) => {
                         if (watchingClip) {
                             showClipSkyOverlay(),
                             watchingClip = false,

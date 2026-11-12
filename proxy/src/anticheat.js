@@ -38,6 +38,10 @@ function hex(buffer) {
 
 export class RunChecker extends DurableObject {
     async check(track, recording, frames) {
+        if (track?.trusted === "be") {
+            if (!Number.isSafeInteger(frames) || frames < 1) return { valid: false, reason: "bad-time" };
+            return typeof recording === "string" && recording ? { valid: true } : { valid: false, reason: "no-recording" };
+        }
         this.simulator ??= new Simulator(physicsModule, mathModule, readInit(initData));
         return this.simulator.check(track, recording, frames);
     }
