@@ -63472,18 +63472,83 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , query = "";
                 // The block file (~80 MB) changes only with the blocks, yet each Better Editor deploy gives it a new ETag, so
                 // browsers downloaded it again after every one. Cache Storage keeps it by tm_parts.js's hash of it instead.
+                // While the block file downloads, the game's loading screen shows how far it has got instead of only its
+                // spinner (a week track's first Play waits on it there).
+                const blocksBar = (() => {
+                    let timer = null
+                      , got = 0
+                      , total = 0;
+                    const mb = n => (n / 1048576).toFixed(n < 10485760 ? 1 : 0)
+                      , draw = () => {
+                        for (const box of document.querySelectorAll(".loading-screen-ui > .loading-spinner-container")) {
+                            let bar = box.querySelector(".nsws-beload");
+                            if (!bar) {
+                                bar = document.createElement("div");
+                                bar.className = "nsws-beload";
+                                bar.innerHTML = '<p class="title">Loading Better Editor blocks</p><div class="track"><div></div></div><p class="sub"></p>';
+                                box.classList.add("nsws-beloading");
+                                box.appendChild(bar);
+                            }
+                            bar.querySelector(".track").classList.toggle("busy", !total);
+                            if (total) bar.querySelector(".track > div").style.width = Math.min(100, got / total * 100).toFixed(1) + "%";
+                            bar.querySelector(".sub").textContent = total && got >= total ? "Building the blocks..." : mb(got) + (total ? " of " + mb(total) : "") + " MB";
+                        }
+                    };
+                    if (!document.getElementById("nsws-beload-style"))
+                        document.head.appendChild(Object.assign(document.createElement("style"), {
+                            id: "nsws-beload-style",
+                            textContent: ".loading-spinner-container.nsws-beloading>.loading-spinner-ui{display:none;}.nsws-beload{width:min(420px,80vw);color:var(--text-color);text-align:center;}.nsws-beload>p{margin:0;}.nsws-beload>.title{font-size:24px;}.nsws-beload>.sub{font-size:16px;opacity:.75;}.nsws-beload>.track{position:relative;height:8px;margin:12px 0 8px;overflow:hidden;background:var(--surface-tertiary-color);}.nsws-beload>.track>div{position:absolute;top:0;bottom:0;left:0;width:0;background:var(--text-color);transition:width .2s;}.nsws-beload>.track.busy>div{width:35%;transition:none;animation:nsws-beload-busy 1.1s linear infinite;}@keyframes nsws-beload-busy{from{left:-35%;}to{left:100%;}}"
+                        }));
+                    return {
+                        progress(g, t) {
+                            got = g,
+                            total = t,
+                            timer ??= setInterval(draw, 150)
+                        },
+                        stop() {
+                            clearInterval(timer),
+                            timer = null;
+                            for (const bar of document.querySelectorAll(".nsws-beload"))
+                                bar.parentElement.classList.remove("nsws-beloading"),
+                                bar.remove()
+                        }
+                    }
+                }
+                )();
+                const countedBlocks = r => {
+                    if (!r.ok || !r.body)
+                        return r;
+                    const total = Number(self.TM_DATA?.binBytes) || Number(r.headers.get("content-length")) || 0
+                      , reader = r.body.getReader();
+                    let got = 0;
+                    blocksBar.progress(0, total);
+                    return new Response(new ReadableStream({
+                        async pull(c) {
+                            const {done: d, value: v} = await reader.read();
+                            if (d)
+                                return c.close();
+                            got += v.byteLength,
+                            blocksBar.progress(got, total),
+                            c.enqueue(v)
+                        },
+                        cancel: e => reader.cancel(e)
+                    }),{
+                        status: r.status,
+                        statusText: r.statusText,
+                        headers: r.headers
+                    })
+                };
                 const cachedBlocks = async load => {
                     const hash = self.TM_DATA?.hash
-                      , url = (self.TM_BASE || "") + "models/tm_blocks.bin";
-                    if (!hash || !self.caches)
-                        return load();
-                    const key = location.origin + "/nsws-be-blocks/" + hash + "-" + self.TM_DATA.binBytes;
+                      , url = (self.TM_BASE || "") + "models/tm_blocks.bin"
+                      , key = hash ? location.origin + "/nsws-be-blocks/" + hash + "-" + self.TM_DATA.binBytes : null;
                     let cache = null
                       , hit = null;
-                    try {
-                        cache = await caches.open("nsws-be-blocks"),
-                        hit = await cache.match(key) ?? null
-                    } catch (e) {}
+                    if (key && self.caches)
+                        try {
+                            cache = await caches.open("nsws-be-blocks"),
+                            hit = await cache.match(key) ?? null
+                        } catch (e) {}
                     const real = window.fetch
                       , mine = function(input) {
                         if (String(input?.url ?? input) !== url)
@@ -63492,7 +63557,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             return Promise.resolve(hit);
                         return real.apply(this, arguments).then((r => {
                             r.ok && cache && cache.put(key, r.clone()).then(( () => cache.keys())).then((keys => Promise.all(keys.filter((k => k.url !== key)).map((k => cache.delete(k)))))).catch((e => console.warn(e)));
-                            return r
+                            return countedBlocks(r)
                         }
                         ))
                     };
@@ -63573,7 +63638,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         d.addTMParts(i(405).registerTM(self.TM)),
                         ready = !0
                     }
-                    )().catch((e => {
+                    )().finally(blocksBar.stop).catch((e => {
                         throw loading = null,
                         e
                     }
