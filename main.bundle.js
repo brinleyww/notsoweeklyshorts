@@ -59148,7 +59148,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         window.__nswsLoadTrackContainer = async function(file) {
             if (window.__nswsFileTrackCache[file]) return window.__nswsFileTrackCache[file];
             const info = window.__nswsFileKeyCache[file];
-            const res = await fetch(info.file);
+            if (!info) throw new Error("No key for " + file);
+            const res = await fetch(info.file, { signal: AbortSignal.timeout?.(30000) });
+            if (!res.ok) throw new Error(info.file + ": " + res.status);
             const b64 = (await res.text()).trim();
             const keyBytes = new Uint8Array(info.keyHex.match(/../g).map(h => parseInt(h, 16)));
             const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["decrypt"]);
@@ -59289,6 +59291,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         const t = C.get(this, Zh, "f").get(e.id);
                         if (null != t)
                             return t.then(( ({trackData: e}) => e));
+                        // Any failure here is a TrackLoadError: the game shows "Failed to load track" only for those, and
+                        // anything else left the track screen gone or the loading spinner up for good.
                         const n = e.weekRef
                             ? (async () => {
                                 const container = await window.__nswsLoadTrackContainer(e.weekRef.file);
@@ -59298,7 +59302,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 const parsed = TrackDataModule.A.fromExportString(raw);
                                 if (null == parsed) throw new Error("Failed to decrypt track");
                                 return { trackMetadata: parsed.trackMetadata, trackData: parsed.trackData };
-                              })()
+                              })().catch((err => {
+                                if (err instanceof TrackLoadError) throw err;
+                                console.warn("Week track:", err);
+                                throw new TrackLoadError;
+                              }))
                             : C.get(this, Qh, "m", id).call(this, e.trackUrl);
                         C.get(this, Zh, "f").set(e.id, n);
                         try {
@@ -63458,11 +63466,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const own = localStorage.getItem("nswsBEBase");
                     /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname) && own && /^https?:\/\/\S+$/.test(own) && (base = own.replace(/\/?$/, "/"))
                 } catch (e) {}
+                // A connection that opens and then goes silent never fires load or error, which kept every Better Editor
+                // track loading for good: after STALL_MS each step fails instead, and the files come from the mirror.
+                const STALL_MS = 30000;
                 const script = src => new Promise(( (ok, fail) => {
-                    const e = document.createElement("script");
+                    const e = document.createElement("script")
+                      , timer = setTimeout(( () => fail(new Error("Timed out loading " + src))), 2 * STALL_MS);
                     e.src = src,
-                    e.onload = ok,
-                    e.onerror = () => fail(new Error("Couldn't load " + src)),
+                    e.onload = () => (clearTimeout(timer), ok()),
+                    e.onerror = () => (clearTimeout(timer), fail(new Error("Couldn't load " + src))),
                     document.head.appendChild(e)
                 }
                 ));
@@ -63515,23 +63527,27 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                 }
                 )();
-                const countedBlocks = r => {
+                const countedBlocks = (r, ctrl) => {
                     if (!r.ok || !r.body)
                         return r;
                     const total = Number(self.TM_DATA?.binBytes) || Number(r.headers.get("content-length")) || 0
                       , reader = r.body.getReader();
-                    let got = 0;
+                    let got = 0
+                      , idle = null;
                     blocksBar.progress(0, total);
                     return new Response(new ReadableStream({
                         async pull(c) {
+                            clearTimeout(idle),
+                            idle = setTimeout(( () => ctrl?.abort()), STALL_MS);
                             const {done: d, value: v} = await reader.read();
                             if (d)
-                                return c.close();
+                                return clearTimeout(idle),
+                                c.close();
                             got += v.byteLength,
                             blocksBar.progress(got, total),
                             c.enqueue(v)
                         },
-                        cancel: e => reader.cancel(e)
+                        cancel: e => (clearTimeout(idle), reader.cancel(e))
                     }),{
                         status: r.status,
                         statusText: r.statusText,
@@ -63555,9 +63571,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             return real.apply(this, arguments);
                         if (hit)
                             return Promise.resolve(hit);
-                        return real.apply(this, arguments).then((r => {
+                        const ctrl = new AbortController
+                          , wait = setTimeout(( () => ctrl.abort()), STALL_MS);
+                        return real.call(this, input, {
+                            signal: ctrl.signal
+                        }).then((r => {
+                            clearTimeout(wait),
                             r.ok && cache && cache.put(key, r.clone()).then(( () => cache.keys())).then((keys => Promise.all(keys.filter((k => k.url !== key)).map((k => cache.delete(k)))))).catch((e => console.warn(e)));
-                            return countedBlocks(r)
+                            return countedBlocks(r, ctrl)
+                        }
+                        ), (e => {
+                            throw clearTimeout(wait),
+                            e
                         }
                         ))
                     };
@@ -63580,7 +63605,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     self.TM_BASE = b;
                     // The files go by physics.json's version: the site's files stay cached for 10 minutes, and a run on a
                     // cached older tm_runtime.js would be saved as the new version, so its ghost would fail later.
-                    physics = await fetch(b + "physics.json", { cache: "no-cache" }).then((r => r.ok ? r.json() : null)).then((j => Number.isSafeInteger(j?.version) && j.version > 0 ? j.version : 1)).catch((() => 1));
+                    physics = await fetch(b + "physics.json", { cache: "no-cache", signal: AbortSignal.timeout?.(STALL_MS) }).then((r => r.ok ? r.json() : null)).then((j => Number.isSafeInteger(j?.version) && j.version > 0 ? j.version : 1)).catch((() => 1));
                     query = "?p=" + physics;
                     window.__nswsSimWorkersSync?.();
                     if (!self.TM_DATA && (await script(b + "tm_parts.js" + query), !self.TM_DATA))
