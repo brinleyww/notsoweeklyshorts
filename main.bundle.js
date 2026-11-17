@@ -43374,7 +43374,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         throw new Error("Car states are not continuous")
                 } else if (e.frames > 0)
                     throw new Error("First frame must be zero");
-                C.get(this, Gt, "f").push(e)
+                C.get(this, Gt, "f").push(e);
+                // Better Editor: each state of a run gets the vehicle the run has there (tm_vehicles.js stamp), so jumping
+                // a replay to any frame shows the right car.
+                this.__tmTrack && self.TM?.vehicles?.stamp?.(this, e)
             }
             getFrame(e) {
                 return e >= 0 && e < C.get(this, Gt, "f").length ? C.get(this, Gt, "f")[e] : null
@@ -45778,6 +45781,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         const n = e.settings.time.numberOfFrames + C.get(this, Wa, "f")
                           , i = new Ft
                           , r = [];
+                        i.__tmTrack = C.get(this, Yr, "f");
                         let a = 0;
                         const s = C.get(this, Rr, "f").createCar(t, C.get(this, Ir, "f").getMountainVertices(), C.get(this, Ir, "f").getMountainOffset(), C.get(this, Yr, "f"), e.settings.recording, (t => {
                             i.push(t),
@@ -62974,7 +62978,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     s.notificationAudioEnabled = C.get(this, df, "f") == r,
                     s.setCarStyle(n.carStyle);
                     const c = {
-                        replay: new Ft,
+                        replay: Object.assign(new Ft, {
+                            __tmTrack: i
+                        }),
                         checkpointTimes: [],
                         carId: null,
                         car: s,
