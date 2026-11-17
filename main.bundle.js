@@ -6352,15 +6352,37 @@ window.__nswsAutoGhostNote = function(trackId) {
                         canvas: canvas,
                         alpha: !0
                     };
+                    // After a failed attempt three.js asks the canvas for a plain context just to word its error, and the canvas
+                    // keeps that one (anti-aliasing on, whatever the setting), so a spare canvas is asked first.
+                    // Anti-aliasing costs a lot more when the CPU draws every pixel.
+                    let softwareOnly = !1;
                     try {
-                        s.failIfMajorPerformanceCaveat = !0,
+                        const probe = document.createElement("canvas").getContext("webgl2", {
+                            failIfMajorPerformanceCaveat: !0,
+                            powerPreference: "high-performance"
+                        });
+                        probe ? probe.getExtension("WEBGL_lose_context")?.loseContext() : softwareOnly = !0
+                    } catch (e) {}
+                    softwareOnly && (s.antialias = !1);
+                    try {
+                        s.failIfMajorPerformanceCaveat = !softwareOnly,
                         i.set(this, k, new a.WebGLRenderer(s), "f"),
-                        i.set(this, E, !1, "f")
+                        i.set(this, E, softwareOnly, "f")
                     } catch {
                         s.failIfMajorPerformanceCaveat = !1,
+                        s.antialias = !1,
                         i.set(this, k, new a.WebGLRenderer(s), "f"),
                         i.set(this, E, !0, "f")
                     }
+                    // Chrome forced onto SwiftShader passes the check above, so the renderer's name decides too. A real
+                    // GPU's name after a failed check (a browser being careful) is hardware; a hidden name trusts the check.
+                    try {
+                        const gl = i.get(this, k, "f").getContext()
+                          , dbg = gl.getExtension("WEBGL_debug_renderer_info")
+                          , gpu = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || "").toLowerCase();
+                        /swiftshader|llvmpipe|softpipe|software|basic render|warp/.test(gpu) ? i.set(this, E, !0, "f") : i.get(this, E, "f") && /nvidia|geforce|quadro|radeon|\bamd\b|intel|apple|adreno|mali/.test(gpu) && i.set(this, E, !1, "f")
+                    } catch (e) {}
+                    i.get(this, E, "f") && (window.__nswsSoftwareGL = !0);
                     i.get(this, k, "f").outputColorSpace = THREE.LinearSRGBColorSpace,
                     i.get(this, k, "f").debug.checkShaderErrors = !1,
                     i.set(this, T, new THREE.Scene, "f"),
@@ -54580,6 +54602,127 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             showGraphicsNote(pendingGraphicsNote);
             pendingGraphicsNote = null;
         }
+        // Without hardware acceleration the CPU draws every pixel: High End ran at 23 fps where Low End at 50% render
+        // scale held 60 (Windows' software renderer, 1600x900). The settings it changes are kept with the values it set,
+        // and once the GPU is back each one the player hasn't touched since goes back.
+        const SOFTWARE_RESTORE_KEY = "_nswsSoftwareRestore";
+        const SOFTWARE_RENDER_SCALE = "0.5";
+        function softwareModeCheck(renderer, settings, meshes) {
+            let saved = null;
+            try {
+                saved = JSON.parse(localStorage.getItem(SOFTWARE_RESTORE_KEY));
+            } catch (e) {}
+            if (renderer.isUsingSoftwareRenderer) {
+                if (saved)
+                    return;
+                const low = DEVICE_PRESETS[0];
+                const scale = settings.getSettingFloat(R.A.RenderScale) <= parseFloat(SOFTWARE_RENDER_SCALE) ? settings.getSetting(R.A.RenderScale) : SOFTWARE_RENDER_SCALE;
+                const target = devicePresetSettings(low, renderer).filter(([k]) => k != R.A.RenderScale).concat([[R.A.RenderScale, scale]]);
+                let preset = null;
+                try {
+                    preset = localStorage.getItem(DEVICE_PRESET_STORAGE_KEY);
+                } catch (e) {}
+                const record = {
+                    settings: target.filter(([k, v]) => settings.getSetting(k) !== v).map(([k, v]) => [k, settings.getSetting(k), v]),
+                    polyFx: [getPolyFxPreset(), low.polyFx],
+                    preset
+                };
+                settings.updateSettings(target);
+                settings.saveSettings();
+                meshes.generateMeshes();
+                setPolyFxPreset(low.polyFx);
+                try {
+                    localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, low.id);
+                    localStorage.setItem(SOFTWARE_RESTORE_KEY, JSON.stringify(record));
+                } catch (e) {}
+                return;
+            }
+            if (!saved || "object" != typeof saved)
+                return;
+            try {
+                localStorage.removeItem(SOFTWARE_RESTORE_KEY);
+            } catch (e) {}
+            const back = (Array.isArray(saved.settings) ? saved.settings : []).filter(e => Array.isArray(e) && settings.getSetting(e[0]) === e[2]).map(e => [e[0], e[1]]);
+            back.length && (settings.updateSettings(back),
+            settings.saveSettings(),
+            meshes.generateMeshes());
+            Array.isArray(saved.polyFx) && getPolyFxPreset() === saved.polyFx[1] && setPolyFxPreset(saved.polyFx[0]);
+            try {
+                if ("low" == localStorage.getItem(DEVICE_PRESET_STORAGE_KEY))
+                    null == saved.preset ? localStorage.removeItem(DEVICE_PRESET_STORAGE_KEY) : localStorage.setItem(DEVICE_PRESET_STORAGE_KEY, saved.preset);
+            } catch (e) {}
+            refreshDevicePresetBar?.();
+            pendingGraphicsNote = "Hardware acceleration is working again, so your graphics settings are back.";
+        }
+        function softwareFixSteps() {
+            const ua = navigator.userAgent || "";
+            if (null != window.electron)
+                return { title: "To fix it:", steps: ["Close the app completely and open it again.", "If that doesn't help, update your graphics drivers."] };
+            if (/Firefox\//.test(ua))
+                return { title: "To turn it on in Firefox:", steps: ["Open Settings and search for \"hardware acceleration\".", "Untick \"Use recommended performance settings\", then tick \"Use hardware acceleration when available\".", "Close Firefox completely and open it again."] };
+            const name = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Chrome\//.test(ua) ? "Chrome" : "your browser";
+            return { title: "To turn it on in " + name + ":", steps: ["Open Settings and search for \"graphics acceleration\".", "Turn on \"Use graphics acceleration when available\".", "Close every " + name + " window and open it again."] };
+        }
+        function ensureSoftwarePopupStyle() {
+            if (document.getElementById("nsws-software-popup-style")) return;
+            const style = document.createElement("style");
+            style.id = "nsws-software-popup-style";
+            style.textContent = `
+.software-renderer-ui { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 2; display: flex; flex-direction: column; width: 680px; max-width: calc(100% - 20px); max-height: calc(100% - 20px); background-color: var(--surface-color); color: var(--text-color); pointer-events: auto; }
+.software-renderer-ui > h2 { margin: 0; padding: 10px 20px 0 20px; font-size: 34px; font-weight: normal; text-align: center; }
+.software-renderer-ui > h3 { margin: 0; padding: 4px 20px 12px 20px; font-size: 20px; font-weight: normal; text-align: center; opacity: 0.8; }
+.software-renderer-ui > .body { margin: 0; padding: 14px 24px; background-color: var(--surface-secondary-color); overflow-y: auto; font-size: 19px; line-height: 1.35; text-align: left; }
+.software-renderer-ui > .body > p { margin: 0 0 10px 0; }
+.software-renderer-ui > .body > ol { margin: 0 0 10px 0; padding-left: 26px; }
+.software-renderer-ui > .body > .muted { opacity: 0.75; margin: 0; }
+.software-renderer-ui > .button { align-self: center; margin: 10px; min-width: 140px; }
+`;
+            document.head.appendChild(style);
+        }
+        function showSoftwareRendererPopup(container, audio, done) {
+            ensureSoftwarePopupStyle();
+            const popup = document.createElement("div");
+            popup.className = "software-renderer-ui";
+            const title = document.createElement("h2");
+            title.textContent = "Hardware acceleration is off";
+            popup.appendChild(title);
+            const subtitle = document.createElement("h3");
+            subtitle.textContent = "Your browser is drawing the game with the CPU instead of the graphics card, which makes it lag.";
+            popup.appendChild(subtitle);
+            const body = document.createElement("div");
+            body.className = "body";
+            const lowered = document.createElement("p");
+            lowered.textContent = "Graphics were lowered to Low End at 50% render scale so the game stays playable. Your own settings come back by themselves once hardware acceleration works.";
+            body.appendChild(lowered);
+            const fix = softwareFixSteps();
+            const how = document.createElement("p");
+            how.textContent = fix.title;
+            body.appendChild(how);
+            const list = document.createElement("ol");
+            for (const step of fix.steps) {
+                const item = document.createElement("li");
+                item.textContent = step;
+                list.appendChild(item);
+            }
+            body.appendChild(list);
+            if (null == window.electron) {
+                const note = document.createElement("p");
+                note.className = "muted";
+                note.textContent = "Already on? Restart the browser anyway: it switches acceleration off by itself after a graphics driver crash. If it keeps happening, update your graphics drivers.";
+                body.appendChild(note);
+            }
+            popup.appendChild(body);
+            const ok = document.createElement("button");
+            ok.className = "button";
+            ok.textContent = "Ok";
+            ok.addEventListener("click", () => {
+                audio?.playUIClick?.();
+                popup.remove();
+                done();
+            });
+            popup.appendChild(ok);
+            container.appendChild(popup);
+        }
         function showDevicePresetPopup(container, audio, renderer, settings, meshes, done) {
             ensureDevicePresetStyle();
             const popup = document.createElement("div");
@@ -58188,6 +58331,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, bc, n, "f"),
                 C.set(this, wc, r, "f"),
                 C.set(this, xc, l, "f"),
+                softwareModeCheck(n, d, r),
                 installGraphicsGuard(n, d, r),
                 null == $c ? C.set(this, Fc, $c = o.loadIsMusicEnabled(), "f") : C.set(this, Fc, $c, "f");
                 const w = document.getElementById("ui");
@@ -58275,10 +58419,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             showDevicePresetPopup(C.get(this, kc, "f"), t, C.get(this, bc, "f"), d, r, showMenu))
                         }
                           , i = () => {
-                            C.get(this, bc, "f").isUsingSoftwareRenderer ? u.show(e.get("Hardware acceleration is disabled. Performance may be reduced.") + "\n\n" + e.get("Please make sure hardware acceleration is enabled in your browser settings."), e.get("Ok"), ( () => {
-                                showMenu()
-                            }
-                            )) : C.get(this, xc, "f").shouldShowUpdatePopup() ? (C.get(this, vc, "m", qc).call(this),
+                            C.get(this, bc, "f").isUsingSoftwareRenderer ? (C.get(this, vc, "m", qc).call(this),
+                            C.get(this, vc, "m", Xc).call(this),
+                            showSoftwareRendererPopup(C.get(this, kc, "f"), t, showMenu)) : C.get(this, xc, "f").shouldShowUpdatePopup() ? (C.get(this, vc, "m", qc).call(this),
                             C.get(this, vc, "m", Xc).call(this),
                             C.set(this, Cc, new Ac(C.get(this, kc, "f"),t,e,( () => {
                                 C.get(this, Cc, "f")?.dispose(),
