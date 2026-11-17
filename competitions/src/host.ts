@@ -35,6 +35,10 @@ const SECRET_ROUNDS = 2;
 const CUP_REFS = 3;
 const MAX_CUSTOM = 30;
 const UPLOAD_STALE_MS = 60_000;
+// After a build's time is up: pages send what is open in their editor, and a big track may still be on its way.
+const BUILD_GRACE_MS = 12_000;
+const BUILD_UPLOAD_WAIT_MS = 20_000;
+const CODE_ASK_MS = 1_500;
 
 export interface PoolTrack extends TrackRef {
   load: () => Promise<LoadedTrack>;
@@ -107,6 +111,7 @@ export class Organizer {
   // Uploaded tracks' import codes by track id, and uploads still arriving by "uid:upload id".
   #codes = new Map<string, string>();
   #parts = new Map<string, { at: number; parts: (string | null)[]; got: number }>();
+  #codeAsk = new Map<number, number>();
 
   constructor(
     private app: App,
@@ -610,6 +615,7 @@ export class Organizer {
         else if (m.a === 'skip') this.voteSkip(p.u);
         else if (m.a === 'watch') this.#watching(p.u, m.v);
         else if (m.a === 'untrack' && typeof m.v === 'string') this.removeTrack(p.u, m.v);
+        else if (m.a === 'code' && typeof m.v === 'string') this.#sendCode(pid, p, m.v);
         else if ((m.a === 'ban' || m.a === 'pick') && typeof m.v === 'string') {
           if (E.draftChoose(s, p.u, m.a, m.v)) this.touch();
         }
@@ -851,14 +857,13 @@ export class Organizer {
     const valid =
       typeof m.id === 'string' && m.id.length <= 16 && Number.isInteger(m.n) && m.n >= 1 && m.n <= UPLOAD_PARTS && Number.isInteger(m.i) && m.i >= 0 && m.i < m.n && typeof m.c === 'string' && m.c.length <= UPLOAD_CHUNK;
     if (!valid || p.bot) return;
-    const r = this.state.rules;
     const now = Date.now();
     for (const [key, up] of this.#parts) if (now - up.at > UPLOAD_STALE_MS) this.#parts.delete(key);
     const key = `${p.u}:${m.id}`;
     let up = this.#parts.get(key);
     if (!up) {
-      if (!r.customTracks) return this.#tell(p, 'Custom tracks are off in this cup', 'bad');
-      if (r.customPick === 'organizer') return this.#tell(p, 'Only the organizer adds tracks in this cup', 'bad');
+      const why = this.#cantAdd(p.u);
+      if (why) return this.#tell(p, why, 'bad');
       // A page sends all of one track's parts before the next on an ordered channel, so an older upload
       // still open here lost a part (rate limit, reconnect) and can never finish.
       for (const k of this.#parts.keys())
@@ -884,35 +889,74 @@ export class Organizer {
     void ensureBE().then((error) => (error ? this.#tell(p, error, 'bad') : add()));
   }
 
+  // Why player u can't add a track right now, or null.
+  #cantAdd(u: number): string | null {
+    const s = this.state,
+      r = s.rules;
+    if (!r.customTracks) return 'Custom tracks are off in this cup.';
+    if (u === this.me) return null;
+    if (r.build) return s.phase === 'build' ? null : 'In a Build Off, tracks are built during the build time.';
+    if (r.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
+    return null;
+  }
+
   // Adds a track from its import code; returns why it can't, or null.
-  addTrack(u: number, code: string, mode?: TrackMode): string | null {
+  addTrack(u: number, code: string, mode?: TrackMode, quiet = false): string | null {
     const s = this.state,
       p = player(s, u);
     if (!p) return null;
-    if (!s.rules.customTracks) return 'Custom tracks are off in this cup.';
-    if (u !== this.me && s.rules.customPick === 'organizer') return 'Only the organizer adds tracks in this cup.';
+    const why = this.#cantAdd(u);
+    if (why) return why;
+    // While building, a racer's new track replaces the one they sent before.
+    const building = s.phase === 'build';
     const be = isBE(code);
     if (be && !beReady()) return BE_NOT_LOADED;
     const track = this.#parse(code);
     if (!track?.trackData) return "That isn't a PolyTrack track code.";
     if (!track.trackData.hasStartingPoint()) return "That track has no start, so it can't be raced.";
     const id = track.trackData.getId();
-    const custom = (s.custom ??= []);
+    let custom = (s.custom ??= []);
     const same = custom.find((t) => t.id === id);
-    if (same) return `${same.name} is already in this cup.`;
+    if (same) return building && same.by === u ? 'The cup already has this version of your track.' : `${same.name} is already in this cup.`;
     if (!s.rules.customOnly && this.#library().some((t) => t.id === id)) return "That track is already in this cup's maps.";
+    const before = building ? custom.filter((t) => t.by === u) : [];
+    for (const t of before) this.removeTrack(u, t.id);
+    custom = s.custom;
     if (custom.length >= MAX_CUSTOM) return `This cup already has ${MAX_CUSTOM} uploaded tracks.`;
-    if (u !== this.me && custom.filter((t) => t.by === u).length >= s.rules.customLimit) return `You can add up to ${s.rules.customLimit} ${s.rules.customLimit === 1 ? 'track' : 'tracks'}.`;
-    const name = (track.trackMetadata?.name ?? '').trim().slice(0, 40) || 'Untitled track';
+    if (!building && u !== this.me && custom.filter((t) => t.by === u).length >= s.rules.customLimit) return `You can add up to ${s.rules.customLimit} ${s.rules.customLimit === 1 ? 'track' : 'tracks'}.`;
+    let name = (track.trackMetadata?.name ?? '').trim().slice(0, 40);
+    if (building && (!name || /^unnamed track/i.test(name))) name = `${p.name.slice(0, 30)}'s track`;
+    name ||= 'Untitled track';
     const author = (track.trackMetadata?.author ?? '').trim().slice(0, 30);
     // A listed track keeps its own physics: its id races on the real leaderboards.
     const m = (mode === 'rocket' || mode === 'royale') && !site.__nswsTracks?.isKnown?.(id) ? mode : null;
     custom.push({ id, name, ...(author ? { author } : {}), cat: 'custom', ...(m ? { mode: m } : {}), ...(be ? { be: true as const } : {}), by: u, bn: p.name.slice(0, 24) });
     this.#codes.set(id, code);
     this.#poolAt = 0;
-    this.notifyAll(`${p.name} added ${name} to the maps`, 'good');
+    if (building) this.notifyAll(before.length ? `${p.name} sent a new version of their track` : `${p.name} sent their track`, 'good');
+    else if (!quiet) this.notifyAll(`${p.name} added ${name} to the maps`, 'good');
     this.touch(true);
     return null;
+  }
+
+  // An uploaded track's code, for saving it to My Tracks.
+  codeOf(id: string) {
+    return this.#codes.get(id) ?? null;
+  }
+
+  // A refusal is an empty answer (n = 0), so the page stops waiting at once.
+  #sendCode(pid: number, p: Player, id: string) {
+    const now = Date.now();
+    const no = (why: string) => (this.app.net.send(pid, { k: 'code', id: id.slice(0, 80), i: 0, n: 0, c: '' }, true), this.#tell(p, why, 'bad'));
+    if (now - (this.#codeAsk.get(p.u) ?? 0) < CODE_ASK_MS) return no('One track at a time. Try again in a moment');
+    this.#codeAsk.set(p.u, now);
+    const code = this.#codes.get(id);
+    const t = this.state.custom?.find((x) => x.id === id);
+    if (!code || !t) return no("That track isn't in this cup any more");
+    const n = Math.ceil(code.length / UPLOAD_CHUNK);
+    for (let i = 0; i < n; i++)
+      if (!this.app.net.send(pid, { k: 'code', id, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK), ...(t.mode ? { m: t.mode } : {}) }, i === n - 1))
+        return this.#tell(p, "The track didn't arrive. Try again", 'bad');
   }
 
   // The organizer removes any uploaded track, everyone else only their own.
@@ -962,6 +1006,7 @@ export class Organizer {
     const s = this.state;
     E.newRound(s, ref, 1, null);
     E.setPhase(s, 'loading', Date.now());
+    if (ref.cat === 'custom' && !s.played?.includes(ref.id)) s.played = [...(s.played ?? []), ref.id];
     this.#recent = [ref.id, ...this.#recent.filter((id) => id !== ref.id)].slice(0, RECENT_TRACKS);
     this.#loading = { ref, at: Date.now(), from: this.app.info?.sessionId, track, sessionAt: 0 };
     this.#retries = 0;
@@ -1068,6 +1113,9 @@ export class Organizer {
     const s = this.state;
     this.#syncLobby(now);
     switch (s.phase) {
+      case 'build':
+        this.#tickBuild(now);
+        break;
       case 'loading':
         this.#tickLoading(now);
         break;
@@ -1120,6 +1168,57 @@ export class Organizer {
     this.#shipBots(now);
     this.#broadcast(now);
     this.#reportStatus(now);
+  }
+
+  // Time up (or everyone sent a track): a short grace for the last uploads, then the cup races what came in.
+  #tickBuild(now: number) {
+    const s = this.state,
+      b = s.build;
+    if (!b || this.#pending) return;
+    const builders = E.humanRacers(s).filter((p) => !p.away);
+    const all = builders.length > 0 && builders.every((p) => (s.custom ?? []).some((t) => t.by === p.u));
+    if (!b.closing) {
+      if (now < b.until && !all) return;
+      b.closing = 1;
+      b.until = now + BUILD_GRACE_MS;
+      s.nextAt = b.until;
+      this.notifyAll(all ? 'Everyone sent a track!' : "Time's up! Sending your tracks…", 'info');
+      this.touch(true);
+      return;
+    }
+    const uploading = [...this.#parts.values()].some((up) => now - up.at < 5000);
+    if (now >= b.until && (!uploading || now >= b.until + BUILD_UPLOAD_WAIT_MS)) this.#finishBuild(now);
+  }
+
+  #finishBuild(now: number) {
+    const s = this.state;
+    delete s.build;
+    const n = s.custom?.length ?? 0;
+    if (!n) {
+      E.setPhase(s, 'lobby', now);
+      this.notifyAll('Nobody sent a track in time, so the cup is back in the lobby.', 'bad');
+      this.touch(true);
+      return;
+    }
+    s.built = 1;
+    this.notifyAll(n === 1 ? 'One track was built. Racing it now!' : `${n} tracks built. Racing them all!`, 'good');
+    this.#playBuilt(now);
+  }
+
+  // The built tracks in a random order, each played rounds-per-track times; a rounds cup lasts exactly that long.
+  #playBuilt(now: number) {
+    const s = this.state;
+    const built = shuffle((s.custom ?? []).map(({ id, name, author, cat, mode }): TrackRef => ({ id, name, ...(author ? { author } : {}), cat, ...(mode ? { mode } : {}) })));
+    s.playlist = built;
+    s.playIndex = 0;
+    if (s.rules.mode === 'rounds') s.rules = cleanRules({ ...s.rules, rounds: Math.min(50, built.length * s.rules.perTrack) });
+    if (s.rules.draft && built.length >= 2) {
+      E.startDraft(s, built, now);
+      this.#botDraft();
+      this.touch(true);
+      return;
+    }
+    this.#chooseTrack(now);
   }
 
   #tickLoading(now: number) {
@@ -1252,13 +1351,16 @@ export class Organizer {
   #reportStatus(now: number) {
     const s = this.state;
     if (now - this.#statusAt < STATUS_MS) return;
-    const phase = s.phase === 'lobby' || s.phase === 'draft' ? 'setup' : s.phase === 'podium' ? 'done' : ['results', 'vote'].includes(s.phase) ? 'break' : 'racing';
+    // The cup list shows where the tracks come from (the proxy keeps only the format text).
+    const r = s.rules;
+    const tag = r.build ? (s.format === 'build' ? '' : '+build') : r.customOnly ? '+custom' : r.customTracks ? '+mix' : '';
+    const phase = s.phase === 'lobby' || s.phase === 'draft' || s.phase === 'build' ? 'setup' : s.phase === 'podium' ? 'done' : ['results', 'vote'].includes(s.phase) ? 'break' : 'racing';
     const status = {
       phase,
       round: s.round?.n ?? s.rounds,
       racers: E.humanRacers(s).length,
       canRace: E.canRace(s),
-      format: s.format.slice(0, 24),
+      format: s.format.slice(0, 24 - tag.length) + tag,
     };
     const key = JSON.stringify(status);
     // A reclaimed code is a new matchmaking socket, which starts with no status.
@@ -1276,7 +1378,22 @@ export class Organizer {
     const s = this.state;
     if (s.phase !== 'lobby') return;
     if (E.humanRacers(s).filter((p) => !p.away).length < 1) throw new Error('Nobody is on the grid yet.');
-    if (s.rules.customOnly && !this.pool().length) throw new Error('Add a track in the Tracks tab first.');
+    const now = Date.now();
+    if (s.rules.build) {
+      this.#syncBots();
+      // Race again on the same tracks skips the building.
+      if (s.built && s.custom?.length) return this.#playBuilt(now);
+      s.custom = [];
+      s.played = [];
+      this.#codes.clear();
+      this.#poolAt = 0;
+      s.build = { until: now + s.rules.build * 60_000 };
+      E.setPhase(s, 'build', now, s.build.until);
+      this.notifyAll(`Build time! You have ${s.rules.build} minute${s.rules.build === 1 ? '' : 's'}.`, 'good');
+      this.touch(true);
+      return;
+    }
+    if (s.rules.customOnly && !this.pool().length) throw new Error('Add at least one track first.');
     this.#syncBots();
     if (s.rules.draft) {
       const n = Math.min(24, Math.max(8, E.racers(s).length * (s.rules.bans + s.rules.picks) + 3));
@@ -1295,6 +1412,7 @@ export class Organizer {
     if (s.phase !== 'lobby') throw new Error('The format is locked once the cup starts.');
     s.format = format.slice(0, 40);
     s.rules = cleanRules(rules);
+    if (!s.rules.build) delete s.built;
     this.#poolAt = 0;
     for (const p of s.players) if (p.role === 'racer' && !p.bot && !E.canRace(s, p.u)) p.role = 'spectator';
     this.#syncBots();
@@ -1420,6 +1538,24 @@ export class Organizer {
     this.touch(true);
   }
 
+  // Ends the build time now (the grace for the last uploads still runs), or gives everyone more of it.
+  buildNow() {
+    const b = this.state.build;
+    if (this.state.phase !== 'build' || !b || b.closing) return;
+    b.until = Date.now();
+    this.touch(true);
+  }
+
+  buildMore(seconds: number) {
+    const s = this.state,
+      b = s.build;
+    if (s.phase !== 'build' || !b || b.closing) return;
+    b.until += seconds * 1000;
+    s.nextAt = b.until;
+    this.notifyAll(`+${Math.round(seconds / 60)} minute${seconds === 60 ? '' : 's'} of build time`, 'info');
+    this.touch(true);
+  }
+
   // Ends the current pick and ban step early.
   draftNow() {
     if (this.state.phase === 'draft' && this.state.draft) {
@@ -1443,6 +1579,7 @@ export class Organizer {
   endCup() {
     const s = this.state;
     s.draft = null;
+    delete s.build;
     this.#epoch++;
     this.#loading = null;
     if (s.winner == null) s.winner = standings(s, this.history)[0]?.u ?? null;
@@ -1466,6 +1603,14 @@ export class Organizer {
     for (const peer of this.#peers.values()) peer.hist = 0;
     if (newTracks) this.#recent = [];
     s.id = randomId();
+    delete s.build;
+    s.played = [];
+    // A Build Off on new tracks builds them again.
+    if (newTracks && s.rules.build) {
+      s.custom = [];
+      this.#codes.clear();
+      delete s.built;
+    }
     E.setPhase(s, 'lobby', Date.now());
     this.#bots?.drop();
     this.#botTier = '';

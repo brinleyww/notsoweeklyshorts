@@ -81,7 +81,7 @@ export class Driver {
     const s = this.app.state;
     if (!s || g !== this.app.game) return false;
     if (this.app.chatTyping) return true;
-    if (s.phase === 'lobby') return false;
+    if (s.phase === 'lobby' || s.phase === 'build') return false;
     if (!this.racing) return true;
     if (s.phase === 'warmup') return false;
     const r = s.round!,
@@ -96,7 +96,7 @@ export class Driver {
   blocksRestart(g: Game) {
     const s = this.app.state;
     if (!s || g !== this.app.game) return false;
-    if (s.phase === 'lobby') return false;
+    if (s.phase === 'lobby' || s.phase === 'build') return false;
     if (s.phase === 'warmup' && this.racing) {
       this.#afterReset();
       return false;

@@ -3,8 +3,8 @@
 import type { App } from '../app.ts';
 import { canRace, humanRacers, leaderPoints, racers } from '../engine.ts';
 import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_BOTS, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
-import { player, standings, type Category, type CupState, type Player, type TrackMode, type TrackRef, isFinalist } from '../state.ts';
-import { btn, click, confirmBtn, range, flag, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
+import { player, standings, type Category, type CupState, type CustomTrack, type Player, type TrackMode, type TrackRef, isFinalist } from '../state.ts';
+import { btn, click, confirmBtn, range, flag, fmtClock, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
 import { beReady, ensureBE, isBE, site } from '../game.ts';
@@ -25,6 +25,7 @@ function gridCount(s: CupState) {
 
 const PHASE_TEXT: Record<CupState['phase'], string> = {
   lobby: 'Lobby',
+  build: 'Building',
   draft: 'Pick & ban',
   loading: 'Loading',
   warmup: 'Warm-up',
@@ -108,6 +109,9 @@ export class Panel {
       app.org?.queued?.id,
       app.code,
       this.tab === 'players' ? Math.floor(Date.now() / 2000) : 0,
+      s.phase === 'build' && this.tab === 'cup' ? Math.floor(app.now() / 1000) : 0,
+      app.saved.size,
+      [...this.#saving],
     ]);
     if (key !== this.#key) {
       this.#key = key;
@@ -192,18 +196,175 @@ export class Panel {
     if (s.phase === 'lobby') {
       out.push(this.#inviteHero(s));
       out.push(this.#roleChooser(s));
+      out.push(this.#sourceSection(s));
       out.push(this.#formatSection(s));
       // Every rule of the chosen format can be changed right here, one by one.
       out.push(...this.#rulesTab(s));
     } else {
+      if (s.phase === 'podium') out.push(this.#saveSection(s));
+      if (s.phase === 'build') out.push(this.#buildSection(s));
       out.push(this.#statusHero(s));
       if (me) out.push(this.#roleChooser(s));
       out.push(this.#skipVote(s));
       // The invite stays here all cup long; the table is a tab of its own.
       out.push(this.#inviteHero(s));
+      out.push(this.#sourceSection(s));
       out.push(...this.#rulesTab(s));
     }
     return out;
+  }
+
+  // While everyone builds: the clock, who has sent a track, and the way into the editor.
+  #buildSection(s: CupState) {
+    const app = this.app,
+      b = s.build;
+    if (!b) return null;
+    const desk = app.build;
+    const mine = desk.mine();
+    const sent = new Map((s.custom ?? []).map((t) => [t.by, t]));
+    const builders = s.players.filter((p) => !p.bot && !p.away && (p.role === 'racer' || sent.has(p.u)));
+    const acts: (HTMLElement | null)[] = [];
+    if (!b.closing && desk.canBuild()) {
+      acts.push(btn([icon('hammer'), mine ? 'Back to the editor' : 'Open the editor'], () => (this.setOpen(false), desk.open()), 'primary'));
+      acts.push(btn('Send my track', () => desk.submit(false), 'ghost'));
+    }
+    if (!b.closing && app.org) {
+      acts.push(btn([icon('clock'), '+2 min'], () => app.org!.buildMore(120), 'small ghost'));
+      acts.push(confirmBtn('End building now', () => app.org!.buildNow(), 'small'));
+    }
+    return h(
+      'div',
+      { class: 'sect' },
+      h('div', { class: 'hero' }, h('span', { class: 'mark' }, icon('hammer')), h('div', { class: 'grow' }, h('div', { class: 'big' }, b.closing ? "Time's up · collecting the tracks" : `Build time · ${fmtClock(b.until - app.now())} left`), h('p', null, mine ? `The cup has your track "${mine.name}". Send it again after more changes.` : desk.canBuild() ? 'Build a track with a start and a finish. Whatever is open in your editor goes to the cup when time runs out.' : 'The racers are building. You can practice on the lobby track meanwhile.')), h('div', { class: 'share' }, acts)),
+      h(
+        'div',
+        { class: 'list' },
+        builders.map((p) => {
+          const t = sent.get(p.u);
+          return h('div', { class: 'prow' + (p.u === app.me ? ' me' : '') }, h('span', { class: 'mark' }, icon(t ? 'check' : 'hammer')), h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`), h('div', { class: 'sub ell' }, t ? `Sent "${t.name}"` : 'Building…')));
+        }),
+      ),
+    );
+  }
+
+  // After the cup: every uploaded track, to keep in My Tracks.
+  #saveSection(s: CupState) {
+    const app = this.app;
+    const lib = site.__nswsTracks;
+    const list = s.custom ?? [];
+    if (!list.length || !lib?.add) return null;
+    void app.checkSaved(list.map((t) => t.id));
+    const played = new Set(s.played ?? []);
+    const order = [...list.filter((t) => played.has(t.id)), ...list.filter((t) => !played.has(t.id))];
+    const left = order.filter((t) => !app.saved.has(t.id));
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, list.length === 1 ? 'Save the track from this cup' : 'Save tracks from this cup', h('span', { class: 'grow' }), left.length > 1 ? btn([icon('save'), 'Save all'], () => this.#saveMany(left), 'small') : null),
+      h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, 'Keep the ones you liked. They go to My Tracks, where you can race them again, edit them or share them.'),
+      h('div', { class: 'list' }, order.map((t) => this.#trackRow(s, t, played.has(t.id) ? 'raced' : 'not raced'))),
+    );
+  }
+
+  #saving = new Set<string>();
+  #saveBtn(t: CustomTrack) {
+    const app = this.app;
+    if (!site.__nswsTracks?.add) return null;
+    if (app.saved.has(t.id)) return h('span', { class: 'dim', style: 'font-size:15px;padding:0 6px' }, icon('check'), ' Saved');
+    const busy = this.#saving.has(t.id);
+    return btn([icon('save'), busy ? 'Saving…' : 'Save'], () => !busy && this.#saveMany([t]), 'small ghost', 'Save to My Tracks');
+  }
+
+  async #saveMany(list: CustomTrack[]) {
+    const app = this.app;
+    let ok = 0;
+    for (const t of list) {
+      if (this.#saving.has(t.id) || app.saved.has(t.id)) continue;
+      this.#saving.add(t.id);
+      this.render(true);
+      try {
+        await app.saveTrack(t);
+        ok++;
+      } catch (e) {
+        app.notify((e as Error)?.message || `Couldn't save ${t.name}.`, 'bad');
+      } finally {
+        this.#saving.delete(t.id);
+      }
+    }
+    this.render(true);
+    if (ok) app.notify(ok === 1 ? (list.length === 1 ? `Saved ${list[0].name} to My Tracks` : 'Saved 1 track to My Tracks') : `Saved ${ok} tracks to My Tracks`, 'good');
+  }
+
+  // One uploaded track: who added it, and remove / save.
+  #trackRow(s: CupState, t: CustomTrack, note = '') {
+    const app = this.app,
+      org = app.org;
+    const mine = !!org || t.by === app.me;
+    const canRemove = mine && (s.phase === 'lobby' || !s.rules.build);
+    return h(
+      'div',
+      { class: 'prow' },
+      h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub ell' }, [t.author ? `by ${t.author}` : '', `added by ${player(s, t.by)?.name ?? t.bn ?? 'a racer who left'}`, MODE_LABEL[t.mode ?? 'normal'], note].filter(Boolean).join(' · '))),
+      this.#saveBtn(t),
+      canRemove ? btn('Remove', () => (org ? org.removeTrack(org.me, t.id) : app.act({ k: 'act', a: 'untrack', v: t.id })), 'small ghost') : null,
+    );
+  }
+
+  // Where the cup's tracks come from, front and centre: the game's maps, custom tracks (and adding them), or a Build Off.
+  #sourceSection(s: CupState) {
+    const { app, host, lobby, r, set, live, row, seg, slider } = this.#ruleKit(s);
+    const v = r.build ? 'build' : r.customOnly ? 'custom' : r.customTracks ? 'both' : 'pool';
+    const picked = site.__nswsCupPool ? poolLabel(site.__nswsCupPool as MapPool) : '';
+    const hints = {
+      pool: picked ? `${picked}, picked when the room opened` : 'The maps picked when the room opened',
+      both: 'Those maps plus tracks added below',
+      custom: 'Only tracks added below',
+      build: 'Everyone builds a track in the editor when the cup starts, then the cup races them all',
+    };
+    const options = ([
+      ['pool', 'Game maps'],
+      ['both', 'Maps + custom'],
+      ['custom', 'Custom only'],
+      ['build', 'Build Off'],
+    ] as const).filter(([k]) => lobby || k !== 'build' || v === 'build');
+    // Mid-cup the source can change, but a Build Off can't start or stop.
+    const can = (k: string) => live('customTracks') && (lobby || (k !== 'build' && v !== 'build'));
+    const pickSource = (k: (typeof options)[number][0]) => {
+      set({ customTracks: k !== 'pool', customOnly: k === 'custom' || k === 'build', build: k === 'build' ? r.build || 8 : 0 });
+      try {
+        const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
+        const source = k === 'pool' ? 'maps' : k === 'build' ? 'build' : 'custom';
+        localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, source, ...(source === 'custom' ? { mix: k === 'both' } : {}) }));
+      } catch {}
+    };
+    const source = row('Tracks from', hints[v], h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !can(k), onclick: click(() => pickSource(k)) }, l))));
+    source.classList.add('wide');
+    const custom = r.customTracks && !r.build;
+    // A Build Off lists only the tracks built in it.
+    const uploads = r.build && !s.built ? [] : (s.custom ?? []);
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, 'Tracks', h('span', { class: 'grow' }), r.customTracks && uploads.length ? h('span', { class: 'dim', style: 'font-size:14px' }, `${uploads.length} ${r.build ? 'built' : 'added'}`) : null),
+      h(
+        'div',
+        { class: 'rules' },
+        source,
+        custom
+          ? seg('customPick', 'Who adds tracks', r.customPick === 'organizer' ? 'Only you, the organizer' : 'Everyone in the cup, and you without a limit', [
+              ['organizer', 'Organizer only'],
+              ['everyone', 'Everyone'],
+            ])
+          : null,
+        custom && r.customPick === 'everyone' ? slider('customLimit', 'Tracks per player', 'The organizer has no limit', 1, 10, 1, (n) => `${n}`) : null,
+        r.build ? slider('build', 'Build time', lobby ? 'How long everyone gets in the editor' : 'Set when the cup started', 1, 30, 1, (n) => `${n} min`) : null,
+      ),
+      custom ? this.#uploadSection(s, true) : null,
+      r.build && lobby && !uploads.length ? h('p', { class: 'dim', style: 'margin:10px 0 0;font-size:15px;line-height:1.35' }, host ? 'When you start, the editor opens for every racer with a new track and a countdown. Tracks go to the cup by themselves when time runs out.' : 'When the organizer starts, the editor opens with a new track and a countdown. Build something with a start and a finish!') : null,
+      r.build && lobby && uploads.length && host ? h('p', { class: 'dim', style: 'margin:10px 0 0;font-size:15px;line-height:1.35' }, 'Start races these tracks again. Race again on new tracks (on the podium) builds new ones.') : null,
+      r.customTracks && uploads.length && app.state?.phase !== 'podium' ? h('div', { class: 'list', style: 'margin-top:10px' }, [...uploads].reverse().map((t) => this.#trackRow(s, t))) : null,
+      custom && !uploads.length && r.customOnly ? h('div', { class: 'empty' }, 'No tracks yet. The cup needs at least one before it can start.') : null,
+    );
   }
 
   #roleChooser(s: CupState) {
@@ -280,12 +441,16 @@ export class Panel {
   #apply(format: string, rules: Rules) {
     const org = this.app.org;
     if (!org) return;
-    org.configure(format.startsWith('custom:') ? format.slice(7) : format, rules);
+    const preset = format.startsWith('custom:');
+    // A format only sets the racing rules: where the tracks come from stays (the Build Off format turns building on).
+    const cur = this.app.state?.rules;
+    const keep = preset || !cur ? {} : { customTracks: cur.customTracks, customOnly: cur.customOnly, customPick: cur.customPick, customLimit: cur.customLimit, build: format === 'build' ? cur.build || rules.build : cur.build };
+    org.configure(preset ? format.slice(7) : format, { ...rules, ...keep });
     this.#draft = null;
     // The next room starts on the format chosen here.
     try {
       const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
-      if (!format.startsWith('custom:')) localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, format }));
+      if (!preset && format !== 'build') localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, format }));
     } catch {}
   }
 
@@ -570,7 +735,7 @@ export class Panel {
         queued ? h('div', { class: 'tile', style: 'display:flex;align-items:center;gap:10px;margin-bottom:10px' }, h('span', { class: 'grow' }, 'Up next: ', h('span', { class: 'amber' }, queued.name)), btn('Clear', () => org!.queue(null), 'small ghost')) : null,
         input,
       ),
-      s.rules.customTracks ? this.#uploadSection(s) : null,
+      s.rules.customTracks && !s.rules.build ? this.#uploadSection(s) : null,
       h(
         'div',
         { class: 'list' },
@@ -581,11 +746,12 @@ export class Panel {
             'div',
             { class: 'prow' },
             h('div', { class: 'grow' }, h('div', { class: 'ell' }, t.name), h('div', { class: 'sub' }, [t.author ? `by ${t.author}` : '', up ? `added by ${player(s, up.by)?.name ?? up.bn ?? 'a racer who left'}` : t.cat, MODE_LABEL[t.mode ?? up?.mode ?? 'normal']].filter(Boolean).join(' · '))),
-            mine ? btn('Remove', () => (org ? org.removeTrack(org.me, t.id) : app.act({ k: 'act', a: 'untrack', v: t.id })), 'small ghost') : null,
+            up ? this.#saveBtn(up) : null,
+            mine && (s.phase === 'lobby' || !s.rules.build) ? btn('Remove', () => (org ? org.removeTrack(org.me, t.id) : app.act({ k: 'act', a: 'untrack', v: t.id })), 'small ghost') : null,
             org ? btn(voting ? 'Pick' : queued?.id === t.id ? 'Queued' : 'Play next', () => org.hostPick({ id: t.id, name: t.name, author: t.author, cat: t.cat }), 'small ' + (voting ? 'primary' : 'ghost')) : null,
           );
         }),
-        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : s.rules.customOnly ? 'No tracks yet. Add one above.' : 'The track list is still loading.'),
+        list.length ? null : h('div', { class: 'empty' }, pool.length ? 'No tracks match.' : s.rules.build ? 'The tracks show up here once they are built.' : s.rules.customOnly ? 'No tracks yet. Add one above.' : 'The track list is still loading.'),
         pool.length > list.length ? h('div', { class: 'empty' }, `Showing ${list.length} of ${pool.length}. Search for the rest.`) : null,
       ),
     ];
@@ -593,12 +759,13 @@ export class Panel {
 
   #trackCode = '';
   #adding = false;
-  #uploadSection(s: CupState) {
+  #uploadSection(s: CupState, bare = false) {
     const app = this.app;
     const r = s.rules;
     const lib = site.__nswsTracks;
     const intro = (text: string) => h('p', { class: 'dim', style: 'margin:0 0 10px;font-size:15px;line-height:1.35' }, text);
-    if (!app.org && r.customPick === 'organizer') return h('div', { class: 'sect' }, h('h3', null, 'Add tracks'), intro('Only the organizer adds tracks in this cup.'));
+    const wrap = (...children: (HTMLElement | null)[]) => (bare ? h('div', { class: 'addbox' }, children) : h('div', { class: 'sect' }, h('h3', null, 'Add tracks'), children));
+    if (!app.org && r.customPick === 'organizer') return wrap(intro('Only the organizer adds tracks in this cup.'));
     const mine = (s.custom ?? []).filter((t) => t.by === app.me).length;
     const full = !app.org && mine >= r.customLimit;
     const code = h('input', { class: 'text', placeholder: full ? 'You have added all your tracks' : 'Paste a track code, pack code or NSWS link', value: this.#trackCode, spellcheck: 'false', autocomplete: 'off', disabled: full || this.#adding }) as HTMLInputElement;
@@ -635,13 +802,10 @@ export class Panel {
       if (picked?.length) void this.#addTracks(picked);
     };
     const count = app.org ? 'As the organizer you have no limit.' : `${mine} of ${r.customLimit} added.`;
-    return h(
-      'div',
-      { class: 'sect' },
-      h('h3', null, 'Add tracks'),
-      intro(`Paste a track's import code, a pack code or an NSWS track link, or pick from My Tracks. They join this cup's maps for everyone, with their mode. ${count}`),
+    return wrap(
+      intro(`Pick from My Tracks, or paste a track's import code, a pack code or an NSWS track link. They join this cup for everyone, with their mode. ${count}`),
+      h('div', { class: 'frow' }, lib?.pick && !full ? btn([icon('plus'), 'Add from My Tracks'], () => void fromLibrary(), 'small primary') : null),
       h('div', { class: 'frow' }, code, btn(this.#adding ? 'Adding...' : 'Add', () => !full && !this.#adding && void send(), 'small' + (full || this.#adding ? ' ghost' : ''))),
-      lib?.pick && !full ? h('div', { class: 'frow' }, btn('Add from My Tracks', () => void fromLibrary(), 'small ghost')) : null,
     );
   }
 
@@ -701,7 +865,7 @@ export class Panel {
 
   // ---- Rules ----
 
-  #rulesTab(s: CupState) {
+  #ruleKit(s: CupState) {
     const app = this.app;
     const host = app.isHost;
     const lobby = s.phase === 'lobby';
@@ -753,19 +917,12 @@ export class Panel {
       });
       return row(label, hint, input);
     };
+    return { app, host, lobby, r, set, live, row, toggle, seg, slider, number };
+  }
+
+  #rulesTab(s: CupState) {
+    const { app, host, lobby, r, set, live, row, toggle, seg, slider, number } = this.#ruleKit(s);
     const sec = (n: number) => fmtDuration(n);
-    const trackSource = () => {
-      const v = r.customOnly ? 'custom' : r.customTracks ? 'both' : 'pool';
-      const hint = v === 'pool' ? 'The maps picked in the Competitions menu' : v === 'both' ? 'Those maps plus tracks added in the Tracks tab' : 'Only tracks added in the Tracks tab';
-      const options = [
-        ['pool', 'Map pool'],
-        ['both', 'Pool + custom'],
-        ['custom', 'Custom only'],
-      ] as const;
-      const el = row('Track source', hint, h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !live('customTracks'), onclick: click(() => set({ customTracks: k !== 'pool', customOnly: k === 'custom' })) }, l))));
-      el.classList.add('wide');
-      return el;
-    };
     const sect = (title: string, ...rows: (HTMLElement | null)[]) => h('div', { class: 'sect' }, h('h3', null, title), h('div', { class: 'rules' }, rows));
 
     const winning = sect(
@@ -785,7 +942,8 @@ export class Panel {
           )
         : null,
       r.mode === 'points' ? toggle('finalist', 'Finalist rule', 'Reaching the cap makes you a finalist; then win a round to take the cup') : null,
-      r.mode === 'rounds' ? slider('rounds', 'Rounds', 'Length of the season', 1, 50, 1, (n) => `${n}`) : null,
+      r.mode === 'rounds' && !r.build ? slider('rounds', 'Rounds', 'Length of the season', 1, 50, 1, (n) => `${n}`) : null,
+      r.mode === 'rounds' && r.build ? row('Rounds', 'Every built track, rounds per track times each', h('span', { class: 'val' }, lobby ? 'Auto' : String(r.rounds))) : null,
       r.mode === 'knockout' ? slider('knockout', 'Knocked out', 'Racers out per round', 1, 8, 1, (n) => `${n}`) : null,
     );
     const tracks = sect(
@@ -804,14 +962,6 @@ export class Panel {
       r.next !== 'random' || r.draft ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'For votes and picks (you get 3x)' : 'For votes and picks', 5, 60, 1, (n) => `${n} s`) : null,
       r.draft ? slider('draftSeconds', 'Pick and ban time', 'For each step', 10, 120, 5, (n) => `${n} s`) : null,
       toggle('skipVotes', 'Skip votes', 'Racers can vote a track away'),
-      trackSource(),
-      r.customTracks
-        ? seg('customPick', 'Who adds tracks', r.customPick === 'organizer' ? 'Only the organizer, in the Tracks tab' : 'Everyone in the cup, in the Tracks tab', [
-            ['organizer', 'Organizer only'],
-            ['everyone', 'Everyone'],
-          ])
-        : null,
-      r.customTracks && r.customPick === 'everyone' ? slider('customLimit', 'Tracks per player', 'The organizer has no limit', 1, 10, 1, (n) => `${n}`) : null,
     );
     const rounds = sect(
       'Rounds',
@@ -1011,7 +1161,20 @@ export class Panel {
     if (app.isHost) {
       const org = app.org!;
       const live = ['countdown', 'racing', 'warmup'].includes(s.phase);
-      if (s.phase === 'lobby') items.push(btn([icon('play'), 'Start the cup'], () => (org.start(), this.setOpen(false)), 'primary big'));
+      if (s.phase === 'lobby') {
+        const why = !s.players.some((p) => p.role === 'racer' && !p.bot && !p.away)
+          ? 'Nobody is on the grid yet'
+          : s.rules.customOnly && !s.rules.build && !(s.custom ?? []).length
+            ? 'Add at least one track first'
+            : '';
+        const building = !!s.rules.build && !(s.built && (s.custom ?? []).length);
+        items.push(btn([icon(building ? 'hammer' : 'play'), building ? `Start building (${s.rules.build} min)` : 'Start the cup'], () => (org.start(), this.setOpen(false)), 'primary big' + (why ? ' ghost' : '')));
+        if (why) items.push(h('span', { class: 'dim', style: 'font-size:15px' }, why));
+      }
+      if (s.phase === 'build' && s.build && !s.build.closing) {
+        items.push(btn([icon('clock'), '+2 min'], () => org.buildMore(120), 'small ghost'));
+        items.push(confirmBtn('End building now', () => org.buildNow(), 'small'));
+      }
       if (s.phase === 'podium') {
         items.push(btn('Race again', () => (org.raceAgain(false), this.setOpen(false))));
         items.push(btn('Race again on new tracks', () => (org.raceAgain(true), this.setOpen(false))));
@@ -1025,7 +1188,7 @@ export class Panel {
         items.push(btn([icon('restart'), 'Restart round'], () => org.restartRound(), 'small ghost'));
         items.push(confirmBtn('Void round', () => org.voidRound(), 'small'));
       }
-      if (s.phase !== 'lobby' && s.phase !== 'podium') {
+      if (s.phase !== 'lobby' && s.phase !== 'podium' && s.phase !== 'build') {
         items.push(btn([icon('skip'), 'Skip track'], () => org.skipTrack(), 'small ghost'));
         items.push(btn([icon(s.hold ? 'play' : 'pause'), s.hold ? 'Resume' : 'Pause breaks'], () => org.setHold(!s.hold), 'small ' + (s.hold ? 'on' : 'ghost')));
       }

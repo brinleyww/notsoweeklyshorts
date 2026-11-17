@@ -149,16 +149,40 @@ hold it at `leaderPoints(s) + 1`.
   every racer bans, then picks, from one list; the picks become the playlist, repeated; bans always
   leave something to pick); skip votes (over half of the racers skips the track, or changes it after
   the round when someone already finished).
-- **Custom tracks:** **Track source** is the map pool, the pool plus custom tracks, or custom tracks only
-  (`customTracks` / `customOnly`). **Who adds tracks** (`customPick`): the organizer only, or everyone, each up to
-  **Tracks per player** (`customLimit`, 1-10, default 5; the organizer has no limit); 30 in all. The Tracks tab takes a
-  pasted stock code, an NSWS pack code or link (expanded by `__nswsTracks.importText`), or **Add from My Tracks**
-  (`__nswsTracks.pick`, hidden without the library). Better Editor codes are refused. Each upload goes
+- **Where the tracks come from** is picked before anything else: the Competitions menu's **Tracks** row (Game
+  maps, Custom tracks, Build Off; `Source` in hub.ts, remembered in `nsws-sc-host`) and, once the room is open, the
+  **Tracks** section at the top of the Cup tab (`Panel.#sourceSection`: Game maps, Maps + custom, Custom only, Build
+  Off). Picking a format keeps it (`#apply`); only the Build Off format turns building on. For Custom tracks the menu
+  takes tracks before the room opens (My Tracks or pasted, kept in page memory), they go in through `HostPlan.tracks`
+  -> `App.#preload`, and the lobby is the first ordinary one. Without maps of their own such cups still need a lobby
+  track, so their pool is the main tracks. The proxy keeps only the format text of a cup's status, so the organizer
+  reports where its tracks come from as a suffix (`quickplay+custom`, `+mix`, `+build`; `cupFormat` in hub.ts)
+  for the join card and the open cups list.
+- **Custom tracks** (`customTracks` / `customOnly`): **Who adds tracks** (`customPick`): the organizer only, or everyone, each up to
+  **Tracks per player** (`customLimit`, 1-10, default 5; the organizer has no limit); 30 in all. The Cup tab's Tracks section
+  (and the Tracks tab) takes **Add from My Tracks** (`__nswsTracks.pick`, hidden without the library), a pasted stock or
+  Better Editor code, or an NSWS pack code or link (expanded by `__nswsTracks.importText`); Start says why it can't go
+  while a custom-only cup has no track. Each upload goes
   `App.uploadTrack` -> `trk` parts of 100k characters (with its mode `m`) -> `Organizer.addTrack`, which checks the
   rules again and keeps the uploader (`by`, `bn`) and mode. Only the organizer's page keeps the codes; the game sends
   the track to everyone when its round loads. The round's track ref carries `mode` (rocket/royale), and every page
   calls `__nswsTracks.registerModes` for it before the track loads (the organizer in `#load`, others in `App.#apply`).
   The organizer removes any upload, a player their own. Rounds on uploaded tracks never upload PBs and have no world record.
+- **Build Off** (`build`, minutes, 0 = off; the Build Off format starts at 8, rounds mode, 2 per track): Start opens
+  the `build` phase (`state.build.until`). Every human racer's page (and the organizer's) opens the editor
+  (`mod/nsws_editor.js`) on a new track with a countdown bar and **Send to the cup** (`BuildDesk`, build.ts, through
+  `__nswsEditor.current/fresh/cup`); the cup layer is hidden while the editor covers the screen. A racer's new send
+  replaces the one before (`addTrack` while building). When time is up, or everyone has sent one, `closing` gives 12 s
+  (plus up to 20 s for uploads still arriving): pages send whatever is open in their editor unless it is unchanged or
+  still the blank track it started with, and close it. The cup then plays the built tracks in a random order
+  (`playlist`), a rounds cup lasting exactly tracks x rounds per track; with nothing built it goes back to the lobby.
+  `state.built` marks a cup whose tracks are built: Race again races them again, Race again on new tracks builds anew.
+  Outside the build phase only the organizer adds tracks. The organizer has **+2 min** and **End building now**.
+- **Saving tracks:** every uploaded track has **Save** (Tracks tab, and a list on the podium's Cup tab, raced ones first
+  from `state.played`; the podium has **Save tracks**). Only the organizer keeps codes, so a page asks for one
+  (`act code` -> `code` parts like `trk`, an empty answer for no) one at a time, 1.6 s apart (the organizer answers
+  each player once per 1.5 s), and adds it with `__nswsTracks.add(code, {source: 'cup'})`. Tracks already in My Tracks
+  show Saved.
 - **Rounds:** one run (time limit auto/fixed/off, auto = 3x the best known time from the world record
   or the cup; finish window after the first finish) or time attack (its length); countdown; break.
 - **Warm-up:** off, a track's first visit, or every new track; fixed length, or the world record times

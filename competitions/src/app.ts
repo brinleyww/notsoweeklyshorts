@@ -2,6 +2,7 @@
 // and runs the local car, the spectator camera and live timing. The organizer's page also runs
 // the Organizer (host.ts).
 import type { ClashHost } from './bots/clash.ts';
+import { BuildDesk } from './build.ts';
 import { BotView } from './bots/view.ts';
 import { CupChat } from './chat.ts';
 import { Driver } from './driver.ts';
@@ -14,7 +15,7 @@ import { drawCars, ghostBehind, installSmoothing, nudgeCar } from './smooth.ts';
 import { UPLOAD_CHUNK, UPLOAD_PARTS, VERSION, type Msg } from './protocol.ts';
 import type { Rules } from './rules.ts';
 import { Spectate } from './spectate.ts';
-import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type RoundResult, type TrackMode } from './state.ts';
+import { byPid, isBot, LIVE_PHASES, player, roundDone, type CupState, type CustomTrack, type RoundResult, type TrackMode } from './state.ts';
 
 export interface HostPlan {
   name: string;
@@ -22,6 +23,8 @@ export interface HostPlan {
   rules: Rules;
   role: 'racer' | 'spectator';
   chatSecret: string;
+  // Custom tracks picked before the room opened; they join the cup as soon as it exists.
+  tracks?: { code: string; mode?: string }[];
 }
 export interface Note {
   id: number;
@@ -39,6 +42,8 @@ const PACE_IDLE = 1000;
 const REJOIN_KEY = 'nsws-sc-rejoin';
 const COVERED = ['loading', 'checking', 'results', 'vote', 'podium'];
 const REJOIN_SAVE_MS = 20_000;
+const CODE_WAIT_MS = 30_000;
+const CODE_SPACING_MS = 1_600;
 
 function identityKey(code: string) {
   const name = 'nsws-sc-key:' + code;
@@ -86,6 +91,13 @@ export class App {
   driver: Driver;
   watch: Spectate;
   chat: CupChat;
+  build: BuildDesk;
+  // Uploaded tracks this page saved to My Tracks (track ids).
+  saved = new Set<string>();
+  #codeWait = new Map<string, { parts: (string | null)[]; got: number; done: (code: string | null, mode?: TrackMode) => void }>();
+  // The organizer answers one code request per player every 1.5 s, so this page asks one at a time, spaced out.
+  #codeQueue: Promise<unknown> = Promise.resolve();
+  #codeAskAt = 0;
   onChange: () => void = () => {};
   onLeave: (message: string) => void = () => {};
 
@@ -120,6 +132,7 @@ export class App {
     );
     this.driver = new Driver(this);
     this.watch = new Spectate(this);
+    this.build = new BuildDesk(this);
     this.chat = new CupChat({
       context: () => (this.state && this.me != null ? { cupId: this.state.id, host: this.isHost } : null),
       changed: () => this.changed(),
@@ -190,6 +203,11 @@ export class App {
     queueMicrotask(() => {
       this.#changeQueued = false;
       this.onChange();
+      try {
+        this.build.update();
+      } catch (error) {
+        console.error('[Cuppa]', error);
+      }
     });
   }
 
@@ -232,6 +250,8 @@ export class App {
     this.#readySent = null;
     this.#lastSeq = -1;
     this.#savedAt = 0;
+    for (const w of this.#codeWait.values()) w.done(null);
+    this.#codeWait.clear();
     this.driver.runs = [];
     site.__nswsMuxPace = undefined;
     site.__nswsMuxQuiet = false;
@@ -278,6 +298,7 @@ export class App {
       this.history = this.org.history;
       this.me = this.org.me;
       this.#plan = null;
+      if (plan.tracks?.length) void this.#preload(plan.tracks);
     }
     this.changed();
   }
@@ -585,7 +606,99 @@ export class App {
       case 'bye':
         this.onLeave(typeof m.why === 'string' ? m.why.slice(0, 200) : 'You left the cup.');
         return;
+      case 'code': {
+        const w = typeof m.id === 'string' ? this.#codeWait.get(m.id) : undefined;
+        if (!w || !Number.isInteger(m.i) || typeof m.c !== 'string') return;
+        if (m.n === 0) return w.done(null);
+        if (w.parts.length !== m.n) w.parts = Array(Math.min(Math.max(1, m.n | 0), UPLOAD_PARTS * 4)).fill(null);
+        if (m.i < 0 || m.i >= w.parts.length || w.parts[m.i] != null) return;
+        w.parts[m.i] = m.c;
+        if (++w.got === w.parts.length) w.done(w.parts.join(''), m.m);
+        return;
+      }
     }
+  }
+
+  // The tracks picked in the Competitions menu, added by the organizer's own page (no per-player limit).
+  async #preload(list: { code: string; mode?: string }[]) {
+    if (list.some((t) => isBE(t.code)) && !beReady()) {
+      const error = await ensureBE();
+      if (error) this.notify(error, 'bad');
+    }
+    let added = 0;
+    const errors: string[] = [];
+    for (const t of list) {
+      const org = this.org;
+      if (!org) return;
+      const error = org.addTrack(org.me, t.code, (t.mode === 'rocket' || t.mode === 'royale' ? t.mode : undefined) as TrackMode | undefined, true);
+      if (error) errors.push(error);
+      else added++;
+    }
+    if (added) this.notify(added === 1 ? '1 track added to the cup' : `${added} tracks added to the cup`, 'good');
+    if (errors.length) this.notify(errors[0], 'bad');
+  }
+
+  // An uploaded track's import code: from the organizer's own copy, or asked for over the cup channel.
+  fetchCode(id: string): Promise<{ code: string; mode?: TrackMode } | null> {
+    if (this.org) {
+      const code = this.org.codeOf(id);
+      const mode = this.state?.custom?.find((t) => t.id === id)?.mode;
+      return Promise.resolve(code ? { code, mode } : null);
+    }
+    const ask = this.#codeQueue.then(async () => {
+      const wait = this.#codeAskAt + CODE_SPACING_MS - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.#codeAskAt = Date.now();
+      return this.#askCode(id);
+    });
+    this.#codeQueue = ask.catch(() => null);
+    return ask;
+  }
+
+  #askCode(id: string): Promise<{ code: string; mode?: TrackMode } | null> {
+    this.#codeWait.get(id)?.done(null);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => w.done(null), CODE_WAIT_MS);
+      const w = {
+        parts: [] as (string | null)[],
+        got: 0,
+        done: (code: string | null, mode?: TrackMode) => {
+          clearTimeout(timer);
+          if (this.#codeWait.get(id) === w) this.#codeWait.delete(id);
+          resolve(code ? { code, mode } : null);
+        },
+      };
+      this.#codeWait.set(id, w);
+      if (!this.net.send(0, { k: 'act', a: 'code', v: id }, true)) w.done(null);
+    });
+  }
+
+  // Copies one of the cup's uploaded tracks into My Tracks.
+  async saveTrack(t: CustomTrack) {
+    const lib = site.__nswsTracks;
+    if (!lib?.add) throw new Error("My Tracks isn't available on this page.");
+    if (this.saved.has(t.id)) return;
+    const got = await this.fetchCode(t.id);
+    if (!got) throw new Error(`Couldn't get ${t.name} from the organizer. Try again.`);
+    await lib.add(got.code, { mode: got.mode ?? t.mode ?? 'normal', source: 'cup' });
+    this.saved.add(t.id);
+    this.changed();
+  }
+
+  // Marks the cup's tracks this page already has in My Tracks.
+  async checkSaved(ids: string[]) {
+    const lib = site.__nswsTracks;
+    if (!lib?.list) return;
+    try {
+      const have = new Set((await lib.list()).map((t) => t.trackId).filter(Boolean));
+      let any = false;
+      for (const id of ids)
+        if (have.has(id) && !this.saved.has(id)) {
+          this.saved.add(id);
+          any = true;
+        }
+      if (any) this.changed();
+    } catch {}
   }
 
   #apply(next: CupState) {

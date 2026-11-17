@@ -48,6 +48,8 @@ export interface Rules {
   // Who adds custom tracks, and how many each racer may add (the organizer has no limit).
   customPick: CustomPick;
   customLimit: number;
+  // Minutes everyone gets to build a track before the first round (0 = off); the cup races only those.
+  build: number;
   collisions: boolean;
   lateJoin: boolean;
   freecam: boolean;
@@ -123,6 +125,7 @@ const base: Rules = {
   customOnly: false,
   customPick: 'everyone',
   customLimit: 5,
+  build: 0,
   collisions: false,
   lateJoin: true,
   freecam: true,
@@ -181,6 +184,15 @@ export const FORMATS: Format[] = [
     perTrack: 1,
     target: 1000,
     next: 'vote',
+  }),
+  format('build', 'Build Off', 'hammer', 'Everyone builds a track against the clock, then the cup races every one of them.', {
+    build: 8,
+    mode: 'rounds',
+    perTrack: 2,
+    customTracks: true,
+    customOnly: true,
+    warmupMode: 'first',
+    warmup: 45,
   }),
   format('bumper', 'Bumper Cars', 'burst', 'Cars collide! Shove your rivals off the road. First to 1200.', {
     collisions: true,
@@ -241,6 +253,7 @@ export function cleanRules(value: unknown): Rules {
     customOnly: bool(o.customOnly, base.customOnly),
     customPick: pick(o.customPick, ['organizer', 'everyone'] as const, base.customPick),
     customLimit: int(o.customLimit, 1, 10, base.customLimit),
+    build: int(o.build, 0, 30, base.build),
     collisions: bool(o.collisions, base.collisions),
     lateJoin: bool(o.lateJoin, base.lateJoin),
     freecam: bool(o.freecam, base.freecam),
@@ -251,6 +264,7 @@ export function cleanRules(value: unknown): Rules {
   if (r.collisions) r.uploads = false;
   if (r.mode === 'knockout') r.lateJoin = false;
   if (r.mode !== 'points') r.finalist = false;
+  if (r.build) r.customTracks = r.customOnly = true;
   if (!r.customTracks) r.customOnly = false;
   return r;
 }
@@ -266,7 +280,7 @@ export function rulesSummary(r: Rules) {
           : `First to ${r.target} pts`;
   const style = r.style === 'timeattack' ? `${fmtDuration(r.taSeconds)} time attack` : 'one run per round';
   const tracks = r.perTrack === 1 ? '1 round per track' : `${r.perTrack} rounds per track`;
-  const custom = r.customOnly ? 'custom tracks only' : r.customTracks ? 'plus custom tracks' : '';
+  const custom = r.build ? `tracks built in ${r.build} min` : r.customOnly ? 'custom tracks only' : r.customTracks ? 'plus custom tracks' : '';
   return [goal, style, tracks, r.draft ? 'drafted tracks' : NEXT_LABEL[r.next], custom].filter(Boolean).join(' · ');
 }
 

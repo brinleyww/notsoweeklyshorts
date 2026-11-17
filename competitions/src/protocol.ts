@@ -13,7 +13,8 @@ export type Action =
   | { a: 'ban' | 'pick'; v: string }
   | { a: 'skip' }
   | { a: 'watch'; v: number | null }
-  | { a: 'untrack'; v: string };
+  | { a: 'untrack'; v: string }
+  | { a: 'code'; v: string };
 
 export type Msg =
   // Racer or spectator page to the organizer.
@@ -33,5 +34,7 @@ export type Msg =
   | { k: 'you'; u: number }
   | { k: 'note'; text: string; tone?: 'good' | 'bad' | 'info' }
   | { k: 'bye'; why: string }
+  // An uploaded track's import code for a page that asked for it ('code' action), in parts like 'trk'.
+  | { k: 'code'; id: string; i: number; n: number; c: string; m?: TrackMode }
   // Bot keyframe chunks for round n, plan generation g: [bot u, seq from 0, base64url deflated chunk].
   | { k: 'bots'; n: number; g: number; c: [number, number, string][] };

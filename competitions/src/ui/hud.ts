@@ -4,6 +4,7 @@
 import type { App } from '../app.ts';
 import { NEXT_LABEL, PRODUCT } from '../rules.ts';
 import { botLevel } from '../bots/roster.ts';
+import { site } from '../game.ts';
 import { isFinalist, player, standings, type CupState, type Player } from '../state.ts';
 import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
 
@@ -106,6 +107,8 @@ export class Hud {
     switch (s.phase) {
       case 'draft':
         return s.draft?.stage === 'ban' ? 'Pick & ban: bans' : 'Pick & ban: picks';
+      case 'build':
+        return s.build?.closing ? 'Build Off · collecting the tracks' : 'Build Off · build your track';
       case 'lobby':
         return this.app.isHost ? 'Lobby · press Tab to set up and start' : 'Lobby · free practice until the organizer starts';
       case 'loading':
@@ -137,8 +140,8 @@ export class Hud {
     // The big number is the round on this track (2/3); the cup's own round count is in the line below.
     const n = r?.n ?? s.rounds + (s.phase === 'lobby' ? 0 : 1);
     const onTrack = s.phase === 'lobby' || s.phase === 'draft' || !r ? null : `${Math.max(1, r.k)}/${s.rules.perTrack}`;
-    const label = h('small', null, onTrack ? 'ROUND' : 'LOBBY');
-    const num = h('div', { class: 'num', title: onTrack ? 'Rounds on this track' : null }, label, h('span', { class: 'mono' }, onTrack ?? icon('flag')));
+    const label = h('small', null, onTrack ? 'ROUND' : s.phase === 'build' ? 'BUILD' : 'LOBBY');
+    const num = h('div', { class: 'num', title: onTrack ? 'Rounds on this track' : null }, label, h('span', { class: 'mono' }, onTrack ?? icon(s.phase === 'build' ? 'hammer' : 'flag')));
     const title = !onTrack ? s.name : r!.track.name;
     const cupRound = onTrack ? (s.rules.mode === 'rounds' ? `Cup round ${Math.max(1, n)}/${s.rules.rounds}` : `Cup round ${Math.max(1, n)}`) : '';
     const mid = h('div', { class: 'mid' }, h('div', { class: 'track ell' }, title), h('div', { class: 'sub ell' }, [cupRound, this.#phaseLabel(s)].filter(Boolean).join(' · ')));
@@ -189,6 +192,9 @@ export class Hud {
         break;
       case 'draft':
         if (s.draft) [label, value] = [s.draft.stage === 'ban' ? 'Bans close' : 'Picks close', fmtClock(s.draft.until - now)];
+        break;
+      case 'build':
+        if (s.build) [label, value, warn] = [s.build.closing ? 'Sending' : 'Build time', fmtClock(s.build.until - now), !s.build.closing && s.build.until - now < 60_000];
         break;
       case 'loading':
       case 'checking':
@@ -361,6 +367,7 @@ export class Hud {
     else if (s.phase === 'results' || s.phase === 'checking') kind = 'results';
     else if (s.phase === 'vote') kind = 'vote';
     else if (s.phase === 'draft' && s.draft) kind = 'draft';
+    else if (s.phase === 'build' && s.build) kind = 'build';
     show(this.#center, !!kind && !app.panelOpen);
     if (!kind) {
       this.#keys.center = '';
@@ -376,7 +383,55 @@ export class Hud {
     }
     if (kind === 'results') return this.#renderResults(s);
     if (kind === 'draft') return this.#renderDraft(s);
+    if (kind === 'build') return this.#renderBuild(s);
     return this.#renderVote(s);
+  }
+
+  // The build time, for whoever isn't in the editor right now: who has sent a track, and the way back in.
+  #renderBuild(s: CupState) {
+    const app = this.app,
+      b = s.build!;
+    const desk = app.build;
+    const mine = desk.mine();
+    const builders = s.players.filter((p) => !p.bot && !p.away && (p.role === 'racer' || (s.custom ?? []).some((t) => t.by === p.u)));
+    const sent = new Set((s.custom ?? []).map((t) => t.by));
+    const key = JSON.stringify([b, builders.map((p) => [p.u, p.name]), [...sent], mine?.name, desk.canBuild()]);
+    if (!this.#changed('center', key)) return;
+    const title = b.closing ? "Time's up!" : desk.canBuild() ? (mine ? 'Your track is in' : 'Build your track') : 'The racers are building';
+    const text = b.closing
+      ? 'The last tracks are coming in. The racing starts in a moment.'
+      : desk.canBuild()
+        ? mine
+          ? `The cup has "${mine.name}". You can keep building and send it again until time runs out.`
+          : 'Build a track with a start and a finish in the editor. It goes to the cup by itself when time runs out.'
+        : 'Practice here until the tracks are ready.';
+    const acts: HTMLElement[] = [];
+    if (!b.closing && desk.canBuild()) {
+      acts.push(btn([icon('hammer'), mine ? 'Back to the editor' : 'Open the editor'], () => desk.open(), 'primary'));
+      if (desk.available) acts.push(btn('Send my track', () => desk.submit(false), 'ghost'));
+    }
+    if (!b.closing && app.isHost) {
+      acts.push(btn([icon('clock'), '+2 min'], () => app.org!.buildMore(120), 'small ghost'));
+      acts.push(btn('End building now', () => app.org!.buildNow(), 'small ghost'));
+    }
+    fill(
+      this.#center,
+      h(
+        'div',
+        { class: 'card build' },
+        h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, 'BUILD OFF'), h('h2', null, title)), this.#votePart(b.until)),
+        this.#voteBar(b.until, b.closing ? b.until - 12_000 : s.phaseAt),
+        h('p', null, text),
+        builders.length
+          ? h(
+              'div',
+              { class: 'builders' },
+              builders.map((p) => h('span', { class: 'chip' + (sent.has(p.u) ? ' done' : '') }, sent.has(p.u) ? icon('check') : icon('hammer'), p.name)),
+            )
+          : null,
+        acts.length ? h('div', { class: 'foot' }, acts) : null,
+      ),
+    );
   }
 
   #renderResults(s: CupState) {
@@ -742,7 +797,7 @@ export class Hud {
     }
     const app = this.app;
     const table = standings(s, app.history);
-    if (!this.#changed('podium', JSON.stringify([s.id, table.map((p) => [p.u, p.pts, p.name]), app.bestRun()?.n]))) return;
+    if (!this.#changed('podium', JSON.stringify([s.id, table.map((p) => [p.u, p.pts, p.name]), app.bestRun()?.n, s.custom?.length]))) return;
     const step = (p: Player | undefined, place: number) => {
       if (!p) return h('div', { class: `step s${place}`, style: 'visibility:hidden' }, h('div', { class: 'block' }));
       const img = h('img', { class: 'car', alt: '' }) as HTMLImageElement;
@@ -761,6 +816,7 @@ export class Hud {
     const acts: HTMLElement[] = [];
     const best = app.bestRun();
     if (best) acts.push(btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'ghost'));
+    if (s.custom?.length && site.__nswsTracks?.add) acts.push(btn([icon('save'), s.custom.length === 1 ? 'Save the track' : 'Save tracks'], () => this.onOpenPanel(), 'ghost'));
     acts.push(btn([icon('trophy'), 'Full results'], () => this.onOpenPanel(), 'ghost'));
     if (app.isHost) {
       acts.push(btn('Race again', () => app.org!.raceAgain(false)));

@@ -185,6 +185,13 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .results tr.out td { opacity: .5; }
 .results .banner { padding: 10px 20px; font-size: 19px; text-align: center; background: var(--s3); }
 .vote { width: 820px; }
+.card.build { width: min(620px, calc(100vw - 32px)); }
+.card.build .cap { position: relative; }
+.card.build > p { margin: 0; padding: 14px 20px 6px; font-size: 17px; line-height: 1.4; color: var(--dim); text-align: center; }
+.card.build .builders { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; padding: 8px 16px 14px; }
+.card.build .builders .chip { font-size: 15px; }
+.card.build .builders .chip.done { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent-lit); }
+.card.build .foot { flex-wrap: wrap; justify-content: center; }
 .vote .opts { display: flex; justify-content: center; gap: 12px; padding: 16px; }
 .vote .opt { pointer-events: auto; position: relative; flex: 0 1 250px; min-width: 0; display: flex; flex-direction: column; background: var(--btn); cursor: pointer; border: none; color: inherit; padding: 0; text-align: left; font-size: inherit; }
 .vote .opt:hover { background: var(--btn-hover); }
@@ -398,6 +405,19 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .frow > input.text { flex: 1; }
 .frow input[type=range] { flex: 1; }
 .frow .val { min-width: 90px; text-align: right; font-size: 17px; color: var(--dim); }
+.srcrows { display: flex; flex-direction: column; gap: 10px; }
+.picked { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.picked .joinrow:empty { display: none; }
+.picked .joinrow > input.text { flex: 1; min-width: 0; font-size: 16px; }
+.picks { display: flex; flex-direction: column; gap: 3px; max-height: 168px; overflow-y: auto; }
+.pick { display: flex; align-items: center; gap: 8px; padding: 5px 4px 5px 10px; background: var(--s4); font-size: 16px; }
+.pick .ell { flex: 1; min-width: 0; }
+.pick .dim { font-size: 13px; color: var(--dim); }
+.pick .x { pointer-events: auto; display: grid; place-items: center; width: 28px; height: 28px; border: none; background: transparent; color: var(--dim); cursor: pointer; }
+.pick .x:hover { color: var(--text); }
+.addbox { margin-top: 12px; }
+.addbox .frow { margin-bottom: 6px; }
+.addbox .frow > input.text { flex: 1; min-width: 0; font-size: 16px; }
 .maps { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
 .mapchip { pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 15px; padding: 6px 11px; border: none; color: var(--dim); background: var(--btn); cursor: pointer; clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
 .mapchip:hover { color: var(--text); }

@@ -7,7 +7,8 @@
     // track over it, so it waits out of sight until the menu is back.
     const pickerStyle = document.createElement("style");
     pickerStyle.textContent =
-        "body:has(.track-info-ui:not(.hidden)) .device-preset-ui,body:has(.track-selection-ui:not(.hidden)) .device-preset-ui,body:has(.game-ui) .device-preset-ui,body:has(#nsws-editor:not(.hidden)) .device-preset-ui{display:none!important;}";
+        "body:has(.track-info-ui:not(.hidden)) .device-preset-ui,body:has(.track-selection-ui:not(.hidden)) .device-preset-ui,body:has(.game-ui) .device-preset-ui,body:has(#nsws-editor:not(.hidden)) .device-preset-ui{display:none!important;}" +
+        "body:has(#nsws-editor:not(.hidden)) #nsws-cuppa{display:none!important;}";
     document.head.appendChild(pickerStyle);
     const DEFAULT_URL = "https://brinleyww.github.io/Better-Editor-PT/?nsws=1";
     const HELLO_EVERY_MS = 1000;
@@ -62,6 +63,13 @@
 #nsws-editor .nse-note{flex:0 1 auto;color:rgba(255,255,255,.8);}
 #nsws-editor .good{color:#96ff96;}
 #nsws-editor .bad{color:#ff9a9a;}
+#nsws-editor .nse-cup{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:6px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);box-shadow:inset 4px 0 0 #7272c2;font-size:16px;}
+#nsws-editor .nse-cup.hidden{display:none;}
+#nsws-editor .nse-cup>b{font-weight:normal;font-size:18px;}
+#nsws-editor .nse-cup .clock{font-size:24px;min-width:64px;font-variant-numeric:tabular-nums;}
+#nsws-editor .nse-cup .clock.warn{color:#ff9a9a;}
+#nsws-editor .nse-cup .st{flex:1 1 200px;color:rgba(255,255,255,.7);}
+#nsws-editor .nse-cup .st.good{color:#96ff96;}
 #nsws-editor .nse-fallback{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);font-size:15px;}
 #nsws-editor .nse-fallback.hidden{display:none;}
 #nsws-editor .nse-fallback>span{flex:1 1 300px;color:rgba(255,255,255,.75);}
@@ -111,6 +119,10 @@
     let manual = null;
     let pendingImport = null;
     let dialogClose = null;
+    // A Cuppa Build Off's bar: { title, status, sent, left(): ms, onSubmit() }.
+    let cupBar = null;
+    let cupTimer = null;
+    let wantFresh = false;
 
     function el(tag, className, text) {
         const node = document.createElement(tag);
@@ -414,6 +426,14 @@
         // A click up here takes the keyboard from the editor below; its shortcuts get it back unless a dialog opened.
         bar.addEventListener("click", () => setTimeout(focusFrame, 0));
 
+        const cup = el("div", "nse-cup hidden");
+        const cupTitle = el("b");
+        const cupClock = el("span", "clock");
+        const cupStatus = el("span", "st");
+        const cupSend = button("Send to the cup", () => cupBar?.onSubmit(), null, true);
+        cup.append(cupTitle, cupClock, cupStatus, cupSend);
+        cup.addEventListener("click", () => setTimeout(focusFrame, 0));
+
         const info = el("div", "nse-info");
         const help = el("div", "nse-help");
         const noteEl = el("div", "nse-note");
@@ -442,9 +462,10 @@
         const loaderText = el("p");
         loader.append(el("h2", null, "Better Editor"), loaderBar, loaderText);
         frameBox.appendChild(loader);
-        host.append(bar, info, fallback, frameBox);
+        host.append(bar, cup, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderText, loaderFill };
+        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderText, loaderFill, send, cup, cupTitle, cupClock, cupStatus, cupSend };
+        renderCup();
         renderPicker();
         renderMode();
         renderAutosave();
@@ -642,7 +663,13 @@
         ui?.fallback.classList.add("hidden");
         refreshList(false).then(() => {
             if (pendingImport) runImport();
-            else if (!editorOpen) {
+            else if (wantFresh) {
+                wantFresh = false;
+                selected = NEW;
+                renderPicker();
+                renderMode();
+                editTrack(null, { fresh: true, quiet: true });
+            } else if (!editorOpen) {
                 let last = null;
                 try {
                     last = localStorage.getItem(LAST_KEY);
@@ -1312,5 +1339,56 @@
         hide();
     }
 
-    window.__nswsEditor = { open, close };
+    function renderCup() {
+        if (!ui) return;
+        const c = cupBar;
+        ui.cup.classList.toggle("hidden", !c);
+        ui.send.style.display = c ? "none" : "";
+        clearInterval(cupTimer);
+        cupTimer = null;
+        if (!c) return;
+        ui.cupTitle.textContent = c.title;
+        ui.cupStatus.textContent = c.status;
+        ui.cupStatus.className = "st" + (c.sent ? " good" : "");
+        ui.cupSend.lastChild.textContent = c.sent ? "Send again" : "Send to the cup";
+        ui.cupSend.disabled = !!c.closed;
+        const tick = () => {
+            const left = Math.max(0, c.left());
+            const s = Math.ceil(left / 1000);
+            ui.cupClock.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+            ui.cupClock.classList.toggle("warn", left < 60000);
+        };
+        tick();
+        cupTimer = setInterval(tick, 250);
+    }
+
+    // The editor's open track, saved or not, with its mode.
+    async function currentTrack() {
+        const t = await refreshLive();
+        return t ? { name: t.name, code: t.code, mode: modeOf(t.name) } : null;
+    }
+
+    // A new, empty track in the block editor (once the editor has loaded).
+    function fresh() {
+        if (!ready) {
+            wantFresh = true;
+            return;
+        }
+        selected = NEW;
+        renderPicker();
+        renderMode();
+        editTrack(null, { fresh: true, quiet: true });
+    }
+
+    window.__nswsEditor = {
+        open,
+        close,
+        current: currentTrack,
+        fresh,
+        cup(bar) {
+            cupBar = bar || null;
+            renderCup();
+        },
+        isOpen: () => !!host && !host.classList.contains("hidden"),
+    };
 })();

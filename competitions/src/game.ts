@@ -224,6 +224,10 @@ export interface SiteTracks {
   importText(text: string): Promise<{ name?: string; tracks: { code: string; mode?: string }[]; club?: string }>;
   registerModes(list: { trackId: string; mode: string }[]): void;
   isKnown?(trackId: string): boolean;
+  parse?(code: string): { ok: boolean; name?: string } | null;
+  add?(code: string, opts?: { mode?: string; source?: string }): Promise<{ id: string; name: string }>;
+  findByTrackId?(trackId: string): Promise<{ id: string } | null>;
+  list?(): Promise<{ trackId?: string }[]>;
 }
 
 // Better Editor codes (PolyTrackBE1): a page reads and races them once their blocks have loaded (window.__nswsTM).
@@ -274,6 +278,7 @@ export const site = window as unknown as {
   __nswsCupLeave?: (message: string) => void;
   __nswsCupApp?: unknown;
   __nswsTracks?: SiteTracks;
+  __nswsEditor?: unknown;
   __nswsTM?: { ensure(): Promise<void>; ready(): boolean };
   __nswsChatIdentity?: { visitorId(): string; nickname(): string; ownerKey(): Promise<string | null> };
 };

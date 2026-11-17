@@ -2,6 +2,7 @@ import type { Rules } from './rules.ts';
 
 export type Phase =
   | 'lobby'
+  | 'build'
   | 'draft'
   | 'loading'
   | 'warmup'
@@ -144,6 +145,12 @@ export interface CupState {
   playIndex: number;
   // Missing in the state of an organizer page from before uploads.
   custom?: CustomTrack[];
+  // The build phase: when building ends (organizer's clock); closing = time is up, the last tracks are coming in.
+  build?: { until: number; closing?: 1 };
+  // A Build Off's tracks are built: starting again races them instead of building new ones.
+  built?: 1;
+  // Uploaded tracks raced so far, for saving them to My Tracks.
+  played?: string[];
   winner: number | null;
   shout: { text: string; at: number } | null;
   rounds: number;

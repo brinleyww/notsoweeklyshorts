@@ -66,6 +66,8 @@ export function flag(cc: string | null | undefined) {
 
 const P: Record<string, string> = {
   bolt: '<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  hammer: '<path d="M14 6 8 12m6-6 4 4 3-3-4-4-1-1-3 1zM8 12l-5 5 3 3 5-5zm0 0 3 3"/>',
+  save: '<path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/>',
   cuppa: '<path d="M4 10h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5zM17 12h1.5a2.5 2.5 0 0 1 0 5H17M8 3c-.8 1 .8 2 0 3.5M12 3c-.8 1 .8 2 0 3.5"/>',
   flag: '<path d="M5 21V4m0 0h11l-2 4 2 4H5"/>',
   calendar: '<rect x="4" y="5" width="16" height="15" rx="1"/><path d="M4 10h16M9 3v4m6-4v4"/>',
