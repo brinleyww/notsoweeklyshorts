@@ -558,6 +558,10 @@
             saveRun(m);
             return;
         }
+        if (m.type === "assets" && m.reqId && typeof m.op === "string") {
+            assetRequest(m);
+            return;
+        }
         if (m.reqId && pending.has(m.reqId)) {
             const p = pending.get(m.reqId);
             pending.delete(m.reqId);
@@ -571,6 +575,32 @@
                 copyLibrary();
             });
     });
+
+    // The editor's asset library (BE tm_assets.js). Reading is public; liking, publishing and deleting are done with
+    // this player's account, so they go through here and the token never reaches the editor's frame.
+    const ASSET_OPS = new Set(["me", "publish", "update", "like", "use", "delete"]);
+    async function assetRequest(m) {
+        const answer = (body) => post(Object.assign({ type: "assets-reply", reqId: m.reqId }, body));
+        const T = lib();
+        const args = m.args && typeof m.args === "object" ? m.args : {};
+        try {
+            if (!T?.api) throw new Error("Custom tracks aren't loaded yet.");
+            let data;
+            if (m.op === "base") data = { base: window.__nswsApiBase || null };
+            else if (m.op === "list") data = await T.api("nsws/tracks/assets");
+            else if (m.op === "get") {
+                if (!/^[0-9A-Za-z]{9}$/.test(args.id || "")) throw new Error("That asset was deleted.");
+                data = await T.api("nsws/tracks/asset/" + args.id);
+            } else if (ASSET_OPS.has(m.op)) {
+                const user = T.user?.() || {};
+                if (!user.token) throw new Error("Your player profile isn't ready yet. Open any leaderboard once, then try again.");
+                data = await T.api("nsws/tracks/assets/" + m.op, Object.assign({}, args, { token: user.token, nickname: user.nickname || "" }), { timeout: m.op === "publish" || m.op === "update" ? 90000 : 25000 });
+            } else throw new Error("Bad request.");
+            answer({ ok: true, data });
+        } catch (e) {
+            answer({ ok: false, error: e?.message || "Something went wrong.", status: e?.status ?? 0, data: e?.data ?? null });
+        }
+    }
 
     // A finished Test in the editor is a run on that track, saved and uploaded like a race.
     async function saveRun(m) {
@@ -605,10 +635,10 @@
                 helloTimer = null;
                 return;
             }
-            post({ type: "hello", version: 1 });
+            post({ type: "hello", version: 1, assets: 1 });
         }, HELLO_EVERY_MS);
         frame.addEventListener("load", () => {
-            post({ type: "hello", version: 1 });
+            post({ type: "hello", version: 1, assets: 1 });
             if (!ready) {
                 clearTimeout(fallbackTimer);
                 fallbackTimer = setTimeout(() => showFallback(true), FALLBACK_AFTER_LOAD_MS);

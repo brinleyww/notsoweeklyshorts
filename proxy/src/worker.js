@@ -12,7 +12,8 @@ import { LobbyRoom, LobbyDirectory, LOBBY_CODE } from "./lobby.js";
 import { SocketBridge } from "./bridge.js";
 import { censor, findSlurs } from "./chatfilter.js";
 import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
-import { TrackHub } from "./trackhub.js";
+import { TrackHub, ASSET_ID, ASSET_THUMB_MAX } from "./trackhub.js";
+import { sniffImage, moderate as moderateImage } from "./chatmedia.js";
 import { Feedback, MAX_FEEDBACK_BODY } from "./feedback.js";
 import { handleDiscord, DISCORD_PREFIX, DISCORD_POSTS } from "./discord.js";
 
@@ -2253,7 +2254,7 @@ async function handleBeMirror(request, url) {
 // A 4 MB pack or campaign plus the JSON around it.
 const MAX_TRACKS_BODY = 4_400_000;
 const MAX_TRACKS_SMALL_BODY = 16_384;
-const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put", "board/submit", "clip-track/put"]);
+const BIG_TRACK_PATHS = new Set(["pack", "campaign/save", "submit", "library/put", "board/submit", "clip-track/put", "assets/publish", "assets/update"]);
 // Reads an address may make in a minute; only there to stop sweeps of club codes and ids.
 const TRACK_READS_PER_MIN = 60;
 // Packs never change, so an instance keeps the small ones it has read.
@@ -2308,8 +2309,10 @@ async function clubTags(env, cfg, hub, ctx, origin) {
 async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx) {
     const path = url.pathname.slice(TRACKS_PREFIX.length);
     const admin = path.startsWith("admin/");
-    // Race Control's owner routes check the owner's key themselves, so they work from anywhere.
-    if (!fromSite && !admin) return forbidden();
+    // Race Control's owner routes check the owner's key themselves, so they work from anywhere. An asset's picture is
+    // an <img>, which sends no Origin; it is public and cached, so it works from anywhere too.
+    const picture = request.method === "GET" && /^asset\/[0-9A-Za-z]{9}\/thumb$/.test(path);
+    if (!fromSite && !admin && !picture) return forbidden();
     const origin = requestOrigin || "*";
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
     if (request.method !== "GET" && request.method !== "POST") return json({ error: "Method not allowed." }, origin, 405);
@@ -2346,6 +2349,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
     }
 
     const ip = request.headers.get("CF-Connecting-IP") || "";
+    if (request.method === "GET" && (path === "assets" || path.startsWith("asset/"))) return assetRead(path, url, hub, ip, ctx, origin);
     if (request.method === "GET") {
         if (trackReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);
         let m;
@@ -2435,6 +2439,124 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
         case "library/codes": return reply(await hub.libraryCodes({ userId, ids: body.ids }));
         case "library/put": return reply(await hub.libraryPut({ userId, ipKey, tracks: body.tracks }));
         case "library/delete": return reply(await hub.libraryDelete({ userId, ids: body.ids }));
+    }
+    if (path.startsWith("assets/")) return assetWrite(path, body, { env, cfg, hub, ctx, origin, token, userId, ipKey, nickname, reply });
+    return reply(null);
+}
+
+// ---- Public assets (Better Editor block groups, src/trackhub.js) ----
+
+const ASSET_LIST_CACHE_S = 60;
+const ASSET_CACHE_S = 600;
+const ASSET_THUMB_CACHE_S = 7 * 86400;
+const ASSET_READS_PER_MIN = 400;
+const assetReadHits = new Map();
+const assetKey = (what) => new Request("https://nsws-assets.invalid/" + what);
+
+function assetReadFlood(ip) {
+    if (!ip) return false;
+    const now = Date.now();
+    if (assetReadHits.size > 2000) assetReadHits.clear();
+    const seen = assetReadHits.get(ip);
+    if (!seen || now - seen.at > 60_000) {
+        assetReadHits.set(ip, { at: now, count: 1 });
+        return false;
+    }
+    return ++seen.count > ASSET_READS_PER_MIN;
+}
+
+// The list, one asset's blocks and its picture. All three are the same for everyone, so they come out of
+// Cloudflare's cache when they can; only a miss counts against the reader's per-minute limit.
+async function assetRead(path, url, hub, ip, ctx, origin) {
+    let m = null;
+    let key;
+    if (path === "assets") key = assetKey("list");
+    else if ((m = /^asset\/([0-9A-Za-z]{9})(\/thumb)?$/.exec(path))) key = assetKey(m[2] ? "thumb/" + m[1] + "/" + (Number(url.searchParams.get("v")) || 1) : "a/" + m[1]);
+    else return json({ error: "Not found." }, origin, 404);
+    const hit = await cacheMatch(key);
+    if (hit) return withCors(hit, origin);
+    if (assetReadFlood(ip)) return json({ error: "Too many requests. Wait a minute and try again." }, origin, 429);
+    let response;
+    if (path === "assets") response = cachedJson(await hub.assetList(), ASSET_LIST_CACHE_S);
+    else if (!m[2]) {
+        const found = await hub.assetGet(m[1]);
+        if (!found) return json({ error: "That asset was deleted." }, origin, 404);
+        response = cachedJson(found, ASSET_CACHE_S);
+    } else {
+        const pic = await hub.assetThumb(m[1]);
+        const d = pic && /^data:(image\/(?:jpeg|png|webp));base64,(.*)$/.exec(pic.data);
+        if (!d) return json({ error: "No picture." }, origin, 404);
+        response = new Response(Uint8Array.from(atob(d[2]), (c) => c.charCodeAt(0)), {
+            headers: { "Content-Type": d[1], "Cache-Control": "public, max-age=" + ASSET_THUMB_CACHE_S, "X-Content-Type-Options": "nosniff" },
+        });
+    }
+    ctx.waitUntil(caches.default.put(key, response.clone()).catch(() => {}));
+    return withCors(response, origin);
+}
+
+// The list and the blocks are cached by this data centre only, so elsewhere a change shows within ASSET_LIST_CACHE_S.
+function forgetAsset(ctx, id) {
+    ctx.waitUntil(Promise.all([caches.default.delete(assetKey("list")), id ? caches.default.delete(assetKey("a/" + id)) : null]).catch(() => {}));
+}
+
+// A picture as the page sends it (a data: URL), checked like a chat image: it must really be a small JPEG, PNG or
+// WebP, and Workers AI must find nothing in it that the chat would refuse. Returns { data } or { error }.
+async function assetPicture(value, env, owner) {
+    if (typeof value !== "string" || value.length > ASSET_THUMB_MAX) return { error: "That picture is too big. Pick a smaller one." };
+    const d = /^data:image\/(?:jpeg|png|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+    if (!d) return { error: "That picture couldn't be read." };
+    let bytes;
+    try {
+        bytes = Uint8Array.from(atob(d[1]), (c) => c.charCodeAt(0));
+    } catch {
+        return { error: "That picture couldn't be read." };
+    }
+    const info = sniffImage(bytes);
+    if (!info || info.animated || info.w > 1024 || info.h > 1024) return { error: "The picture has to be a still image up to 1024 x 1024." };
+    if (!owner) {
+        if (!env.AI) return { error: "Pictures can't be checked right now, so assets can't be published. Try again later." };
+        let verdict;
+        try {
+            verdict = await moderateImage(env.AI, bytes, info);
+        } catch {
+            return { error: "Your picture couldn't be checked just now. Try again in a minute." };
+        }
+        if (!verdict.ok) return { error: "That picture can't be used (" + verdict.why + "). Pick another one." };
+    }
+    return { data: "data:" + info.type + ";base64," + d[1] };
+}
+
+async function assetWrite(path, body, { env, cfg, hub, ctx, origin, token, userId, ipKey, nickname, reply }) {
+    const owner = cfg.owner || (await isOwner(token, cfg));
+    const id = typeof body.id === "string" ? body.id : "";
+    switch (path) {
+        case "assets/me": return reply(await hub.assetMe({ userId, owner }));
+        case "assets/like": return reply(await hub.assetLike({ userId, ipKey, id, on: body.on === true }));
+        case "assets/use": return reply(await hub.assetUse({ userId, ipKey, id }));
+        case "assets/delete": {
+            const out = await hub.assetDelete({ userId, owner, id });
+            if (!out.error) forgetAsset(ctx, id);
+            return reply(out);
+        }
+        case "assets/publish":
+        case "assets/update": {
+            if (!owner) {
+                const ban = await uploadBanOf(userId, env, cfg);
+                if (ban) return json({ banned: true, error: "You're banned, so you can't publish assets." }, origin, 403);
+            }
+            if (path === "assets/update" && !ASSET_ID.test(id)) return json({ error: "That asset was deleted." }, origin, 404);
+            let thumb = null;
+            if (body.thumb != null && body.thumb !== "") {
+                thumb = await assetPicture(body.thumb, env, owner);
+                if (thumb.error) return json({ error: thumb.error }, origin, 400);
+            }
+            const out = path === "assets/publish"
+                ? await hub.assetPublish({ userId, ipKey, nickname, owner, name: body.name, description: body.description, tags: body.tags, kw: body.kw, parts: body.parts, dims: body.dims, thumb })
+                : await hub.assetUpdate({ userId, owner, id, name: body.name, description: body.description, tags: body.tags, thumb });
+            if (out.error) return json({ error: out.error, wait: out.wait, id: out.id }, origin, out.status || 400);
+            forgetAsset(ctx, out.asset?.id);
+            return json(out, origin);
+        }
     }
     return reply(null);
 }

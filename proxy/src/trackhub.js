@@ -84,6 +84,25 @@ const CLIP_TRACK_CANDIDATES = 3;
 const CLIP_TRACK_MAX = LIB_CODE_MAX;
 const CLIP_TRACKS_PER_DAY = 200;
 
+// Public assets: groups of blocks (a tree, a house) players publish from the Better Editor and anyone can place.
+export const ASSET_ID = /^[0-9A-Za-z]{9}$/;
+export const ASSET_PUBLISH_GAP_MS = 30 * 60_000;
+const ASSET_PARTS_MAX = 5000;
+const ASSET_SPAN = 1024;
+const ASSET_NAME_MAX = 40;
+const ASSET_DESC_MAX = 300;
+const ASSET_TAGS = 8;
+const ASSET_TAG_MAX = 20;
+const ASSET_KW_MAX = 400;
+// A data: URL; the page makes 256 x 256 JPEGs of about 15 KB.
+export const ASSET_THUMB_MAX = 90_000;
+// A shared network (a school) may hold many players; each still waits 30 minutes between assets.
+const ASSETS_PER_IP_DAY = 30;
+const ASSET_LIKES_PER_DAY = 300;
+const ASSET_USES_PER_DAY = 600;
+const ASSET_EDITS_PER_DAY = 60;
+const ASSET_LIST_MAX = 5000;
+
 const fail = (status, error) => ({ status, error });
 
 function randomString(length, alphabet) {
@@ -188,6 +207,19 @@ export class TrackHub extends DurableObject {
         this.sql.exec(`CREATE TABLE IF NOT EXISTS clip_tracks (track_id TEXT NOT NULL, hash TEXT NOT NULL, mode TEXT NOT NULL, size INTEGER NOT NULL,
             created INTEGER NOT NULL, used INTEGER NOT NULL, uploaders INTEGER NOT NULL, PRIMARY KEY (track_id, hash))`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS clip_track_users (track_id TEXT NOT NULL, user_id TEXT NOT NULL, hash TEXT NOT NULL, PRIMARY KEY (track_id, user_id))");
+        // Public assets. The blocks are in blobs (kind "a"), the picture too (kind "ai", a data: URL); thumb counts picture
+        // changes, so its address changes with it. kw: words from the blocks' names, for search. dims: "x,y,z" in tiles.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, author TEXT NOT NULL, name TEXT NOT NULL,
+            description TEXT NOT NULL, tags TEXT NOT NULL, kw TEXT NOT NULL, parts INTEGER NOT NULL, dims TEXT NOT NULL, hash TEXT NOT NULL,
+            created INTEGER NOT NULL, updated INTEGER NOT NULL, uses INTEGER NOT NULL, likes INTEGER NOT NULL, thumb INTEGER NOT NULL)`);
+        this.sql.exec("CREATE INDEX IF NOT EXISTS assets_user ON assets(user_id, created)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS assets_hash ON assets(hash)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS asset_likes (asset_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (asset_id, user_id))");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS asset_likes_user ON asset_likes(user_id)");
+        this.sql.exec("CREATE TABLE IF NOT EXISTS asset_uses (asset_id TEXT NOT NULL, user_id TEXT NOT NULL, PRIMARY KEY (asset_id, user_id))");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS asset_uses_user ON asset_uses(user_id)");
+        // When each account last published, so deleting an asset doesn't skip the wait.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS asset_published (user_id TEXT PRIMARY KEY, at INTEGER NOT NULL)");
         this.prunedDay = -1;
     }
 
@@ -906,6 +938,202 @@ export class TrackHub extends DurableObject {
         });
         return { ok: true };
     }
+
+    // ---- public assets ----
+
+    // Every asset's details (no blocks, no picture): the page searches and sorts them itself, and the Worker keeps
+    // this reply in Cloudflare's cache for a minute, so browsing costs one read of the table a minute.
+    assetList() {
+        const rows = this.sql.exec(`SELECT id, author, name, description, tags, kw, parts, dims, created, updated, uses, likes, thumb
+            FROM assets ORDER BY created DESC LIMIT ?`, ASSET_LIST_MAX).toArray();
+        return { assets: rows.map(assetView), at: Date.now() };
+    }
+
+    assetGet(id) {
+        if (!ASSET_ID.test(id ?? "")) return null;
+        const row = this.first("SELECT * FROM assets WHERE id = ?", id);
+        if (!row) return null;
+        return { asset: assetView(row), parts: this.getBlob("a", id) };
+    }
+
+    assetThumb(id) {
+        if (!ASSET_ID.test(id ?? "")) return null;
+        const data = this.getBlob("ai", id);
+        return data ? { data } : null;
+    }
+
+    assetMe({ userId, owner }) {
+        const ids = (q) => this.sql.exec(q, userId).toArray().map((r) => r.id);
+        const last = owner ? null : this.first("SELECT at FROM asset_published WHERE user_id = ?", userId)?.at;
+        return {
+            owner: !!owner,
+            mine: ids("SELECT id FROM assets WHERE user_id = ? ORDER BY created DESC"),
+            liked: ids("SELECT asset_id AS id FROM asset_likes WHERE user_id = ?"),
+            used: ids("SELECT asset_id AS id FROM asset_uses WHERE user_id = ?"),
+            wait: last ? Math.max(0, last + ASSET_PUBLISH_GAP_MS - Date.now()) : 0,
+            gap: ASSET_PUBLISH_GAP_MS,
+        };
+    }
+
+    // thumb: { data } (a data: URL the Worker already checked) or null for none.
+    // dims: the tiles the blocks cover as the editor counts them; the block positions alone stand in without it.
+    async assetPublish({ userId, ipKey, nickname, owner, name, description, tags, kw, parts, dims, thumb }) {
+        const blocks = cleanAssetParts(parts);
+        if (blocks.error) return blocks;
+        const title = moderate(name, ASSET_NAME_MAX);
+        if (!title) return fail(400, "Give your asset a name.");
+        if (!thumb?.data) return fail(400, "Add a picture of your asset.");
+        if (!owner) {
+            const last = this.first("SELECT at FROM asset_published WHERE user_id = ?", userId)?.at ?? 0;
+            const wait = last + ASSET_PUBLISH_GAP_MS - Date.now();
+            if (wait > 0) return { status: 429, error: "You can publish one asset every 30 minutes. Try again in " + minutes(wait) + ".", wait };
+            if (this.overLimit(["asset:ip:" + ipKey], ASSETS_PER_IP_DAY)) return fail(429, "Too many assets were published from your network today. Try again tomorrow.");
+        }
+        const hash = (await sha256Hex(blocks.json)).slice(0, 32);
+        const same = this.first("SELECT id, name FROM assets WHERE hash = ?", hash);
+        if (same) return { status: 409, error: "Those exact blocks are already in the library as “" + same.name + "”.", id: same.id };
+        const id = this.freshId("assets", "id", 9, ID_ALPHABET);
+        const now = Date.now();
+        this.ctx.storage.transactionSync(() => {
+            this.sql.exec(`INSERT INTO assets (id, user_id, author, name, description, tags, kw, parts, dims, hash, created, updated, uses, likes, thumb)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1)`, id, userId, nick(nickname), title, cleanLines(description, ASSET_DESC_MAX),
+                JSON.stringify(cleanAssetTags(tags)), cleanKeywords(kw), blocks.count, cleanDims(dims) ?? blocks.dims, hash, now, now);
+            this.putBlob("a", id, blocks.json);
+            this.putBlob("ai", id, thumb.data);
+            this.sql.exec("INSERT INTO asset_published (user_id, at) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET at = excluded.at", userId, now);
+            if (!owner) this.countHit(["asset:ip:" + ipKey]);
+        });
+        return { asset: assetView(this.first("SELECT * FROM assets WHERE id = ?", id)), wait: owner ? 0 : ASSET_PUBLISH_GAP_MS };
+    }
+
+    // The uploader (or the owner) changes the name, description, tags or picture; the blocks stay as published.
+    assetUpdate({ userId, owner, id, name, description, tags, thumb }) {
+        const row = ASSET_ID.test(id ?? "") ? this.first("SELECT * FROM assets WHERE id = ?", id) : null;
+        if (!row) return fail(404, "That asset was deleted.");
+        if (row.user_id !== userId && !owner) return fail(403, "Only the player who published this asset can change it.");
+        if (!owner && this.overLimit(["asset-edit:u:" + userId], ASSET_EDITS_PER_DAY)) return fail(429, "Too many changes today. Try again tomorrow.");
+        const title = name === undefined ? row.name : moderate(name, ASSET_NAME_MAX);
+        if (!title) return fail(400, "Give your asset a name.");
+        const desc = description === undefined ? row.description : cleanLines(description, ASSET_DESC_MAX);
+        const tagText = tags === undefined ? row.tags : JSON.stringify(cleanAssetTags(tags));
+        const pic = thumb?.data ? row.thumb + 1 : row.thumb;
+        this.ctx.storage.transactionSync(() => {
+            this.sql.exec("UPDATE assets SET name = ?, description = ?, tags = ?, thumb = ?, updated = ? WHERE id = ?", title, desc, tagText, pic, Date.now(), id);
+            if (thumb?.data) {
+                this.dropBlob("ai", id);
+                this.putBlob("ai", id, thumb.data);
+            }
+            this.countHit(["asset-edit:u:" + userId]);
+        });
+        return { asset: assetView(this.first("SELECT * FROM assets WHERE id = ?", id)) };
+    }
+
+    assetLike({ userId, ipKey, id, on }) {
+        if (!ASSET_ID.test(id ?? "") || !this.first("SELECT 1 AS x FROM assets WHERE id = ?", id)) return fail(404, "That asset was deleted.");
+        const keys = ["asset-like:ip:" + ipKey, "asset-like:u:" + userId];
+        if (this.overLimit(keys, ASSET_LIKES_PER_DAY)) return fail(429, "Too many likes today. Try again tomorrow.");
+        this.ctx.storage.transactionSync(() => {
+            const changed = on
+                ? this.sql.exec("INSERT INTO asset_likes (asset_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", id, userId).rowsWritten
+                : this.sql.exec("DELETE FROM asset_likes WHERE asset_id = ? AND user_id = ?", id, userId).rowsWritten;
+            if (changed > 0) this.sql.exec("UPDATE assets SET likes = MAX(0, likes + ?) WHERE id = ?", on ? 1 : -1, id);
+            this.countHit(keys);
+        });
+        const row = this.first("SELECT likes, uses FROM assets WHERE id = ?", id);
+        return { likes: row.likes, uses: row.uses, liked: !!on };
+    }
+
+    // A player placed the asset in a track; each account counts once.
+    assetUse({ userId, ipKey, id }) {
+        if (!ASSET_ID.test(id ?? "") || !this.first("SELECT 1 AS x FROM assets WHERE id = ?", id)) return fail(404, "That asset was deleted.");
+        const keys = ["asset-use:ip:" + ipKey, "asset-use:u:" + userId];
+        if (this.overLimit(keys, ASSET_USES_PER_DAY)) return { ok: true };
+        this.ctx.storage.transactionSync(() => {
+            if (this.sql.exec("INSERT INTO asset_uses (asset_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING", id, userId).rowsWritten > 0) {
+                this.sql.exec("UPDATE assets SET uses = uses + 1 WHERE id = ?", id);
+                this.countHit(keys);
+            }
+        });
+        const row = this.first("SELECT likes, uses FROM assets WHERE id = ?", id);
+        return { ok: true, likes: row.likes, uses: row.uses };
+    }
+
+    // The uploader, or the owner (moderation).
+    assetDelete({ userId, owner, id }) {
+        const row = ASSET_ID.test(id ?? "") ? this.first("SELECT user_id FROM assets WHERE id = ?", id) : null;
+        if (!row) return { ok: true };
+        if (row.user_id !== userId && !owner) return fail(403, "Only the player who published this asset can delete it.");
+        this.ctx.storage.transactionSync(() => {
+            this.sql.exec("DELETE FROM assets WHERE id = ?", id);
+            this.sql.exec("DELETE FROM asset_likes WHERE asset_id = ?", id);
+            this.sql.exec("DELETE FROM asset_uses WHERE asset_id = ?", id);
+            this.dropBlob("a", id);
+            this.dropBlob("ai", id);
+        });
+        return { ok: true };
+    }
+}
+
+const minutes = (ms) => {
+    const m = Math.max(1, Math.ceil(ms / 60_000));
+    return m + (m === 1 ? " minute" : " minutes");
+};
+
+function assetView(a) {
+    let tags = [];
+    try {
+        tags = JSON.parse(a.tags);
+    } catch {}
+    return {
+        id: a.id, name: a.name, author: a.author, description: a.description, tags, kw: a.kw, parts: a.parts,
+        dims: a.dims.split(",").map(Number), created: a.created, updated: a.updated, uses: a.uses, likes: a.likes, thumb: a.thumb,
+    };
+}
+
+// [[id, x, y, z, rotation, axis, color, checkpointOrder|null], ...] -> the canonical JSON, the count and the size in tiles.
+function cleanAssetParts(parts) {
+    if (!Array.isArray(parts) || parts.length === 0) return fail(400, "Select some blocks first.");
+    if (parts.length > ASSET_PARTS_MAX) return fail(413, "An asset can hold " + ASSET_PARTS_MAX + " blocks at most.");
+    const int = (v, lo, hi) => Number.isSafeInteger(v) && v >= lo && v <= hi;
+    const out = [];
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const p of parts) {
+        if (!Array.isArray(p) || p.length < 7 || p.length > 8) return fail(400, "Those blocks couldn't be read.");
+        const [id, x, y, z, r, axis, color] = p;
+        const cp = p[7] ?? null;
+        if (!int(id, 0, 65535) || !int(x, -ASSET_SPAN, ASSET_SPAN) || !int(y, -ASSET_SPAN, ASSET_SPAN) || !int(z, -ASSET_SPAN, ASSET_SPAN)
+            || !int(r, 0, 3) || !int(axis, 0, 5) || !int(color, 0, 65535) || (cp !== null && !int(cp, 0, 65535))) {
+            return fail(400, "Those blocks couldn't be read.");
+        }
+        out.push(cp === null ? [id, x, y, z, r, axis, color] : [id, x, y, z, r, axis, color, cp]);
+        [x, y, z].forEach((v, i) => {
+            lo[i] = Math.min(lo[i], v);
+            hi[i] = Math.max(hi[i], v);
+        });
+    }
+    return { json: JSON.stringify(out), count: out.length, dims: hi.map((h, i) => h - lo[i] + 1).join(",") };
+}
+
+function cleanDims(d) {
+    return Array.isArray(d) && d.length === 3 && d.every((v) => Number.isSafeInteger(v) && v >= 1 && v <= 4 * ASSET_SPAN) ? d.join(",") : null;
+}
+
+function cleanAssetTags(tags) {
+    if (!Array.isArray(tags)) return [];
+    const seen = new Set();
+    for (const t of tags.slice(0, ASSET_TAGS * 2)) {
+        const tag = moderate(String(t ?? "").replace(/^#/, ""), ASSET_TAG_MAX).toLowerCase().trim();
+        if (tag && !seen.has(tag)) seen.add(tag);
+        if (seen.size >= ASSET_TAGS) break;
+    }
+    return [...seen];
+}
+
+function cleanKeywords(kw) {
+    if (typeof kw !== "string") return "";
+    const words = new Set(kw.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(" ").filter((w) => w.length > 1 && w.length < 24));
+    return [...words].join(" ").slice(0, ASSET_KW_MAX);
 }
 
 function submissionView(s) {
