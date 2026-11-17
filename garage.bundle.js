@@ -1148,6 +1148,9 @@
                 const __nswsTagsPanel = document.createElement("div");
                 __nswsTagsPanel.className = "panel hidden",
                 i.get(this, Jt, "f").appendChild(__nswsTagsPanel);
+                const __nswsCratesPanel = document.createElement("div");
+                __nswsCratesPanel.className = "panel hidden",
+                i.get(this, Jt, "f").appendChild(__nswsCratesPanel);
                 const f = [{
                     title: n.get("Paint"),
                     icon: "images/paint.svg",
@@ -1172,6 +1175,10 @@
                     title: "Roles",
                     icon: "images/tag.svg",
                     panel: __nswsTagsPanel
+                }] : []), ...(window.__nswsCrates ? [{
+                    title: "Crates",
+                    icon: "images/crate.svg",
+                    panel: __nswsCratesPanel
                 }] : [])];
                 let p = f[0];
                 const u = [];
@@ -1189,6 +1196,7 @@
                         i.get(this, an, "f").classList.add("hidden"),
                         i.get(this, bodyPanel, "f").classList.add("hidden"),
                         __nswsTagsPanel.classList.add("hidden"),
+                        __nswsCratesPanel.classList.add("hidden"),
                         e.classList.add("selected"),
                         n.panel.classList.remove("hidden"),
                         p != n && (n.panel == h ? c(new THREE.Vector3(0,2,6)) : n.panel == i.get(this, nn, "f") ? (i.get(this, Yt, "m", un).call(this),
@@ -1197,6 +1205,14 @@
                         c(new THREE.Vector3(2.874291197536667,.9837316369014955,-.7283975369068978))) : n.panel == i.get(this, bodyPanel, "f") && (i.get(this, Yt, "m", bodyScroll).call(this),
                         c(new THREE.Vector3(3.5,1.8,5.2)))),
                         n.panel == __nswsTagsPanel && window.__nswsTags.mountGarage(__nswsTagsPanel),
+                        n.panel == __nswsCratesPanel ? (p != n && c(new THREE.Vector3(3.5,1.8,5.2)),
+                        window.__nswsCrates.mountGarage(__nswsCratesPanel, {
+                            apply: s => {
+                                this.setCarStyle(s),
+                                i.get(this, Yt, "m", dn).call(this)
+                            },
+                            current: () => new y.A(i.get(this, Kt, "f"),i.get(this, $t, "f"),i.get(this, tn, "f"),i.get(this, cn, "f")[0].color.getHex(),i.get(this, cn, "f")[1].color.getHex(),i.get(this, cn, "f")[2].color.getHex(),i.get(this, cn, "f")[3].color.getHex(),i.get(this, bodyIdx, "f"))
+                        })) : window.__nswsCrates?.leaveGarage?.(),
                         p = n
                     }
                     )),
@@ -1727,6 +1743,7 @@
         }
         ,
         fe = function() {
+            window.__nswsCrates?.leaveGarage?.(!0);
             i.get(this, se, "f") && (i.get(this, Hn, "f").setNickname(i.get(this, ee, "f")),
             i.get(this, Hn, "f").setCountryCode(i.get(this, ie, "f")),
             i.get(this, Hn, "f").setCarStyle(i.get(this, Sn, "f").getCarStyle()),
@@ -1934,6 +1951,8 @@
                     i.set(this, Qn, t, "f")
                 }
                 )), "f"),
+                // Crates show a skin on this car without touching the saved paint (mod/nsws_crates.js).
+                window.__nswsGarageCar = t => i.get(this, Sn, "f").setCarStyle(t),
                 i.get(this, Dn, "f").appendChild(i.get(this, _n, "f")),
                 i.get(this, $n, "f").setCarStyle(i.get(this, ne, "f").carStyle),
                 i.get(this, Sn, "f").setCarStyle(i.get(this, ne, "f").carStyle),
@@ -1951,6 +1970,8 @@
                     }
                     ))
                 }
+                window.__nswsCrates?.leaveGarage?.(),
+                window.__nswsGarageCar = null,
                 i.get(this, Pn, "f").scene.remove(i.get(this, Xn, "f")),window.__polyfxInGarage = false,
                 window.removeEventListener("keydown", i.get(this, Rn, "f")),
                 i.get(this, $n, "f").dispose(),

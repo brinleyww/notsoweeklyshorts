@@ -2044,7 +2044,9 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         } else if (m.text || !m.media) {
             const text = document.createElement("div");
             text.className = isJumbo(m.text) ? "text jumbo" : "text";
-            appendText(text, m.text, m.pings);
+            const crate = window.__nswsCrates?.chatLine?.(m.text);
+            if (crate) text.appendChild(crate);
+            else appendText(text, m.text, m.pings);
             if (m.edited) {
                 const edited = document.createElement("span");
                 edited.className = "edited";
