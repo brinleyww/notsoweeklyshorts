@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" version="1.1" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+ <rect width="1024" height="1024" fill="#f00"/>
+ <g transform="rotate(45 512 512)">
+  <rect x="-800" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-672" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-544" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-416" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-288" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-160" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="-32" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="96" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="224" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="352" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="480" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="608" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="736" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="864" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="992" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1120" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1248" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1376" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1504" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1632" y="-600" width="64" height="2300" fill="#0f0"/>
+  <rect x="1760" y="-600" width="64" height="2300" fill="#0f0"/>
+ </g>
+</svg>

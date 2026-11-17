@@ -976,6 +976,8 @@
                 for (let s = 0; s < y.A.patterns.length; s++) {
                     if (!y.A.isValidPattern(s))
                         throw new Error("Invalid car style pattern");
+                    if (y.A.patterns[s].crate)
+                        continue;
                     let o = null;
                     const a = document.createElement("button");
                     a.addEventListener("click", ( () => {
@@ -1019,6 +1021,8 @@
                 for (let o = 0; o < y.A.rims.length; o++) {
                     if (!y.A.isValidRims(o))
                         throw new Error("Invalid car style rims");
+                    if (y.A.rims[o].crate)
+                        continue;
                     let a = null;
                     const l = document.createElement("button");
                     l.addEventListener("click", ( () => {
@@ -1069,6 +1073,8 @@
                 for (let o = 0; o < y.A.exhausts.length; o++) {
                     if (!y.A.isValidExhaust(o))
                         throw new Error("Invalid car style exhaust");
+                    if (y.A.exhausts[o].crate)
+                        continue;
                     let a = null;
                     const l = document.createElement("button");
                     l.addEventListener("click", ( () => {
@@ -1119,6 +1125,8 @@
                 for (let o = 0; o < y.A.bodies.length; o++) {
                     if (!y.A.isValidBody(o))
                         throw new Error("Invalid car style body");
+                    if (y.A.bodies[o].crate)
+                        continue;
                     const l = document.createElement("button");
                     l.title = y.A.bodies[o].name,
                     l.addEventListener("click", ( () => {
@@ -1483,19 +1491,19 @@
                     throw new Error("Invalid car style pattern");
                 return n
             }
-            )).filter((t => i.get(this, Vn, "f").isPatternUnlocked(t)))
+            )).filter((t => !y.A.patterns[t].crate && i.get(this, Vn, "f").isPatternUnlocked(t)))
               , n = y.A.rims.map(( (t, n) => {
                 if (!y.A.isValidRims(n))
                     throw new Error("Invalid car style rims");
                 return n
             }
-            )).filter((t => i.get(this, Vn, "f").isRimsUnlocked(t)))
+            )).filter((t => !y.A.rims[t].crate && i.get(this, Vn, "f").isRimsUnlocked(t)))
               , e = y.A.exhausts.map(( (t, n) => {
                 if (!y.A.isValidExhaust(n))
                     throw new Error("Invalid car style exhaust");
                 return n
             }
-            )).filter((t => i.get(this, Vn, "f").isExhaustUnlocked(t)))
+            )).filter((t => !y.A.exhausts[t].crate && i.get(this, Vn, "f").isExhaustUnlocked(t)))
               , o = t[Math.floor(Math.random() * t.length)]
               , a = n[Math.floor(Math.random() * n.length)]
               , l = e[Math.floor(Math.random() * e.length)]
@@ -1528,9 +1536,9 @@
                     n.setCarStyle(e.carStyle),
                     n.setVisible(!0);
                 else {
-                    const p = Math.floor(Math.random() * y.A.patterns.length)
-                      , r = Math.floor(Math.random() * y.A.rims.length)
-                      , x = Math.floor(Math.random() * y.A.exhausts.length)
+                    const p = Math.floor(Math.random() * y.A.patterns.filter((t => !t.crate)).length)
+                      , r = Math.floor(Math.random() * y.A.rims.filter((t => !t.crate)).length)
+                      , x = Math.floor(Math.random() * y.A.exhausts.filter((t => !t.crate)).length)
                       , h = 360 * Math.random();
                     let s, l;
                     Math.random() < .9 ? (s = 100 * (1 - Math.pow(Math.random(), 2)),

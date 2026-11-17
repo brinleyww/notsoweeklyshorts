@@ -1,65 +1,44 @@
-// Crates: cosmetic paint jobs that drop from finished runs and open with keys earned from new PBs. Kept in this
-// browser only (per profile). Paint never touches physics: everything here ends up as an ordinary car style.
+// Crates: car parts that only come out of crates (mod/nsws_crate_parts.js), bought with Bolts earned by playing. Never real
+// money. The inventory is kept in this browser per profile; the Worker only counts how many of each part exist.
 (function () {
-    const STORE = "nsws_crates_v1:";
-    const DROP_CHANCE = 0.14;
-    const DROP_PITY = 14;
-    const DROP_GAP_MS = 3 * 60 * 1000;
-    const DROPS_PER_DAY = 4;
-    const KEYS_PER_DAY = 3;
+    const STORE = "nsws_crates_v2:";
+    const OLD_STORE = "nsws_crates_v1:";
+    const PRICE = 50;
+    const START_BOLTS = 50;
+    const FINISH_BOLTS = 2;
+    const FINISH_BOLTS_PER_DAY = 60;
+    const PB_BOLTS = 15;
+    const PB_REWARDS_PER_DAY = 3;
     const MAX_ITEMS = 500;
     const TILE = 150;
     const GAP = 6;
     const SPIN_MS = 6200;
+    const COUNTS_MS = 5 * 60 * 1000;
+    const REPORT_DELAY_MS = 15000;
 
     const RARITIES = [
-        { id: "milspec", name: "Mil-Spec", color: "#4b69ff", odds: 0.7992 },
-        { id: "restricted", name: "Restricted", color: "#8847ff", odds: 0.1598 },
-        { id: "classified", name: "Classified", color: "#d32ce6", odds: 0.032 },
-        { id: "covert", name: "Covert", color: "#eb4b4b", odds: 0.0064 },
-        { id: "gold", name: "Rare Special", color: "#e4ae39", odds: 0.0026 },
+        { id: "milspec", name: "Mil-Spec", color: "#4b69ff", odds: 0.7992, sell: 4 },
+        { id: "restricted", name: "Restricted", color: "#8847ff", odds: 0.1598, sell: 12 },
+        { id: "classified", name: "Classified", color: "#d32ce6", odds: 0.032, sell: 40 },
+        { id: "covert", name: "Covert", color: "#eb4b4b", odds: 0.0064, sell: 150 },
+        { id: "gold", name: "Rare Special", color: "#e4ae39", odds: 0.0026, sell: 600 },
     ];
     const R = Object.fromEntries(RARITIES.map((r, i) => [r.id, i]));
 
-    const WEARS = [
-        { name: "Factory New", short: "FN", max: 0.07 },
-        { name: "Minimal Wear", short: "MW", max: 0.15 },
-        { name: "Field-Tested", short: "FT", max: 0.38 },
-        { name: "Well-Worn", short: "WW", max: 0.45 },
-        { name: "Battle-Scarred", short: "BS", max: 1.01 },
+    const CRATES = [
+        { kind: "patterns", name: "Pattern Crate", field: "pattern", label: "Patterns", one: "pattern" },
+        { kind: "rims", name: "Rims Crate", field: "rims", label: "Rims", one: "rims" },
+        { kind: "exhausts", name: "Exhaust Crate", field: "exhaust", label: "Exhausts", one: "exhaust" },
+        { kind: "bodies", name: "Car Crate", field: "body", label: "Cars", one: "car" },
     ];
-
-    // pattern = index into CarStyle.patterns, rims = a rims model (higher tiers only), body only for the Pengu knives.
-    // c = [primary, secondary, frame, rims]; wear = [min, max] float.
-    const ITEMS = [
-        { name: "Parking Ticket", r: "milspec", pattern: 0, c: [0xf2c21b, 0x1a1a1a, 0x1a1a1a, 0x666666], note: "Comes with a fine you will never pay." },
-        { name: "Rust Bucket", r: "milspec", pattern: 5, c: [0x8a4b2a, 0x5a3a28, 0x3b2a20, 0x5a4a40], wear: [0.06, 1], note: "Cannot be Factory New. It was born like this." },
-        { name: "Learner Plates", r: "milspec", pattern: 7, c: [0xf4f4f4, 0xd61f1f, 0x1f1f1f, 0x888888], note: "Please be patient. Student driver." },
-        { name: "Mud Season", r: "milspec", pattern: 4, c: [0x6b5a3e, 0x3e3425, 0x2a241b, 0x4d4436], note: "Was a different colour before the forest stage." },
-        { name: "Rental Return", r: "milspec", pattern: 1, c: [0x9aa3ad, 0x2b2f36, 0x1a1c20, 0x9aa3ad], note: "Returned with less fuel than promised." },
-        { name: "Sponsor Wanted", r: "milspec", pattern: 15, c: [0xffffff, 0xff2d95, 0x1a1a1a, 0xffffff], note: "Your logo here. Seriously. Anyone." },
-        { name: "Grandma's Minivan", r: "milspec", pattern: 14, c: [0x8fa9c4, 0xd9cfb8, 0x5d6b7a, 0xc0c0c0], note: "Top speed: church." },
-        { name: "Night Shift", r: "restricted", pattern: 9, c: [0x0d0f1f, 0x39ff88, 0x0d0f1f, 0x39ff88], note: "Drives best after 2 am, like everyone on this site." },
-        { name: "Left Turn Only", r: "restricted", pattern: 3, c: [0x1d4fd6, 0xffd400, 0x111111, 0xffd400], note: "Built for ovals. Panics at right turns." },
-        { name: "Pit Lane Pasta", r: "restricted", pattern: 12, c: [0xf5d76e, 0xc0392b, 0x3a2a10, 0xc0392b], note: "Al dente aerodynamics." },
-        { name: "Gravel Gremlin", r: "restricted", pattern: 10, c: [0x3fa34d, 0x1b1b1b, 0x1b1b1b, 0x3fa34d], note: "Has never once stayed on the road." },
-        { name: "Checkpoint Skipper", r: "restricted", pattern: 6, c: [0x7b2cff, 0xffffff, 0x1a0f33, 0xffffff], note: "Allegedly." },
-        { name: "Redline", r: "classified", pattern: 2, rims: 3, c: [0x111111, 0xd10f0f, 0x111111, 0xd10f0f], note: "Shift at 9,000 rpm. Or never. Your call." },
-        { name: "Hyper Goose", r: "classified", pattern: 11, rims: 5, c: [0x19c2b5, 0xff6a00, 0x10302e, 0xff6a00], note: "Honk." },
-        { name: "Hot Sauce", r: "classified", pattern: 8, rims: 7, c: [0xff3b1f, 0xffb100, 0x3a0a05, 0xffb100], note: "Warning: contains chilli and overconfidence." },
-        { name: "Author Time", r: "covert", pattern: 13, rims: 9, c: [0xf0c419, 0x101010, 0x101010, 0xf0c419], note: "Beat it. Then beat it again." },
-        { name: "World Record", r: "covert", pattern: 15, rims: 10, c: [0xffffff, 0x0047ff, 0x0b1020, 0x0047ff], note: "Held for eleven glorious minutes." },
-        { name: "\u2605 Pengu | Fade", r: "gold", body: 6, pattern: 14, rims: 11, c: [0xff4fa3, 0xffd23f, 0x6a2ca0, 0xffd23f], finish: "fade", wear: [0, 0.08], note: "A penguin. In a car. In a gradient." },
-        { name: "\u2605 Pengu | Ice Hardened", r: "gold", body: 6, pattern: 11, rims: 11, c: [0xb8892e, 0x8a8f96, 0x2b2f36, 0x8a8f96], finish: "ice", wear: [0, 1], note: "Somebody, somewhere, is chasing template 661." },
-        { name: "\u2605 Pengu | Dopplerganger", r: "gold", body: 6, pattern: 13, rims: 11, c: [0x7a1fd6, 0x111111, 0x111111, 0xcfcfcf], finish: "doppler", wear: [0, 0.08], note: "There are two of it. Neither of them can drive." },
-    ];
+    const CRATE = Object.fromEntries(CRATES.map((c) => [c.kind, c]));
 
     const QUIPS = [
-        ["It's blue. Like your chances of beating Author Time.", "Certified mid.", "Adds 0 km/h. We checked.", "The crate shrugged."],
+        ["Certified mid.", "Adds 0 km/h. We checked.", "The crate shrugged.", "It's blue. Like your chances of beating Author Time."],
         ["Purple! Respectable. Frame it.", "Someone's mum is proud.", "Not bad. Not bad at all."],
         ["PINK. Somebody screenshot this.", "The chat would like to know your location."],
         ["RED. You may now be insufferable for exactly one week.", "Covert. Act natural."],
-        ["\u2605 You absolute menace.", "\u2605 The penguin has chosen you."],
+        ["\u2605 You absolute menace.", "\u2605 The crate gods smile upon you."],
     ];
 
     const CSS = `
@@ -67,13 +46,12 @@
 .nsws-crates .bar{position:absolute;right:var(--safe-area-right);bottom:0;top:64px;display:flex;flex-direction:column;width:min(380px,48vw);box-sizing:border-box;background:var(--surface-secondary-color);pointer-events:auto;}
 .nsws-crates .bar>.head{flex-shrink:0;padding:12px 14px;background:var(--surface-color);}
 .nsws-crates .bar>.head>.count{font-size:30px;}
-.nsws-crates .bar>.head>.count small{font-size:16px;color:rgba(255,255,255,.65);margin:0 10px 0 6px;}
+.nsws-crates .bar>.head>.count small{font-size:16px;color:rgba(255,255,255,.65);margin-left:6px;}
 .nsws-crates .bar>.head>.sub{font-size:13px;line-height:1.35;color:rgba(255,255,255,.6);margin:2px 0 8px;}
-.nsws-crates .bar>.head>.button{margin:0;font-size:18px;padding:6px 14px;}
-.nsws-crates .bar>.head>.button+.button{margin-left:6px;}
+.nsws-crates .bar>.head>.button{margin:0 6px 0 0;font-size:18px;padding:6px 12px;}
 .nsws-crates .bar>.head>.button.main{box-shadow:inset 0 -3px #ffc94a;}
 .nsws-crates .bar>.list{flex:1;min-height:0;overflow-y:auto;padding:4px 6px 10px;}
-.nsws-crates .bar h3{margin:12px 4px 4px;font-size:17px;font-weight:normal;}
+.nsws-crates .bar h3{margin:12px 4px 4px;font-size:17px;font-weight:normal;color:rgba(255,255,255,.8);}
 .nsws-crates .bar>.list>p{margin:20px 10px;font-size:15px;line-height:1.4;color:rgba(255,255,255,.55);text-align:center;}
 .nsws-crates .bar>.foot{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 12px;border-top:1px solid rgba(255,255,255,.1);font-size:13px;color:rgba(255,255,255,.55);}
 .nsws-crates .bar>.foot>.button{margin:0;font-size:15px;padding:3px 10px;}
@@ -81,17 +59,18 @@
 .nsws-crates .item:hover{background:var(--button-hover-color);}
 .nsws-crates .item.selected{background:var(--button-hover-color);border-color:#fff;border-left-color:var(--rc);box-shadow:inset 0 0 5px #fff;}
 .nsws-crates .item>.nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.nsws-crates .item>.x{flex-shrink:0;font-size:13px;color:rgba(255,255,255,.55);}
 .nsws-crates .item>.w{margin-left:auto;flex-shrink:0;font-size:13px;color:rgba(255,255,255,.55);}
 .nsws-crates .item.on>.w{color:#ffc94a;}
-.nsws-crates .st{color:#cf6a32;}
+.nsws-crates .st,#nsws-crate .st{color:#cf6a32;}
 .nsws-crates .preview{position:absolute;left:calc(var(--safe-area-left) + 10px);bottom:10px;width:min(430px,calc(100% - min(380px,48vw) - 30px));box-sizing:border-box;background:var(--surface-secondary-color);pointer-events:auto;clip-path:polygon(0 0,100% 0,calc(100% - 10px) 100%,0 100%);}
 .nsws-crates .preview>.cap{padding:4px 12px;background:var(--surface-color);font-size:20px;border-bottom:3px solid var(--rc,transparent);}
 .nsws-crates .preview>.cap>small{display:block;font-size:14px;color:var(--rc,rgba(255,255,255,.6));}
 .nsws-crates .preview>.info{padding:8px 12px 12px;font-size:14px;line-height:1.4;color:rgba(255,255,255,.75);}
 .nsws-crates .preview>.info>.note{font-style:italic;color:rgba(255,255,255,.6);margin-top:4px;}
 .nsws-crates .preview>.info>.button{margin:8px 6px 0 0;font-size:18px;padding:5px 14px;}
-.nsws-crates .preview>.info>.button.armed{color:#ff9696;box-shadow:inset 0 -3px #ff9696;}
-.nsws-crates .preview>.info>input{width:100%;box-sizing:border-box;margin:8px 0 0;font-size:18px;}
+.nsws-crates .preview>.info>.button.armed{color:#ffc94a;box-shadow:inset 0 -3px #ffc94a;}
+.nsws-crates .preview>.info>.button:disabled{opacity:.35;}
 @media (max-width:720px){.nsws-crates .preview>.info>.note{display:none;}}
 #nsws-crate{position:fixed;inset:0;z-index:10001;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.72);}
 #nsws-crate *{box-sizing:border-box;}
@@ -103,10 +82,17 @@
 #nsws-crate .body{overflow-y:auto;padding:8px 20px 18px;}
 #nsws-crate h2{margin:12px 0 8px;padding-bottom:3px;font-size:15px;font-weight:normal;font-style:italic;color:rgba(255,255,255,.65);border-bottom:1px solid #fff;}
 #nsws-crate .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:6px;}
+#nsws-crate .shop{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:8px;}
 #nsws-crate .tile{position:relative;display:flex;flex-direction:column;align-items:center;background:var(--button-color);border-bottom:4px solid var(--rc);padding:4px 4px 6px;min-width:0;}
 #nsws-crate .tile>img,#nsws-crate .tile>.star{width:100%;max-width:120px;aspect-ratio:1;object-fit:contain;filter:drop-shadow(0 0 2px #000);}
 #nsws-crate .tile>.star{display:flex;align-items:center;justify-content:center;font-size:64px;color:#e4ae39;}
 #nsws-crate .tile>span{width:100%;font-size:13px;line-height:1.2;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#nsws-crate .tile>small{font-size:11px;color:rgba(255,255,255,.55);white-space:nowrap;}
+#nsws-crate .shop .tile{cursor:pointer;border-bottom-color:#ffc94a;padding:8px;}
+#nsws-crate .shop .tile:hover{background:var(--button-hover-color);}
+#nsws-crate .shop .tile>img{max-width:150px;}
+#nsws-crate .shop .tile>span{font-size:19px;}
+#nsws-crate .shop .tile>small{font-size:13px;}
 #nsws-crate .reel{position:relative;height:${TILE + 46}px;margin:6px 0 4px;overflow:hidden;background:var(--surface-tertiary-color);}
 #nsws-crate .reel>.strip{position:absolute;left:0;top:8px;display:flex;gap:${GAP}px;will-change:transform;}
 #nsws-crate .reel .tile{width:${TILE}px;flex-shrink:0;}
@@ -129,6 +115,12 @@
 #nsws-crate .line>div>small{display:block;font-size:13px;color:rgba(255,255,255,.6);}
 #nsws-crate .line>.button{margin:0;font-size:17px;padding:5px 14px;flex-shrink:0;}
 #nsws-crate .line>.button:disabled{opacity:.35;}
+#nsws-crate table{width:100%;border-collapse:collapse;font-size:15px;table-layout:fixed;}
+#nsws-crate td:not(:first-child),#nsws-crate th:not(:first-child){width:17%;}
+#nsws-crate td,#nsws-crate th{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:right;white-space:nowrap;}
+#nsws-crate th{font-weight:normal;font-size:13px;color:rgba(255,255,255,.55);}
+#nsws-crate td:first-child,#nsws-crate th:first-child{text-align:left;white-space:normal;border-left:4px solid var(--rc,transparent);}
+#nsws-crate td.mine{color:#96ff96;}
 #nsws-crate .fine{margin:14px 0 0;font-size:13px;line-height:1.4;color:rgba(255,255,255,.5);}
 @media (max-width:620px){#nsws-crate .won{flex-direction:column;align-items:flex-start;}#nsws-crate .won>img{width:160px;height:160px;}#nsws-crate .top>small{display:none;}}
 .nsws-crate-chat{color:rgba(255,255,255,.8);}
@@ -153,7 +145,7 @@
     }
 
     function plural(n, one, many = one + "s") {
-        return n + " " + (n === 1 ? one : many);
+        return n.toLocaleString() + " " + (n === 1 ? one : many);
     }
 
     function today() {
@@ -168,6 +160,18 @@
         return (h >>> 0).toString(36);
     }
 
+    function parts() {
+        return window.__nswsCrateParts;
+    }
+
+    function partOf(item) {
+        return parts()?.PARTS[item.k]?.[item.n] ?? null;
+    }
+
+    function allParts() {
+        return Object.values(parts()?.PARTS ?? {}).flat();
+    }
+
     function profile() {
         try {
             return window.__nswsCup?.services?.().profiles?.getCurrentUserProfile?.() ?? null;
@@ -176,23 +180,44 @@
         }
     }
 
-    function storeKey() {
-        const token = profile()?.token ?? window.__nswsProfileToken?.();
-        return token ? STORE + hashText(token) : null;
+    function token() {
+        return profile()?.token ?? window.__nswsProfileToken?.() ?? null;
+    }
+
+    function newId() {
+        return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+    // v12.11 crates held paint skins; whatever a profile had then becomes Bolts.
+    function fromV1(t) {
+        let bolts = START_BOLTS;
+        try {
+            const old = JSON.parse(localStorage.getItem(OLD_STORE + hashText(t)));
+            if (old && Array.isArray(old.items)) {
+                const tier = (i) => (i < 7 ? 0 : i < 12 ? 1 : i < 15 ? 2 : i < 17 ? 3 : 4);
+                bolts += (old.crates ?? 0) * PRICE + (old.keys ?? 0) * 25 + old.items.reduce((sum, x) => sum + RARITIES[tier(x.i)].sell, 0);
+            }
+        } catch {}
+        return bolts;
     }
 
     let cached = null;
     function load() {
-        const key = storeKey();
-        if (!key) return null;
+        const t = token();
+        if (!t || !parts()) return null;
+        const key = STORE + hashText(t);
         if (cached?.key === key) return cached.state;
         let state = null;
         try {
             state = JSON.parse(localStorage.getItem(key));
         } catch {}
         if (!state || typeof state !== "object" || !Array.isArray(state.items)) {
-            state = { v: 1, crates: 1, keys: 1, items: [], lastDrop: 0, pity: 0, day: today(), drops: 0, keyCount: 0, keyTracks: {}, off: false, equipped: null, opened: 0 };
+            state = { v: 2, bolts: fromV1(t), items: [], prev: {}, equipped: {}, day: today(), finBolts: 0, pbCount: 0, pbTracks: {}, notes: true, opened: 0, pending: [] };
         }
+        state.items = state.items.filter((x) => partOf(x));
+        state.pending ??= [];
+        state.prev ??= {};
+        state.equipped ??= {};
         cached = { key, state };
         return state;
     }
@@ -215,123 +240,42 @@
         const d = today();
         if (state.day !== d) {
             state.day = d;
-            state.drops = 0;
-            state.keyCount = 0;
-            state.keyTracks = {};
+            state.finBolts = 0;
+            state.pbCount = 0;
+            state.pbTracks = {};
         }
-    }
-
-    function wearOf(f) {
-        return WEARS.find((w) => f < w.max) ?? WEARS[WEARS.length - 1];
-    }
-
-    function hexToRgb(h) {
-        return [(h >> 16) & 255, (h >> 8) & 255, h & 255];
-    }
-
-    function rgbToHex([r, g, b]) {
-        return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
-    }
-
-    function mix(a, b, t) {
-        const x = hexToRgb(a), y = hexToRgb(b);
-        return rgbToHex(x.map((v, i) => v + (y[i] - v) * t));
-    }
-
-    function hueShift(hex, deg) {
-        let [r, g, b] = hexToRgb(hex).map((v) => v / 255);
-        const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
-        if (max === min) return hex;
-        const d = max - min, s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-        let h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-        h = ((h * 60 + deg) % 360 + 360) % 360 / 360;
-        const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
-        const f = (t) => {
-            t = (t + 1) % 1;
-            return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
-        };
-        return rgbToHex([f(h + 1 / 3), f(h), f(h - 1 / 3)].map((v) => v * 255));
-    }
-
-    function iceBlue(seed) {
-        if (seed === 661) return 98;
-        if (seed === 387 || seed === 670) return 86;
-        return Math.round(4 + 38 * (((seed * 7919) % 1000) / 1000) ** 2);
-    }
-
-    const DOPPLER = [
-        ["Phase 1", 0x1a0f2e, 0x5b1f8a],
-        ["Phase 2", 0xd6338f, 0x3d1450],
-        ["Phase 3", 0x1f8a6a, 0x123a4a],
-        ["Phase 4", 0x2a63d6, 0x6a2ca0],
-    ];
-    function dopplerPhase(seed) {
-        if (seed < 8) return ["Ruby", 0xd10f2a, 0x4a0510];
-        if (seed < 16) return ["Sapphire", 0x0f4ad1, 0x051a4a];
-        if (seed < 24) return ["Black Pearl", 0x1a1030, 0x3a2a6a];
-        return DOPPLER[seed % 4];
-    }
-
-    function special(def, item) {
-        if (def.finish === "fade") return "Fade " + (80 + (item.s % 21)) + "%";
-        if (def.finish === "ice") return iceBlue(item.s) + "% blue" + (item.s === 661 ? " (the blue gem!)" : "");
-        if (def.finish === "doppler") return dopplerPhase(item.s)[0];
-        return null;
-    }
-
-    function colors(def, item) {
-        let [p, s, f, r] = def.c;
-        if (def.finish === "fade") {
-            const t = (80 + (item.s % 21)) / 100;
-            p = mix(0x6a2ca0, p, t);
-            s = mix(0xff4fa3, s, t);
-        } else if (def.finish === "ice") {
-            p = mix(p, 0x1f5fd1, iceBlue(item.s) / 100);
-        } else if (def.finish === "doppler") {
-            const [, a, b] = dopplerPhase(item.s);
-            p = a;
-            s = b;
-        } else {
-            s = hueShift(s, ((item.s % 13) - 6));
-        }
-        const grime = Math.max(0, item.f - 0.05) * 0.55;
-        return [p, s, f, r].map((c) => mix(c, 0x5e5242, grime));
     }
 
     function CarStyle() {
         return window.__clipCarStyleClass;
     }
 
-    // The skin painted onto `base`: pattern and colours always, rims from Classified up, the body only for Pengu.
-    function styleFor(item, base) {
-        const C = CarStyle();
-        const def = ITEMS[item.i];
-        if (!C || !def) return null;
-        const [p, s, f, r] = colors(def, item);
-        const rims = def.rims ?? base?.rims ?? C.defaultRims;
-        const body = def.body ?? base?.body ?? C.defaultBody;
-        return new C(def.pattern, rims, base?.exhaust ?? C.defaultExhaust, p, s, f, r, body);
-    }
-
-    function wearing(item, current) {
-        if (!item || !current) return false;
-        const want = styleFor(item, current);
-        return !!want && want.equals(current);
-    }
-
     function currentStyle() {
         return garage?.hooks?.current?.() ?? profile()?.carStyle ?? null;
     }
 
-    function equippedItem(state, current = currentStyle()) {
-        const item = state.items.find((x) => x.u === state.equipped);
-        return item && wearing(item, current) ? item : null;
+    function withPart(style, kind, index) {
+        const C = CarStyle();
+        if (!C) return null;
+        const s = style ?? C.deserializeSafe("");
+        const v = { pattern: s.pattern, rims: s.rims, exhaust: s.exhaust, body: s.body };
+        v[CRATE[kind].field] = index;
+        return new C(v.pattern, v.rims, v.exhaust, s.primaryHex, s.secondaryHex, s.frameHex, s.rimsHex, v.body);
     }
 
-    function fullName(item, withWear = true) {
-        const def = ITEMS[item.i];
-        return (item.st != null ? (def.r === "gold" ? "\u2605 StatTrak\u2122 " + def.name.slice(2) : "StatTrak\u2122 " + def.name) : def.name)
-            + (withWear ? " (" + wearOf(item.f).name + ")" : "");
+    function wornIndex(kind, style = currentStyle()) {
+        return style ? style[CRATE[kind].field] : null;
+    }
+
+    function isWorn(item, style = currentStyle()) {
+        const p = partOf(item);
+        return !!p && wornIndex(item.k, style) === p.index;
+    }
+
+    function fullName(item) {
+        const name = partOf(item)?.name ?? "?";
+        if (item.st == null) return name;
+        return name.startsWith("\u2605 ") ? "\u2605 StatTrak\u2122 " + name.slice(2) : "StatTrak\u2122 " + name;
     }
 
     function rollRarity(rand = Math.random()) {
@@ -347,21 +291,20 @@
         return list[Math.floor(Math.random() * list.length)];
     }
 
-    function makeItem(rarity, floatT = Math.random(), statTrak = Math.random() < 0.1) {
-        const choices = ITEMS.map((d, i) => [d, i]).filter(([d]) => R[d.r] === rarity);
-        const [def, i] = pick(choices);
-        const [lo, hi] = def.wear ?? [0, 0.8];
-        return {
-            u: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
-            i,
-            f: Math.round((lo + (hi - lo) * floatT) * 1e9) / 1e9,
-            s: Math.floor(Math.random() * 1000),
-            st: statTrak ? 0 : null,
-            at: Date.now(),
-        };
+    function rollPart(kind, rarity) {
+        const list = parts().PARTS[kind];
+        let choices = list.map((p, n) => [p, n]).filter(([p]) => R[p.r] === rarity);
+        if (!choices.length) choices = list.map((p, n) => [p, n]);
+        return pick(choices)[1];
+    }
+
+    function makeItem(kind, rarity, statTrak = Math.random() < 0.1) {
+        return { u: newId(), k: kind, n: rollPart(kind, rarity), st: statTrak ? 0 : null, at: Date.now() };
     }
 
     function toast(text) {
+        const state = load();
+        if (state && !state.notes) return;
         if (window.__nswsTags?.toast) return window.__nswsTags.toast(text);
         console.info(text);
     }
@@ -370,37 +313,102 @@
         const state = load();
         if (!state) return;
         rollDay(state);
-        const worn = equippedItem(state, profile()?.carStyle ?? null);
-        if (worn && worn.st != null) worn.st++;
-        let dropped = false;
-        if (!state.off && state.drops < DROPS_PER_DAY && Date.now() - state.lastDrop >= DROP_GAP_MS) {
-            state.pity = (state.pity ?? 0) + 1;
-            if (state.pity >= DROP_PITY || Math.random() < DROP_CHANCE) {
-                state.crates++;
-                state.drops++;
-                state.pity = 0;
-                state.lastDrop = Date.now();
-                dropped = true;
-            }
+        const style = profile()?.carStyle ?? null;
+        for (const c of CRATES) {
+            const item = state.items.find((x) => x.u === state.equipped[c.kind]);
+            if (item && item.st != null && isWorn(item, style)) item.st++;
+        }
+        const before = state.bolts;
+        if (state.finBolts < FINISH_BOLTS_PER_DAY) {
+            state.bolts += FINISH_BOLTS;
+            state.finBolts += FINISH_BOLTS;
         }
         save();
-        if (dropped) setTimeout(() => toast("A crate dropped! Open it in Garage \u2192 Crates."), 1800);
+        if (before < PRICE && state.bolts >= PRICE) setTimeout(() => toast("You have " + PRICE + " Bolts: buy a crate in Garage \u2192 Crates."), 1800);
         render();
     }
 
     function onNewPb(e) {
         const state = load();
         const track = e.detail?.track;
-        if (!state || !track || state.off) return;
+        if (!state || !track) return;
         rollDay(state);
-        if (state.keyTracks[track] || state.keyCount >= KEYS_PER_DAY) return;
-        state.keyTracks[track] = 1;
-        state.keyCount++;
-        state.keys++;
+        if (state.pbTracks[track] || state.pbCount >= PB_REWARDS_PER_DAY) return;
+        state.pbTracks[track] = 1;
+        state.pbCount++;
+        state.bolts += PB_BOLTS;
         save();
-        setTimeout(() => toast("New PB, so you got a crate key."), 2600);
+        setTimeout(() => toast("+" + PB_BOLTS + " Bolts for a new PB."), 2600);
         render();
     }
+
+    // ---- How many of each part exist across all players (proxy/src/crates.js).
+
+    let counts = null;
+    let countsAt = 0;
+    let countsLoading = null;
+
+    function api() {
+        return window.__nswsApiBase || null;
+    }
+
+    function loadCounts() {
+        if (countsLoading) return countsLoading;
+        if ((counts && Date.now() - countsAt < COUNTS_MS) || !api()) return Promise.resolve(counts);
+        countsLoading = fetch(api() + "nsws/crates/counts")
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => {
+                if (data?.counts) {
+                    counts = data.counts;
+                    countsAt = Date.now();
+                }
+                return counts;
+            })
+            .catch(() => counts)
+            .finally(() => {
+                countsLoading = null;
+                render();
+                refreshOverlayCounts();
+            });
+        return countsLoading;
+    }
+
+    function existText(part) {
+        return counts ? (counts[part.g] ?? 0).toLocaleString() : "\u2014";
+    }
+
+    let reportTimer = 0;
+    function queue(state, events) {
+        state.pending.push(...events);
+        clearTimeout(reportTimer);
+        reportTimer = setTimeout(report, REPORT_DELAY_MS);
+    }
+
+    async function report() {
+        const state = load();
+        const t = token();
+        if (!state || !t || !state.pending.length || !api()) return;
+        const events = state.pending.slice(0, 60);
+        try {
+            const r = await fetch(api() + "nsws/crates/report", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: t, events }),
+                keepalive: true,
+            });
+            if (!r.ok) return;
+            const data = await r.json();
+            const done = new Set(Array.isArray(data?.done) ? data.done : []);
+            const fresh = load();
+            if (!fresh) return;
+            const sent = new Set(events.map((e) => e.u + ":" + e.e));
+            fresh.pending = fresh.pending.filter((e) => !(done.has(e.u) && sent.has(e.u + ":" + e.e)));
+            save();
+            countsAt = 0;
+        } catch {}
+    }
+
+    // ---- Sound.
 
     let audio = null;
     function volume() {
@@ -438,43 +446,66 @@
         notes.forEach((f, i) => blip(f, i * 0.09, 0.5, 0.12));
     }
 
+    // ---- Thumbnails: the part on the player's own car, from where it shows best.
+
+    function turn(yaw, pitch) {
+        const a = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+        const b = [Math.sin(pitch / 2), 0, 0, Math.cos(pitch / 2)];
+        return [
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        ];
+    }
+    const VIEWS = {
+        patterns: [null, null],
+        rims: [turn(Math.PI / 2 + 0.35, -0.2), { look: [0.75, 0, 1.38], zoom: 2 }],
+        exhausts: [turn(Math.PI * 0.8, -0.3), { look: [0, -0.15, -1.7], zoom: 0.95 }],
+        bodies: [turn(Math.PI / 2 - 0.5, -0.3), null],
+    };
+
     const thumbs = new Map();
-    function thumb(style) {
+    function thumb(kind, style) {
         if (!style || !window.__nswsCarThumb) return Promise.resolve("");
-        const key = style.serialize();
+        const key = kind + ":" + style.serialize();
         if (!thumbs.has(key)) {
-            if (thumbs.size > 80) thumbs.delete(thumbs.keys().next().value);
-            thumbs.set(key, Promise.resolve(window.__nswsCarThumb(key)).catch(() => ""));
+            if (thumbs.size > 120) thumbs.delete(thumbs.keys().next().value);
+            const [t, close] = VIEWS[kind];
+            thumbs.set(key, Promise.resolve(window.__nswsCarThumb(style.serialize(), t ?? undefined, close ?? undefined)).catch(() => ""));
         }
         return thumbs.get(key);
     }
 
-    function setImage(img, style) {
-        thumb(style).then((src) => {
+    function partImage(kind, n, base) {
+        const img = el("img");
+        img.alt = "";
+        img.draggable = false;
+        const p = parts().PARTS[kind][n];
+        thumb(kind, withPart(base, kind, p.index)).then((src) => {
             if (src) img.src = src;
         });
+        return img;
     }
 
-    function sampleFor(i, base) {
-        return styleFor({ i, f: 0, s: 500, st: null }, base);
-    }
-
-    function tileFor(i, base, hideGold = true) {
-        const def = ITEMS[i];
+    function tileFor(kind, n, base, hideGold, withCount) {
+        const p = parts().PARTS[kind][n];
         const tile = el("div", "tile");
-        tile.style.setProperty("--rc", RARITIES[R[def.r]].color);
-        if (def.r === "gold" && hideGold) {
-            tile.appendChild(el("div", "star", "\u2605"));
-            tile.appendChild(el("span", null, "Rare Special Item"));
+        tile.style.setProperty("--rc", RARITIES[R[p.r]].color);
+        if (p.r === "gold" && hideGold) {
+            tile.append(el("div", "star", "\u2605"), el("span", null, "Rare Special Item"));
         } else {
-            const img = el("img");
-            img.alt = "";
-            img.draggable = false;
-            setImage(img, sampleFor(i, base));
-            tile.append(img, el("span", null, def.name));
+            tile.append(partImage(kind, n, base), el("span", null, p.name));
+        }
+        if (withCount) {
+            const small = el("small", null, existText(p) + " exist");
+            small.dataset.g = p.g;
+            tile.appendChild(small);
         }
         return tile;
     }
+
+    // ---- Overlays.
 
     let view = null;
 
@@ -495,7 +526,12 @@
         else closeOverlay();
     }
 
-    function overlay(title, sub) {
+    function boltsText() {
+        const state = load();
+        return state ? plural(state.bolts, "Bolt") : "";
+    }
+
+    function overlay(title) {
         closeOverlay();
         const root = el("div");
         root.id = "nsws-crate";
@@ -503,7 +539,7 @@
         box.tabIndex = -1;
         const top = el("div", "top");
         const body = el("div", "body");
-        top.append(el("h1", null, title), el("small", null, sub ?? ""), button("Close", () => (view?.spinning ? view.skip?.() : closeOverlay())));
+        top.append(el("h1", null, title), el("small", null, boltsText()), button("Close", () => (view?.spinning ? view.skip?.() : closeOverlay())));
         box.append(top, body);
         root.appendChild(box);
         root.addEventListener("pointerdown", (e) => {
@@ -514,68 +550,111 @@
         window.addEventListener("keydown", onOverlayKey, true);
         box.focus();
         view = { overlay: root, top, body, raf: 0, spinning: false };
+        loadCounts();
         return view;
     }
 
-    function counts(state) {
-        return plural(state.crates, "crate") + " \u00b7 " + plural(state.keys, "key");
+    function refreshTop() {
+        if (view) view.top.querySelector("small").textContent = boltsText();
     }
 
-    function openCrate() {
-        const state = load();
-        if (!state) return;
-        const v = overlay("Not So Weekly Crate", counts(state));
-        const base = currentStyle();
-        v.body.appendChild(el("h2", null, "Contains one of these"));
-        const grid = el("div", "grid");
-        ITEMS.forEach((def, i) => {
-            if (def.r !== "gold") grid.appendChild(tileFor(i, base));
-        });
-        grid.appendChild(tileFor(ITEMS.findIndex((d) => d.r === "gold"), base));
-        v.body.appendChild(grid);
-        const actions = el("div", "actions");
-        const unlock = button("Unlock crate", () => spin(), "main");
-        unlock.disabled = !state.crates || !state.keys;
-        actions.appendChild(unlock);
-        if (!state.keys) actions.appendChild(button("Buy key \u2014 $2.49", () => wallet(actions)));
-        actions.appendChild(el("span", "msg", !state.crates ? "No crates yet. They drop from finished runs." : !state.keys ? "You need a key. Keys come from new PBs." : ""));
-        v.body.appendChild(actions);
-        v.body.appendChild(el("p", "fine", "Paint only: a skin never changes how your car drives, and nothing here costs money. "
-            + "Crates drop from finished runs (up to " + DROPS_PER_DAY + " a day), keys from new PBs (up to " + KEYS_PER_DAY + " a day, one per track)."));
+    function refreshOverlayCounts() {
+        if (!view) return;
+        for (const node of view.body.querySelectorAll("[data-g]")) {
+            const p = allParts().find((x) => String(x.g) === node.dataset.g);
+            if (p) node.textContent = node.dataset.bare ? existText(p) : existText(p) + " exist";
+        }
     }
 
     function wallet(actions) {
         const msg = actions.querySelector(".msg");
-        if (msg) msg.textContent = "NSWS Wallet: $0.00. Keys can't be bought, so set a new PB instead. It's cheaper.";
+        if (msg) msg.textContent = "NSWS Wallet: $0.00. Bolts can't be bought. Go drive.";
     }
 
-    function spin() {
+    function oddsText(kind, p) {
+        const same = parts().PARTS[kind].filter((x) => x.r === p.r).length;
+        const pct = (RARITIES[R[p.r]].odds / same) * 100;
+        return (pct >= 1 ? pct.toFixed(1) : pct.toFixed(2)) + "%";
+    }
+
+    function openShop() {
         const state = load();
-        if (!state || !state.crates || !state.keys || !view) return;
-        state.crates--;
-        state.keys--;
+        if (!state) return;
+        const v = overlay("Crates");
+        const base = currentStyle();
+        v.body.appendChild(el("h2", null, "Each crate costs " + PRICE + " Bolts and holds one part you can't get anywhere else"));
+        const shop = el("div", "shop");
+        for (const c of CRATES) {
+            const list = parts().PARTS[c.kind];
+            const tile = el("div", "tile");
+            const showcase = Math.max(0, list.findIndex((p) => p.r === "covert"));
+            tile.append(partImage(c.kind, showcase, base), el("span", null, c.name), el("small", null, list.length + " " + c.label.toLowerCase() + " \u00b7 " + PRICE + " Bolts"));
+            tile.addEventListener("click", () => {
+                window.__nswsUIClick?.();
+                openCrate(c.kind);
+            });
+            shop.appendChild(tile);
+        }
+        v.body.appendChild(shop);
+        const actions = el("div", "actions");
+        actions.append(button("Buy 1,000 Bolts \u2014 $4.99", () => wallet(actions)), el("span", "msg", ""));
+        v.body.appendChild(actions);
+        v.body.appendChild(el("p", "fine", "Bolts come from playing: +" + FINISH_BOLTS + " for each finished run (up to " + FINISH_BOLTS_PER_DAY + " a day) and +" + PB_BOLTS
+            + " for a new PB (up to " + PB_REWARDS_PER_DAY + " a day, one per track). Parts are looks only: nothing here changes how a car drives, and nothing costs real money."));
+    }
+
+    function openCrate(kind) {
+        const state = load();
+        if (!state) return;
+        const c = CRATE[kind];
+        const v = overlay(c.name);
+        const base = currentStyle();
+        v.body.appendChild(el("h2", null, "Contains one of these \u00b7 the small number is how many exist across all players"));
+        const grid = el("div", "grid");
+        const list = parts().PARTS[kind];
+        list.forEach((p, n) => {
+            if (p.r !== "gold") grid.appendChild(tileFor(kind, n, base, true, true));
+        });
+        list.forEach((p, n) => {
+            if (p.r === "gold") grid.appendChild(tileFor(kind, n, base, true, true));
+        });
+        v.body.appendChild(grid);
+        const actions = el("div", "actions");
+        const buy = button("Buy and open \u2014 " + PRICE + " Bolts", () => spin(kind), "main");
+        buy.disabled = state.bolts < PRICE;
+        actions.append(buy, button("Back", () => openShop()));
+        actions.appendChild(el("span", "msg", state.bolts < PRICE ? "You have " + plural(state.bolts, "Bolt") + ". Finish runs and set PBs to earn more." : ""));
+        v.body.appendChild(actions);
+    }
+
+    function spin(kind) {
+        const state = load();
+        if (!state || state.bolts < PRICE || !view) return;
+        state.bolts -= PRICE;
         state.opened = (state.opened ?? 0) + 1;
-        const item = makeItem(rollRarity());
+        const item = makeItem(kind, rollRarity());
         const kept = state.items.length < MAX_ITEMS;
-        if (kept) state.items.push(item);
+        if (kept) {
+            state.items.push(item);
+            queue(state, [{ u: item.u, i: partOf(item).g, e: 1 }]);
+        }
         save();
 
         const v = view;
         const base = currentStyle();
-        v.top.querySelector("small").textContent = counts(state);
+        refreshTop();
         v.body.textContent = "";
         const reel = el("div", "reel");
         const strip = el("div", "strip");
         const COUNT = 56, WIN = 48;
         for (let n = 0; n < COUNT; n++) {
-            const i = n === WIN ? item.i : makeItem(rollRarity()).i;
-            strip.appendChild(tileFor(i, base, n !== WIN));
+            const idx = n === WIN ? item.n : rollPart(kind, rollRarity());
+            strip.appendChild(tileFor(kind, idx, base, n !== WIN, false));
         }
         reel.append(strip, el("div", "mark"));
         v.body.appendChild(reel);
         const actions = el("div", "actions");
-        const skip = button("Skip", () => v.skip());
-        actions.appendChild(skip);
+        actions.appendChild(button("Skip", () => v.skip()));
         v.body.appendChild(actions);
 
         const width = reel.clientWidth || 900;
@@ -589,7 +668,7 @@
             v.spinning = false;
             cancelAnimationFrame(v.raf);
             strip.style.transform = "translateX(" + -end + "px)";
-            setTimeout(() => view === v && reveal(item, true, kept), 350);
+            setTimeout(() => view === v && reveal(item, kind, kept), 350);
         };
         v.skip = finish;
         const frame = (now) => {
@@ -608,36 +687,40 @@
         v.raf = requestAnimationFrame(frame);
     }
 
-    function reveal(item, fromCrate, kept = true) {
+    function reveal(item, kind, kept = true) {
         const state = load();
         if (!state || !view) return;
-        const def = ITEMS[item.i];
-        const rarity = R[def.r];
+        const p = partOf(item);
+        const rarity = R[p.r];
         const v = view;
         v.body.textContent = "";
         const won = el("div", "won pop");
         won.style.setProperty("--rc", RARITIES[rarity].color);
-        const img = el("img");
-        img.alt = "";
-        setImage(img, styleFor(item, currentStyle()));
         const text = el("div");
-        text.appendChild(el("div", "kind", RARITIES[rarity].name + (def.r === "gold" ? " \u2605" : "")));
-        const name = el("div", "nm", fullName(item, false));
-        if (item.st != null) name.classList.add("st");
+        text.appendChild(el("div", "kind", RARITIES[rarity].name + " " + CRATE[item.k].one + (p.r === "gold" ? " \u2605" : "")));
+        const name = el("div", "nm" + (item.st != null ? " st" : ""), fullName(item));
         text.appendChild(name);
-        const extra = special(def, item);
-        text.appendChild(el("div", "meta", wearOf(item.f).name + " \u00b7 float " + item.f.toFixed(9) + " \u00b7 template #" + item.s + (extra ? " \u00b7 " + extra : "")));
+        const meta = el("div", "meta");
+        const exist = el("span", null, existText(p));
+        exist.dataset.g = p.g;
+        exist.dataset.bare = "1";
+        meta.append(exist, " exist \u00b7 you own " + state.items.filter((x) => x.k === item.k && x.n === item.n).length);
+        text.appendChild(meta);
         text.appendChild(el("div", "quip", pick(QUIPS[rarity])));
-        won.append(img, text);
+        won.append(partImage(item.k, item.n, currentStyle()), text);
         v.body.appendChild(won);
         fanfare(rarity);
 
         const actions = el("div", "actions");
-        actions.appendChild(button("Equip", (b) => {
-            equip(item);
-            b.disabled = true;
-            b.textContent = "Equipped";
-        }, "main"));
+        if (kept) {
+            const eq = button(isWorn(item) ? "Equipped" : "Equip", (b) => {
+                equip(item);
+                b.disabled = true;
+                b.textContent = "Equipped";
+            }, "main");
+            eq.disabled = isWorn(item);
+            actions.appendChild(eq);
+        }
         const chat = window.__nswsChat;
         if (chat?.isEnabled?.() && chat.feed?.active?.()) {
             actions.appendChild(button("Show in chat", (b) => {
@@ -649,116 +732,170 @@
                 });
             }));
         }
-        if (fromCrate && state.crates && state.keys) actions.appendChild(button("Open another", () => openCrate()));
-        else if (fromCrate && state.crates) actions.appendChild(button("Buy key \u2014 $2.49", () => wallet(actions)));
+        if (kind) {
+            const again = button("Open another \u2014 " + PRICE + " Bolts", () => openCrate(kind));
+            again.disabled = state.bolts < PRICE;
+            actions.appendChild(again);
+        }
         actions.appendChild(button("Done", () => closeOverlay()));
-        actions.appendChild(el("span", "msg", !kept ? "Your inventory is full, so this one wasn't kept." : ""));
-        v.top.querySelector("small").textContent = counts(state);
+        actions.appendChild(el("span", "msg", kept ? "" : "Your inventory is full, so this one wasn't kept."));
+        refreshTop();
         v.body.appendChild(actions);
     }
 
     function chatText(item) {
-        return "\u{1F4E6} opened a crate and found: " + fullName(item) + " [crate:" + item.i + "." + Math.round(item.f * 1e4) + "." + item.s + "." + (item.st != null ? 1 : 0) + "]";
+        return "\u{1F4E6} opened a crate and found: " + fullName(item) + " [crate:" + partOf(item).g + "." + (item.st != null ? 1 : 0) + "]";
     }
 
-    // Draws "[crate:i.f.s.t]" chat messages as an unboxing line; anything else stays plain text.
+    // Draws "[crate:g.t]" chat messages as an unboxing line; anything else stays plain text.
     function chatLine(text) {
-        const m = /^\u{1F4E6} opened a crate and found: .* \[crate:(\d{1,2})\.(\d{1,5})\.(\d{1,3})\.([01])\]$/u.exec(text ?? "");
-        if (!m || !ITEMS[+m[1]]) return null;
-        const item = { i: +m[1], f: Math.min(1, +m[2] / 1e4), s: +m[3], st: m[4] === "1" ? 0 : null };
-        const def = ITEMS[item.i];
-        const line = el("span", "nsws-crate-chat", "opened a crate and found: ");
+        const m = /^\u{1F4E6} opened a crate and found: .* \[crate:(\d{1,3})\.([01])\]$/u.exec(text ?? "");
+        if (!m || !parts()) return null;
+        const p = allParts().find((x) => x.g === +m[1]);
+        if (!p) return null;
+        const item = { k: p.kind, n: parts().PARTS[p.kind].indexOf(p), st: m[2] === "1" ? 0 : null };
+        const line = el("span", "nsws-crate-chat", "opened a " + CRATE[p.kind].name + " and found: ");
         const name = el("b", null, fullName(item));
-        name.style.setProperty("--rc", RARITIES[R[def.r]].color);
-        name.title = RARITIES[R[def.r]].name + " \u00b7 float " + item.f.toFixed(4) + " \u00b7 template #" + item.s;
+        name.style.setProperty("--rc", RARITIES[R[p.r]].color);
+        name.title = RARITIES[R[p.r]].name + " " + CRATE[p.kind].one;
         line.appendChild(name);
         return line;
     }
 
+    function applyStyle(style) {
+        if (garage?.hooks?.apply) return garage.hooks.apply(style);
+        const services = window.__nswsCup?.services?.();
+        const p = services?.profiles?.getCurrentUserProfile?.();
+        if (!services || !p) return;
+        services.profiles.setCarStyle(style);
+        services.api?.submitUserProfile?.(p.token, p.nickname, p.countryCode, style)?.catch?.((e) => console.warn(e));
+    }
+
     function equip(item) {
         const state = load();
-        if (!state) return;
-        const base = currentStyle();
-        const style = styleFor(item, base);
-        if (!style) return;
-        state.equipped = item.u;
+        const p = partOf(item);
+        if (!state || !p) return;
+        const current = currentStyle();
+        const now = wornIndex(item.k, current);
+        if (now != null && !parts().byIndex(item.k, now)) state.prev[item.k] = now;
+        state.equipped[item.k] = item.u;
         save();
-        if (garage?.hooks?.apply) {
-            garage.hooks.apply(style);
-        } else {
-            const services = window.__nswsCup?.services?.();
-            const p = services?.profiles?.getCurrentUserProfile?.();
-            if (!services || !p) return;
-            services.profiles.setCarStyle(style);
-            services.api?.submitUserProfile?.(p.token, p.nickname, p.countryCode, style)?.catch?.((e) => console.warn(e));
-        }
+        const style = withPart(current, item.k, p.index);
+        if (style) applyStyle(style);
+        render();
+    }
+
+    // Back to the stock part the car had before its first crate part in that slot.
+    function unequip(kind) {
+        const state = load();
+        const C = CarStyle();
+        if (!state || !C) return;
+        const defaults = { patterns: C.defaultPattern, rims: C.defaultRims, exhausts: C.defaultExhaust, bodies: C.defaultBody };
+        const back = state.prev[kind] ?? defaults[kind];
+        delete state.equipped[kind];
+        save();
+        const style = withPart(currentStyle(), kind, back);
+        if (style) applyStyle(style);
         render();
     }
 
     function tradeUp() {
         const state = load();
         if (!state) return;
-        const v = overlay("Trade up contract", counts(state));
+        const v = overlay("Trade up contract");
         const current = currentStyle();
-        const worn = equippedItem(state, current);
-        v.body.appendChild(el("h2", null, "Sign away items of one grade for one of the next grade up"));
+        v.body.appendChild(el("h2", null, "Sign away parts of one grade for one of the next grade up"));
         for (let r = 0; r < RARITIES.length - 1; r++) {
             const need = r === R.covert ? 5 : 10;
-            const pool = state.items.filter((x) => R[ITEMS[x.i].r] === r && x !== worn && !x.n);
+            const pool = state.items.filter((x) => R[partOf(x).r] === r && !isWorn(x, current));
             const row = el("div", "line");
             const left = el("div", null, need + " " + RARITIES[r].name + " \u2192 1 " + RARITIES[r + 1].name);
             left.style.color = RARITIES[r + 1].color;
-            left.appendChild(el("small", null, "You have " + pool.length + " to spare (named and equipped items are kept). The new float is the average of the old ones."));
+            left.appendChild(el("small", null, "You have " + pool.length + " to spare (parts on your car are kept). The new part comes from the crate of one of the parts signed."));
             const sign = button("Sign", () => contract(r, need));
             sign.disabled = pool.length < need;
             row.append(left, sign);
             v.body.appendChild(row);
         }
-        v.body.appendChild(el("p", "fine", "Duplicates go first, then the most worn. StatTrak\u2122 carries over only if every item signed is StatTrak\u2122."));
+        v.body.appendChild(el("p", "fine", "Duplicates go first. StatTrak\u2122 carries over only if every part signed is StatTrak\u2122."));
     }
 
     function contract(rarity, need) {
         const state = load();
-        if (!state) return;
-        const worn = equippedItem(state);
-        const pool = state.items.filter((x) => R[ITEMS[x.i].r] === rarity && x !== worn && !x.n);
+        if (!state || !view) return;
+        const current = currentStyle();
+        const pool = state.items.filter((x) => R[partOf(x).r] === rarity && !isWorn(x, current));
         if (pool.length < need) return;
         const seen = new Map();
-        for (const x of pool) seen.set(x.i, (seen.get(x.i) ?? 0) + 1);
-        pool.sort((a, b) => (seen.get(b.i) - seen.get(a.i)) || (b.f - a.f));
+        for (const x of pool) seen.set(x.k + x.n, (seen.get(x.k + x.n) ?? 0) + 1);
+        pool.sort((a, b) => seen.get(b.k + b.n) - seen.get(a.k + a.n));
         const used = pool.slice(0, need);
-        const norm = used.map((x) => {
-            const [lo, hi] = ITEMS[x.i].wear ?? [0, 0.8];
-            return hi > lo ? (x.f - lo) / (hi - lo) : 0;
-        });
-        const avg = norm.reduce((a, b) => a + b, 0) / norm.length;
-        const item = makeItem(rarity + 1, Math.max(0, Math.min(1, avg)), used.every((x) => x.st != null));
+        const item = makeItem(pick(used).k, rarity + 1, used.every((x) => x.st != null));
         const gone = new Set(used.map((x) => x.u));
         state.items = state.items.filter((x) => !gone.has(x.u));
         state.items.push(item);
+        queue(state, [...used.map((x) => ({ u: x.u, e: -1 })), { u: item.u, i: partOf(item).g, e: 1 }]);
         save();
         view.top.querySelector("h1").textContent = "Contract signed";
-        reveal(item, false);
+        reveal(item, null);
     }
+
+    function collection() {
+        const state = load();
+        if (!state) return;
+        const v = overlay("Collection");
+        let owned = 0;
+        for (const p of allParts()) if (state.items.some((x) => x.k === p.kind && parts().PARTS[p.kind][x.n] === p)) owned++;
+        v.body.appendChild(el("h2", null, "You've found " + owned + " of " + allParts().length + " parts. Exist = how many are out there across all players."));
+        for (const c of CRATES) {
+            v.body.appendChild(el("h2", null, c.name));
+            const table = el("table");
+            const head = el("tr");
+            for (const t of ["Part", "Odds", "Exist", "You own"]) head.appendChild(el("th", null, t));
+            table.appendChild(head);
+            const list = parts().PARTS[c.kind].map((p, n) => [p, n]).sort((a, b) => R[b[0].r] - R[a[0].r]);
+            for (const [p, n] of list) {
+                const tr = el("tr");
+                const name = el("td", null, p.name);
+                name.style.setProperty("--rc", RARITIES[R[p.r]].color);
+                const exist = el("td", null, existText(p));
+                exist.dataset.g = p.g;
+                exist.dataset.bare = "1";
+                const mine = state.items.filter((x) => x.k === c.kind && x.n === n).length;
+                tr.append(name, el("td", null, oddsText(c.kind, p)), exist, el("td", mine ? "mine" : null, mine ? String(mine) : "\u2014"));
+                table.appendChild(tr);
+            }
+            v.body.appendChild(table);
+        }
+        v.body.appendChild(el("p", "fine", "Counts refresh every few minutes. Selling a part or signing it into a trade up takes it out of the count."));
+    }
+
+    // ---- The Garage tab.
 
     let garage = null;
 
     function mountGarage(panel, hooks) {
         panel.classList.add("nsws-crates");
         panel.textContent = "";
-        garage = { panel, hooks: hooks ?? {}, bar: el("div", "bar"), preview: el("div", "preview"), selected: null, armed: false, naming: false };
+        garage = { panel, hooks: hooks ?? {}, bar: el("div", "bar"), preview: el("div", "preview"), selected: null, armed: false };
         panel.append(garage.preview, garage.bar);
+        loadCounts();
+        if (load()?.pending.length) report();
         render();
     }
 
-    // The garage car shows the selected skin while this tab is open; this puts the real paint back.
+    // The garage car shows the selected part while this tab is open; this puts the real car back.
     function leaveGarage() {
         if (!garage) return;
         const current = garage.hooks.current?.();
         if (current && garage.selected) window.__nswsGarageCar?.(current);
         garage.selected = null;
-        garage.armed = garage.naming = false;
+        garage.armed = false;
         render();
+    }
+
+    function groupKey(x) {
+        return x.k + ":" + x.n + ":" + (x.st != null ? "st" : "");
     }
 
     function render() {
@@ -779,42 +916,45 @@
         }
         rollDay(state);
         const current = g.hooks.current?.() ?? null;
-        const worn = equippedItem(state, current);
 
         const head = el("div", "head");
-        const count = el("div", "count", String(state.crates));
-        count.appendChild(el("small", null, state.crates === 1 ? "crate" : "crates"));
-        count.append(String(state.keys));
-        count.appendChild(el("small", null, state.keys === 1 ? "key" : "keys"));
+        const count = el("div", "count", state.bolts.toLocaleString());
+        count.appendChild(el("small", null, state.bolts === 1 ? "Bolt" : "Bolts"));
         head.appendChild(count);
-        head.appendChild(el("div", "sub", state.off
-            ? "Drops are off. Turn them back on below."
-            : "Crates drop from finished runs, keys come from new PBs. Paint only, never speed."));
-        head.appendChild(button("Open crate", () => openCrate(), "main"));
+        head.appendChild(el("div", "sub", "Earn Bolts by finishing runs and setting PBs. A crate costs " + PRICE + " and holds a part you can't get anywhere else. Looks only, never speed."));
+        head.appendChild(button("Crates", () => openShop(), "main"));
         head.appendChild(button("Trade up", () => tradeUp()));
+        head.appendChild(button("Collection", () => collection()));
         g.bar.appendChild(head);
 
         const list = el("div", "list");
-        if (!state.items.length) list.appendChild(el("p", null, "Nothing here yet. Open a crate and your skins land here."));
-        for (let r = RARITIES.length - 1; r >= 0; r--) {
-            const items = state.items.filter((x) => R[ITEMS[x.i]?.r] === r).sort((a, b) => b.at - a.at);
-            if (!items.length) continue;
-            const h = el("h3", null, RARITIES[r].name + " \u00b7 " + items.length);
-            h.style.color = RARITIES[r].color;
-            list.appendChild(h);
-            for (const item of items) {
-                const on = item === worn;
-                const row = el("button", "item" + (on ? " on" : "") + (g.selected === item.u ? " selected" : ""));
-                row.style.setProperty("--rc", RARITIES[r].color);
-                const nm = el("span", "nm" + (item.st != null ? " st" : ""), item.n ? "\u201c" + item.n + "\u201d" : fullName(item, false));
-                row.append(nm, el("span", "w", on ? "Equipped" : wearOf(item.f).short));
-                row.title = fullName(item);
+        if (!state.items.length) list.appendChild(el("p", null, "No parts yet. Open a crate and they land here."));
+        const groups = new Map();
+        for (const x of state.items) {
+            const key = groupKey(x);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(x);
+        }
+        for (const c of CRATES) {
+            const rows = [...groups.values()].filter((xs) => xs[0].k === c.kind)
+                .sort((a, b) => R[partOf(b[0]).r] - R[partOf(a[0]).r] || a[0].n - b[0].n);
+            if (!rows.length) continue;
+            list.appendChild(el("h3", null, c.label));
+            for (const xs of rows) {
+                const x = xs[0];
+                const p = partOf(x);
+                const on = isWorn(x, current);
+                const key = groupKey(x);
+                const row = el("button", "item" + (on ? " on" : "") + (g.selected === key ? " selected" : ""));
+                row.style.setProperty("--rc", RARITIES[R[p.r]].color);
+                row.append(el("span", "nm" + (x.st != null ? " st" : ""), fullName(x)));
+                if (xs.length > 1) row.appendChild(el("span", "x", "\u00d7" + xs.length));
+                row.appendChild(el("span", "w", on ? "Equipped" : RARITIES[R[p.r]].name));
                 row.addEventListener("click", () => {
                     window.__nswsUIClick?.();
-                    g.selected = g.selected === item.u ? null : item.u;
+                    g.selected = g.selected === key ? null : key;
                     g.armed = false;
-                    g.naming = false;
-                    const style = g.selected ? styleFor(item, current) : current;
+                    const style = g.selected ? withPart(current, x.k, p.index) : current;
                     if (style) window.__nswsGarageCar?.(style);
                     render();
                 });
@@ -826,75 +966,58 @@
 
         const foot = el("div", "foot");
         foot.appendChild(el("span", null, state.opened ? plural(state.opened, "crate") + " opened" : ""));
-        foot.appendChild(button(state.off ? "Drops: Off" : "Drops: On", () => {
-            state.off = !state.off;
+        foot.appendChild(button(state.notes ? "Notes: On" : "Notes: Off", () => {
+            state.notes = !state.notes;
             save();
             render();
         }));
         g.bar.appendChild(foot);
 
-        const item = state.items.find((x) => x.u === g.selected);
-        g.preview.style.display = item ? "" : "none";
-        if (!item) return;
-        const def = ITEMS[item.i];
-        const rarity = RARITIES[R[def.r]];
+        const xs = g.selected ? groups.get(g.selected) : null;
+        g.preview.style.display = xs ? "" : "none";
+        if (!xs) {
+            g.selected = null;
+            return;
+        }
+        const x = xs[0];
+        const p = partOf(x);
+        const rarity = RARITIES[R[p.r]];
         g.preview.style.setProperty("--rc", rarity.color);
-        const cap = el("div", "cap", item.n ? "\u201c" + item.n + "\u201d" : fullName(item, false));
-        cap.appendChild(el("small", null, rarity.name + " \u00b7 " + wearOf(item.f).name));
+        const cap = el("div", "cap", fullName(x));
+        cap.appendChild(el("small", null, rarity.name + " " + CRATE[x.k].one + " \u00b7 " + CRATE[x.k].name));
         g.preview.appendChild(cap);
         const info = el("div", "info");
-        const extra = special(def, item);
-        info.appendChild(el("div", null, "Float " + item.f.toFixed(9) + " \u00b7 template #" + item.s + (extra ? " \u00b7 " + extra : "")));
-        if (item.st != null) info.appendChild(el("div", "st", "StatTrak\u2122 finishes: " + item.st.toLocaleString()));
-        if (item.n) info.appendChild(el("div", null, fullName(item)));
-        info.appendChild(el("div", "note", def.note));
-        if (g.naming) {
-            const input = el("input");
-            input.maxLength = 24;
-            input.placeholder = "Name tag (empty removes it)";
-            input.value = item.n ?? "";
-            const done = () => {
-                const name = input.value.replace(/\s+/g, " ").trim().slice(0, 24);
-                item.n = name || undefined;
-                g.naming = false;
-                save();
-                render();
-            };
-            input.addEventListener("keydown", (e) => {
-                e.stopPropagation();
-                if (e.key === "Enter") done();
-                if (e.key === "Escape") {
-                    g.naming = false;
-                    render();
-                }
-            });
-            info.append(input, button("Save name", done));
-            setTimeout(() => input.focus(), 0);
-        } else {
-            const isOn = item === worn;
-            const eq = button(isOn ? "Equipped" : "Equip", () => equip(item));
-            eq.disabled = isOn;
-            info.appendChild(eq);
-            info.appendChild(button("Name tag", () => {
-                g.naming = true;
-                render();
-            }));
-            const drop = button(g.armed ? "Sure? Click again" : "Throw away", () => {
-                if (!g.armed) {
-                    g.armed = true;
-                    return render();
-                }
-                state.items = state.items.filter((x) => x !== item);
-                if (state.equipped === item.u) state.equipped = null;
+        const owned = state.items.filter((y) => y.k === x.k && y.n === x.n).length;
+        info.appendChild(el("div", null, existText(p) + " exist \u00b7 you own " + owned));
+        if (x.st != null) info.appendChild(el("div", "st", "StatTrak\u2122 finishes: " + Math.max(...xs.map((y) => y.st)).toLocaleString()));
+        info.appendChild(el("div", "note", p.note));
+        const on = isWorn(x, current);
+        info.appendChild(on ? button("Unequip", () => {
+            g.selected = null;
+            unequip(x.k);
+        }) : button("Equip", () => equip(xs.slice().sort((a, b) => (b.st ?? -1) - (a.st ?? -1))[0])));
+        const value = rarity.sell;
+        const lastOnCar = on && owned === 1;
+        const sell = button(g.armed ? "Sure? Sell for " + value : "Sell one \u2014 " + value + " Bolts", () => {
+            if (!g.armed) {
+                g.armed = true;
+                return render();
+            }
+            const victim = xs.slice().sort((a, b) => (a.st ?? -1) - (b.st ?? -1))[0];
+            state.items = state.items.filter((y) => y !== victim);
+            state.bolts += value;
+            queue(state, [{ u: victim.u, e: -1 }]);
+            g.armed = false;
+            if (xs.length === 1) {
                 g.selected = null;
-                g.armed = false;
-                save();
                 if (current) window.__nswsGarageCar?.(current);
-                render();
-            }, g.armed ? "armed" : "");
-            if (isOn) drop.disabled = true;
-            info.appendChild(drop);
-        }
+            }
+            save();
+            render();
+        }, g.armed ? "armed" : "");
+        sell.disabled = lastOnCar;
+        if (lastOnCar) sell.title = "Unequip it first";
+        info.appendChild(sell);
         g.preview.appendChild(info);
     }
 
@@ -905,6 +1028,7 @@
 
     window.addEventListener("nsws-finish", onFinish);
     window.addEventListener("nsws-new-pb", onNewPb);
+    window.addEventListener("pagehide", () => report());
 
-    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openCrate, tradeUp, items: ITEMS, rarities: RARITIES };
+    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openShop, tradeUp, collection, crates: CRATES, rarities: RARITIES };
 })();

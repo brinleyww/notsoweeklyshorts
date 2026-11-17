@@ -3451,7 +3451,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[15] = {
                     url: "images/pattern_outline.svg"
                 },
-                e.map((e => Object.freeze(e)))
+                e.concat(window.__nswsCrateParts?.list("patterns", e.length) ?? []).map((e => Object.freeze(e)))
             }
             )()),
             u.rims = Object.freeze(( () => {
@@ -3492,7 +3492,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[11] = {
                     model: "Wheel11"
                 },
-                e.map((e => Object.freeze(e)))
+                e.concat(window.__nswsCrateParts?.list("rims", e.length) ?? []).map((e => Object.freeze(e)))
             }
             )()),
             u.exhausts = Object.freeze(( () => {
@@ -3521,7 +3521,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[7] = {
                     model: "Exhaust7"
                 },
-                e.map((e => Object.freeze(e)))
+                e.concat(window.__nswsCrateParts?.list("exhausts", e.length) ?? []).map((e => Object.freeze(e)))
             }
             )()),
             u.bodies = Object.freeze(( () => {
@@ -3561,7 +3561,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     lowModel: "BodyPengu",
                     name: "Pengu"
                 },
-                e.map((e => Object.freeze(e)))
+                e.concat(window.__nswsCrateParts?.list("bodies", e.length) ?? []).map((e => Object.freeze(e)))
             }
             )());
             const p = u
@@ -11037,13 +11037,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                             for (let e = 0; e < S.A.rims.length; e++) {
                                 if (!S.A.isValidRims(e))
                                     throw new Error("Invalid car style rims");
-                                s.set(e, a(r(S.A.rims[e].model, !1)))
+                                S.A.rims[e].crate || s.set(e, a(r(S.A.rims[e].model, !1)))
                             }
                             const o = new Map;
                             for (let e = 0; e < S.A.exhausts.length; e++) {
                                 if (!S.A.isValidExhaust(e))
                                     throw new Error("Invalid car style exhaust");
-                                o.set(e, a(r(S.A.exhausts[e].model, !0)))
+                                S.A.exhausts[e].crate || o.set(e, a(r(S.A.exhausts[e].model, !0)))
                             }
                             const carBodies = new Map
                               , carBodiesLow = new Map
@@ -11060,6 +11060,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 exhausts: o,
                                 collisionShapeVertices: carCollision
                             },
+                            window.__nswsCrateParts?.buildParts({ THREE, utils: BufferGeometryUtils, models: F.models, stage: "parts" }),
                             l.get(F, F, "m", at).call(F).then((t => {
                                 e(t)
                             }
@@ -11074,10 +11075,13 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
                                     if (!S.A.isValidBody(bodyIndex))
                                         throw new Error("Invalid car style body");
+                                    if (S.A.bodies[bodyIndex].crate)
+                                        continue;
                                     carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene, !0)));
                                     const lowModel = S.A.bodies[bodyIndex].lowModel;
                                     carBodiesLow.set(bodyIndex, lowModel == S.A.bodies[bodyIndex].model ? carBodies.get(bodyIndex) : a(r(lowModel, !0, bodiesGltf.scene, !0)))
                                 }
+                                window.__nswsCrateParts?.buildParts({ THREE, utils: BufferGeometryUtils, models: F.models, stage: "bodies" });
                                 F.bodiesLoaded = !0;
                                 const waiting = [...F.pendingBodies];
                                 F.pendingBodies.clear();
@@ -11302,7 +11306,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             je = function(e) {
                 if (null == F.models)
                     throw new Error("Car models aren't loaded yet");
-                const t = F.models.rims.get(e);
+                const t = F.models.rims.get(e) ?? F.models.rims.get(0);
                 if (null == t)
                     throw new Error("Rims model not found");
                 return t.clone()
@@ -11311,7 +11315,7 @@ window.__nswsAutoGhostNote = function(trackId) {
             Ke = function(e) {
                 if (null == F.models)
                     throw new Error("Car models aren't loaded yet");
-                const t = F.models.exhausts.get(e);
+                const t = F.models.exhausts.get(e) ?? F.models.exhausts.get(0);
                 if (null == t)
                     throw new Error("Exhaust model not found");
                 return t.clone()
@@ -43422,11 +43426,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         window.__clipCarStyleClass = jt.A;
         // A data URL of a 200x200 render, as the leaderboard's thumbnails; turn is the camera's [x, y, z, w] rotation
         // around the car, from looking down +z (left out: the thumbnails' own view).
-        window.__nswsCarThumb = (style, turn) => {
-            const THREE = i(4922), look = new THREE.Vector3(.1, .3, 0);
+        window.__nswsCarThumb = (style, turn, close) => {
+            const THREE = i(4922), look = close?.look ? new THREE.Vector3(...close.look) : new THREE.Vector3(.1, .3, 0), zoom = close?.zoom ?? .5;
             const q = turn ? new THREE.Quaternion(...turn) : null;
             const view = q
-                ? { position: new THREE.Vector3(0, 0, 1732.05).applyQuaternion(q).add(look), look, up: new THREE.Vector3(0, 1, 0).applyQuaternion(q), zoom: .5 }
+                ? { position: new THREE.Vector3(0, 0, 1732.05).applyQuaternion(q).add(look), look, up: new THREE.Vector3(0, 1, 0).applyQuaternion(q), zoom }
                 : { position: new THREE.Vector3(1000.1, 1000.3, 1e3), look, zoom: .5 };
             return i(832).F(jt.A.deserializeSafe(style ?? ""), { addCancelCallback() {} }, view);
         };

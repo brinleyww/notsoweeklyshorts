@@ -210,7 +210,9 @@
         const a = tilt * Math.PI / 180;
         const group = new T.Group();
         group.name = "NSWSClubTag";
-        group.position.set(0, y, z);
+        const fit = body.userData?.crateFit;
+        group.position.set(0, fit ? y * fit.sy + fit.lift : y, fit ? z * fit.sz : z);
+        if (fit) group.scale.x = fit.sx;
         // Flat on the body with the top of the letters towards the front, so it reads from behind.
         group.quaternion.setFromRotationMatrix(new T.Matrix4().makeBasis(
             new T.Vector3(-1, 0, 0), new T.Vector3(0, Math.sin(a), Math.cos(a)), new T.Vector3(0, Math.cos(a), -Math.sin(a))));

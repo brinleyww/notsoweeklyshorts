@@ -15,9 +15,10 @@ import { describeCup, CARD_W, CARD_H } from "./cupcard.js";
 import { TrackHub, ASSET_ID, ASSET_THUMB_MAX } from "./trackhub.js";
 import { sniffImage, moderate as moderateImage } from "./chatmedia.js";
 import { Feedback, MAX_FEEDBACK_BODY } from "./feedback.js";
+import { CrateStats, CRATES_PREFIX, handleCrates } from "./crates.js";
 import { handleDiscord, DISCORD_PREFIX, DISCORD_POSTS } from "./discord.js";
 
-export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub, Feedback };
+export { TrafficStats, AntiCheat, RunChecker, ChatRoom, Accounts, LobbyRoom, LobbyDirectory, SocketBridge, TrackHub, Feedback, CrateStats };
 
 const DEFAULT_UPSTREAM = "https://vps.kodub.com";
 const DEFAULT_UPSTREAM_ORIGIN = "https://www.kodub.com";
@@ -2757,6 +2758,18 @@ export default {
                 } catch (err) {
                     noteDoError(err);
                     console.error("tracks error:", err && err.message);
+                    return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
+                }
+            }
+            if (url.pathname.startsWith(CRATES_PREFIX)) {
+                const origin = requestOrigin || "*";
+                try {
+                    return await handleCrates(request, url, env, ctx, {
+                        fromSite, origin: requestOrigin, forbidden, corsHeaders, json, withCors, cachedJson, doLimited, busy, readSmallBody, sha256Hex, HEX64,
+                    });
+                } catch (err) {
+                    noteDoError(err);
+                    console.error("crates error:", err && err.message);
                     return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
                 }
             }

@@ -162,3 +162,12 @@ class_name = "Feedback"
 [[migrations]]
 tag = "v8"
 new_sqlite_classes = ["Feedback"]
+
+# How many of each crate part exist (src/crates.js); inventories stay in players' browsers.
+[[durable_objects.bindings]]
+name = "CRATES"
+class_name = "CrateStats"
+
+[[migrations]]
+tag = "v9"
+new_sqlite_classes = ["CrateStats"]
