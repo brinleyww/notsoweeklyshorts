@@ -59248,7 +59248,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     if (!t) continue;
                     const container = await window.__nswsLoadTrackContainer(p.file);
                     const raw = container[t.contentId ?? t.id];
-                    raw?.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure();
+                    raw?.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure(raw);
                     const parsed = raw && TrackDataModule.A.fromExportString(raw);
                     // The Worker can't simulate Better Editor blocks, so it takes these tracks' runs as they come.
                     if (parsed?.trackData.hasExtendedParts?.())
@@ -59310,7 +59310,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                                 const container = await window.__nswsLoadTrackContainer(e.weekRef.file);
                                 const raw = container[e.weekRef.id];
                                 if (null == raw) throw new Error("Track not found in week container");
-                                raw.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure();
+                                raw.startsWith("PolyTrackBE") && await window.__nswsTM?.ensure(raw);
                                 const parsed = TrackDataModule.A.fromExportString(raw);
                                 if (null == parsed) throw new Error("Failed to decrypt track");
                                 return { trackMetadata: parsed.trackMetadata, trackData: parsed.trackData };
@@ -63492,8 +63492,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     document.head.appendChild(e)
                 }
                 ));
-                let loading = null
-                  , ready = !1
+                let ready = !1
                   , physics = 1
                   , query = "";
                 // The block file (~80 MB) changes only with the blocks, yet each Better Editor deploy gives it a new ETag, so
@@ -63615,7 +63614,137 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         window.fetch === mine && (window.fetch = real)
                     }
                 };
-                const from = async b => {
+                // A week track loads only its own parts' bytes of the block file (a track uses a few MB of its ~80), by Range
+                // request, and Cache Storage keeps each part's bytes. False when the whole file should load instead: a Better
+                // Editor without useBlocks, the whole file cached already, or a server that ignores Range (the Worker mirror).
+                let partBuf = null
+                  , pruned = !1;
+                const RANGE_GAP = 32768
+                  , RANGE_JOBS = 8;
+                const rangeOf = async (url, a, e, onBytes) => {
+                    const ctrl = new AbortController;
+                    let idle = setTimeout(( () => ctrl.abort()), STALL_MS);
+                    try {
+                        const r = await fetch(url, { headers: { Range: "bytes=" + a + "-" + (e - 1) }, signal: ctrl.signal });
+                        if (206 !== r.status || !r.body)
+                            throw ctrl.abort(), new Error("No Range support at " + url + " (" + r.status + ")");
+                        const out = new Uint8Array(e - a)
+                          , reader = r.body.getReader();
+                        let o = 0;
+                        for (;;) {
+                            const {done: d, value: v} = await reader.read();
+                            if (d)
+                                break;
+                            if (o + v.byteLength > out.length)
+                                throw ctrl.abort(), new Error("Range too long");
+                            out.set(v, o),
+                            o += v.byteLength,
+                            onBytes(v.byteLength),
+                            clearTimeout(idle),
+                            idle = setTimeout(( () => ctrl.abort()), STALL_MS)
+                        }
+                        if (o !== out.length)
+                            throw new Error("Range cut short");
+                        return out
+                    } finally {
+                        clearTimeout(idle)
+                    }
+                };
+                const partBlocks = async code => {
+                    const TM = self.TM
+                      , D = self.TM_DATA;
+                    if ("function" != typeof TM?.useBlocks || !D?.hash)
+                        return !1;
+                    const parsed = window.__nswsTrackHooks?.parse(code);
+                    if (!parsed?.trackData)
+                        return !1;
+                    const ids = new Set;
+                    parsed.trackData.forEachPart(( (x, y, z, id) => TM.isTM(id) && ids.add(id)));
+                    if (TM.hasBlocks([...ids]))
+                        return !0;
+                    const held = new Set(TM.blocksParts() ?? [])
+                      , key = location.origin + "/nsws-be-blocks/" + D.hash + "-" + D.binBytes;
+                    let cache = null;
+                    if (self.caches)
+                        try {
+                            cache = await caches.open("nsws-be-blocks");
+                            if (await cache.match(key))
+                                return !1
+                        } catch (e) {
+                            cache = null
+                        }
+                    const buf = partBuf ?? new ArrayBuffer(D.binBytes)
+                      , bytes = new Uint8Array(buf)
+                      , size = rs => rs.reduce(( (n, [a, e]) => n + e - a), 0)
+                      , want = [];
+                    for (const id of ids) {
+                        if (held.has(id))
+                            continue;
+                        const rs = TM.rangesOf(id);
+                        let hit = null;
+                        try {
+                            hit = cache && await cache.match(key + "/" + id).then((r => r ? r.arrayBuffer() : null))
+                        } catch (e) {}
+                        if (hit?.byteLength === size(rs)) {
+                            const b = new Uint8Array(hit);
+                            let o = 0;
+                            for (const [a, e] of rs)
+                                bytes.set(b.subarray(o, o += e - a), a)
+                        } else
+                            want.push(id)
+                    }
+                    if (want.length) {
+                        // The ranges of the parts still missing, sorted and joined where they touch or nearly do.
+                        const runs = [];
+                        for (const [a, e] of want.flatMap((id => TM.rangesOf(id))).sort(( (x, y) => x[0] - y[0]))) {
+                            const last = runs[runs.length - 1];
+                            last && a <= last[1] + RANGE_GAP ? last[1] = Math.max(last[1], e) : runs.push([a, e])
+                        }
+                        const total = size(runs)
+                          , url = (self.TM_BASE || "") + "models/tm_blocks.bin";
+                        let got = 0
+                          , next = 0;
+                        blocksBar.progress(0, total);
+                        const job = async () => {
+                            for (; next < runs.length; ) {
+                                const [a, e] = runs[next++];
+                                bytes.set(await rangeOf(url, a, e, (n => blocksBar.progress(got += n, total))), a)
+                            }
+                        };
+                        // The first range goes alone: a server that ignores Range sends the whole file, and that should
+                        // happen once, not once per parallel request.
+                        next = 1,
+                        bytes.set(await rangeOf(url, runs[0][0], runs[0][1], (n => blocksBar.progress(got += n, total))), runs[0][0]);
+                        await Promise.all(Array.from({ length: Math.min(RANGE_JOBS, runs.length - 1) }, job));
+                        cache && (async () => {
+                            for (const id of want) {
+                                const rs = TM.rangesOf(id)
+                                  , out = new Uint8Array(size(rs));
+                                let o = 0;
+                                for (const [a, e] of rs)
+                                    out.set(bytes.subarray(a, e), o),
+                                    o += e - a;
+                                await cache.put(key + "/" + id, new Response(out))
+                            }
+                            if (!pruned) {
+                                pruned = !0;
+                                for (const k of await cache.keys())
+                                    k.url.startsWith(key) || await cache.delete(k)
+                            }
+                        }
+                        )().catch((e => console.warn(e)))
+                    }
+                    partBuf = buf;
+                    TM.useBlocks(buf, [...held, ...ids]);
+                    return !0
+                };
+                let registered = !1;
+                const register = () => {
+                    registered || (d.addTMParts(i(405).registerTM(self.TM)),
+                    registered = !0)
+                };
+                const from = async (b, code) => {
+                    if (self.TM_BASE !== b || !self.TM) {
                     self.TM_BASE = b;
                     // The files go by physics.json's version: the site's files stay cached for 10 minutes, and a run on a
                     // cached older tm_runtime.js would be saved as the new version, so its ghost would fail later.
@@ -63645,11 +63774,33 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     self.TM.water && !self.TM.hud && await script(b + "tm_hud.js" + query).catch((e => console.warn(e)));
                     self.TM.hud?.setWheels(window.__nswsSettingBoolean?.("WheelInfo") === true);
                     self.TM.hud?.setWheelsSize?.(parseFloat(window.__nswsSetting?.("WheelInfoScale")));
+                    }
                     await u;
-                    await cachedBlocks(() => self.TM.load());
-                    // The physics workers read the page's copy of the block file (mod/nsws_tracks.js sends them its address).
+                    // The parts go into the game's table first: a track code is read with them, and a part's mesh is only
+                    // built from the block file when it is first drawn.
+                    register();
+                    const part = null != code && await partBlocks(code).catch((e => (console.warn(e), !1)));
+                    part || await cachedBlocks(() => self.TM.load());
+                    // The physics workers read the page's copy of the block file (mod/nsws_tracks.js sends them its address,
+                    // which lists the parts in it when it holds only some).
                     window.__nswsSimWorkersSync?.()
                 };
+                const run = async code => {
+                    try {
+                        await from(base, code)
+                    } catch (e) {
+                        // Networks that block github.io still reach the NSWS Worker, which mirrors these files.
+                        const mirror = window.__nswsApiBase ? window.__nswsApiBase + "be/" : null;
+                        if (!mirror || base === mirror)
+                            throw e;
+                        console.warn(e),
+                        base = mirror,
+                        await from(base, code)
+                    }
+                    ready = null == self.TM.blocksParts?.()
+                };
+                let full = null
+                  , parts = Promise.resolve();
                 return {
                     get base() {
                         return base
@@ -63661,24 +63812,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     get query() {
                         return query
                     },
+                    // ready: the whole block file is in, so any Better Editor track can be read, drawn and driven.
                     ready: () => ready,
-                    ensure: () => loading ?? (loading = (async () => {
-                        try {
-                            await from(base)
-                        } catch (e) {
-                            // Networks that block github.io still reach the NSWS Worker, which mirrors these files.
-                            const mirror = window.__nswsApiBase ? window.__nswsApiBase + "be/" : null;
-                            if (!mirror || base === mirror)
-                                throw e;
-                            console.warn(e),
-                            base = mirror,
-                            await from(base)
-                        }
-                        d.addTMParts(i(405).registerTM(self.TM)),
-                        ready = !0
-                    }
-                    )().finally(blocksBar.stop).catch((e => {
-                        throw loading = null,
+                    // ensure(code) for an official week track: only that track's parts (one load at a time, so they add up in
+                    // one buffer). ensure() loads everything.
+                    ensure: code => ready ? Promise.resolve() : full ?? ("string" == typeof code && code.trim().startsWith("PolyTrackBE") ? parts = parts.catch(( () => {}
+                    )).then(( () => ready ? void 0 : run(code.trim()))).finally(blocksBar.stop) : full = parts.catch(( () => {}
+                    )).then(( () => run(null))).finally(blocksBar.stop).catch((e => {
+                        throw full = null,
                         e
                     }
                     )))
