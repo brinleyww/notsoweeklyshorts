@@ -15,6 +15,32 @@
     const SPIN_MS = 6200;
     const COUNTS_MS = 5 * 60 * 1000;
     const REPORT_DELAY_MS = 15000;
+    const WHEEL_SPINS_PER_DAY = 5;
+    const WHEEL_BETS = [10, 25, 50, 100];
+    const WHEEL_MS = 5200;
+    // Clockwise from the top. Pays a little over even on average, with only five spins a day.
+    const WHEEL = [
+        { x: 0, label: "BANKRUPT", color: "#1b1b2b" },
+        { x: 1.5, label: "\u00d71.5", color: "#8847ff" },
+        { x: 0.5, label: "HALF", color: "#3a4a8a" },
+        { x: 1, label: "PUSH", color: "#28346a" },
+        { x: 2, label: "DOUBLE", color: "#d32ce6" },
+        { x: 0, label: "BANKRUPT", color: "#1b1b2b" },
+        { x: 1, label: "PUSH", color: "#28346a" },
+        { x: 4, label: "\u00d74 JACKPOT", color: "#e4ae39" },
+        { x: 0.5, label: "HALF", color: "#3a4a8a" },
+        { x: 1.5, label: "\u00d71.5", color: "#8847ff" },
+        { x: 0, label: "BANKRUPT", color: "#1b1b2b" },
+        { x: 1, label: "PUSH", color: "#28346a" },
+    ];
+    const WHEEL_QUIPS = {
+        0: ["The wheel giveth. Mostly it taketh.", "Bolts gone. Character built.", "That's racing."],
+        0.5: ["Half back. Could be worse.", "A partial refund of dignity."],
+        1: ["Nothing happened. Thrilling.", "You get your Bolts back, and a story nobody wants."],
+        1.5: ["Up a bit! Act like you meant it.", "Profit. Small, but it's yours."],
+        2: ["DOUBLE. Tell nobody, they'll want a go.", "Twice the Bolts, twice the swagger."],
+        4: ["JACKPOT. The wheel would like to apologise to everyone else.", "\u00d74! Screenshot or it didn't happen."],
+    };
 
     const RARITIES = [
         { id: "milspec", name: "Mil-Spec", color: "#4b69ff", odds: 0.7992, sell: 4 },
@@ -122,6 +148,23 @@
 #nsws-crate td:first-child,#nsws-crate th:first-child{text-align:left;white-space:normal;border-left:4px solid var(--rc,transparent);}
 #nsws-crate td.mine{color:#96ff96;}
 #nsws-crate .fine{margin:14px 0 0;font-size:13px;line-height:1.4;color:rgba(255,255,255,.5);}
+#nsws-crate .wheel{display:flex;flex-wrap:wrap;gap:20px;align-items:center;justify-content:center;padding:6px 0;}
+#nsws-crate .wheel .disc{position:relative;width:min(340px,80vw);aspect-ratio:1;flex-shrink:0;}
+#nsws-crate .wheel .disc>svg{width:100%;height:100%;display:block;will-change:transform;}
+#nsws-crate .wheel .disc>.pin{position:absolute;left:50%;top:-6px;width:0;height:0;margin-left:-13px;border-left:13px solid transparent;border-right:13px solid transparent;border-top:26px solid #ffc94a;filter:drop-shadow(0 2px 2px #000);z-index:1;}
+#nsws-crate .wheel .side{flex:1;min-width:220px;max-width:360px;}
+#nsws-crate .wheel .side>p{margin:0 0 10px;font-size:15px;line-height:1.4;color:rgba(255,255,255,.75);}
+#nsws-crate .wheel .bets{display:flex;flex-wrap:wrap;gap:0;margin:0 0 10px;}
+#nsws-crate .wheel .bets>.button{margin:0;font-size:18px;padding:5px 14px;}
+#nsws-crate .wheel .bets>.button.on{background:var(--button-hover-color);box-shadow:inset 0 -3px #ffc94a;}
+#nsws-crate .wheel .bets>.button:disabled{opacity:.35;}
+#nsws-crate .wheel .side>.button{margin:0;font-size:22px;padding:7px 20px;}
+#nsws-crate .wheel .side>.button.main{box-shadow:inset 0 -3px #ffc94a;}
+#nsws-crate .wheel .side>.button:disabled{opacity:.35;}
+#nsws-crate .wheel .result{min-height:52px;margin-top:12px;font-size:20px;}
+#nsws-crate .wheel .result>small{display:block;font-size:14px;font-style:italic;color:rgba(255,255,255,.65);}
+#nsws-crate .wheel .result.win{color:#96ff96;}
+#nsws-crate .wheel .result.lose{color:#ff9696;}
 @media (max-width:620px){#nsws-crate .won{flex-direction:column;align-items:flex-start;}#nsws-crate .won>img{width:160px;height:160px;}#nsws-crate .top>small{display:none;}}
 .nsws-crate-chat{color:rgba(255,255,255,.8);}
 .nsws-crate-chat>b{font-weight:normal;color:var(--rc);}
@@ -243,6 +286,7 @@
             state.finBolts = 0;
             state.pbCount = 0;
             state.pbTracks = {};
+            state.wheelSpins = 0;
         }
     }
 
@@ -840,6 +884,151 @@
         reveal(item, null);
     }
 
+    function wheelSvg() {
+        const ns = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(ns, "svg");
+        svg.setAttribute("viewBox", "-100 -100 200 200");
+        const step = 360 / WHEEL.length;
+        const point = (deg, r) => [Math.sin((deg * Math.PI) / 180) * r, -Math.cos((deg * Math.PI) / 180) * r];
+        WHEEL.forEach((s, i) => {
+            const a0 = i * step - step / 2, a1 = a0 + step;
+            const [x0, y0] = point(a0, 96), [x1, y1] = point(a1, 96);
+            const path = document.createElementNS(ns, "path");
+            path.setAttribute("d", "M0 0 L" + x0.toFixed(2) + " " + y0.toFixed(2) + " A96 96 0 0 1 " + x1.toFixed(2) + " " + y1.toFixed(2) + " Z");
+            path.setAttribute("fill", s.color);
+            path.setAttribute("stroke", "#0d1230");
+            path.setAttribute("stroke-width", "1.2");
+            svg.appendChild(path);
+            const text = document.createElementNS(ns, "text");
+            text.setAttribute("x", "0");
+            text.setAttribute("y", "0");
+            text.setAttribute("transform", "rotate(" + i * step + ") translate(0 -57) rotate(-90)");
+            text.setAttribute("text-anchor", "middle");
+            text.setAttribute("dominant-baseline", "middle");
+            text.setAttribute("fill", s.x === 4 ? "#1b1300" : "#fff");
+            text.setAttribute("font-size", s.label.length > 6 ? "9" : "11");
+            text.setAttribute("style", "font-family:inherit");
+            text.textContent = s.label;
+            svg.appendChild(text);
+        });
+        const rim = document.createElementNS(ns, "circle");
+        rim.setAttribute("r", "97");
+        rim.setAttribute("fill", "none");
+        rim.setAttribute("stroke", "#ffc94a");
+        rim.setAttribute("stroke-width", "3");
+        svg.appendChild(rim);
+        const hub = document.createElementNS(ns, "circle");
+        hub.setAttribute("r", "14");
+        hub.setAttribute("fill", "#112052");
+        hub.setAttribute("stroke", "#ffc94a");
+        hub.setAttribute("stroke-width", "2");
+        svg.appendChild(hub);
+        return svg;
+    }
+
+    // The outcome is settled and saved before the wheel moves, so closing the page mid-spin changes nothing.
+    function wheel() {
+        const state = load();
+        if (!state) return;
+        rollDay(state);
+        const v = overlay("Wheel of Bolts");
+        const box = el("div", "wheel");
+        const disc = el("div", "disc");
+        const svg = wheelSvg();
+        disc.append(el("div", "pin"), svg);
+        const side = el("div", "side");
+        const left = () => WHEEL_SPINS_PER_DAY - (state.wheelSpins ?? 0);
+        side.appendChild(el("p", null, "Bet some Bolts and spin. Whatever the pointer lands on multiplies your bet: BANKRUPT loses it, HALF gives half back, PUSH gives it back, and the rest pay more. " + WHEEL_SPINS_PER_DAY + " spins a day."));
+        const bets = el("div", "bets");
+        let bet = WHEEL_BETS.find((b) => b <= state.bolts) ?? WHEEL_BETS[0];
+        const betButtons = WHEEL_BETS.map((b) => {
+            const btn = button(String(b), () => {
+                bet = b;
+                paint();
+            });
+            bets.appendChild(btn);
+            return btn;
+        });
+        side.appendChild(bets);
+        const go = button("Spin", () => spinWheel(), "main");
+        side.appendChild(go);
+        const result = el("div", "result");
+        side.appendChild(result);
+        const spinsLeft = el("p", null, "");
+        side.appendChild(spinsLeft);
+        box.append(disc, side);
+        v.body.appendChild(box);
+        v.body.appendChild(el("p", "fine", "Bolts only. Nothing here costs or pays real money."));
+
+        let angle = 0;
+        function paint() {
+            betButtons.forEach((btn, i) => {
+                btn.classList.toggle("on", WHEEL_BETS[i] === bet);
+                btn.disabled = v.spinning || WHEEL_BETS[i] > state.bolts;
+            });
+            go.disabled = v.spinning || left() <= 0 || bet > state.bolts;
+            go.textContent = left() <= 0 ? "Back tomorrow" : "Spin \u2014 " + bet + " Bolts";
+            spinsLeft.textContent = left() > 0 ? plural(left(), "spin") + " left today" : "No spins left today.";
+        }
+
+        function spinWheel() {
+            if (v.spinning || left() <= 0 || bet > state.bolts) return;
+            const i = Math.floor(Math.random() * WHEEL.length);
+            const seg = WHEEL[i];
+            const stake = bet;
+            const payout = Math.round(stake * seg.x);
+            state.bolts += payout - stake;
+            state.wheelSpins = (state.wheelSpins ?? 0) + 1;
+            save();
+            refreshTop();
+            render();
+            result.className = "result";
+            result.textContent = "";
+            const step = 360 / WHEEL.length;
+            const jitter = (Math.random() - 0.5) * step * 0.7;
+            const start = angle;
+            const target = start + 360 * 5 + ((((-i * step - start) % 360) + 720) % 360) + jitter;
+            const t0 = performance.now();
+            let last = Math.floor(start / step);
+            v.spinning = true;
+            paint();
+            const done = () => {
+                v.spinning = false;
+                angle = target;
+                svg.style.transform = "rotate(" + target + "deg)";
+                const net = payout - stake;
+                result.className = "result " + (net > 0 ? "win" : net < 0 ? "lose" : "");
+                result.textContent = seg.label + ": " + (net > 0 ? "+" + net : net === 0 ? "\u00b10" : String(net)) + " Bolts";
+                result.appendChild(el("small", null, pick(WHEEL_QUIPS[seg.x])));
+                if (seg.x >= 2) fanfare(seg.x === 4 ? 4 : 2);
+                else if (seg.x === 0) blip(160, 0, 0.5, 0.12, "sawtooth");
+                if (bet > state.bolts) bet = [...WHEEL_BETS].reverse().find((b) => b <= state.bolts) ?? WHEEL_BETS[0];
+                paint();
+            };
+            v.skip = () => {
+                if (!v.spinning) return;
+                cancelAnimationFrame(v.raf);
+                done();
+            };
+            const frame = (now) => {
+                if (!v.spinning) return;
+                const k = Math.min(1, (now - t0) / WHEEL_MS);
+                const a = start + (target - start) * (1 - Math.pow(1 - k, 3.2));
+                svg.style.transform = "rotate(" + a + "deg)";
+                const tickAt = Math.floor((a + step / 2) / step);
+                if (tickAt !== last) {
+                    last = tickAt;
+                    tick();
+                }
+                if (k < 1) v.raf = requestAnimationFrame(frame);
+                else done();
+            };
+            v.raf = requestAnimationFrame(frame);
+        }
+
+        paint();
+    }
+
     function collection() {
         const state = load();
         if (!state) return;
@@ -925,6 +1114,7 @@
         head.appendChild(button("Crates", () => openShop(), "main"));
         head.appendChild(button("Trade up", () => tradeUp()));
         head.appendChild(button("Collection", () => collection()));
+        head.appendChild(button("Wheel", () => wheel()));
         g.bar.appendChild(head);
 
         const list = el("div", "list");
@@ -1030,5 +1220,5 @@
     window.addEventListener("nsws-new-pb", onNewPb);
     window.addEventListener("pagehide", () => report());
 
-    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openShop, tradeUp, collection, crates: CRATES, rarities: RARITIES };
+    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openShop, tradeUp, collection, wheel, crates: CRATES, rarities: RARITIES };
 })();
