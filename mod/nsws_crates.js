@@ -610,11 +610,6 @@
         }
     }
 
-    function wallet(actions) {
-        const msg = actions.querySelector(".msg");
-        if (msg) msg.textContent = "NSWS Wallet: $0.00. Bolts can't be bought. Go drive.";
-    }
-
     function oddsText(kind, p) {
         const same = parts().PARTS[kind].filter((x) => x.r === p.r).length;
         const pct = (RARITIES[R[p.r]].odds / same) * 100;
@@ -640,9 +635,6 @@
             shop.appendChild(tile);
         }
         v.body.appendChild(shop);
-        const actions = el("div", "actions");
-        actions.append(button("Buy 1,000 Bolts \u2014 $4.99", () => wallet(actions)), el("span", "msg", ""));
-        v.body.appendChild(actions);
         v.body.appendChild(el("p", "fine", "Bolts come from playing: +" + FINISH_BOLTS + " for each finished run (up to " + FINISH_BOLTS_PER_DAY + " a day) and +" + PB_BOLTS
             + " for a new PB (up to " + PB_REWARDS_PER_DAY + " a day, one per track). Parts are looks only: nothing here changes how a car drives, and nothing costs real money."));
     }
