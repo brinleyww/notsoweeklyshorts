@@ -80,6 +80,7 @@
 #nsws-editor .nse-cup .row .button{padding:3px 10px;font-size:15px;}
 #nsws-editor .nse-cup .st{flex:1 1 240px;color:rgba(255,255,255,.75);}
 #nsws-editor .nse-cup .st.good{color:#96ff96;}
+#nsws-editor .nse-cup .st.bad{color:#ff9a9a;}
 #nsws-editor .nse-cup .who{display:flex;flex-wrap:wrap;gap:2px 10px;color:rgba(255,255,255,.5);}
 #nsws-editor .nse-cup .who>span.done{color:#96ff96;}
 #nsws-editor .nse-cup .who>span.me{text-decoration:underline;}
@@ -135,6 +136,8 @@
     // A Cuppa Build Off's bar: { title, status, sent, left(): ms, onSubmit() }.
     let cupBar = null;
     let cupTimer = null;
+    // A warning shown in place of the cup bar's status line (no finish in the last seconds).
+    let cupAlert = "";
     let wantFresh = false;
 
     function el(tag, className, text) {
@@ -1429,8 +1432,7 @@
         ui.cupTitle.textContent = c.title;
         ui.cupTitle.title = c.title;
         ui.cupPhase.textContent = c.phase || "Build Off";
-        ui.cupStatus.textContent = c.status;
-        ui.cupStatus.className = "st" + (c.sent ? " good" : "");
+        renderCupStatus();
         ui.cupSend.lastChild.textContent = c.sent ? "Send again" : "Send to the cup";
         ui.cupSend.disabled = !!c.closed;
         const builders = c.builders || [];
@@ -1453,6 +1455,19 @@
         };
         tick();
         cupTimer = setInterval(tick, 250);
+    }
+
+    function renderCupStatus() {
+        if (!ui || !cupBar) return;
+        ui.cupStatus.textContent = cupAlert || cupBar.status;
+        ui.cupStatus.className = "st" + (cupAlert ? " bad" : cupBar.sent ? " good" : "");
+    }
+
+    // Cuppa's Build Off finish guard in the editor (BE nsws_cup.js, bridge 7): status, lock, unlock, fill. null when the
+    // editor can't answer, so the cup goes on as before.
+    function guard(op, extra, ms) {
+        if (!ready || bridgeVersion < 7) return Promise.resolve(null);
+        return request("cup", Object.assign({}, extra, { op }), ms || 4000).catch(() => null);
     }
 
     // The editor's open track, saved or not, with its mode.
@@ -1483,8 +1498,18 @@
             cupBar = bar || null;
             // Entering the cup clears the editor's own first-open note; a send that arrived clears "Sending...".
             if (cupBar && (!was || (cupBar.sent && !was.sent))) note("");
+            if (!cupBar && was) {
+                cupAlert = "";
+                if (ready && bridgeVersion >= 7) post({ type: "cup", op: "unlock" });
+            }
             renderCup();
         },
+        cupAlert(text) {
+            if ((text || "") === cupAlert) return;
+            cupAlert = text || "";
+            renderCupStatus();
+        },
+        guard,
         note,
         isOpen: () => !!host && !host.classList.contains("hidden"),
     };
