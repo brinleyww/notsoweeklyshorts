@@ -197,7 +197,7 @@ export class Panel {
       out.push(this.#inviteHero(s));
       out.push(this.#roleChooser(s));
       out.push(this.#sourceSection(s));
-      out.push(this.#formatSection(s));
+      if (!s.rules.build) out.push(this.#formatSection(s));
       // Every rule of the chosen format can be changed right here, one by one.
       out.push(...this.#rulesTab(s));
     } else {
@@ -310,38 +310,10 @@ export class Panel {
     );
   }
 
-  // Where the cup's tracks come from, front and centre: the game's maps, custom tracks (and adding them), or a Build Off.
+  // Custom tracks (and adding them) or the Build Off clock. Where the tracks come from is picked when the room opens.
   #sourceSection(s: CupState) {
-    const { app, host, lobby, r, set, live, row, seg, slider } = this.#ruleKit(s);
-    const v = r.build ? 'build' : r.customOnly ? 'custom' : r.customTracks ? 'both' : 'pool';
-    const picked = site.__nswsCupPool ? poolLabel(site.__nswsCupPool as MapPool) : '';
-    const hints = {
-      pool: picked ? `${picked}, picked when the room opened` : 'The maps picked when the room opened',
-      both: 'Those maps plus tracks added below',
-      custom: 'Only tracks added below',
-      build: lobby && host ? 'Build Off: everyone builds a track when the cup starts. Pick one of these to race existing tracks instead' : 'Build Off: the racers build the tracks in this cup',
-    };
-    // A Build Off is picked when the room opens or with its format, so it has no button here.
-    const options = [
-      ['pool', 'Game maps'],
-      ['both', 'Maps + custom'],
-      ['custom', 'Custom only'],
-    ] as const;
-    // Mid-cup the source can change, but a Build Off can't start or stop.
-    const can = () => live('customTracks') && (lobby || v !== 'build');
-    const pickSource = (k: (typeof options)[number][0]) => {
-      set({ customTracks: k !== 'pool', customOnly: k === 'custom', build: 0 });
-      try {
-        const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
-        const source = k === 'pool' ? 'maps' : 'custom';
-        localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, source, ...(source === 'custom' ? { mix: k === 'both' } : {}) }));
-      } catch {}
-    };
-    const source =
-      v === 'build' && !(lobby && host)
-        ? row('Tracks from', hints.build, h('span', { class: 'val' }, 'Build Off'))
-        : row('Tracks from', hints[v], h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !can(), onclick: click(() => pickSource(k)) }, l))));
-    source.classList.add('wide');
+    const { app, host, lobby, r, seg, slider } = this.#ruleKit(s);
+    if (!r.customTracks && !r.build) return null;
     const custom = r.customTracks && !r.build;
     // A Build Off lists only the tracks built in it.
     const uploads = r.build && !s.built ? [] : (s.custom ?? []);
@@ -352,7 +324,6 @@ export class Panel {
       h(
         'div',
         { class: 'rules' },
-        source,
         custom
           ? seg('customPick', 'Who adds tracks', r.customPick === 'organizer' ? 'Only you, the organizer' : 'Everyone in the cup, and you without a limit', [
               ['organizer', 'Organizer only'],
@@ -408,7 +379,7 @@ export class Panel {
     const formats = h(
       'div',
       { class: 'formats' },
-      FORMATS.map((f) =>
+      FORMATS.filter((f) => f.id !== 'build').map((f) =>
         h(
           'button',
           {

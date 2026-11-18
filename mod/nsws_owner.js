@@ -3076,6 +3076,36 @@
         tiles.appendChild(tile("Unexplained Bolts", num(s.dr), num(s.dn) + " profiles hold more than they earned"));
         wrap.appendChild(tiles);
 
+        // Days without a report are zero, so the charts always span the last 14 UTC days.
+        const byDay = new Map(days.map((d) => [d.day, d]));
+        const series = (f) => {
+            const out = [];
+            for (let d = e.day - 13; d <= e.day; d++) out.push({ t: d * 86400000 + 43200000, v: f(byDay.get(d) || {}) });
+            return out;
+        };
+        const dayTip = (ms) => new Date(ms).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+        const crateCount = (d) => v(d, "cp") + v(d, "cr") + v(d, "ce") + v(d, "cb");
+        const charts = el("div", "nrc-grid2");
+        charts.style.marginTop = "14px";
+        const draws = [];
+        for (const [title, sub, f, unit, isTime] of [
+            ["Bolts earned", "Runs, quests, Wheel payouts and sold parts, per day", earned, "Bolts earned"],
+            ["Bolts spent", "Crates and Wheel bets, per day", spent, "Bolts spent"],
+            ["Players earning", "Profiles that reported Bolts earned that day", (d) => v(d, "p"), "players"],
+            ["Crates opened", "All four crates, per day", crateCount, "crates"],
+            ["Paid driving", "Run time that paid Bolts, per day", (d) => v(d, "ns"), "of driving", true],
+            ["Quests claimed", "Daily quests claimed, per day", (d) => v(d, "nq"), "quests"],
+        ]) {
+            const c = card(title, null, sub);
+            const box = el("div", "nrc-chart");
+            c.appendChild(box);
+            charts.appendChild(c);
+            const points = series(f);
+            draws.push(() => drawChart(box, points, { kind: "bars", isTime: !!isTime, labels: { tick: fmt.date, tip: dayTip }, unit, minMax: 4 }));
+        }
+        wrap.appendChild(charts);
+        ui.charts = draws;
+
         const grid = el("div", "nrc-grid2");
         const sources = card("Earned by source");
         sources.appendChild(table([["Source", "name"], ["Today", "num"], ["All time", "num"]], [
@@ -3808,6 +3838,7 @@
         }
         if (ui.tab === "economy") {
             renderEconomyTab(body);
+            for (const draw of ui.charts) draw();
             body.scrollTop = scroll;
             return;
         }
