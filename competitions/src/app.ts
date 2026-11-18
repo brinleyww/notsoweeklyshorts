@@ -100,6 +100,7 @@ export class App {
   #codeAskAt = 0;
   onChange: () => void = () => {};
   onLeave: (message: string) => void = () => {};
+  onOpenPanel: () => void = () => {};
 
   #plan: HostPlan | null = null;
   #intent: 'racer' | 'spectator' = 'racer';

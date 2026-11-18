@@ -947,6 +947,15 @@ export class Accounts extends DurableObject {
         return this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id ?? null;
     }
 
+    // A chat whisper's recipient (src/chat.js): the account holding the name now and its chat ids, newest first.
+    whisperTarget(nickname) {
+        const key = nameKey(text(nickname, MAX_NICK));
+        const userId = SHARED_NAMES.has(key) ? null : this.holder(key);
+        if (!userId) return null;
+        const uids = this.sql.exec("SELECT uid FROM chat_links WHERE user_id = ? ORDER BY at DESC LIMIT 20", userId).toArray().map((r) => r.uid);
+        return { nickname: this.nicknameOf(userId) || text(nickname, MAX_NICK), uids };
+    }
+
     setEquipped(userId, tag) {
         this.sql.exec(`INSERT INTO tag_profile (user_id, equipped, bonus) VALUES (?, ?, 0)
             ON CONFLICT(user_id) DO UPDATE SET equipped = excluded.equipped`, userId, tag);

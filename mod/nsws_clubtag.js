@@ -129,7 +129,9 @@
         BodyF1: [0.182, -1.77, 0, 0.5, 0.66, 0.28],
         BodyF1Low: [0.182, -1.77, 0, 0.5, 0.66, 0.28],
         BodyFrame: [0.136, -1.175, 0, 0.48],
-        BodyPengu: [1.502, -0.3, 40.3, 0.32]
+        BodyPengu: [1.502, -0.3, 40.3, 0.32],
+        // On the rear wing's main plane (mod/nsws_crate_parts.js).
+        BodyStadium: [0.219, -1.8, 0, 0.5]
     };
     const textures = new Map();
     const decals = new WeakMap();

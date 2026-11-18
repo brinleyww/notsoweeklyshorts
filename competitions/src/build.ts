@@ -11,11 +11,19 @@ interface EditorTrack {
 }
 interface CupBar {
   title: string;
+  phase: string;
   status: string;
   sent: boolean;
   closed: boolean;
+  builders: { name: string; done: boolean; me: boolean }[];
   left: () => number;
   onSubmit: () => void;
+  onBack: () => void;
+  onLeave: () => void;
+  leaveLabel: string;
+  // The organizer's build clock: +2 min and end now.
+  more?: () => void;
+  endNow?: () => void;
 }
 interface Editor {
   open(track?: unknown): void;
@@ -24,6 +32,7 @@ interface Editor {
   fresh?(): void;
   cup?(bar: CupBar | null): void;
   isOpen?(): boolean;
+  note?(text: string, kind?: string): void;
 }
 
 export class BuildDesk {
@@ -126,17 +135,44 @@ export class BuildDesk {
     const mine = this.mine();
     const closing = !!s.build.closing;
     const status = closing ? (mine ? `Time's up. The cup has "${mine.name}".` : "Time's up. Sending your track…") : mine ? `The cup has "${mine.name}". Send again after more changes.` : 'Build a track with a start and a finish, then send it. It goes by itself when time runs out.';
-    const key = JSON.stringify([status, !!mine, closing]);
+    const sent = new Set((s.custom ?? []).map((t) => t.by));
+    const builders = s.players
+      .filter((p) => !p.bot && !p.away && (p.role === 'racer' || sent.has(p.u)))
+      .map((p) => ({ name: p.name, done: sent.has(p.u), me: p.u === this.app.me }));
+    const per = s.rules.perTrack;
+    const phase = closing ? 'Collecting the tracks' : `Build Off · then ${per} round${per === 1 ? '' : 's'} on every track`;
+    const org = !!this.app.org;
+    const key = JSON.stringify([status, !!mine, closing, phase, s.name, builders]);
     if (key === this.#barKey) return;
     this.#barKey = key;
     ed.cup({
-      title: closing ? 'Build Off · sending' : 'Build Off',
+      title: s.name || 'Cup',
+      phase,
       status,
       sent: !!mine,
       closed: closing,
+      builders,
       left: () => (this.app.state?.build?.until ?? 0) - this.app.now(),
       onSubmit: () => void this.submit(false),
+      onBack: () => {
+        ed.close();
+        this.app.onOpenPanel();
+      },
+      onLeave: () => {
+        ed.close();
+        this.app.onLeave(org ? 'You closed the cup.' : '');
+      },
+      leaveLabel: org ? 'Close the cup' : 'Leave cup',
+      more: org && !closing ? () => this.app.org?.buildMore(120) : undefined,
+      endNow: org && !closing ? () => this.app.org?.buildNow() : undefined,
     });
+  }
+
+  // The cup layer is hidden while the editor covers the screen, so its notes go to the editor's bar then.
+  #say(text: string, tone: 'info' | 'bad' | 'good' = 'info') {
+    const ed = this.editor;
+    if (ed?.note && ed.isOpen?.() && !this.app.state?.build?.closing) ed.note(text, tone === 'info' ? '' : tone);
+    else this.app.notify(text, tone);
   }
 
   // Sends the editor's open track; auto is the send when time runs out.
@@ -148,28 +184,28 @@ export class BuildDesk {
     try {
       const t = await ed.current().catch(() => null);
       if (!t?.code) {
-        app.notify(auto ? "Your editor had no track open, so nothing was sent." : 'Open or build a track in the editor first.', 'bad');
+        this.#say(auto ? "Your editor had no track open, so nothing was sent." : 'Open or build a track in the editor first.', 'bad');
         return;
       }
       if (t.code === this.#sent && this.mine()) {
-        if (!auto) app.notify('The cup already has this version of your track.', 'info');
+        if (!auto) this.#say('The cup already has this version of your track.', 'info');
         return;
       }
       if (isBE(t.code) && !beReady()) {
         const error = await ensureBE();
-        if (error) return app.notify(error, 'bad');
+        if (error) return this.#say(error, 'bad');
       }
       if (this.#blank && this.#idOf(t.code) === this.#blank) {
-        app.notify(auto ? "You didn't build anything, so no track was sent." : 'Build something first: this is still the empty track.', 'bad');
+        this.#say(auto ? "You didn't build anything, so no track was sent." : 'Build something first: this is still the empty track.', 'bad');
         return;
       }
       const error = app.uploadTrack(t.code, t.mode as TrackMode);
       if (error) {
-        app.notify(auto ? `Your track wasn't sent: ${error}` : error, 'bad');
+        this.#say(auto ? `Your track wasn't sent: ${error}` : error, 'bad');
         return;
       }
       this.#sent = t.code;
-      if (!app.org) app.notify('Sending your track…', 'info');
+      if (!app.org) this.#say('Sending your track…', 'info');
     } finally {
       this.#busy = false;
     }

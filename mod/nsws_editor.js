@@ -63,13 +63,26 @@
 #nsws-editor .nse-note{flex:0 1 auto;color:rgba(255,255,255,.8);}
 #nsws-editor .good{color:#96ff96;}
 #nsws-editor .bad{color:#ff9a9a;}
-#nsws-editor .nse-cup{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:6px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);box-shadow:inset 4px 0 0 #7272c2;font-size:16px;}
+#nsws-editor.cupmode .nse-bar{display:none;}
+#nsws-editor.cupmode .nse-help:not(.special){display:none;}
+#nsws-editor.cupmode .nse-info{padding-top:5px;}
+#nsws-editor.cupmode .nse-info:not(:has(.nse-help.special)):has(.nse-note:empty){display:none;}
+#nsws-editor .nse-cup{flex-shrink:0;display:flex;flex-direction:column;background:#212b58;border-bottom:1px solid rgba(255,255,255,.15);}
 #nsws-editor .nse-cup.hidden{display:none;}
-#nsws-editor .nse-cup>b{font-weight:normal;font-size:18px;}
-#nsws-editor .nse-cup .clock{font-size:24px;min-width:64px;font-variant-numeric:tabular-nums;}
+#nsws-editor .nse-cup .top{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:6px 10px 5px;}
+#nsws-editor .nse-cup .gap{flex:1 1 0;min-width:0;}
+#nsws-editor .nse-cup .ttl{display:flex;flex-direction:column;min-width:0;flex:0 1 auto;line-height:1.15;}
+#nsws-editor .nse-cup .ttl>b{font-weight:normal;font-size:20px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+#nsws-editor .nse-cup .ttl>span{font-size:13px;color:rgba(255,255,255,.55);white-space:nowrap;}
+#nsws-editor .nse-cup .clock{min-width:84px;padding:1px 14px;font-size:26px;text-align:center;font-variant-numeric:tabular-nums;background:#192042;clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);}
 #nsws-editor .nse-cup .clock.warn{color:#ff9a9a;}
-#nsws-editor .nse-cup .st{flex:1 1 200px;color:rgba(255,255,255,.7);}
+#nsws-editor .nse-cup .row{display:flex;flex-wrap:wrap;align-items:center;gap:4px 14px;padding:4px 10px 5px 12px;background:#28346a;font-size:15px;}
+#nsws-editor .nse-cup .row .button{padding:3px 10px;font-size:15px;}
+#nsws-editor .nse-cup .st{flex:1 1 240px;color:rgba(255,255,255,.75);}
 #nsws-editor .nse-cup .st.good{color:#96ff96;}
+#nsws-editor .nse-cup .who{display:flex;flex-wrap:wrap;gap:2px 10px;color:rgba(255,255,255,.5);}
+#nsws-editor .nse-cup .who>span.done{color:#96ff96;}
+#nsws-editor .nse-cup .who>span.me{text-decoration:underline;}
 #nsws-editor .nse-fallback{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);font-size:15px;}
 #nsws-editor .nse-fallback.hidden{display:none;}
 #nsws-editor .nse-fallback>span{flex:1 1 300px;color:rgba(255,255,255,.75);}
@@ -380,6 +393,8 @@
         for (const type of ["keydown", "keyup", "keypress"])
             window.addEventListener(type, (e) => {
                 if (!host || host.classList.contains("hidden") || host.contains(e.target)) return;
+                // Typing in the chat (or Cuppa's, inside its shadow root) above the editor: refocusing the frame ate every key.
+                if (e.composedPath().some((t) => t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.id === "nsws-chat" || t.id === "nsws-chat-feed")) return;
                 e.stopImmediatePropagation();
                 // Focus that drifted to the page behind (a popup that closed, say) leaves the editor and its test drive deaf to the keyboard.
                 if (type === "keydown" && !document.querySelector("dialog[open], .nt-host:not([hidden])")) focusFrame();
@@ -387,7 +402,7 @@
         host.addEventListener("keydown", (e) => {
             if (e.key === "Escape" || e.code === "Escape") {
                 e.preventDefault();
-                dialogClose ? dialogClose() : close();
+                dialogClose ? dialogClose() : cupBar?.onBack ? cupBar.onBack() : close();
             }
         });
 
@@ -426,12 +441,40 @@
         // A click up here takes the keyboard from the editor below; its shortcuts get it back unless a dialog opened.
         bar.addEventListener("click", () => setTimeout(focusFrame, 0));
 
+        // A Cuppa Build Off replaces the bar above with the cup's own: the mode buttons move in here while it shows.
         const cup = el("div", "nse-cup hidden");
+        const cupTop = el("div", "top");
+        const cupBack = button("Back", () => (cupBar?.onBack ? cupBar.onBack() : close()), "images/back.svg");
+        cupBack.title = "Back to the cup (Esc). The editor keeps your track.";
+        const cupTtl = el("div", "ttl");
         const cupTitle = el("b");
+        const cupPhase = el("span");
+        cupTtl.append(cupTitle, cupPhase);
         const cupClock = el("span", "clock");
+        const cupGap = el("div", "gap");
+        const cupSend = button("Send to the cup", () => cupBar?.onSubmit(), "images/checkmark.svg", true);
+        cupTop.append(cupBack, cupTtl, cupClock, cupGap, cupSend);
+        const cupRow = el("div", "row");
         const cupStatus = el("span", "st");
-        const cupSend = button("Send to the cup", () => cupBar?.onSubmit(), null, true);
-        cup.append(cupTitle, cupClock, cupStatus, cupSend);
+        const cupWho = el("span", "who");
+        // Press twice: the first press only arms it for 3 s.
+        const twice = (label, run) => {
+            let armed = 0;
+            const b = button(label, () => {
+                if (Date.now() < armed) return run();
+                armed = Date.now() + 3000;
+                b.lastChild.textContent = "Press again";
+                setTimeout(() => (b.lastChild.textContent = b.dataset.label), 3000);
+            });
+            b.dataset.label = label;
+            return b;
+        };
+        const cupMore = button("+2 min", () => cupBar?.more?.(), "images/timer.svg");
+        const cupEnd = twice("End building now", () => cupBar?.endNow?.());
+        const cupLeave = twice("Leave cup", () => cupBar?.onLeave?.());
+        cupLeave.prepend(Object.assign(el("img"), { src: "images/quit.svg", alt: "" }));
+        cupRow.append(cupStatus, cupWho, cupMore, cupEnd, cupLeave);
+        cup.append(cupTop, cupRow);
         cup.addEventListener("click", () => setTimeout(focusFrame, 0));
 
         const info = el("div", "nse-info");
@@ -460,11 +503,12 @@
         const loaderFill = el("div");
         loaderBar.appendChild(loaderFill);
         const loaderText = el("p");
-        loader.append(el("h2", null, "Better Editor"), loaderBar, loaderText);
+        const loaderTitle = el("h2", null, "Better Editor");
+        loader.append(loaderTitle, loaderBar, loaderText);
         frameBox.appendChild(loader);
         host.append(bar, cup, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderText, loaderFill, send, cup, cupTitle, cupClock, cupStatus, cupSend };
+        ui = { host, bar, auto, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderTitle, loaderText, loaderFill, send, cup, cupTop, cupGap, cupTitle, cupPhase, cupClock, cupStatus, cupWho, cupSend, cupMore, cupEnd, cupLeave };
         renderCup();
         renderPicker();
         renderMode();
@@ -509,6 +553,7 @@
         const mode = t ? modeOf(t.name) : "normal";
         for (const b of ui.seg.children) b.classList.toggle("on", b.dataset.mode === mode);
         ui.help.textContent = MODES.find((m) => m.id === mode).help + (mode === "normal" ? "" : " The editor's Test button tests in this mode.");
+        ui.help.classList.toggle("special", mode !== "normal");
     }
 
     function post(msg) {
@@ -1373,15 +1418,33 @@
         if (!ui) return;
         const c = cupBar;
         ui.cup.classList.toggle("hidden", !c);
+        ui.host.classList.toggle("cupmode", !!c);
         ui.send.style.display = c ? "none" : "";
+        ui.loaderTitle.textContent = c ? "Build Off" : "Better Editor";
+        if (c && ui.seg.parentNode !== ui.cupTop) ui.cupTop.insertBefore(ui.seg, ui.cupGap);
+        else if (!c && ui.seg.parentNode !== ui.bar) ui.bar.insertBefore(ui.seg, ui.auto);
         clearInterval(cupTimer);
         cupTimer = null;
         if (!c) return;
         ui.cupTitle.textContent = c.title;
+        ui.cupTitle.title = c.title;
+        ui.cupPhase.textContent = c.phase || "Build Off";
         ui.cupStatus.textContent = c.status;
         ui.cupStatus.className = "st" + (c.sent ? " good" : "");
         ui.cupSend.lastChild.textContent = c.sent ? "Send again" : "Send to the cup";
         ui.cupSend.disabled = !!c.closed;
+        const builders = c.builders || [];
+        ui.cupWho.textContent = "";
+        if (builders.length) {
+            ui.cupWho.append("Sent " + builders.filter((b) => b.done).length + "/" + builders.length + ":");
+            for (const b of builders) ui.cupWho.appendChild(el("span", (b.done ? "done" : "") + (b.me ? " me" : ""), b.name));
+            ui.cupWho.title = "Green: track sent. The rest are still building.";
+        }
+        ui.cupMore.style.display = c.more ? "" : "none";
+        ui.cupEnd.style.display = c.endNow ? "" : "none";
+        ui.cupLeave.style.display = c.onLeave ? "" : "none";
+        ui.cupLeave.dataset.label = c.leaveLabel || "Leave cup";
+        if (ui.cupLeave.lastChild.textContent !== "Press again") ui.cupLeave.lastChild.textContent = ui.cupLeave.dataset.label;
         const tick = () => {
             const left = Math.max(0, c.left());
             const s = Math.ceil(left / 1000);
@@ -1416,9 +1479,13 @@
         current: currentTrack,
         fresh,
         cup(bar) {
+            const was = cupBar;
             cupBar = bar || null;
+            // Entering the cup clears the editor's own first-open note; a send that arrived clears "Sending...".
+            if (cupBar && (!was || (cupBar.sent && !was.sent))) note("");
             renderCup();
         },
+        note,
         isOpen: () => !!host && !host.classList.contains("hidden"),
     };
 })();

@@ -54,6 +54,10 @@ export class Layer {
     this.keyMenu = new KeyMenu(app, this.#stage, () => this.#rects, () => this.keys.open());
     this.#stage.append(this.hud.el, this.panel.el, this.hub.el);
     this.hud.onOpenPanel = () => this.panel.setOpen(true);
+    app.onOpenPanel = () => {
+      this.panel.tab = 'cup';
+      this.panel.setOpen(true);
+    };
     this.hud.onChatPanel = () => {
       this.panel.setOpen(true);
       this.panel.render();

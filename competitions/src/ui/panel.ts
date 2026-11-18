@@ -319,25 +319,28 @@ export class Panel {
       pool: picked ? `${picked}, picked when the room opened` : 'The maps picked when the room opened',
       both: 'Those maps plus tracks added below',
       custom: 'Only tracks added below',
-      build: 'Everyone builds a track in the editor when the cup starts, then the cup races them all',
+      build: lobby && host ? 'Build Off: everyone builds a track when the cup starts. Pick one of these to race existing tracks instead' : 'Build Off: the racers build the tracks in this cup',
     };
-    const options = ([
+    // A Build Off is picked when the room opens or with its format, so it has no button here.
+    const options = [
       ['pool', 'Game maps'],
       ['both', 'Maps + custom'],
       ['custom', 'Custom only'],
-      ['build', 'Build Off'],
-    ] as const).filter(([k]) => lobby || k !== 'build' || v === 'build');
+    ] as const;
     // Mid-cup the source can change, but a Build Off can't start or stop.
-    const can = (k: string) => live('customTracks') && (lobby || (k !== 'build' && v !== 'build'));
+    const can = () => live('customTracks') && (lobby || v !== 'build');
     const pickSource = (k: (typeof options)[number][0]) => {
-      set({ customTracks: k !== 'pool', customOnly: k === 'custom' || k === 'build', build: k === 'build' ? r.build || 8 : 0 });
+      set({ customTracks: k !== 'pool', customOnly: k === 'custom', build: 0 });
       try {
         const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
-        const source = k === 'pool' ? 'maps' : k === 'build' ? 'build' : 'custom';
+        const source = k === 'pool' ? 'maps' : 'custom';
         localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, source, ...(source === 'custom' ? { mix: k === 'both' } : {}) }));
       } catch {}
     };
-    const source = row('Tracks from', hints[v], h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !can(k), onclick: click(() => pickSource(k)) }, l))));
+    const source =
+      v === 'build' && !(lobby && host)
+        ? row('Tracks from', hints.build, h('span', { class: 'val' }, 'Build Off'))
+        : row('Tracks from', hints[v], h('div', { class: 'seg' }, options.map(([k, l]) => h('button', { class: v === k ? 'on' : '', disabled: !can(), onclick: click(() => pickSource(k)) }, l))));
     source.classList.add('wide');
     const custom = r.customTracks && !r.build;
     // A Build Off lists only the tracks built in it.

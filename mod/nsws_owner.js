@@ -9,7 +9,7 @@
     const STATE_COLORS = { menu: "#3987e5", race: "#d95926", editor: "#199e70", watch: "#c98500", garage: "#d55181", away: "#7c8597" };
     const STATE_LABELS = { menu: "In menus", race: "Racing", editor: "In the editor", watch: "Watching replays", garage: "In the garage", away: "Away (tab hidden)" };
     const RANGES = [["day", "24H"], ["3d", "3D"], ["week", "7D"], ["month", "30D"], ["all", "All"]];
-    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Roles"], ["bans", "Bans"], ["subs", "Submissions"], ["feedback", "Feedback"]];
+    const TABS = [["overview", "Overview"], ["live", "Live"], ["drivers", "Drivers"], ["tracks", "Tracks"], ["audience", "Audience"], ["anticheat", "Anti-cheat"], ["announce", "Announce"], ["tags", "Roles"], ["bans", "Bans"], ["subs", "Submissions"], ["economy", "Economy"], ["feedback", "Feedback"]];
     const SUB_FILTERS = [["new", "New"], ["planned", "Planned"], ["rejected", "Rejected"], ["all", "All"]];
     const SUB_MODES = { normal: "Normal", rocket: "Rocket League", royale: "Royale" };
     // Maps in a week, for the map number picker.
@@ -704,6 +704,7 @@
         if (ui.tab === "bans") return "bans";
         if (ui.tab === "subs") return "subs";
         if (ui.tab === "feedback") return "feedback";
+        if (ui.tab === "economy") return "econ";
         return statsKey();
     }
 
@@ -790,6 +791,9 @@
             if (!ui.subsLoading && (!ui.subsAll || Date.now() - (ui.fetchedAt.subs || 0) > 15000)) loads.push(loadSubs);
         } else if (ui.tab === "feedback") {
             if (!window.__nswsFeedback?.inbox.loaded()) loads.push(loadFeedback);
+        } else if (ui.tab === "economy") {
+            ui.econ ??= cacheGet("econ");
+            if (!ui.econ) loads.push(loadEcon);
         } else {
             if (!ui.stats) {
                 ui.stats = cacheGet(statsKey());
@@ -814,6 +818,7 @@
         else if (tab === "bans") await loadBans();
         else if (tab === "subs") await loadSubs();
         else if (tab === "feedback") await loadFeedback();
+        else if (tab === "economy") await loadEcon();
         else await loadStats();
         if (!ui.refreshBtn) return;
         ui.refreshBtn.disabled = false;
@@ -3022,6 +3027,111 @@
         inbox.render(ui.feedbackRoot, window.__nswsOwner, feedbackLabel);
     }
 
+    async function loadEcon() {
+        try {
+            ui.econ = await post("crates/admin/economy", {});
+            cachePut("econ", ui.econ);
+            ui.econError = null;
+        } catch (err) {
+            ui.econError = err;
+        }
+        if (ui.overlay && ui.tab === "economy") render();
+    }
+
+    // Bolts live in each browser; pages report their lifetime figures (mod/nsws_crates.js figures(), proxy/src/crates.js ECON_KEYS).
+    function renderEconomyTab(body) {
+        body.textContent = "";
+        const e = ui.econ;
+        if (!e) {
+            body.appendChild(el("div", "nrc-status", !ui.econError ? "Loading\u2026"
+                : ui.econError.status === 404 ? "The Worker hasn't been deployed with the Bolts economy yet."
+                    : ui.econError.status === 403 ? "This profile isn't the owner." : "Couldn't load the economy."));
+            return;
+        }
+        const s = e.sum || {};
+        const v = (o, k) => o?.[k] ?? 0;
+        const earned = (o) => v(o, "er") + v(o, "eq") + v(o, "ew") + v(o, "es");
+        const spent = (o) => v(o, "sc") + v(o, "sw");
+        const signed = (n) => (n > 0 ? "+" : n < 0 ? "\u2212" : "") + num(Math.abs(n));
+        const days = (e.days || []).slice().sort((a, b) => b.day - a.day);
+        const today = days.find((d) => d.day === e.day) || {};
+        const dayLabel = (day) => fmt.date(day * 86400000 + 43200000);
+
+        const wrap = el("div");
+        wrap.appendChild(card("Bolts economy", null, "Bolts are kept in each player's browser, so these are the figures their pages last reported (every 10 minutes or so while they play). Days are UTC days; a profile's first report brings in its whole balance as start + legacy."));
+        const crates = window.__nswsCrates?.crates ?? [];
+        const rarities = window.__nswsCrates?.rarities ?? [];
+        const partsMade = (e.parts || []).reduce((n, r) => n + r.made - r.gone, 0);
+        const tiles = el("div", "nrc-tiles");
+        tiles.style.marginTop = "14px";
+        tiles.appendChild(tile("Bolts in circulation", num(s.b), num(s.u) + " profiles \u00b7 average " + num(s.u ? s.b / s.u : 0)));
+        tiles.appendChild(tile("Earned today", num(earned(today)), num(today.p) + " players earning \u00b7 " + num(today.n) + " new profiles"));
+        tiles.appendChild(tile("Spent today", num(spent(today)), num(v(today, "cp") + v(today, "cr") + v(today, "ce") + v(today, "cb")) + " crates \u00b7 " + num(today.nw) + " spins"));
+        tiles.appendChild(tile("Earned all time", num(earned(s) + v(s, "el")), num(s.el) + " of it start + legacy"));
+        tiles.appendChild(tile("Spent all time", num(spent(s) + v(s, "ls")), num(s.ls) + " of it before tracking"));
+        tiles.appendChild(tile("Wheel net for players", signed(v(s, "ew") - v(s, "sw")), num(s.nw) + " spins \u00b7 " + num(s.sw) + " bet \u00b7 " + num(s.ew) + " paid"));
+        tiles.appendChild(tile("Paid driving", hours(s.ns), num(s.nr) + " runs \u00b7 " + (s.nr ? (v(s, "er") / s.nr).toFixed(1) : "0") + " Bolts a run"));
+        tiles.appendChild(tile("Quests claimed", num(s.nq), num(s.eq) + " Bolts paid"));
+        tiles.appendChild(tile("Parts in inventories", num(s.it), num(partsMade) + " counted as existing"));
+        tiles.appendChild(tile("Unexplained Bolts", num(s.dr), num(s.dn) + " profiles hold more than they earned"));
+        wrap.appendChild(tiles);
+
+        const grid = el("div", "nrc-grid2");
+        const sources = card("Earned by source");
+        sources.appendChild(table([["Source", "name"], ["Today", "num"], ["All time", "num"]], [
+            ["Runs", num(today.er), num(s.er)],
+            ["Quests", num(today.eq), num(s.eq)],
+            ["Wheel payouts", num(today.ew), num(s.ew)],
+            ["Sold parts", num(today.es), num(s.es)],
+            ["Start + legacy", "\u2013", num(s.el)],
+        ]));
+        const sinks = card("Spent by sink");
+        sinks.appendChild(table([["Sink", "name"], ["Today", "num"], ["All time", "num"]], [
+            ["Crates", num(today.sc), num(s.sc)],
+            ["Wheel bets", num(today.sw), num(s.sw)],
+            ["Crates before tracking", "\u2013", num(s.ls)],
+        ]));
+        grid.append(sources, sinks);
+        wrap.appendChild(grid);
+
+        const grid2 = el("div", "nrc-grid2");
+        const opened = card("Crates opened");
+        const keys = { patterns: "cp", rims: "cr", exhausts: "ce", bodies: "cb" };
+        opened.appendChild(table([["Crate", "name"], ["Today", "num"], ["All time", "num"]], [
+            ...crates.map((c) => [c.name, num(today[keys[c.kind]]), num(s[keys[c.kind]])]),
+            ["Before tracking (any crate)", "\u2013", num(s.lo)],
+        ]));
+        const byRarity = card("Parts existing by rarity", null, "Counted by the Worker as parts are opened, traded up, traded away and sold.");
+        const rarityOf = new Map();
+        for (const list of Object.values(window.__nswsCrateParts?.PARTS ?? {})) for (const part of list) if (part.g != null) rarityOf.set(part.g, part.r);
+        const rows = rarities.map((r) => {
+            const mine = (e.parts || []).filter((x) => rarityOf.get(x.i) === r.id);
+            const made = mine.reduce((n, x) => n + x.made, 0);
+            const gone = mine.reduce((n, x) => n + x.gone, 0);
+            const name = el("span", null, r.name);
+            name.style.color = r.color;
+            return [name, num(made - gone), num(made), num(gone)];
+        });
+        byRarity.appendChild(table([["Rarity", "name"], ["Exist", "num"], ["Made", "num"], ["Gone", "num"]], rows));
+        grid2.append(opened, byRarity);
+        wrap.appendChild(grid2);
+
+        const daily = card("Last 14 days");
+        if (!days.length) daily.appendChild(el("div", "nrc-empty", "No reports yet."));
+        else daily.appendChild(table([["Day", "name"], ["Earning", "num"], ["New", "num"], ["Earned", "num"], ["Spent", "num"], ["Runs", "num"], ["Driving", "num"], ["Quests", "num"], ["Crates", "num"], ["Wheel net", "num"]],
+            days.map((d) => [dayLabel(d.day), num(d.p), num(d.n), num(earned(d)), num(spent(d)), num(d.nr), hours(d.ns), num(d.nq),
+                num(v(d, "cp") + v(d, "cr") + v(d, "ce") + v(d, "cb")), signed(v(d, "ew") - v(d, "sw"))])));
+        daily.style.marginBottom = "14px";
+        wrap.appendChild(daily);
+
+        const top = card("Top balances", null, "Unexplained is how many Bolts a profile holds beyond what it earned minus what it spent, which only an edited save makes.");
+        if (!(e.top || []).length) top.appendChild(el("div", "nrc-empty", "No reports yet."));
+        else top.appendChild(table([["#", "rank"], ["Player", "name"], ["Balance", "num"], ["Earned", "num"], ["Unexplained", "num"], ["Reported", "num"]],
+            e.top.map((r, i) => [String(i + 1), r.name || r.userId.slice(0, 10), num(r.bal), num(r.earned), r.drift ? num(r.drift) : "\u2013", fmt.dateTime(r.at)])));
+        wrap.appendChild(top);
+        body.appendChild(wrap);
+    }
+
     function subsLabel() {
         const b = ui.overlay?.querySelector('[data-tab="subs"]');
         if (b) b.textContent = ui.subsNew ? "Submissions (" + num(ui.subsNew) + ")" : "Submissions";
@@ -3694,6 +3804,11 @@
         }
         if (ui.tab === "feedback") {
             renderFeedbackTab(body);
+            return;
+        }
+        if (ui.tab === "economy") {
+            renderEconomyTab(body);
+            body.scrollTop = scroll;
             return;
         }
         body.textContent = "";

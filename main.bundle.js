@@ -10043,7 +10043,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.CpsCounter = 41] = "CpsCounter",
                 e[e.WheelInfo = 42] = "WheelInfo",
                 e[e.WheelInfoScale = 43] = "WheelInfoScale",
-                e[e.WatchUnlimited = 44] = "WatchUnlimited"
+                e[e.WatchUnlimited = 44] = "WatchUnlimited",
+                e[e.NoRespawnTime = 45] = "NoRespawnTime"
             }(i || (i = {}));
             const r = i
         }
@@ -10678,7 +10679,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 let n;
                                 n = Array.isArray(t.material) ? t.material : [t.material];
                                 for (const t of n)
-                                    "Main" == t.name || "MainPlain" == t.name ? t.color.set(e.primaryColor) : "Metal" == t.name ? t.color.set(e.frameColor) : "Rim" == t.name && t.color.set(e.rimsColor)
+                                    "Main" == t.name || "MainPlain" == t.name ? t.color.set(e.primaryColor) : "Metal" == t.name ? t.color.set(e.frameColor) : "Rim" == t.name ? t.color.set(e.rimsColor) : "Secondary" == t.name && t.color.set(e.secondaryColor)
                             }
                         }
                         )),
@@ -11075,7 +11076,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 for (let bodyIndex = 1; bodyIndex < S.A.bodies.length; bodyIndex++) {
                                     if (!S.A.isValidBody(bodyIndex))
                                         throw new Error("Invalid car style body");
-                                    if (S.A.bodies[bodyIndex].crate)
+                                    if (S.A.bodies[bodyIndex].crate || S.A.bodies[bodyIndex].built)
                                         continue;
                                     carBodies.set(bodyIndex, a(r(S.A.bodies[bodyIndex].model, !0, bodiesGltf.scene, !0)));
                                     const lowModel = S.A.bodies[bodyIndex].lowModel;
@@ -45593,9 +45594,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             window.__nswsTraffic?.event("attempts", __nswsTrackId);
             // Only solo runs count: test drives have records off, and multiplayer has a session.
             window.__nswsGrind?.newCar(s, __nswsTrackId, C.get(this, Xr, "f").name, C.get(this, jr, "f") && null == C.get(this, Sa, "f"));
+            // Bolts pay for this car's race clock (mod/nsws_crates.js); test drives have records off and earn nothing.
+            window.__nswsCrates?.newCar(s, C.get(this, jr, "f"));
+            window.__nswsNR?.newCar(s, C.get(this, ea, "f")?.element);
             return s.notificationAudioEnabled = !0,
             s.addResetCallback(( () => {
                 window.__nswsGrind?.respawn(s),
+                window.__nswsNR?.respawn(s),
                 C.get(this, ya, "f").reset = !1,
                 C.set(this, va, s.getControls().up || s.getControls().down, "f"),
                 C.get(this, va, "f") && C.set(this, ba, new Date, "f")
@@ -45612,6 +45617,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     speed: s.getSpeedKmh(),
                     refSpeed: null != i ? t.checkpoints[e].speedKmh : null
                 }),
+                window.__nswsNR?.checkpoint(s),
                 C.get(this, sa, "f").showCheckpointTime(n, i),
                 null != t && t.checkpoints.length > e) {
                     const n = t.checkpoints[e].speedKmh;
@@ -45775,6 +45781,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     default:
                         C.get(this, Sa, "f").gameMode
                     }
+                window.__nswsNR?.finish(e, C.get(this, ea, "f").element);
                 null != c?.finishSpeedKmh && C.get(this, aa, "f").showCheckpointSpeed(e.getSpeedKmh(), c.finishSpeedKmh)
             }
             )),
@@ -47149,6 +47156,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, aa, "f").update(C.get(this, wa, "f")),
                 this.updateLiveInputs(),
                 C.get(this, sa, "f").update(C.get(this, wa, "f")),
+                window.__nswsNR?.update(C.get(this, wa, "f")),
                 C.get(this, ra, "f").update(C.get(this, wa, "f")),
                 C.get(this, ma, "f").setResetCheckpointAvailable(C.get(this, _r, "m", ja).call(this)),
                 C.get(this, Ga, "f")?.update(),
@@ -53397,6 +53405,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
             }], R.A.CpsCounter),
+            // Shown under the timer and on the finish screen once a run has a respawn (mod/nsws_nrtime.js).
+            C.get(this, ms, "m", Gs).call(this, "No respawn time", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.NoRespawnTime),
             // Better Editor's tyre panel (tm_hud.js) on BE tracks.
             C.get(this, ms, "m", Gs).call(this, "Wheel info", [{
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
@@ -59265,7 +59281,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             masks: ["7b563c818dee24e8", "cfd277d5d7ed5f9d", "1468f2c00c698c69", "c79ffeec7b777e24"],
             file: "tracks/community/week12.track",
             // Better Editor tracks. They race on this Better Editor commit's physics, whichever version is live.
-            be: { physics: 25, commit: "042ac1313cc1023fd90e4ddb32008b2cb946f962" },
+            // bin: this commit's models/tm_blocks.bin is byte-identical to the live one, so its workers can take the page's
+            // partial copy. Drop it if Better Editor's blocks change.
+            be: { physics: 25, commit: "d218938fb2d293e95c90200ca1e6aa11cb93b38d", bin: !0 },
             tracks: [{ id: "0a2bf0951b1b6a9beb7b1036d830d18a185ccdd991b771c8b023ae4410894880", name: "1 - Summer 1 Retextured", short: "S1Re", author: "Kodub", env: "Summer", thumb: "tracks/community/thumbnails/week12_1.png" }, { id: "8fa80b47833c3d28cfd32682071bc12abc2430a7faacf66324ced57a827e32e8", name: "2 - Technical stadium", short: "TStad", author: "Schemzboi", env: "Summer", thumb: "tracks/community/thumbnails/week12_2.png" }, { id: "75daa5f5afea15106549e1752dec82ca1b64343958094fb0753a00f365fd7d9e", name: "3 - Secret Tunnel", short: "Tunl", author: "🐭Simo_900 (1nd)😫", env: "Summer", thumb: "tracks/community/thumbnails/week12_3.png" }, { id: "69c659490aca789231d6ebff499fa9735c2c4558815cd5be1d73b4d1ae15779e", name: "4 - Icy Precision", short: "Icy", author: "person", env: "Winter", thumb: "tracks/community/thumbnails/week12_4.png" }, { id: "03b6cf96283eb894e12dc65140c390fd30d181718c9c06c585b7986a6437fe69", name: "5 - MEGA EASY OBBY ROBLOX", short: "Obby", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/week12_5.png" }]
         },
         {
@@ -59377,7 +59395,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     for (const t of p.tracks || [])
                         if (t.id === trackId) {
                             const be = t.be || p.be || w.be;
-                            return be ? { physics: be.physics, commit: be.commit, base: window.__nswsApiBase + "be@" + be.commit + "/" } : null;
+                            return be ? { physics: be.physics, commit: be.commit, bin: !!be.bin, base: window.__nswsApiBase + "be@" + be.commit + "/" } : null;
                         }
             return null;
         };
@@ -62179,7 +62197,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "true"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"], [R.A.NoRespawnTime, "true"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -64080,13 +64098,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 let s = pinnedSims.get(be.base);
                 if (null == s) {
                     window.__nswsSimBase = be.base;
+                    window.__nswsSimBin = be.bin;
                     try {
                         s = {
                             p: new Lu.A(!0,d,t),
                             f: new Lu.A(!1,d,t)
                         }
                     } finally {
-                        window.__nswsSimBase = null
+                        window.__nswsSimBase = null;
+                        window.__nswsSimBin = !1
                     }
                     s.p.__nswsTMBase = s.f.__nswsTMBase = be.base,
                     pinnedSims.set(be.base, s)

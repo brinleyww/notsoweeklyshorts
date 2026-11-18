@@ -502,6 +502,14 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
 - **Favourites** are in `localStorage` (`_nswsChatGifStars`, up to 100). A starred upload also keeps
   a copy of the file in IndexedDB (`nsws-chat`), since uploads leave the server; sending it uploads
   it again, which the hash makes cheap.
+- **Whispers** (main room only): `{t:"whisper", to, text}`. The room asks Accounts `whisperTarget`
+  for the account holding that name (cached 5 min) and its newest 20 chat ids, then sends
+  `{t:"whisper", m}` only to sockets and pollers with the sender's or those ids. Rows sit in
+  `whispers` (one per participant id, 30 min) so `init` (socket and poll) and polls with `wafter`
+  catch up; they never enter `messages`, the shared poll events or `who`. Same bans, mutes, slow mode
+  and spam timeouts as messages, plus at most 8 different names per 10 min. Refusals carry
+  `wfail` so the page puts the text back with the whisper still set. The owner can mute or ban from
+  a whisper they got (`wid` instead of `id` on `ipban`/`userban`).
 
 ## Announcements
 

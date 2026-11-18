@@ -45,7 +45,7 @@
         // physics) loads a fixed commit; the others tag the files with the page's physics version, and read the block
         // file from the page's copy (nswsTMBin) once the page has it.
         const message = { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
-        const bin = worker?.nswsTMBase ? null : window.__nswsTM?.blocksUrl?.();
+        const bin = worker?.nswsTMBase && !worker.nswsTMSameBin ? null : window.__nswsTM?.blocksUrl?.();
         if (bin) message.nswsTMBin = bin;
         return message;
     }
@@ -58,6 +58,7 @@
                 super(url, options);
                 if (/simulation_worker/.test(String(url))) {
                     this.nswsTMBase = window.__nswsSimBase || null;
+                    this.nswsTMSameBin = !!(this.nswsTMBase && window.__nswsSimBin);
                     simWorkers.add(this);
                     try {
                         const message = modesMessage(this);

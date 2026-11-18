@@ -73,6 +73,17 @@ const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 const CUP_MUTE_MS = 24 * 3600_000;
 const CUP_KEEP_MS = 24 * 3600_000;
 
+// Whispers (main room only) go to the sender and the chat ids of the account holding the name, and
+// nowhere else: not the history, the events pollers share, "who" or any broadcast. They are kept
+// WHISPER_KEEP_MS so a tab that reconnects (or polls) still gets them. A sender reaches at most
+// WHISPER_PEOPLE different names per WHISPER_PEOPLE_MS; a name's lookup is trusted WHISPER_NAME_MS.
+const WHISPER_KEEP_MS = 30 * 60_000;
+const WHISPERS_SHOWN = 40;
+const WHISPER_PEOPLE = 8;
+const WHISPER_PEOPLE_MS = 10 * 60_000;
+const WHISPER_NAME_MS = 5 * 60_000;
+const WHISPER_UIDS = 20;
+
 // Uploaded images, GIFs and other files (main room only). A file is kept while a message shows it,
 // and for PENDING_MS after its upload so the message can follow. Stored in parts because a SQLite
 // value can be at most 2 MB. Only images are checked by the model; other files are served as
@@ -162,6 +173,11 @@ export class ChatRoom extends DurableObject {
         this.waiters = new Set();
         this.pollers = new Map();
         this.tags = new Map();
+        this.whisperNames = new Map();
+        // Chat ids that got a whisper since this instance started. A poller from before a restart
+        // reloads (new epoch), and that reload reads its whispers, so only these need looking up.
+        this.whisperUids = new Set();
+        this.lastWhisperId = 0;
         ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     }
 
@@ -198,6 +214,9 @@ export class ChatRoom extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS uploads_at ON uploads (at)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS ai_days (day TEXT PRIMARY KEY, checks INTEGER NOT NULL)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS banned_gifs (slug TEXT PRIMARY KEY, at INTEGER NOT NULL)");
+        // One row per chat id that may see the whisper (the sender's and the recipient's).
+        this.sql.exec("CREATE TABLE IF NOT EXISTS whispers (id INTEGER NOT NULL, uid TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, ip TEXT, PRIMARY KEY (uid, id))");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS whispers_at ON whispers (at)");
     }
 
     async alarm() {
@@ -380,7 +399,7 @@ export class ChatRoom extends DurableObject {
         const path = new URL(request.url).pathname;
         if (path.endsWith("/poll")) return this.poll(me, body, ipHash);
         if (path.endsWith("/send")) {
-            if (body?.msg?.t === "msg") me.tag = await this.tagOf(me.uid);
+            if (body?.msg?.t === "msg" || body?.msg?.t === "whisper") me.tag = await this.tagOf(me.uid);
             return this.sendHttp(me, body);
         }
         return jsonReply({ error: "Not found" }, 404);
@@ -400,10 +419,12 @@ export class ChatRoom extends DurableObject {
         if (mine >= POLLS_PER_UID || sameIp >= POLLS_PER_IP) return jsonReply({ error: "Too many chat windows" }, 429);
         this.touch(me);
         const ready = this.eventsAfter(body.epoch, body.after);
+        const wafter = Number.isSafeInteger(body.wafter) ? body.wafter : 0;
         if (ready === null) {
-            return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), init: { you: { uid: me.uid, owner: me.owner }, messages: this.history() } });
+            return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), init: { you: { uid: me.uid, owner: me.owner }, messages: this.history(), whispers: this.whispersFor(me.uid, 0) } });
         }
-        if (ready.length) return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: ready });
+        const whispers = this.newWhispers(me.uid, wafter);
+        if (ready.length || whispers.length) return jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: ready, whispers });
         const after = body.after;
         return new Promise((resolve) => {
             const waiter = {
@@ -412,7 +433,7 @@ export class ChatRoom extends DurableObject {
                 wake: () => {
                     clearTimeout(waiter.timer);
                     this.waiters.delete(waiter);
-                    resolve(jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: this.eventsAfter(this.epoch, after) ?? [] }));
+                    resolve(jsonReply({ epoch: this.epoch, seq: this.seq, gap: this.pollGap(), events: this.eventsAfter(this.epoch, after) ?? [], whispers: this.newWhispers(me.uid, wafter) }));
                 },
             };
             waiter.timer = setTimeout(waiter.wake, POLL_WAIT_MS);
@@ -743,6 +764,14 @@ export class ChatRoom extends DurableObject {
         }
         for (const row of this.sql.exec("SELECT at FROM reactions WHERE uid = ? AND at > ?", uid, now - REACT_WINDOW_MS)) s.reacts.push(row.at);
         for (const row of this.sql.exec("SELECT edited FROM messages WHERE uid = ? AND edited > ?", uid, now - EDIT_WINDOW_MS)) s.edits.push(row.edited);
+        // A uid's whisper rows also hold the whispers it got; only the ones it sent count.
+        for (const row of this.sql.exec("SELECT at, data FROM whispers WHERE uid = ? AND at > ?", uid, now - Math.max(SPAM_WINDOW_MS, WHISPER_PEOPLE_MS))) {
+            const m = JSON.parse(row.data);
+            if (m.uid !== uid) continue;
+            s.last = Math.max(s.last, row.at);
+            if (now - row.at < SPAM_WINDOW_MS) s.recent.push(row.at);
+            (s.whispers ||= []).push({ to: String(m.to?.nick || "").toLowerCase(), at: row.at });
+        }
         return s;
     }
 
@@ -811,11 +840,100 @@ export class ChatRoom extends DurableObject {
             }
             Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
-            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), ...(me.cup ? { mutes: this.cupMutes() } : {}) });
+            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), ...(me.cup ? { mutes: this.cupMutes() } : { whispers: this.whispersFor(me.uid, 0) }) });
             return;
         }
         if (!me.joined) return;
         return this.handle(me, msg, (data) => this.send(ws, data), () => ws.serializeAttachment(me));
+    }
+
+    // The newest whispers this chat id may see, oldest first.
+    whispersFor(uid, after) {
+        return this.sql.exec("SELECT data FROM whispers WHERE uid = ? AND id > ? AND at > ? ORDER BY id DESC LIMIT ?", uid, after, Date.now() - WHISPER_KEEP_MS, WHISPERS_SHOWN)
+            .toArray().reverse().map((r) => JSON.parse(r.data));
+    }
+
+    newWhispers(uid, after) {
+        return this.whisperUids.has(uid) ? this.whispersFor(uid, after) : [];
+    }
+
+    // The account holding a name now and the chat ids linked to it, or null if nobody holds it.
+    async whisperTarget(name) {
+        const key = name.toLowerCase();
+        const hit = this.whisperNames.get(key);
+        if (hit && Date.now() - hit.at < WHISPER_NAME_MS) return hit.target;
+        const target = this.env.ACCOUNTS ? await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).whisperTarget(name) : null;
+        if (this.whisperNames.size > 2000) this.whisperNames.clear();
+        // A miss (no such name, or no chat ids yet) is trusted only 30 s, so a new account can be reached soon.
+        this.whisperNames.set(key, { target, at: Date.now() - (target?.uids.length ? 0 : Math.max(0, WHISPER_NAME_MS - 30_000)) });
+        return target;
+    }
+
+    async whisper(me, msg, reply, save) {
+        if (me.cup) return reply({ t: "err", text: "Whispers only work in the main chat.", wfail: true });
+        const text = cleanText(msg.text, MAX_TEXT);
+        const name = cleanText(msg.to, MAX_NICK).trim();
+        if (!text || !name) return;
+        const banned = this.bannedText(me.uid);
+        if (banned) return reply({ t: "err", text: banned, wfail: true });
+        const until = this.mutedUntil(me.uid);
+        if (until) return reply({ t: "err", text: "You're muted for " + duration(until - Date.now()) + ".", wfail: true });
+        const now = Date.now();
+        const refused = me.owner ? null : this.checkSpam(me.uid, "\u0001" + name.toLowerCase() + "\u0001" + text, now);
+        if (refused) return reply(refused);
+        let target;
+        try {
+            target = await this.whisperTarget(name);
+        } catch (err) {
+            console.error("whisper lookup failed:", err && err.message);
+            return reply({ t: "err", text: "Couldn't send that whisper. Try again in a moment.", wfail: true });
+        }
+        if (!target) return reply({ t: "err", text: "Nobody is called " + name + ".", wfail: true });
+        if (target.uids.includes(me.uid)) return reply({ t: "err", text: "That's you.", wfail: true });
+        const to = target.uids.slice(0, WHISPER_UIDS);
+        if (!to.length) return reply({ t: "err", text: target.nickname + " hasn't used the chat yet, so they can't get whispers.", wfail: true });
+        if (!me.owner) {
+            const s = this.activity(me.uid, now);
+            const key = target.nickname.toLowerCase();
+            s.whispers = (s.whispers || []).filter((w) => now - w.at < WHISPER_PEOPLE_MS);
+            if (!s.whispers.some((w) => w.to === key) && new Set(s.whispers.map((w) => w.to)).size >= WHISPER_PEOPLE) {
+                return reply({ t: "err", text: "You've whispered too many different people. Wait a few minutes.", wfail: true });
+            }
+            s.whispers.push({ to: key, at: now });
+        }
+        const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+        if (nick !== me.nick) {
+            me.nick = nick;
+            save();
+        }
+        const tag = TAG_ID.test(me.tag ?? "") ? me.tag : null;
+        const id = this.lastWhisperId = Math.max(now * 100, this.lastWhisperId + 1);
+        const m = { id, at: now, uid: me.uid, nick, owner: me.owner, tag, to: { uid: to[0], nick: target.nickname }, text: censor(text) };
+        const data = JSON.stringify(m);
+        const uids = new Set([me.uid, ...to]);
+        this.sql.exec("DELETE FROM whispers WHERE at < ?", now - WHISPER_KEEP_MS);
+        for (const uid of uids) this.sql.exec("INSERT OR REPLACE INTO whispers (id, uid, at, data, ip) VALUES (?, ?, ?, ?, ?)", id, uid, now, data, me.ip || null);
+        const frame = JSON.stringify({ t: "whisper", m });
+        for (const ws of this.ctx.getWebSockets()) {
+            const a = ws.deserializeAttachment();
+            if (!a?.joined || !uids.has(a.uid)) continue;
+            try {
+                ws.send(frame);
+            } catch {}
+        }
+        for (const uid of uids) this.whisperUids.add(uid);
+        for (const waiter of [...this.waiters]) if (uids.has(waiter.uid)) waiter.wake();
+    }
+
+    // Who a ban points at: a public message by id, or (wid) a whisper the owner sent or got.
+    modRow(msg, me) {
+        if (Number.isSafeInteger(msg.wid)) {
+            const row = this.sql.exec("SELECT data, ip FROM whispers WHERE id = ? AND uid = ?", msg.wid, me.uid).toArray()[0];
+            if (!row) return null;
+            const m = JSON.parse(row.data);
+            return { uid: m.uid, nick: m.nick, owner: m.owner ? 1 : 0, ip: row.ip };
+        }
+        return Number.isSafeInteger(msg.id) ? this.sql.exec("SELECT uid, nick, owner, ip FROM messages WHERE id = ?", msg.id).toArray()[0] : null;
     }
 
     // Players edit only their own messages; the owner too. The new text is censored like any
@@ -849,6 +967,7 @@ export class ChatRoom extends DurableObject {
         if (msg?.t === "who") return reply({ t: "who", users: this.users() });
         if (msg?.t === "react") return this.react(reply, me, msg);
         if (msg?.t === "edit") return this.edit(reply, me, msg);
+        if (msg?.t === "whisper") return this.whisper(me, msg, reply, save);
         // Anyone can delete their own message; the owner can delete anyone's.
         if (msg?.t === "del" && Number.isSafeInteger(msg.id)) {
             const row = this.sql.exec("SELECT uid FROM messages WHERE id = ?", msg.id).toArray()[0];
@@ -938,8 +1057,8 @@ export class ChatRoom extends DurableObject {
                 this.broadcast({ t: "del", id });
             }
             reply({ t: "err", text: "Banned. It can't be posted again." });
-        } else if (msg?.t === "ipban" && !me.cup && Number.isSafeInteger(msg.id) && IP_BAN_DAYS.includes(msg.days)) {
-            const row = this.sql.exec("SELECT uid, nick, owner, ip FROM messages WHERE id = ?", msg.id).toArray()[0];
+        } else if (msg?.t === "ipban" && !me.cup && IP_BAN_DAYS.includes(msg.days)) {
+            const row = this.modRow(msg, me);
             if (!row) return;
             // A message from before IP bans existed has no address, but its sender may still be connected.
             const socket = this.ctx.getWebSockets().map((ws) => ws.deserializeAttachment()).find((a) => a?.uid === row.uid && a.ip);
@@ -955,8 +1074,8 @@ export class ChatRoom extends DurableObject {
             }
             this.blockIp(ip, until);
             reply({ t: "err", text: "IP banned " + (msg.days ? "for " + msg.days + (msg.days === 1 ? " day" : " days") : "for good") + ". Lift it in Race Control -> Bans." });
-        } else if (msg?.t === "userban" && !me.cup && Number.isSafeInteger(msg.id) && IP_BAN_DAYS.includes(msg.days)) {
-            const row = this.sql.exec("SELECT uid, nick, owner FROM messages WHERE id = ?", msg.id).toArray()[0];
+        } else if (msg?.t === "userban" && !me.cup && IP_BAN_DAYS.includes(msg.days)) {
+            const row = this.modRow(msg, me);
             if (!row) return;
             if (row.owner || row.uid === me.uid) return reply({ t: "err", text: "That's your own account, so it wasn't banned." });
             const chat = msg.chat === true;

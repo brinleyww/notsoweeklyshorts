@@ -151,8 +151,9 @@ hold it at `leaderPoints(s) + 1`.
   the round when someone already finished).
 - **Where the tracks come from** is picked before anything else: the Competitions menu's **Tracks** row (Game
   maps, Custom tracks, Build Off; `Source` in hub.ts, remembered in `nsws-sc-host`) and, once the room is open, the
-  **Tracks** section at the top of the Cup tab (`Panel.#sourceSection`: Game maps, Maps + custom, Custom only, Build
-  Off). Picking a format keeps it (`#apply`); only the Build Off format turns building on. For Custom tracks the menu
+  **Tracks** section at the top of the Cup tab (`Panel.#sourceSection`: Game maps, Maps + custom, Custom only; a Build
+  Off has no button there, it shows as "Build Off" and in the lobby any of the three turns it off). Picking a format
+  keeps it (`#apply`); only the Build Off format turns building on. For Custom tracks the menu
   takes tracks before the room opens (My Tracks or pasted, kept in page memory), they go in through `HostPlan.tracks`
   -> `App.#preload`, and the lobby is the first ordinary one. Without maps of their own such cups still need a lobby
   track, so their pool is the main tracks. The proxy keeps only the format text of a cup's status, so the organizer
@@ -170,8 +171,10 @@ hold it at `leaderPoints(s) + 1`.
   The organizer removes any upload, a player their own. Rounds on uploaded tracks never upload PBs and have no world record.
 - **Build Off** (`build`, minutes, 0 = off; the Build Off format starts at 8, rounds mode, 2 per track): Start opens
   the `build` phase (`state.build.until`). Every human racer's page (and the organizer's) opens the editor
-  (`mod/nsws_editor.js`) on a new track with a countdown bar and **Send to the cup** (`BuildDesk`, build.ts, through
-  `__nswsEditor.current/fresh/cup`); the cup layer is hidden while the editor covers the screen. A racer's new send
+  (`mod/nsws_editor.js`) on a new track with the cup's own bar in place of the editor's (`BuildDesk`, build.ts, through
+  `__nswsEditor.current/fresh/cup/note`): Back (or Esc) to the Cup tab, the cup name and phase, the clock, the track
+  modes, **Send to the cup**, who has sent a track, the organizer's +2 min / End building now, and Leave (press twice).
+  The cup layer is hidden while the editor covers the screen, so BuildDesk's notes go to the editor's note line then. A racer's new send
   replaces the one before (`addTrack` while building). When time is up, or everyone has sent one, `closing` gives 12 s
   (plus up to 20 s for uploads still arriving): pages send whatever is open in their editor unless it is unchanged or
   still the blank track it started with, and close it. The cup then plays the built tracks in a random order

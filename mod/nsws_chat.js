@@ -56,6 +56,7 @@
     const WHO_MS = 5000;
     // Messages from one player closer together than this share one name header.
     const GROUP_MS = 5 * 60000;
+    const WHISPER_COLOR = "#b48cff";
     const RECENT_EMOJI = 27;
     const MAX_SUGGEST = 12;
     // Messages of only emoji, up to this many, are shown large.
@@ -200,6 +201,14 @@
 #nsws-chat>.replying>button:hover{background:var(--button-hover-color,#334b77);}
 #nsws-chat>.replying>.ping{font-weight:bold;color:#949cf7;}
 #nsws-chat>.replying>.ping.off{color:rgba(255,255,255,.45);}
+#nsws-chat>form>.whisper-to{display:none;flex-shrink:1;align-items:center;max-width:42%;min-width:0;padding:0 0 0 9px;background:var(--surface-tertiary-color,#192042);box-shadow:inset 3px 0 0 ${WHISPER_COLOR};color:${WHISPER_COLOR};font-size:14px;white-space:nowrap;}
+#nsws-chat.whispering>form>.whisper-to{display:flex;}
+#nsws-chat>form>.whisper-to>span{overflow:hidden;text-overflow:ellipsis;}
+#nsws-chat>form>.whisper-to>button{flex-shrink:0;align-self:stretch;padding:0 7px;border:0;background:transparent;color:var(--text-color,#fff);font:inherit;cursor:pointer;opacity:.6;}
+#nsws-chat>form>.whisper-to>button:hover{opacity:1;}
+#nsws-chat.whispering>form>.icon-button,#nsws-chat.whispering>form>.gif-button{display:none;}
+#nsws-chat .m.whisper{background:rgba(180,140,255,.08);}
+#nsws-chat .m.whisper>.meta>.dir{opacity:.65;}
 #nsws-chat.has-reply>.suggest,#nsws-chat.has-reply>.emoji-panel{bottom:80px;}
 #nsws-chat>form{display:flex;flex-shrink:0;gap:6px;padding:6px;}
 #nsws-chat>form>input{flex:1;min-width:0;padding:6px 8px;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;user-select:text;}
@@ -466,6 +475,14 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     let replyTo = null;
     let lastReply = null;
     let replyBar = null;
+    // Whispers: the name the box is whispering to (or null), the last name that whispered us (for /r),
+    // the name the last send whispered (put back if the server refuses it), and the newest whisper id seen (polling).
+    let whisperTo = null;
+    let whisperFrom = null;
+    let lastWhisper = null;
+    let whisperIds = new Set();
+    let whisperSeen = 0;
+    let whisperChip = null;
     // The message being edited in place: { id, draft }. It survives re-renders of the log.
     let editing = null;
     let confirmBox = null;
@@ -714,7 +731,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         else who.textContent = m.nick;
         who.style.color = nickColor(m.uid);
         const text = lineText(m);
-        toast.append(who, m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ", text.length > 90 ? text.slice(0, 90) + "..." : text);
+        toast.append(who, m.to ? " whispered: " : m.reply?.uid === me?.uid ? " replied to you: " : " pinged you: ",text.length > 90 ? text.slice(0, 90) + "..." : text);
         document.body.appendChild(toast);
         const bar = root.getBoundingClientRect();
         const below = bar.bottom + 6 + toast.offsetHeight <= window.innerHeight;
@@ -854,7 +871,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         suggestBox.textContent = "";
         const head = document.createElement("div");
         head.className = "head";
-        head.textContent = q.kind === "emoji" ? "Emoji matching :" + q.query : "Players online";
+        head.textContent = q.kind === "emoji" ? "Emoji matching :" + q.query : q.at === 0 && !whisperTo ? "Whisper to a player online" : "Players online";
         const box = document.createElement("div");
         box.className = "list";
         list.forEach((item, i) => {
@@ -887,6 +904,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         insertAtCaret(item.insert + " ", q.at, input.selectionStart ?? input.value.length);
         if (item.e) useEmoji(item.e);
         hideSuggest();
+        if (!item.e) whisperStart();
     }
 
     function suggestKeys(e) {
@@ -914,6 +932,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             insertAtCaret(e, caret - done[0].length, caret);
             useEmoji(e);
         }
+        whisperStart();
         updateSuggest();
     }
 
@@ -1815,11 +1834,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             });
             tools.appendChild(b);
         };
-        add("Delete", { t: "del", id: m.id });
+        // A whisper (m.to) has no public message to delete; bans find it by its whisper id.
+        const whisper = !!m.to;
+        if (!whisper) add("Delete", { t: "del", id: m.id });
         add("Mute 10m", { t: "mute", uid: m.uid, minutes: 10 });
         add("Mute 1h", { t: "mute", uid: m.uid, minutes: 60 });
         add("Mute 1d", { t: "mute", uid: m.uid, minutes: 1440 });
-        add("Delete all theirs", { t: "clear", uid: m.uid });
+        if (!whisper) add("Delete all theirs", { t: "clear", uid: m.uid });
         if (m.media) add("Ban this " + (mediaLabel(m) === "GIF" ? "GIF" : mediaLabel(m).toLowerCase()), { t: "ban", id: m.id });
         if (!m.owner) {
             const openers = [];
@@ -1834,7 +1855,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                     reason.maxLength = 200;
                     tools.appendChild(reason);
                     for (const [days, span] of [[1, "1d"], [7, "7d"], [30, "30d"], [0, "for good"]]) {
-                        add(label + " " + span, () => ({ ...data, id: m.id, days, reason: reason.value }));
+                        add(label + " " + span, () => ({ ...data, [whisper ? "wid" : "id"]: m.id, days, reason: reason.value }));
                     }
                     reason.focus();
                 });
@@ -1965,6 +1986,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     function startReply(m) {
+        if (whisperTo) setWhisper(null);
         replyTo = { id: m.id, uid: m.uid, nick: m.nick, ping: true };
         updateReplyBar();
         for (const other of log.querySelectorAll(".m.open")) other.classList.remove("open");
@@ -1994,6 +2016,136 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         ping.textContent = "@ " + (replyTo.ping ? "ON" : "OFF");
         ping.classList.toggle("off", !replyTo.ping);
         ping.title = replyTo.ping ? "Click to not ping " + replyTo.nick : "Click to ping " + replyTo.nick;
+    }
+
+    // ---- Whispers ----
+
+    function setWhisper(nick) {
+        whisperTo = nick || null;
+        if (whisperTo) cancelReply();
+        root?.classList.toggle("whispering", !!whisperTo);
+        if (whisperChip) {
+            whisperChip.firstChild.textContent = whisperTo ? "To " + whisperTo : "";
+            whisperChip.title = whisperTo ? "Only " + whisperTo + " sees these. Backspace in the empty box goes back to everyone." : "";
+        }
+        if (input) input.placeholder = whisperTo ? "Whisper to " + whisperTo + "..." : "Say something...";
+    }
+
+    // "@name text", "/w name text" or "/r text" at the start: { to, text }, or null for a public message.
+    // A name can hold spaces, so the longest online name that fits wins; otherwise the first word.
+    function typedWhisper(value) {
+        if (/^\/r(\s|$)/i.test(value)) return { to: whisperFrom, text: value.slice(2).trim(), reply: true };
+        const m = /^(?:@|\/w\s+)(\S.*)$/i.exec(value);
+        if (!m || !me || /^everyone(?![\p{L}\p{N}_])/iu.test(m[1])) return null;
+        const rest = m[1];
+        const lower = rest.toLowerCase();
+        let name = null;
+        for (const u of users) {
+            const nick = u.nick.toLowerCase();
+            if (u.uid === me.uid || (name && nick.length <= name.length)) continue;
+            if (lower.startsWith(nick) && (rest.length === nick.length || /\s/.test(rest[nick.length]))) name = u.nick;
+        }
+        name ??= rest.split(/\s/)[0];
+        return { to: name, text: rest.slice(name.length).trim() };
+    }
+
+    // Typing the space after "@name", "/w name" or "/r" switches the box to whispering, as /w did in Roblox.
+    function whisperStart() {
+        if (whisperTo || !me || !input) return;
+        const value = input.value;
+        if (!/\s$/.test(value) || /\s\s$/.test(value)) return;
+        const typed = typedWhisper(value.trimEnd());
+        if (!typed || typed.text) return;
+        if (typed.reply && !typed.to) {
+            input.value = "";
+            addSystem("Nobody has whispered you yet. Start one with @name or /w name.");
+            return;
+        }
+        // "@Bob" of "@Bob Smith": wait while a longer online name could still be on its way.
+        const lower = typed.to.toLowerCase();
+        if (!typed.reply && users.some((u) => u.uid !== me.uid && u.nick.toLowerCase().startsWith(lower + " ")) && !users.some((u) => u.nick.toLowerCase() === lower)) return;
+        input.value = "";
+        setWhisper(typed.to);
+        hideSuggest();
+    }
+
+    // Cuppa's Everyone tab shows whispers too, marked, since the main window is tucked away there.
+    function whisperLine(m) {
+        return { ...m, id: "w" + m.id, nick: m.uid === me?.uid ? "To " + m.to.nick : "From " + m.nick, pings: [] };
+    }
+
+    function addWhisper(m, live) {
+        if (!m || typeof m.text !== "string" || typeof m.nick !== "string" || !m.to || whisperIds.has(m.id)) return;
+        whisperIds.add(m.id);
+        whisperSeen = Math.max(whisperSeen, Number(m.id) || 0);
+        const mine = m.uid === me?.uid;
+        if (!mine) whisperFrom = m.nick;
+        if (!live) return;
+        addItem({ kind: "whisper", m });
+        const line = whisperLine(m);
+        for (const fn of feedListeners) {
+            try {
+                fn(line);
+            } catch {}
+        }
+        if (mine) return;
+        if (layout.min) {
+            unread++;
+            updateUnread();
+        }
+        notifyPing(m);
+    }
+
+    function whisperElement(m) {
+        const el = document.createElement("div");
+        el.className = "m head whisper";
+        el.dataset.wid = m.id;
+        const mine = m.uid === me?.uid;
+        const other = mine ? m.to : { uid: m.uid, nick: m.nick };
+        el.style.setProperty("--c", WHISPER_COLOR);
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const dir = document.createElement("span");
+        dir.className = "dir";
+        dir.textContent = mine ? "To" : "From";
+        const nick = document.createElement("span");
+        nick.className = "nick link";
+        nick.style.color = nickColor(other.uid);
+        if (window.__nswsClubTag) window.__nswsClubTag.name(nick, other.nick);
+        else nick.textContent = other.nick;
+        nick.title = "Whisper to " + other.nick;
+        nick.addEventListener("click", (e) => {
+            e.stopPropagation();
+            setWhisper(other.nick);
+            input.focus();
+        });
+        meta.append(dir, nick);
+        if (!mine && m.owner) {
+            const badge = document.createElement("span");
+            badge.className = "badge";
+            badge.textContent = "OWNER";
+            meta.appendChild(badge);
+        }
+        const time = document.createElement("span");
+        time.className = "time";
+        time.textContent = headerTime(m.at);
+        meta.appendChild(time);
+        const text = document.createElement("div");
+        text.className = "text";
+        appendText(text, m.text, []);
+        const bar = document.createElement("div");
+        bar.className = "actions";
+        bar.appendChild(actionButton(REPLY_ICON, "Whisper back", () => {
+            setWhisper(other.nick);
+            input.focus();
+        }, true));
+        if (me?.owner && !mine) {
+            const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
+            more.classList.add("more");
+            bar.appendChild(more);
+        }
+        el.append(meta, text, bar);
+        return el;
     }
 
     function messageElement(m, head) {
@@ -2257,6 +2409,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
 
     function itemElement(item, prev) {
         if (item.kind === "msg") return messageElement(item.m, startsGroup(prev, item.m));
+        if (item.kind === "whisper") return whisperElement(item.m);
         const el = document.createElement("div");
         el.className = "sys";
         el.textContent = item.text;
@@ -2343,6 +2496,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             items = data.messages.map((m) => ({ kind: "msg", m }));
             oldestId = data.messages[0]?.id ?? null;
             deletedIds = new Set();
+            whisperIds = new Set();
+            for (const w of Array.isArray(data.whispers) ? data.whispers : []) {
+                if (whisperIds.has(w?.id)) continue;
+                addWhisper(w, false);
+                if (whisperIds.has(w?.id)) items.push({ kind: "whisper", m: w });
+            }
+            items.sort((a, b) => a.m.at - b.m.at);
             items.push({ kind: "sys", text: "Connected. Be nice - slurs are filtered." });
             renderLog();
             scrollToEnd(true);
@@ -2359,6 +2519,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 updateUnread();
             }
             if (pingsMe(data.m)) notifyPing(data.m);
+        } else if (data.t === "whisper") {
+            addWhisper(data.m, true);
         } else if (data.t === "who") {
             users = Array.isArray(data.users) ? data.users : [];
             if (suggest.kind === "mention" || document.activeElement === input) updateSuggest();
@@ -2387,12 +2549,19 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         } else if (data.t === "ann-stop") {
             window.__nswsAnnounce?.stop(data.id);
         } else if (data.t === "err") {
+            // A refused whisper goes back in the box, still to the same name, so it can't slip out to everyone.
+            if (data.wfail && lastWhisper && input) {
+                if (!input.value) input.value = lastText;
+                if (!whisperTo) setWhisper(lastWhisper);
+                lastWhisper = null;
+            }
             addSystem(data.text);
         } else if (data.t === "slow" || data.t === "timeout") {
             // The server refused the last message, so it goes back in the box.
             if (!input.value) {
                 input.value = lastText;
-                if (!replyTo && lastReply && !isDeleted(lastReply.id)) {
+                if ((lastWhisper || null) !== whisperTo) setWhisper(lastWhisper);
+                if (!lastWhisper && !replyTo && lastReply && !isDeleted(lastReply.id)) {
                     replyTo = lastReply;
                     updateReplyBar();
                 }
@@ -2583,7 +2752,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         let delay = 2000;
         while (http === session) {
             try {
-                const data = await httpPost(session, "poll", { epoch: session.epoch, after: session.seq }, POLL_ABORT_MS);
+                const data = await httpPost(session, "poll", { epoch: session.epoch, after: session.seq, wafter: whisperSeen }, POLL_ABORT_MS);
                 if (http !== session) return;
                 delay = 2000;
                 session.epoch = data.epoch;
@@ -2597,6 +2766,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                     setStatus("");
                 }
                 for (const event of data.events || []) onServer(event);
+                for (const m of data.whispers || []) onServer({ t: "whisper", m });
                 if (data.gap > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(data.gap, MAX_POLL_GAP_MS)));
             } catch (err) {
                 if (http !== session) return;
@@ -2652,11 +2822,41 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     function trySend() {
         clearTimeout(sendTimer);
         if (!input) return;
-        const text = replaceShortcodes(input.value).replace(/\s+/g, " ").trim();
+        let text = replaceShortcodes(input.value).replace(/\s+/g, " ").trim();
         if (!text && !attachment) return;
+        let to = whisperTo;
+        const typed = to ? null : typedWhisper(text);
+        if (typed) {
+            if (!typed.to) return addSystem("Nobody has whispered you yet. Start one with @name or /w name.");
+            to = typed.to;
+            text = typed.text;
+            input.value = typed.text;
+            setWhisper(to);
+            if (!text) return;
+        }
+        if (to && attachment) return addSystem("Whispers are text only. Remove the attachment, or press x next to \"To " + to + "\" to post it to everyone.");
         if (attachment?.state === "bad") return addSystem(attachment.error + " Remove the attachment to send.");
         if (!connected()) {
             addSystem("Not connected yet.");
+            return;
+        }
+        if (to) {
+            const wait = me.owner ? 0 : readyAt - Date.now();
+            if (wait > 0) {
+                if (!timedOut) sendTimer = setTimeout(trySend, wait);
+                showWait();
+                return;
+            }
+            lastText = [...text].slice(0, MAX_TEXT).join("");
+            lastReply = null;
+            lastAttachment = null;
+            lastWhisper = to;
+            send({ t: "whisper", to, text: lastText, nick: readNickname() });
+            input.value = "";
+            hideSuggest();
+            readyAt = Date.now() + SLOW_MS;
+            clearInterval(waitTimer);
+            setStatus("");
             return;
         }
         if (attachment?.state === "working") {
@@ -2674,6 +2874,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         lastText = [...text].slice(0, MAX_TEXT).join("");
         lastReply = replyTo;
         lastAttachment = attachment;
+        lastWhisper = null;
         const data = { t: "msg", text: lastText, nick: readNickname() };
         if (replyTo) data.reply = { id: replyTo.id, ping: replyTo.ping && replyTo.uid !== me.uid };
         if (attachment) data.media = { f: attachment.file.id };
@@ -2785,9 +2986,14 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (!text) return Promise.reject(new Error("Write something first."));
         if (!connected()) return Promise.reject(new Error("Chat is connecting. Try again in a moment."));
         if (!me.owner && readyAt > Date.now()) return Promise.reject(new Error("Slow mode: one message a second."));
-        lastText = text;
+        const typed = typedWhisper(text);
+        if (typed && !typed.to) return Promise.reject(new Error("Nobody has whispered you yet."));
+        if (typed && !typed.text) return Promise.reject(new Error("Write the whisper after the name: @name your message"));
+        lastText = typed ? typed.text : text;
         lastReply = null;
-        send({ t: "msg", text, nick: readNickname() });
+        lastWhisper = typed ? typed.to : null;
+        if (typed) send({ t: "whisper", to: typed.to, text: typed.text, nick: readNickname() });
+        else send({ t: "msg", text, nick: readNickname() });
         readyAt = Date.now() + SLOW_MS;
         return Promise.resolve();
     }
@@ -2916,7 +3122,19 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         gifLabel.textContent = "GIF";
         gifButton.appendChild(gifLabel);
         gifButton.addEventListener("click", toggleGifPanel);
-        form.append(fileInput, attachButton, input, gifButton, emojiButton, sendButton);
+        whisperChip = document.createElement("div");
+        whisperChip.className = "whisper-to";
+        const whisperClose = document.createElement("button");
+        whisperClose.type = "button";
+        whisperClose.title = "Stop whispering";
+        whisperClose.textContent = icon(0x2715);
+        whisperClose.addEventListener("mousedown", (e) => e.preventDefault());
+        whisperClose.addEventListener("click", () => {
+            setWhisper(null);
+            input.focus();
+        });
+        whisperChip.append(document.createElement("span"), whisperClose);
+        form.append(fileInput, attachButton, whisperChip, input, gifButton, emojiButton, sendButton);
         form.addEventListener("submit", submit);
 
         attachBar = document.createElement("div");
@@ -2972,6 +3190,11 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
         input.addEventListener("keydown", suggestKeys);
         // Up in an empty box edits your last message, as in Discord.
+        input.addEventListener("keydown", (e) => {
+            if (e.key !== "Backspace" || !whisperTo || input.value) return;
+            e.preventDefault();
+            setWhisper(null);
+        });
         input.addEventListener("keydown", (e) => {
             if (e.key !== "ArrowUp" || e.defaultPrevented || input.value || !me) return;
             const last = items.findLast?.((item) => item.kind === "msg" && item.m.uid === me.uid);
@@ -3070,6 +3293,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         closeLightbox();
         setAttachment(null);
         lastAttachment = queuedGif = null;
+        whisperTo = null;
         document.removeEventListener("paste", onPaste);
         window.removeEventListener("keydown", onKey, true);
         window.removeEventListener("keydown", quickKey, true);
@@ -3164,7 +3388,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         feed: {
             active: () => !!root,
             uid: () => me?.uid ?? null,
-            recent: () => items.filter((item) => item.kind === "msg").slice(-40).map((item) => item.m.media ? { ...item.m, text: lineText(item.m) } : item.m),
+            recent: () => items.filter((item) => item.kind === "msg" || item.kind === "whisper").slice(-40)
+                .map((item) => item.kind === "whisper" ? whisperLine(item.m) : item.m.media ? { ...item.m, text: lineText(item.m) } : item.m),
             subscribe(fn) {
                 const listener = (m) => fn(m.media ? { ...m, text: lineText(m) } : m);
                 feedListeners.add(listener);

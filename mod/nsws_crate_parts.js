@@ -5,6 +5,10 @@
 (function () {
     const BASE = { patterns: 40, rims: 40, exhausts: 10, bodies: 10 };
     const STOCK = { patterns: 16, rims: 12, exhausts: 8, bodies: 7 };
+    // Free stock parts with no model file, built below, in the reserved slots right after the bundle's own. `built` makes
+    // the car_bodies.glb loop skip them; they are not `crate`, so the garage lists them.
+    const BUILT = { bodies: [{ model: "BodyStadium", lowModel: "BodyStadium", name: "Stadium", built: true }] };
+    const STADIUM = STOCK.bodies;
 
     // g = the id the Worker counts by; never reuse one.
     const PARTS = {
@@ -62,7 +66,8 @@
     function list(kind, stockLength) {
         if (stockLength !== STOCK[kind]) console.warn("Crate parts: stock " + kind + " changed (" + stockLength + "); check BASE");
         const out = [];
-        for (let n = stockLength; n < BASE[kind]; n++) out.push({ reserved: true, crate: true, model: null, url: "images/pattern_stripe.svg" });
+        const built = stockLength === STOCK[kind] ? BUILT[kind] ?? [] : [];
+        for (let n = stockLength; n < BASE[kind]; n++) out.push(built[n - stockLength] ?? { reserved: true, crate: true, model: null, url: "images/pattern_stripe.svg" });
         for (const p of PARTS[kind]) out.push(entry(kind, p));
         return out;
     }
@@ -310,6 +315,164 @@
         });
     }
 
+    // ---- The Stadium body: an open-wheel racer drawn over the stock car's wheels, suspension and exhaust, in the body
+    // frame (+z the nose, +x the left). Wheel centres sit near y -0.41 (front x 0.628 z 1.348, rear x 0.721 z -1.527,
+    // radius 0.331, half-width 0.172) and the road near y -0.74. Everything stays clear of a front wheel steered 30
+    // degrees and of the wheels with the suspension fully up.
+    // Flat-shaded triangle lists made of convex pieces, each face turned away from its piece's centre so the game's
+    // one-sided materials show it on both sides of the car.
+    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    function mid(P) {
+        const m = [0, 0, 0];
+        for (const p of P) (m[0] += p[0]), (m[1] += p[1]), (m[2] += p[2]);
+        return m.map((v) => v / P.length);
+    }
+    function tri(out, a, b, c, h) {
+        const u = sub(b, a), v = sub(c, a);
+        const nx = u[1] * v[2] - u[2] * v[1], ny = u[2] * v[0] - u[0] * v[2], nz = u[0] * v[1] - u[1] * v[0];
+        if (nx * nx + ny * ny + nz * nz < 1e-14) return;
+        const flip = nx * h[0] + ny * h[1] + nz * h[2] < 0;
+        out.push(...a, ...(flip ? c : b), ...(flip ? b : c));
+    }
+    function poly(out, P, c) {
+        const h = sub(mid(P), c);
+        for (let k = 1; k + 1 < P.length; k++) tri(out, P[0], P[k], P[k + 1], h);
+    }
+    // Rings of points (same count, same order round), each joined to the next; both end rings are capped.
+    function loft(out, R) {
+        for (let i = 0; i + 1 < R.length; i++) {
+            const A = R[i], B = R[i + 1], m = A.length, c = mid([...A, ...B]);
+            for (let k = 0; k < m; k++) poly(out, [A[k], A[(k + 1) % m], B[(k + 1) % m], B[k]], c);
+            if (i === 0) poly(out, A, c);
+            if (i + 2 === R.length) poly(out, B, c);
+        }
+    }
+    // A ring across the car at z from half its outline, [x, y] up the left side; the right side mirrors it.
+    const section = (z, half) => [...half.map(([x, y]) => [x, y, z]), ...half.map(([x, y]) => [-x, y, z]).reverse()];
+    // Eight corners numbered like a box's (bit 0: +x, bit 1: +y, bit 2: +z).
+    function hexa(out, P) {
+        const c = mid(P);
+        for (const f of [[0, 1, 3, 2], [4, 5, 7, 6], [0, 1, 5, 4], [2, 3, 7, 6], [0, 2, 6, 4], [1, 3, 7, 5]]) poly(out, f.map((i) => P[i]), c);
+    }
+    function block(out, x, y, z, hx, hy, hz) {
+        const P = [];
+        for (let k = 0; k < 8; k++) P.push([x + (k & 1 ? hx : -hx), y + (k & 2 ? hy : -hy), z + (k & 4 ? hz : -hz)]);
+        hexa(out, P);
+    }
+    function bar(out, a, b, r, n = 6) {
+        const d = sub(b, a), L = Math.hypot(...d), w = d.map((v) => v / L);
+        const t = Math.abs(w[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+        let u = [w[1] * t[2] - w[2] * t[1], w[2] * t[0] - w[0] * t[2], w[0] * t[1] - w[1] * t[0]];
+        const ul = Math.hypot(...u);
+        u = u.map((v) => v / ul);
+        const v = [w[1] * u[2] - w[2] * u[1], w[2] * u[0] - w[0] * u[2], w[0] * u[1] - w[1] * u[0]];
+        const R = (p) => Array.from({ length: n }, (_, k) => {
+            const q = ((k + 0.5) / n) * Math.PI * 2, cs = Math.cos(q) * r, sn = Math.sin(q) * r;
+            return [p[0] + u[0] * cs + v[0] * sn, p[1] + u[1] * cs + v[1] * sn, p[2] + u[2] * cs + v[2] * sn];
+        });
+        loft(out, [R(a), R(b)]);
+    }
+    // A strip lying on a surface along [z, y] points, from x0 to x1, t thick.
+    function strip(out, line, x0, x1, t) {
+        for (let i = 0; i + 1 < line.length; i++) {
+            const [za, ya] = line[i], [zb, yb] = line[i + 1];
+            hexa(out, [[x0, ya, za], [x1, ya, za], [x0, ya + t, za], [x1, ya + t, za], [x0, yb, zb], [x1, yb, zb], [x0, yb + t, zb], [x1, yb + t, zb]]);
+        }
+    }
+
+    // Slots: paint (primary), second (secondary), black, carbon, frame (frame colour), brake light, visor.
+    function stadiumShapes() {
+        const P = { paint: [], second: [], black: [], carbon: [], frame: [], brake: [], visor: [] };
+        // Monocoque from the nose tip to the tail.
+        loft(P.paint, [
+            section(1.98, [[0.07, -0.53], [0.09, -0.46], [0.06, -0.42]]),
+            section(1.7, [[0.14, -0.55], [0.17, -0.45], [0.11, -0.36]]),
+            section(1.15, [[0.2, -0.57], [0.25, -0.43], [0.16, -0.27]]),
+            section(0.62, [[0.26, -0.58], [0.31, -0.4], [0.22, -0.19]]),
+            section(-0.45, [[0.28, -0.58], [0.33, -0.4], [0.24, -0.17]]),
+            section(-1.2, [[0.25, -0.57], [0.29, -0.42], [0.19, -0.25]]),
+            section(-1.92, [[0.17, -0.54], [0.2, -0.44], [0.12, -0.32]]),
+        ]);
+        strip(P.second, [[1.98, -0.42], [1.7, -0.36], [1.15, -0.27], [0.62, -0.19]], -0.045, 0.045, 0.006);
+        // Engine cover rising into the airbox behind the driver.
+        loft(P.paint, [
+            section(-0.4, [[0.2, -0.2], [0.15, 0.03], [0.07, 0.11]]),
+            section(-0.7, [[0.24, -0.22], [0.18, 0.02], [0.08, 0.09]]),
+            section(-1.3, [[0.21, -0.26], [0.13, -0.12], [0.06, -0.09]]),
+            section(-1.85, [[0.13, -0.34], [0.09, -0.3], [0.04, -0.28]]),
+        ]);
+        block(P.black, 0, 0.05, -0.401, 0.06, 0.035, 0.006);
+        // Cockpit opening, driver's helmet and visor.
+        block(P.black, 0, -0.172, 0.05, 0.17, 0.016, 0.42);
+        const helmet = (y, r) => Array.from({ length: 8 }, (_, k) => [Math.cos(((k + 0.5) / 8) * Math.PI * 2) * r, y, -0.22 + Math.sin(((k + 0.5) / 8) * Math.PI * 2) * r]);
+        loft(P.second, [[0, 0.07], [0.05, 0.11], [0.11, 0.12], [0.17, 0.1], [0.21, 0.04]].map(([dy, r]) => helmet(-0.17 + dy, r)));
+        block(P.visor, 0, -0.065, -0.103, 0.075, 0.024, 0.012);
+        // Halo round the cockpit, from the nose top to the airbox.
+        bar(P.frame, [0, -0.17, 0.5], [0, -0.03, 0.36], 0.022);
+        for (const s of [1, -1]) {
+            bar(P.frame, [0, -0.03, 0.36], [s * 0.15, -0.015, 0.24], 0.022);
+            bar(P.frame, [s * 0.15, -0.015, 0.24], [s * 0.21, 0, 0], 0.022);
+            bar(P.frame, [s * 0.21, 0, 0], [s * 0.15, 0.02, -0.42], 0.022);
+        }
+        for (const s of [1, -1]) {
+            // Sidepods between the wheels, with an intake at the front and a stripe down the side.
+            const S = [
+                { z: -1.05, xi: 0.28, xo: 0.44, yb: -0.56, ti: -0.36, to: -0.44 },
+                { z: 0.3, xi: 0.29, xo: 0.6, yb: -0.58, ti: -0.28, to: -0.36 },
+                { z: 0.8, xi: 0.27, xo: 0.5, yb: -0.57, ti: -0.34, to: -0.4 },
+            ];
+            for (let i = 0; i + 1 < S.length; i++) {
+                const pod = [], band = [];
+                for (let k = 0; k < 8; k++) {
+                    const q = S[i + (k >> 2)];
+                    pod.push([s * (k & 1 ? q.xo : q.xi), k & 2 ? (k & 1 ? q.to : q.ti) : q.yb, q.z]);
+                    band.push([s * (q.xo + (k & 1 ? 0.007 : 0)), q.yb + (k & 2 ? 0.12 : 0.075), q.z]);
+                }
+                hexa(P.paint, pod);
+                hexa(P.second, band);
+            }
+            block(P.black, s * 0.385, -0.47, 0.803, 0.09, 0.06, 0.006);
+            // Front wing: main plane, flap and end plate, on pylons under the nose.
+            block(P.second, s * 0.39, -0.6, 1.88, 0.39, 0.015, 0.1);
+            block(P.paint, s * 0.37, -0.565, 1.82, 0.37, 0.012, 0.035);
+            block(P.second, s * 0.79, -0.56, 1.87, 0.012, 0.07, 0.12);
+            block(P.black, s * 0.06, -0.56, 1.86, 0.012, 0.035, 0.08);
+            // Rear wing end plates (inside the rear wheels) with light strips, and the pylons.
+            block(P.second, s * 0.515, 0.08, -1.8, 0.015, 0.2, 0.16);
+            block(P.brake, s * 0.515, 0.12, -1.963, 0.012, 0.1, 0.005);
+            block(P.frame, s * 0.05, -0.06, -1.8, 0.012, 0.25, 0.07);
+        }
+        // Rear wing main plane (the club tag lies on it) and its lip.
+        block(P.paint, 0, 0.2, -1.8, 0.5, 0.018, 0.13);
+        block(P.second, 0, 0.235, -1.935, 0.5, 0.03, 0.008);
+        // Floor, gearbox round the exhausts, diffuser and rain light.
+        block(P.carbon, 0, -0.595, -0.15, 0.5, 0.012, 1.0);
+        block(P.carbon, 0, -0.4, -1.75, 0.28, 0.07, 0.17);
+        block(P.carbon, 0, -0.53, -1.62, 0.34, 0.05, 0.31);
+        block(P.brake, 0, -0.31, -1.89, 0.06, 0.022, 0.04);
+        return [P.paint, P.second, P.black, P.carbon, P.frame, P.brake, P.visor];
+    }
+
+    function stadiumBody(chassis) {
+        const ms = materialsOf(chassis);
+        const by = (n) => ms.find((m) => m.name === n);
+        const main = by("Main") ?? ms[0];
+        const black = by("AirIntake") ?? ms[0];
+        // MainPlain takes the primary colour and Secondary the secondary one (VisualCar.setCarStyle); no pattern UVs.
+        const own = (src, name, hex, rough) => {
+            const m = src.clone();
+            m.name = name;
+            if ("map" in m) m.map = null;
+            m.color?.setHex?.(hex);
+            if (rough != null && "roughness" in m) m.roughness = rough;
+            return m;
+        };
+        const mats = [own(main, "MainPlain", 0x969696), own(main, "Secondary", 0x969696), black, own(black, "StadiumCarbon", 0x1b1d21, 0.6),
+            by("Metal") ?? black, by("BrakeLight") ?? black, own(black, "StadiumVisor", 0x0d1016, 0.12)];
+        const slots = stadiumShapes().map((list) => list.length ? [geometry(list)] : []);
+        return build(slots, mats, "BodyStadium");
+    }
+
     // Called from VisualCar.initResources once car.glb is in (rims, exhausts) and again once car_bodies.glb is (bodies).
     function buildParts({ THREE, utils, models, stage }) {
         T = THREE;
@@ -326,6 +489,14 @@
                 const exMetal = ex.find((m) => m.name === "Metal") ?? ex[ex.length - 1];
                 const hot = glow(darkMat);
                 for (const p of PARTS.exhausts) models.exhausts.set(p.index, build(EXHAUSTS[p.id](), [darkMat, exMetal, hot], "Crate_" + p.id));
+                // Built with car.glb, so menus and thumbnails have it before car_bodies.glb is in.
+                try {
+                    const stadium = stadiumBody(models.bodies.get(0));
+                    models.bodies.set(STADIUM, stadium);
+                    models.bodiesLow.set(STADIUM, stadium);
+                } catch (err) {
+                    console.error("Stadium body failed to build", err);
+                }
             } else if (stage === "bodies") {
                 const make = (src, p) => {
                     const g = src.geometry.clone();

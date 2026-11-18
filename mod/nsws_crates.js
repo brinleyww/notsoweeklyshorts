@@ -5,10 +5,13 @@
     const OLD_STORE = "nsws_crates_v1:";
     const PRICE = 50;
     const START_BOLTS = 50;
-    const FINISH_BOLTS = 2;
-    const FINISH_BOLTS_PER_DAY = 60;
-    const PB_BOLTS = 15;
-    const PB_REWARDS_PER_DAY = 3;
+    // A finished run pays 1 Bolt per RUN_MS_PER_BOLT of race clock that ran while this tab was in view.
+    const RUN_MS_PER_BOLT = 10000;
+    // Race clock (ms) after the last steering or throttle that still counts, so a parked car earns nothing.
+    const IDLE_MS = 20000;
+    const ECON_MS = 10 * 60 * 1000;
+    const ECON_LEAVE_MS = 2 * 60 * 1000;
+    const QUESTS_PER_DAY = 3;
     const MAX_ITEMS = 500;
     const TILE = 150;
     const GAP = 6;
@@ -58,6 +61,25 @@
         { kind: "bodies", name: "Car Crate", field: "body", label: "Cars", one: "car" },
     ];
     const CRATE = Object.fromEntries(CRATES.map((c) => [c.kind, c]));
+    // Keys of the Bolt figures reported to the Worker (proxy/src/crates.js ECON_KEYS).
+    const CRATE_KEY = { patterns: "cp", rims: "cr", exhausts: "ce", bodies: "cb" };
+    const ECON_KEYS = ["er", "eq", "ew", "es", "el", "sc", "sw", "ls", "nr", "ns", "nq", "nw", "cp", "cr", "ce", "cb", "lo"];
+
+    // Three a day, one per group, picked by the date. n is the counter in state.q they read (questValue).
+    const QUESTS = [
+        { id: "fin5", g: "fin", n: "fin", goal: 5, reward: 15, text: "Finish 5 runs" },
+        { id: "fin15", g: "fin", n: "fin", goal: 15, reward: 35, text: "Finish 15 runs" },
+        { id: "min10", g: "min", n: "ms", goal: 600000, reward: 20, text: "Drive for 10 minutes" },
+        { id: "min30", g: "min", n: "ms", goal: 1800000, reward: 45, text: "Drive for 30 minutes" },
+        { id: "trk3", g: "trk", n: "trk", goal: 3, reward: 20, text: "Finish 3 different tracks" },
+        { id: "trk6", g: "trk", n: "trk", goal: 6, reward: 40, text: "Finish 6 different tracks" },
+        { id: "pb1", g: "pb", n: "pb", goal: 1, reward: 15, text: "Set a new PB" },
+        { id: "pb3", g: "pb", n: "pb", goal: 3, reward: 40, text: "Set new PBs on 3 different tracks" },
+        { id: "week3", g: "week", n: "week", goal: 3, reward: 20, text: "Finish 3 runs on this week's tracks" },
+        { id: "long", g: "long", n: "long", goal: 1, reward: 20, text: "Finish a run that takes over a minute" },
+        { id: "crate", g: "crate", n: "crate", goal: 1, reward: 10, text: "Open a crate" },
+        { id: "wheel", g: "wheel", n: "wheel", goal: 1, reward: 5, text: "Spin the Wheel of Bolts" },
+    ];
 
     const QUIPS = [
         ["Certified mid.", "Adds 0 km/h. We checked.", "The crate shrugged.", "It's blue. Like your chances of beating Author Time."],
@@ -74,7 +96,7 @@
 .nsws-crates .bar>.head>.count{font-size:30px;}
 .nsws-crates .bar>.head>.count small{font-size:16px;color:rgba(255,255,255,.65);margin-left:6px;}
 .nsws-crates .bar>.head>.sub{font-size:13px;line-height:1.35;color:rgba(255,255,255,.6);margin:2px 0 8px;}
-.nsws-crates .bar>.head>.button{margin:0 6px 0 0;font-size:18px;padding:6px 12px;}
+.nsws-crates .bar>.head>.button{margin:0 6px 6px 0;font-size:18px;padding:6px 12px;}
 .nsws-crates .bar>.head>.button.main{box-shadow:inset 0 -3px #ffc94a;}
 .nsws-crates .bar>.list{flex:1;min-height:0;overflow-y:auto;padding:4px 6px 10px;}
 .nsws-crates .bar h3{margin:12px 4px 4px;font-size:17px;font-weight:normal;color:rgba(255,255,255,.8);}
@@ -141,6 +163,10 @@
 #nsws-crate .line>div>small{display:block;font-size:13px;color:rgba(255,255,255,.6);}
 #nsws-crate .line>.button{margin:0;font-size:17px;padding:5px 14px;flex-shrink:0;}
 #nsws-crate .line>.button:disabled{opacity:.35;}
+#nsws-crate .line>.button.main{box-shadow:inset 0 -3px #ffc94a;}
+#nsws-crate .line>.quest{flex:1;min-width:0;}
+#nsws-crate .qbar{height:6px;margin-top:6px;background:var(--surface-tertiary-color);}
+#nsws-crate .qbar>i{display:block;height:100%;background:#ffc94a;}
 #nsws-crate table{width:100%;border-collapse:collapse;font-size:15px;table-layout:fixed;}
 #nsws-crate td:not(:first-child),#nsws-crate th:not(:first-child){width:17%;}
 #nsws-crate td,#nsws-crate th{padding:5px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:right;white-space:nowrap;}
@@ -255,12 +281,17 @@
             state = JSON.parse(localStorage.getItem(key));
         } catch {}
         if (!state || typeof state !== "object" || !Array.isArray(state.items)) {
-            state = { v: 2, bolts: fromV1(t), items: [], prev: {}, equipped: {}, day: today(), finBolts: 0, pbCount: 0, pbTracks: {}, notes: true, opened: 0, pending: [] };
+            state = { v: 2, bolts: fromV1(t), items: [], prev: {}, equipped: {}, day: today(), notes: true, opened: 0, pending: [] };
         }
         state.items = state.items.filter((x) => partOf(x));
         state.pending ??= [];
         state.prev ??= {};
         state.equipped ??= {};
+        // Tracking starts from what the profile holds now, so earned minus spent always matches the balance.
+        if (!state.eco || typeof state.eco !== "object") {
+            const opened = state.opened ?? 0;
+            state.eco = { el: Math.max(0, state.bolts) + opened * PRICE, ls: opened * PRICE, lo: opened };
+        }
         cached = { key, state };
         return state;
     }
@@ -283,12 +314,158 @@
         const d = today();
         if (state.day !== d) {
             state.day = d;
-            state.finBolts = 0;
-            state.pbCount = 0;
-            state.pbTracks = {};
             state.wheelSpins = 0;
         }
     }
+
+    function add(state, key, n) {
+        state.eco[key] = (state.eco[key] ?? 0) + n;
+    }
+
+    // ---- Daily quests.
+
+    function dailyQuests(day) {
+        let seed = parseInt(hashText("quests:" + day), 36) >>> 0;
+        const rand = () => {
+            seed = (seed + 0x6d2b79f5) >>> 0;
+            let t = seed;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+        const pool = QUESTS.slice();
+        const out = [];
+        while (out.length < QUESTS_PER_DAY && pool.length) {
+            const q = pool.splice(Math.floor(rand() * pool.length), 1)[0];
+            if (!out.some((x) => x.g === q.g)) out.push(q);
+        }
+        return out;
+    }
+
+    function questState(state) {
+        rollDay(state);
+        if (state.q?.day !== state.day) state.q = { day: state.day, p: {}, trk: [], pbt: [], got: [], told: [] };
+        return state.q;
+    }
+
+    function questValue(q, quest) {
+        if (quest.n === "trk") return q.trk.length;
+        if (quest.n === "pb") return q.pbt.length;
+        return q.p[quest.n] ?? 0;
+    }
+
+    function bump(q, key, by = 1) {
+        q.p[key] = (q.p[key] ?? 0) + by;
+    }
+
+    function questsReady(state) {
+        const q = questState(state);
+        return dailyQuests(q.day).filter((x) => !q.got.includes(x.id) && questValue(q, x) >= x.goal).length;
+    }
+
+    function questsTouched(state) {
+        const q = questState(state);
+        for (const quest of dailyQuests(q.day)) {
+            if (questValue(q, quest) < quest.goal || q.told.includes(quest.id) || q.got.includes(quest.id)) continue;
+            q.told.push(quest.id);
+            setTimeout(() => toast("Quest done: " + quest.text + ". Claim " + quest.reward + " Bolts in Garage \u2192 Crates \u2192 Quests."), 4200);
+        }
+    }
+
+    function claimQuest(id) {
+        const state = load();
+        if (!state) return;
+        const q = questState(state);
+        const quest = dailyQuests(q.day).find((x) => x.id === id);
+        if (!quest || q.got.includes(id) || questValue(q, quest) < quest.goal) return;
+        q.got.push(id);
+        state.bolts += quest.reward;
+        add(state, "eq", quest.reward);
+        add(state, "nq", 1);
+        save();
+        econChanged();
+        fanfare(1);
+        refreshTop();
+        render();
+        if (view?.quests) paintQuests(view);
+    }
+
+    function quests() {
+        if (!load()) return;
+        const v = overlay("Daily quests");
+        v.quests = true;
+        paintQuests(v);
+    }
+
+    function paintQuests(v) {
+        const state = load();
+        if (!state) return;
+        const q = questState(state);
+        v.body.textContent = "";
+        v.body.appendChild(el("h2", null, "New quests every day \u00b7 claim the Bolts once one is done"));
+        for (const quest of dailyQuests(q.day)) {
+            const have = Math.min(quest.goal, questValue(q, quest));
+            const got = q.got.includes(quest.id);
+            const row = el("div", "line");
+            const left = el("div", "quest", quest.text);
+            const amount = quest.n === "ms" ? Math.floor(have / 60000) + " / " + quest.goal / 60000 + " min" : have + " / " + quest.goal;
+            left.appendChild(el("small", null, (got ? "Done" : amount) + " \u00b7 " + plural(quest.reward, "Bolt")));
+            const bar = el("div", "qbar");
+            const fill = el("i");
+            fill.style.width = (have / quest.goal) * 100 + "%";
+            bar.appendChild(fill);
+            left.appendChild(bar);
+            const ready = !got && have >= quest.goal;
+            const claim = button(got ? "Claimed" : "Claim", () => claimQuest(quest.id), ready ? "main" : "");
+            claim.disabled = !ready;
+            row.append(left, claim);
+            v.body.appendChild(row);
+        }
+        v.body.appendChild(el("p", "fine", "Runs count on any track and in Cuppa races, but not in test drives. Driving time counts only while the race clock runs and this tab is in view. New quests at midnight."));
+    }
+
+    // ---- Bolts for driving. The race scene hands over each new car (main.bundle.js, next to __nswsGrind.newCar).
+
+    let run = null;
+    function newCar(car, records) {
+        run = { car, ok: !!records || !!window.__nswsCupApp?.inCup?.(), ms: 0, last: 0, active: 0 };
+    }
+
+    // Leaving the tab throws away what this run had counted; counting starts again from when the tab is back.
+    function sampleRun(r) {
+        let frames;
+        let moving;
+        try {
+            if (!r.car.hasStarted()) return;
+            frames = r.car.getFinishTime()?.numberOfFrames ?? r.car.getTime().numberOfFrames;
+            const c = r.car.getControls();
+            moving = !!(c?.up || c?.down || c?.left || c?.right);
+        } catch {
+            return;
+        }
+        if (document.visibilityState === "hidden") {
+            r.ms = 0;
+            r.last = null;
+            return;
+        }
+        // A respawn may wind the clock back.
+        if (r.last != null && frames < r.last) r.active = Math.min(r.active, frames);
+        if (moving) r.active = frames;
+        if (r.last != null && frames > r.last) r.ms += Math.max(0, Math.min(frames, r.active + IDLE_MS) - r.last);
+        r.last = frames;
+    }
+
+    setInterval(() => {
+        if (run) sampleRun(run);
+    }, 1000);
+
+    document.addEventListener("visibilitychange", () => {
+        if (!run) return;
+        if (document.visibilityState === "hidden") {
+            run.ms = 0;
+            run.last = null;
+        } else sampleRun(run);
+    });
 
     function CarStyle() {
         return window.__clipCarStyleClass;
@@ -353,7 +530,9 @@
         console.info(text);
     }
 
-    function onFinish() {
+    function onFinish(e) {
+        const r = run;
+        run = null;
         const state = load();
         if (!state) return;
         rollDay(state);
@@ -363,12 +542,31 @@
             if (item && item.st != null && isWorn(item, style)) item.st++;
         }
         const before = state.bolts;
-        if (state.finBolts < FINISH_BOLTS_PER_DAY) {
-            state.bolts += FINISH_BOLTS;
-            state.finBolts += FINISH_BOLTS;
+        let paid = 0;
+        if (r?.ok) {
+            sampleRun(r);
+            const total = (state.runMs ?? 0) + r.ms;
+            paid = Math.floor(total / RUN_MS_PER_BOLT);
+            state.runMs = total - paid * RUN_MS_PER_BOLT;
+            state.bolts += paid;
+            add(state, "er", paid);
+            add(state, "nr", 1);
+            add(state, "ns", Math.round(r.ms / 1000));
+            const q = questState(state);
+            const track = e.detail?.track;
+            bump(q, "fin");
+            bump(q, "ms", r.ms);
+            if (track && !q.trk.includes(track) && q.trk.length < 50) q.trk.push(track);
+            if (track && window.__nswsIsCurrentWeek?.(track)) bump(q, "week");
+            if ((e.detail?.seconds ?? 0) >= 60) bump(q, "long");
+            questsTouched(state);
         }
         save();
-        if (before < PRICE && state.bolts >= PRICE) setTimeout(() => toast("You have " + PRICE + " Bolts: buy a crate in Garage \u2192 Crates."), 1800);
+        if (paid) {
+            const enough = before < PRICE && state.bolts >= PRICE ? " That's enough for a crate in Garage \u2192 Crates." : "";
+            setTimeout(() => toast("+" + plural(paid, "Bolt") + " for " + Math.round(r.ms / 1000) + " s of driving." + enough), 1800);
+            econChanged();
+        }
         render();
     }
 
@@ -376,13 +574,11 @@
         const state = load();
         const track = e.detail?.track;
         if (!state || !track) return;
-        rollDay(state);
-        if (state.pbTracks[track] || state.pbCount >= PB_REWARDS_PER_DAY) return;
-        state.pbTracks[track] = 1;
-        state.pbCount++;
-        state.bolts += PB_BOLTS;
+        const q = questState(state);
+        if (q.pbt.includes(track) || q.pbt.length >= 50) return;
+        q.pbt.push(track);
+        questsTouched(state);
         save();
-        setTimeout(() => toast("+" + PB_BOLTS + " Bolts for a new PB."), 2600);
         render();
     }
 
@@ -428,16 +624,50 @@
         reportTimer = setTimeout(report, REPORT_DELAY_MS);
     }
 
-    async function report() {
+    function figures(state) {
+        const out = { b: Math.max(0, Math.round(state.bolts)), it: state.items.length };
+        for (const k of ECON_KEYS) out[k] = Math.max(0, Math.round(state.eco[k] ?? 0));
+        return out;
+    }
+
+    // Every report is a Worker and a Durable Object request (100k a day each on the free plan), so Bolt figures ride along at
+    // most every few minutes, less often on a busy site.
+    function econGap() {
+        return Math.max(ECON_MS, (window.__nswsPlayersOnline || 0) * 3000);
+    }
+
+    let econTimer = 0;
+    function econChanged() {
+        const state = load();
+        if (!state || econTimer) return;
+        const wait = Math.max(REPORT_DELAY_MS, (state.ecoAt ?? 0) + econGap() - Date.now());
+        econTimer = setTimeout(() => {
+            econTimer = 0;
+            report();
+        }, wait);
+    }
+
+    async function report(leaving) {
         const state = load();
         const t = token();
-        if (!state || !t || !state.pending.length || !api()) return;
+        if (!state || !t || !api()) return;
         const events = state.pending.slice(0, 60);
+        const figs = figures(state);
+        const figText = JSON.stringify(figs);
+        const changed = figText !== state.ecoSent;
+        const econ = changed && Date.now() - (state.ecoAt ?? 0) >= (leaving === true ? ECON_LEAVE_MS : econGap()) ? figs : null;
+        if (changed && !econ && leaving !== true) econChanged();
+        if (!events.length && !econ) return;
+        const body = { token: t, events };
+        if (econ) {
+            body.econ = econ;
+            body.name = profile()?.nickname ?? null;
+        }
         try {
             const r = await fetch(api() + "nsws/crates/report", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ token: t, events }),
+                body: JSON.stringify(body),
                 keepalive: true,
             });
             if (!r.ok) return;
@@ -447,8 +677,12 @@
             if (!fresh) return;
             const sent = new Set(events.map((e) => e.u + ":" + e.e));
             fresh.pending = fresh.pending.filter((e) => !(done.has(e.u) && sent.has(e.u + ":" + e.e)));
+            if (econ) {
+                fresh.ecoSent = figText;
+                fresh.ecoAt = Date.now();
+            }
             save();
-            countsAt = 0;
+            if (events.length) countsAt = 0;
         } catch {}
     }
 
@@ -635,8 +869,8 @@
             shop.appendChild(tile);
         }
         v.body.appendChild(shop);
-        v.body.appendChild(el("p", "fine", "Bolts come from playing: +" + FINISH_BOLTS + " for each finished run (up to " + FINISH_BOLTS_PER_DAY + " a day) and +" + PB_BOLTS
-            + " for a new PB (up to " + PB_REWARDS_PER_DAY + " a day, one per track). Parts are looks only: nothing here changes how a car drives, and nothing costs real money."));
+        v.body.appendChild(el("p", "fine", "Bolts come from driving: a finished run pays 1 Bolt for every " + RUN_MS_PER_BOLT / 1000
+            + " s of race clock while this tab was in view, plus daily quests. Parts are looks only: nothing here changes how a car drives, and nothing costs real money."));
     }
 
     function openCrate(kind) {
@@ -659,7 +893,7 @@
         const buy = button("Buy and open \u2014 " + PRICE + " Bolts", () => spin(kind), "main");
         buy.disabled = state.bolts < PRICE;
         actions.append(buy, button("Back", () => openShop()));
-        actions.appendChild(el("span", "msg", state.bolts < PRICE ? "You have " + plural(state.bolts, "Bolt") + ". Finish runs and set PBs to earn more." : ""));
+        actions.appendChild(el("span", "msg", state.bolts < PRICE ? "You have " + plural(state.bolts, "Bolt") + ". Finish runs and do quests to earn more." : ""));
         v.body.appendChild(actions);
     }
 
@@ -668,6 +902,11 @@
         if (!state || state.bolts < PRICE || !view) return;
         state.bolts -= PRICE;
         state.opened = (state.opened ?? 0) + 1;
+        add(state, "sc", PRICE);
+        add(state, CRATE_KEY[kind], 1);
+        bump(questState(state), "crate");
+        questsTouched(state);
+        econChanged();
         const item = makeItem(kind, rollRarity());
         const kept = state.items.length < MAX_ITEMS;
         if (kept) {
@@ -971,7 +1210,13 @@
             const payout = Math.round(stake * seg.x);
             state.bolts += payout - stake;
             state.wheelSpins = (state.wheelSpins ?? 0) + 1;
+            add(state, "sw", stake);
+            add(state, "ew", payout);
+            add(state, "nw", 1);
+            bump(questState(state), "wheel");
+            questsTouched(state);
             save();
+            econChanged();
             refreshTop();
             render();
             result.className = "result";
@@ -1102,8 +1347,10 @@
         const count = el("div", "count", state.bolts.toLocaleString());
         count.appendChild(el("small", null, state.bolts === 1 ? "Bolt" : "Bolts"));
         head.appendChild(count);
-        head.appendChild(el("div", "sub", "Earn Bolts by finishing runs and setting PBs. A crate costs " + PRICE + " and holds a part you can't get anywhere else. Looks only, never speed."));
+        head.appendChild(el("div", "sub", "Earn Bolts by driving (the longer the run, the more you get) and from daily quests. A crate costs " + PRICE + " and holds a part you can't get anywhere else. Looks only, never speed."));
         head.appendChild(button("Crates", () => openShop(), "main"));
+        const ready = questsReady(state);
+        head.appendChild(button(ready ? "Quests (" + ready + ")" : "Quests", () => quests(), ready ? "main" : ""));
         head.appendChild(button("Trade up", () => tradeUp()));
         head.appendChild(button("Collection", () => collection()));
         head.appendChild(button("Wheel", () => wheel()));
@@ -1188,6 +1435,8 @@
             const victim = xs.slice().sort((a, b) => (a.st ?? -1) - (b.st ?? -1))[0];
             state.items = state.items.filter((y) => y !== victim);
             state.bolts += value;
+            add(state, "es", value);
+            econChanged();
             queue(state, [{ u: victim.u, e: -1 }]);
             g.armed = false;
             if (xs.length === 1) {
@@ -1210,7 +1459,9 @@
 
     window.addEventListener("nsws-finish", onFinish);
     window.addEventListener("nsws-new-pb", onNewPb);
-    window.addEventListener("pagehide", () => report());
+    window.addEventListener("pagehide", () => report(true));
+    // A profile that hasn't earned anything this sitting still reports its balance once.
+    setTimeout(() => report(), 30000);
 
-    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openShop, tradeUp, collection, wheel, crates: CRATES, rarities: RARITIES };
+    window.__nswsCrates = { mountGarage, leaveGarage, chatLine, open: openShop, tradeUp, collection, wheel, quests, newCar, crates: CRATES, rarities: RARITIES };
 })();

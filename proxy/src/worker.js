@@ -82,7 +82,7 @@ const SNAPSHOT_TTL_MS = 5 * 60_000;
 // Every instance rereads the ban list from KV this often; each read counts against the free plan's 100k a day.
 const IP_BANS_TTL_MS = 2 * 60_000;
 // These routes check the owner's key themselves, so the owner can always lift a ban from a banned network.
-const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban|tracks\/admin|feedback\/admin)(\/|$)/;
+const OWNER_ROUTE = /^\/nsws\/(live|stats|anticheat|announce|tagadmin|ipban|tracks\/admin|feedback\/admin|crates\/admin)(\/|$)/;
 // A track the list doesn't have yet (a new week) is looked up again after this long.
 const TRACK_WEEKS_RETRY_MS = 60_000;
 const WR_SEEN_MAX = 2000;
@@ -2766,6 +2766,7 @@ export default {
                 try {
                     return await handleCrates(request, url, env, ctx, {
                         fromSite, origin: requestOrigin, forbidden, corsHeaders, json, withCors, cachedJson, doLimited, busy, readSmallBody, sha256Hex, HEX64,
+                        isOwner: async (token) => cfg.owner || (await isOwner(token, cfg)),
                     });
                 } catch (err) {
                     noteDoError(err);
