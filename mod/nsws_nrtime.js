@@ -108,6 +108,7 @@
         const panel = panels?.[panels.length - 1];
         if (!panel) return;
         addStyle();
+        panel.querySelector(":scope > .nsws-nr")?.remove();
         const row = document.createElement("div"), title = document.createElement("p"), value = document.createElement("p");
         row.className = "difference nsws-nr";
         title.className = "title";

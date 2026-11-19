@@ -10421,6 +10421,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                         throw new Error("Car model isn't loaded yet");
                     if (null != l.get(this, Z, "f") && null != l.get(this, Re, "f") && null != l.get(this, Pe, "f") && null != h) {
                         const e = l.get(this, Z, "f").createCar(t, l.get(this, Re, "f").getMountainVertices(), l.get(this, Re, "f").getMountainOffset(), h, n, (e => {
+                            // A respawn sent just before the finish reaches the worker after it; it would un-finish the car and finish it again.
+                            const cur = l.get(this, ie, "f");
+                            if (null != cur?.finishFrames && e.finishFrames !== cur.finishFrames)
+                                return;
                             this.setCarState(e, !1)
                         }
                         ));
@@ -45749,6 +45753,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             })
                         }
                 }
+                C.get(this, oa, "f")?.dispose(),
+                C.set(this, oa, null, "f");
                 let l = null;
                 const c = C.get(this, _r, "m", Za).call(this);
                 if (null == c || c.settings.isSelf || (l = {
