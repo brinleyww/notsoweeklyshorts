@@ -28014,7 +28014,7 @@ window.__nswsAutoGhostNote = function(trackId) {
               , r = n.n(i)
               , a = n(6314)
               , s = n.n(a)()(r());
-            s.push([e.id, ".menu-ui {\n\tdisplay: flex;\n\tflex-direction: column;\n\tposition: absolute;\n\tleft: 0;\n\ttop: 0;\n\twidth: 100%;\n\theight: 100%;\n\tbackground-color: rgba(20, 20, 45, 0.8);\n\t-webkit-backdrop-filter: blur(4px);\n\tbackdrop-filter: blur(4px);\n\ttext-align: center;\n\ttransition: background-color 1s ease-out;\n}\n.menu-ui.loading-screen {\n\tbackground-color: var(--surface-tertiary-color);\n}\n\n.menu-ui > .logo {\n\tdisplay: block;\n\tmargin: clamp(80px, 13vh, 160px) auto 0 auto;\n\tpadding: 0;\n\twidth: 1000px;\n\theight: 200px;\n\t-webkit-filter: drop-shadow(0 0 3px #000);\n\tfilter: drop-shadow(0 0 3px #000);\n\ttransition: opacity 0.25s ease-out;\n}\n.menu-ui > .logo.hidden {\n\topacity: 0;\n}\n\n@media (max-width: 1300px) {\n\t.menu-ui > .logo {\n\t\twidth: calc(100vw * (1000 / 1300));\n\t}\n}\n@media (max-width: 975px) {\n\t.menu-ui > .logo {\n\t\twidth: calc(975px * (1000 / 1300));\n\t}\n}\n\n.menu-ui > .warning-message {\n\tmargin: 16px auto 0 auto;\n\tmax-width: 900px;\n\tfont-size: 26px;\n\tcolor: #f66;\n}\n.menu-ui > .warning-message.modded {\n\tcolor: #ffb311;\n}\n.menu-ui > .warning-message > a {\n\tmargin: 0 auto;\n\tdisplay: block;\n\twidth: max-content;\n\tcolor: var(--text-color);\n\tpointer-events: auto;\n}\n\n.menu-ui > .main-buttons-container {\n\tmargin: 0 0 140px 0;\n\tdisplay: flex;\n\tflex-grow: 1;\n\talign-items: center;\n\tjustify-content: center;\n}\n.menu-ui > .main-buttons-container.hidden {\n\tdisplay: none;\n}\n\n.menu-ui .button-image {\n\tdisplay: inline-block;\n\tmargin: 10px 0;\n\tpadding: 0;\n\twidth: 200px;\n\theight: 200px;\n\tpointer-events: auto;\n}\n.menu-ui .button-image > img {\n\tmargin: 40px 40px 0 40px;\n\tpadding: 0;\n\twidth: 96px;\n\theight: 96px;\n\ttransition: transform 0.2s ease-in-out;\n\tpointer-events: none;\n}\n.menu-ui .button-image:not(:disabled):hover > img {\n\ttransform: translateY(-10px);\n}\n@media (hover: none) {\n\t.menu-ui .button-image:not(:disabled):hover > img {\n\t\ttransform: none;\n\t}\n}\n.menu-ui .button-image > p {\n\tmargin: 0;\n\tpadding: 0;\n\tcolor: var(--text-color);\n\tfont-size: 24px;\n}\n\n.menu-ui .button-image.button-spawn {\n\tanimation: button-spawn 0.5s ease-out forwards;\n\topacity: 0;\n}\n\n@keyframes button-spawn {\n\t0% {\n\t\ttransform: translateY(50px) scale(0.8);\n\t\topacity: 0;\n\t}\n\t70% {\n\t\ttransform: translateY(-10px) scale(1);\n\t\topacity: 1;\n\t}\n\t100% {\n\t\ttransform: translateY(0) scale(1);\n\t\topacity: 1;\n\t}\n}\n\n.menu-ui > .button-bar {\n\tpadding: 8px calc(8px + var(--safe-area-horizontal));\n\tposition: absolute;\n\tleft: 0;\n\tbottom: 0;\n\tbox-sizing: border-box;\n\twidth: 100%;\n\ttext-align: left;\n\tbackground-color: var(--surface-transparent-color);\n}\n.menu-ui > .button-bar.hidden {\n\tdisplay: none;\n}\n\n.menu-ui > .button-bar > button, .menu-ui > .button-bar > a {\n\tdisplay: inline-block;\n\tpadding: 6px 12px;\n\tclip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%);\n\tfont-size: 22px;\n\ttext-decoration: none;\n}\n.menu-ui > .button-bar > button.right, .menu-ui > .button-bar > a.right {\n\tfloat: right;\n}\n.menu-ui > .button-bar > button.disabled, .menu-ui > .button-bar > a.disabled {\n\tcolor: rgba(255, 255, 255, 0.25);\n}\n.menu-ui > .button-bar > button > img, .menu-ui > .button-bar > a > img {\n\tvertical-align: middle;\n\twidth: 24px;\n\theight: 24px;\n}\n.menu-ui > .button-bar > button.disabled > img, .menu-ui > .button-bar > a.disabled > img {\n\topacity: 0.25;\n}\n\n.menu-ui > .discord-link {\n\tdisplay: block;\n\tposition: absolute;\n\tright: 0;\n\tbottom: 0;\n\tmargin: 0;\n\tpadding: 0;\n\tpointer-events: auto;\n}\n.menu-ui > .discord-link > img {\n\tmargin: 16px calc(30px + var(--safe-area-horizontal)) 64px 30px;\n\tpadding: 0;\n\theight: 40px;\n\ttransition: opacity 0.25s ease-out;\n}\n.menu-ui > .discord-link > img.hidden {\n\topacity: 0;\n}\n\n.menu-ui > .info {\n\tposition: absolute;\n\tleft: 0;\n\tbottom: 64px;\n\twidth: 100%;\n}\n.menu-ui > .info > a {\n\tdisplay: block;\n\tmargin: 0 auto;\n\tpadding: 5px;\n\twidth: fit-content;\n\tcolor: var(--text-color);\n\ttext-decoration: none;\n\tfont-size: 20px;\n\tpointer-events: auto;\n}\n.menu-ui > .info > a[href]:hover, .menu-ui > .info > a[href]:focus-visible {\n\ttext-decoration: underline;\n\toutline: none;\n}\n", ""]);
+            s.push([e.id, ".menu-ui {\n\tdisplay: flex;\n\tflex-direction: column;\n\tposition: absolute;\n\tleft: 0;\n\ttop: 0;\n\twidth: 100%;\n\theight: 100%;\n\tbackground-color: rgba(20, 20, 45, 0.8);\n\t-webkit-backdrop-filter: blur(4px);\n\tbackdrop-filter: blur(4px);\n\ttext-align: center;\n\ttransition: background-color 1s ease-out;\n}\n.menu-ui.loading-screen {\n\tbackground-color: var(--surface-tertiary-color);\n}\n\n.menu-ui > .logo {\n\tdisplay: block;\n\tmargin: clamp(80px, 13vh, 160px) auto 0 auto;\n\tpadding: 0;\n\twidth: 1000px;\n\theight: 200px;\n\t-webkit-filter: drop-shadow(0 0 3px #000);\n\tfilter: drop-shadow(0 0 3px #000);\n\ttransition: opacity 0.25s ease-out;\n}\n.menu-ui > .logo.hidden {\n\topacity: 0;\n}\n\n@media (max-width: 1300px) {\n\t.menu-ui > .logo {\n\t\twidth: calc(100vw * (1000 / 1300));\n\t}\n}\n@media (max-width: 975px) {\n\t.menu-ui > .logo {\n\t\twidth: calc(975px * (1000 / 1300));\n\t}\n}\n\n.menu-ui > .warning-message {\n\tmargin: 16px auto 0 auto;\n\tmax-width: 900px;\n\tfont-size: 26px;\n\tcolor: #f66;\n}\n.menu-ui > .warning-message.modded {\n\tcolor: #ffb311;\n}\n.menu-ui > .warning-message > a {\n\tmargin: 0 auto;\n\tdisplay: block;\n\twidth: max-content;\n\tcolor: var(--text-color);\n\tpointer-events: auto;\n}\n\n.menu-ui > .main-buttons-container {\n\tmargin: 0 0 140px 0;\n\tdisplay: flex;\n\tflex-grow: 1;\n\talign-items: center;\n\tjustify-content: center;\n}\n.menu-ui > .main-buttons-container.hidden {\n\tdisplay: none;\n}\n\n.menu-ui .button-image {\n\tdisplay: inline-block;\n\tmargin: 10px 0;\n\tpadding: 0;\n\twidth: 200px;\n\theight: 200px;\n\tpointer-events: auto;\n}\n.menu-ui .button-image > img {\n\tmargin: 40px 40px 0 40px;\n\tpadding: 0;\n\twidth: 96px;\n\theight: 96px;\n\ttransition: transform 0.2s ease-in-out;\n\tpointer-events: none;\n}\n.menu-ui .button-image:not(:disabled):hover > img {\n\ttransform: translateY(-10px);\n}\n@media (hover: none) {\n\t.menu-ui .button-image:not(:disabled):hover > img {\n\t\ttransform: none;\n\t}\n}\n.menu-ui .button-image > p {\n\tmargin: 0;\n\tpadding: 0;\n\tcolor: var(--text-color);\n\tfont-size: 24px;\n}\n\n.menu-ui .button-image.button-spawn {\n\tanimation: button-spawn 0.5s ease-out forwards;\n\topacity: 0;\n}\n\n@keyframes button-spawn {\n\t0% {\n\t\ttransform: translateY(50px) scale(0.8);\n\t\topacity: 0;\n\t}\n\t70% {\n\t\ttransform: translateY(-10px) scale(1);\n\t\topacity: 1;\n\t}\n\t100% {\n\t\ttransform: translateY(0) scale(1);\n\t\topacity: 1;\n\t}\n}\n\n.menu-ui > .button-bar {\n\tpadding: 8px calc(8px + var(--safe-area-horizontal));\n\tposition: absolute;\n\tleft: 0;\n\tbottom: 0;\n\tbox-sizing: border-box;\n\twidth: 100%;\n\ttext-align: left;\n\tbackground-color: var(--surface-transparent-color);\n}\n.menu-ui > .button-bar.hidden {\n\tdisplay: none;\n}\n\n.menu-ui > .button-bar > button, .menu-ui > .button-bar > a {\n\tdisplay: inline-block;\n\tpadding: 6px 12px;\n\tclip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%);\n\tfont-size: 22px;\n\ttext-decoration: none;\n}\n.menu-ui > .button-bar > button.right, .menu-ui > .button-bar > a.right {\n\tfloat: right;\n}\n.menu-ui > .button-bar:not(.hidden) {\n\tdisplay: flex;\n\tflex-wrap: wrap;\n\talign-items: stretch;\n}\n.menu-ui > .button-bar > button.right {\n\tmargin-left: auto;\n}\n.menu-ui > .button-bar > button.nsws-icon-btn {\n\tpadding: 6px 14px;\n}\n.menu-ui > .button-bar > button.nsws-more-btn.open {\n\tbackground-color: #334b77;\n}\n.menu-ui > .button-bar > .nsws-more-menu {\n\tdisplay: none;\n\tposition: absolute;\n\tright: calc(8px + var(--safe-area-horizontal));\n\tbottom: 100%;\n\tflex-direction: column;\n\tgap: 4px;\n\tmin-width: 200px;\n\tpadding: 6px;\n\tbackground-color: var(--surface-color);\n\tpointer-events: auto;\n}\n.menu-ui > .button-bar > .nsws-more-menu.open {\n\tdisplay: flex;\n}\n.menu-ui > .button-bar > .nsws-more-menu > button {\n\tmargin: 0;\n\tpadding: 6px 14px;\n\tclip-path: polygon(4px 0, 100% 0, calc(100% - 4px) 100%, 0 100%);\n\tfont-size: 22px;\n\ttext-align: left;\n\twhite-space: nowrap;\n}\n.menu-ui > .button-bar > .nsws-more-menu > button > img {\n\tdisplay: none;\n}\n.menu-ui > .button-bar > button.disabled, .menu-ui > .button-bar > a.disabled {\n\tcolor: rgba(255, 255, 255, 0.25);\n}\n.menu-ui > .button-bar > button > img, .menu-ui > .button-bar > a > img {\n\tvertical-align: middle;\n\twidth: 24px;\n\theight: 24px;\n}\n.menu-ui > .button-bar > button.disabled > img, .menu-ui > .button-bar > a.disabled > img {\n\topacity: 0.25;\n}\n\n.menu-ui > .discord-link {\n\tdisplay: block;\n\tposition: absolute;\n\tright: 0;\n\tbottom: 0;\n\tmargin: 0;\n\tpadding: 0;\n\tpointer-events: auto;\n}\n.menu-ui > .discord-link > img {\n\tmargin: 16px calc(30px + var(--safe-area-horizontal)) 64px 30px;\n\tpadding: 0;\n\theight: 40px;\n\ttransition: opacity 0.25s ease-out;\n}\n.menu-ui > .discord-link > img.hidden {\n\topacity: 0;\n}\n\n.menu-ui > .info {\n\tposition: absolute;\n\tleft: 0;\n\tbottom: 64px;\n\twidth: 100%;\n}\n.menu-ui > .info > a {\n\tdisplay: block;\n\tmargin: 0 auto;\n\tpadding: 5px;\n\twidth: fit-content;\n\tcolor: var(--text-color);\n\ttext-decoration: none;\n\tfont-size: 20px;\n\tpointer-events: auto;\n}\n.menu-ui > .info > a[href]:hover, .menu-ui > .info > a[href]:focus-visible {\n\ttext-decoration: underline;\n\toutline: none;\n}\n", ""]);
             const o = s
         }
         ,
@@ -58025,17 +58025,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             {
                 const e = document.createElement("button");
-                e.className = "button",
-                i.isFullscreen ? (e.innerHTML = '<img src="images/windowed.svg">',
-                e.appendChild(document.createTextNode(" " + t.get("Windowed")))) : (e.innerHTML = '<img src="images/fullscreen.svg">',
-                e.appendChild(document.createTextNode(" " + t.get("Fullscreen")))),
+                e.className = "button nsws-icon-btn";
+                const paintFs = () => {
+                    e.innerHTML = i.isFullscreen ? '<img src="images/windowed.svg">' : '<img src="images/fullscreen.svg">';
+                    e.title = t.get(i.isFullscreen ? "Windowed" : "Fullscreen");
+                    e.setAttribute("aria-label", e.title);
+                };
+                paintFs(),
                 null != C.get(this, Vc, "f") && i.removeFullscreenChangeListener(C.get(this, Vc, "f")),
-                i.addFullscreenChangeListener(C.set(this, Vc, ( () => {
-                    i.isFullscreen ? (e.innerHTML = '<img src="images/windowed.svg">',
-                    e.appendChild(document.createTextNode(" " + t.get("Windowed")))) : (e.innerHTML = '<img src="images/fullscreen.svg">',
-                    e.appendChild(document.createTextNode(" " + t.get("Fullscreen"))))
-                }
-                ), "f")),
+                i.addFullscreenChangeListener(C.set(this, Vc, paintFs, "f")),
                 e.addEventListener("click", ( () => {
                     n.playUIClick(),
                     i.toggleFullscreen().catch((e => {
@@ -58049,13 +58047,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             const _ = () => {
                 C.get(this, Fc, "f") ? (R.classList.remove("disabled"),
-                R.innerHTML = '<img className="button-icon" src="images/music_on.svg">',
-                R.appendChild(document.createTextNode(" " + t.get("Music: On")))) : (R.classList.add("disabled"),
-                R.innerHTML = '<img className="button-icon" src="images/music_off.svg">',
-                R.appendChild(document.createTextNode(" " + t.get("Music: Off"))))
+                R.innerHTML = '<img className="button-icon" src="images/music_on.svg">') : (R.classList.add("disabled"),
+                R.innerHTML = '<img className="button-icon" src="images/music_off.svg">'),
+                R.title = t.get(C.get(this, Fc, "f") ? "Music: On" : "Music: Off"),
+                R.setAttribute("aria-label", R.title)
             }
               , R = document.createElement("button");
-            R.className = "button",
+            R.className = "button nsws-icon-btn",
             R.addEventListener("click", ( () => {
                 n.playUIClick(),
                 C.set(this, Fc, !C.get(this, Fc, "f"), "f"),
@@ -58070,13 +58068,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             if (window.__nswsChat) {
                 const chat = window.__nswsChat;
                 const chatBtn = document.createElement("button");
-                chatBtn.className = "button";
+                chatBtn.className = "button nsws-icon-btn";
                 chatBtn.id = "nsws-chat-toggle";
                 const refreshChatBtn = () => {
                     const on = chat.isEnabled();
                     chatBtn.classList.toggle("disabled", !on);
                     chatBtn.innerHTML = on ? '<img src="images/chat_on.svg">' : '<img src="images/chat_off.svg">';
-                    chatBtn.appendChild(document.createTextNode(on ? " Chat: On" : " Chat: Off"));
+                    chatBtn.title = on ? "Chat: On" : "Chat: Off";
+                    chatBtn.setAttribute("aria-label", chatBtn.title);
                 };
                 chatBtn.addEventListener("click", ( () => {
                     n.playUIClick();
@@ -58091,7 +58090,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             window.__nswsUIClick = () => n.playUIClick();
             if (window.__nswsTags) {
                 const refBtn = document.createElement("button");
-                refBtn.className = "button";
+                refBtn.className = "button nsws-more-item";
                 refBtn.innerHTML = '<img src="images/invite.svg"> ';
                 refBtn.append("Referrals");
                 refBtn.addEventListener("click", ( () => {
@@ -58104,7 +58103,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             if (window.__nswsHalloween?.active()) {
                 const hauntedBtn = document.createElement("button");
-                hauntedBtn.className = "button";
+                hauntedBtn.className = "button nsws-more-item";
                 window.__nswsHalloween.mountButton(hauntedBtn);
                 hauntedBtn.addEventListener("click", ( () => {
                     n.playUIClick();
@@ -58155,7 +58154,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
             if (P.isVerifier) {
                 const e = document.createElement("button");
-                e.className = "button",
+                e.className = "button nsws-more-item",
                 e.textContent = "Verifier",
                 e.addEventListener("click", ( () => {
                     n.playUIClick(),
@@ -58165,7 +58164,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bc, "f").appendChild(e),
                 C.get(this, Gc, "f").push(e);
                 const t = document.createElement("button");
-                t.className = "button",
+                t.className = "button nsws-more-item",
                 t.textContent = "Admin",
                 t.addEventListener("click", ( () => {
                     n.playUIClick(),
@@ -58178,7 +58177,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
             {
                 const ownerBtn = document.createElement("button");
-                ownerBtn.className = "button";
+                ownerBtn.className = "button nsws-more-item";
                 ownerBtn.style.display = "none";
                 ownerBtn.innerHTML = '<img src="images/graph.svg"> ';
                 ownerBtn.append("Race Control");
@@ -58197,7 +58196,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 
             {
                 const creditsBtn = document.createElement("button");
-                creditsBtn.className = "button right";
+                creditsBtn.className = "button nsws-more-item";
                 creditsBtn.textContent = "Credits";
                 creditsBtn.addEventListener("click", ( () => {
                     n.playUIClick();
@@ -58301,6 +58300,46 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             e.preventDefault();
                             e.stopImmediatePropagation();
                             overlay.style.display = "none";
+                        }
+                    }, true);
+                }
+            }
+
+            // Rarely used buttons live in a "More" menu so the bar stays one row and clear of the version line.
+            {
+                const bar = C.get(this, Bc, "f"), list = C.get(this, Gc, "f");
+                const moreBtn = document.createElement("button");
+                moreBtn.className = "button right nsws-more-btn";
+                moreBtn.textContent = "More";
+                const menu = document.createElement("div");
+                menu.className = "nsws-more-menu";
+                for (const b of list.filter(b => b.classList.contains("nsws-more-item"))) {
+                    menu.appendChild(b);
+                    list.splice(list.indexOf(b), 1);
+                }
+                const setOpen = open => {
+                    menu.classList.toggle("open", open);
+                    moreBtn.classList.toggle("open", open);
+                };
+                moreBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    setOpen(!menu.classList.contains("open"));
+                }
+                ));
+                menu.addEventListener("click", e => { if (e.target.closest("button")) setOpen(false); });
+                bar.append(moreBtn, menu);
+                list.push(moreBtn, menu);
+                if (!window.__nswsMoreMenuWired) {
+                    window.__nswsMoreMenuWired = true;
+                    const closeAll = () => document.querySelectorAll(".nsws-more-menu.open, .nsws-more-btn.open").forEach(x => x.classList.remove("open"));
+                    window.addEventListener("pointerdown", e => {
+                        if (!e.target.closest?.(".nsws-more-menu, .nsws-more-btn")) closeAll();
+                    }, true);
+                    window.addEventListener("keydown", e => {
+                        if (e.code === "Escape" && document.querySelector(".nsws-more-menu.open")) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            closeAll();
                         }
                     }, true);
                 }

@@ -1,5 +1,13 @@
 [
     {
+        "version": "v12.32",
+        "changes": [
+            "Tidier bottom bar on the home menu: it fits on one row again",
+            "Fullscreen, Music and Chat are icon buttons now (hover to see which is which)",
+            "Referrals, Credits and Race Control moved into a new More menu"
+        ]
+    },
+    {
         "version": "v12.31",
         "changes": [
             "Build Off: once you've sent your track you can watch the others build from the cup menu, with their camera and the block in their hand",
