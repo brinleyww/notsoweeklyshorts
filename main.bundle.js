@@ -10050,7 +10050,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.WheelInfoScale = 43] = "WheelInfoScale",
                 e[e.WatchUnlimited = 44] = "WatchUnlimited",
                 e[e.NoRespawnTime = 45] = "NoRespawnTime",
-                e[e.LiveDifference = 46] = "LiveDifference"
+                e[e.LiveDifference = 46] = "LiveDifference",
+                e[e.GrassTufts = 47] = "GrassTufts"
             }(i || (i = {}));
             const r = i
         }
@@ -53564,6 +53565,24 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
                 value: "true"
             }], R.A.LowPerformanceMode, ( () => {
+                // Penalty grass sprites go off with Low performance mode and back on without it.
+                const pending = C.get(this, Ps, "f");
+                pending.set(R.A.GrassTufts, "true" == pending.get(R.A.LowPerformanceMode) ? "false" : "true");
+                C.get(this, bs, "f").updateSettings(Array.from(pending));
+                C.get(this, ws, "f").generateMeshes();
+                const scroll = C.get(this, ks, "f").scrollTop;
+                C.get(this, ms, "m", Ns).call(this);
+                C.get(this, ks, "f").scrollTop = scroll
+            }
+            )),
+            // Better Editor's grass tufts on penalty grass blocks (tm_runtime.js).
+            C.get(this, ms, "m", Gs).call(this, "Penalty grass sprites", [{
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "Off"),
+                value: "false"
+            }, {
+                title: gs.getFromLanguage(C.get(this, Cs, "f"), "On"),
+                value: "true"
+            }], R.A.GrassTufts, ( () => {
                 C.get(this, ws, "f").generateMeshes()
             }
             )),
@@ -54344,9 +54363,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         const DEVICE_PRESET_STORAGE_KEY = "_nswsDevicePreset";
         const POLYFX_PRESET_STORAGE_KEY = "_polyfxGraphicsPreset";
         const DEVICE_PRESETS = [
-            { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", fog: "false", renderScale: "0.75", polyFx: "0", solidBackground: "true" },
-            { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", fog: "false", renderScale: "1", polyFx: "1", solidBackground: "false" },
-            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", fog: "false", renderScale: "1", polyFx: "4", solidBackground: "false", colorCorrect: "true" }
+            { id: "low", title: "Low End Device", hint: "Best performance", lowPerformance: "true", shadows: 0, effects: "false", fog: "false", renderScale: "0.75", polyFx: "0", solidBackground: "true", grassTufts: "false" },
+            { id: "high", title: "High End Device", hint: "Default settings", lowPerformance: "false", shadows: 2, effects: "true", fog: "false", renderScale: "1", polyFx: "1", solidBackground: "false", grassTufts: "true" },
+            { id: "ultra", title: "Ultra", hint: "Ultra shadows and graphics", lowPerformance: "false", shadows: 5, effects: "true", fog: "false", renderScale: "1", polyFx: "4", solidBackground: "false", colorCorrect: "true", grassTufts: "true" }
         ];
         const DEVICE_PRESET_ICONS = {
             low: '<rect x="17" y="5" width="30" height="54" rx="6"/><path d="M28 11h8M29 52h6"/>',
@@ -54357,13 +54376,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             return '<svg class="device-preset-icon" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' + DEVICE_PRESET_ICONS[id] + "</svg>";
         }
         // Ultra shadows need a shadow texture larger than some GPUs allow.
-        // The menu background is left out of preset matching, so changing it alone keeps the preset highlighted.
+        // The menu background and penalty grass sprites are left out of preset matching, so changing one alone keeps the preset highlighted.
         function devicePresetSettings(preset, renderer, forMatching) {
             let shadows = preset.shadows;
             for (; shadows > 0 && !renderer.isShadowQualitySupported(shadows); )
                 shadows--;
             const list = [[R.A.LowPerformanceMode, preset.lowPerformance], [R.A.ShadowQuality, shadows.toString()], [R.A.CloudsEnabled, preset.effects], [R.A.ParticlesEnabled, preset.effects], [R.A.FogEnabled, preset.fog], [R.A.RenderScale, preset.renderScale]];
-            if (!forMatching) list.push([R.A.SolidMenuBackground, preset.solidBackground]);
+            if (!forMatching) list.push([R.A.SolidMenuBackground, preset.solidBackground], [R.A.GrassTufts, preset.grassTufts]);
             return list;
         }
         function getPolyFxPreset() {
@@ -60184,6 +60203,16 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     ,
                     C.get(this, ld, "f").set(e.id, n)
                 }
+                // Penalty grass sprites changed: drop the blocks' built meshes (the ones with penalty grass, when this
+                // Better Editor can tell), so the next generateMeshes builds them again with or without the tufts.
+                window.__nswsTMRebuildMeshes = () => {
+                    for (const {configuration: e, colors: c} of C.get(this, ld, "f").values()) {
+                        if (null == e.tm || null == c.build || !1 === self.TM?.hasTufts?.(e.id))
+                            continue;
+                        for (const [k, m] of Map.prototype.entries.call(c))
+                            null != m && (m.geometry?.dispose(), Map.prototype.set.call(c, k, null))
+                    }
+                }
             }
             isPartCombinationAllowed(e, t) {
                 const n = C.get(this, od, "m", hd).call(this, e.id, t.id);
@@ -62331,14 +62360,19 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, _u, e, "f");
                 const t = e.loadSettings();
                 null != t && this.updateSettings(t);
+                // Saved before Penalty grass sprites existed: they start off on Low performance mode, as they were.
+                null != t && !t.some(([k]) => k === R.A.GrassTufts) && this.getSettingBoolean(R.A.LowPerformanceMode) && this.updateSettings([[R.A.GrassTufts, "false"]]);
+                this.__nswsTufts = this.getSettingBoolean(R.A.GrassTufts);
                 const n = e.loadKeyBindings();
                 null != n && C.get(this, Mu, "m", Pu).call(this, n);
                 keyBindSettings = this;
                 window.__nswsSettingBoolean = (name) => name in R.A && this.getSettingBoolean(R.A[name]);
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
+                // Read by Better Editor's tm_runtime.js when it builds a block's mesh.
+                window.__nswsGrassTufts = () => this.getSettingBoolean(R.A.GrassTufts);
             }
             defaultSettings() {
-                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "false"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"], [R.A.NoRespawnTime, "true"], [R.A.LiveDifference, "false"]])
+                return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "false"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"], [R.A.NoRespawnTime, "true"], [R.A.LiveDifference, "false"], [R.A.GrassTufts, "true"]])
             }
             defaultKeyBindings() {
                 return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
@@ -62368,7 +62402,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     C.get(this, Cu, "f").set(t, n)
                 }
                 self.TM?.hud?.setWheels(this.getSettingBoolean(R.A.WheelInfo)),
-                self.TM?.hud?.setWheelsSize?.(this.getSettingFloat(R.A.WheelInfoScale))
+                self.TM?.hud?.setWheelsSize?.(this.getSettingFloat(R.A.WheelInfoScale));
+                // Better Editor's penalty grass tufts are part of each block's mesh, so the blocks are built again.
+                const tufts = this.getSettingBoolean(R.A.GrassTufts);
+                null != this.__nswsTufts && tufts !== this.__nswsTufts && window.__nswsTMRebuildMeshes?.();
+                this.__nswsTufts = tufts
             }
             saveSettings() {
                 C.get(this, _u, "f").saveSettings(C.get(this, Cu, "f"))

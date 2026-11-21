@@ -1,5 +1,12 @@
 [
     {
+        "version": "v12.36",
+        "changes": [
+            "New Penalty grass sprites setting in Graphics, to turn the grass tufts on Better Editor penalty grass on or off",
+            "Low End Device and Low performance mode turn them off, High End and Ultra turn them on"
+        ]
+    },
+    {
         "version": "v12.35",
         "changes": [
             "My Tracks: new My order sort, drag a track by its handle to put your tracks in any order",
