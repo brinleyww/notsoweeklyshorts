@@ -13195,6 +13195,12 @@
             }
             function i(i) {
                 const s = i.data;
+                s.messageType != Ki.Verify && s.messageType != Ki.TestDeterminism && s.messageType != Ki.Init || __parkDrop();
+                if (null != s.carId && __parkAlias.has(s.carId)) {
+                    const pid = s.carId;
+                    s.carId = __parkAlias.get(pid);
+                    s.messageType == Ki.DeleteCar && __parkAlias.delete(pid)
+                }
                 switch (s.messageType) {
                 case Ki.Init:
                     !function(e) {
@@ -13219,6 +13225,7 @@
                             t.ccall("addTrackPartConfiguration", "void", ["number", "number", "number", "number", "number", "number", "number", "number", "number", "number", "boolean", "number", "number", "number"], [l.id, A, l.vertices.length, null != l.detector ? l.detector.type : -1, null != l.detector ? l.detector.center[0] : 0, null != l.detector ? l.detector.center[1] : 0, null != l.detector ? l.detector.center[2] : 0, null != l.detector ? l.detector.size[0] : 0, null != l.detector ? l.detector.size[1] : 0, null != l.detector ? l.detector.size[2] : 0, null != l.startOffset, null != l.startOffset ? l.startOffset[0] : 0, null != l.startOffset ? l.startOffset[1] : 0, null != l.startOffset ? l.startOffset[2] : 0]),
                             t.ccall("free", "void", ["number"], [A])
                         }
+                        __parkOn = !!r && "nsws-cuppa-bots" !== self.name;
                         if (r)
                             if (self.requestAnimationFrame) {
                                 let d = performance.now();
@@ -13321,10 +13328,13 @@
                         const o = i.getStartTransform();
                         if (null == o)
                             throw new Error("Track has no starting point");
-                        const l = t.carId;
-                        r(l, t.mountainVertices, new R(t.mountainOffset.x,t.mountainOffset.y,t.mountainOffset.z), i, o, version),
+                        const l = t.carId
+                          , parked = __parkTake(l, t.trackData, version, i);
+                        null == parked && (r(l, t.mountainVertices, new R(t.mountainOffset.x,t.mountainOffset.y,t.mountainOffset.z), i, o, version),
+                        __parkKeep(l, t.trackData, version)),
                         e.push({
-                            id: l,
+                            id: parked ?? l,
+                            pageId: null == parked ? null : l,
                             controls: s,
                             userControls: n,
                             hasStarted: !1,
@@ -13340,6 +13350,12 @@
                         for (let i = 0; i < e.length; i++) {
                             const s = e[i];
                             if (s.id == r) {
+                                if (null != __park && __park.wid === r && !__park.parked) {
+                                    s.controls.dispose(),
+                                    e.splice(i, 1),
+                                    __park.parked = !0;
+                                    break
+                                }
                                 s.controls.dispose(),
                                 __rocketFree(r),
                                 __tmActive.delete(r),
@@ -13426,6 +13442,59 @@
             // Messages from before the physics was ready run at the end, once everything below is defined: a CreateCar
             // run here met __RL before its initialisation (a worker made just before a Watch).
             const queued = jo.splice(0);
+            // Restarts. Building a car rebuilds the whole track's collision world (on a big Better Editor track a second or
+            // more, while the car can't move). The physics' state is all in its heap (one mutable global, the stack
+            // pointer) plus Better Editor's per-car record (fxSave). So the realtime worker copies both right after
+            // building the only car it has; deleting that car parks it instead, and the next car on the same track puts
+            // the copy back and drives the parked model under its page id. Anything else drops the copy.
+            let __park = null
+              , __parkOn = !1;
+            const __parkAlias = new Map;
+            function __parkKeep(id, save, version) {
+                if (!__parkOn || 0 != e.length || null != __park)
+                    return;
+                const H = t.HEAPU8
+                  , mem = self.navigator?.deviceMemory;
+                // The copy is as big as the heap: never more than an eighth of the device's memory.
+                if (H.length > ("number" == typeof mem ? mem : 8) * 134217728)
+                    return;
+                let tm = null;
+                if (__tmActive.has(id)) {
+                    if ("function" != typeof self.TM?.fxSave || "function" != typeof self.TM.fxLoad)
+                        return;
+                    tm = self.TM.fxSave(id)
+                }
+                __park = { wid: id, save, version, heap: H.slice(), tm, parked: !1 }
+            }
+            function __parkTake(id, save, version, track) {
+                const p = __park;
+                if (null == p)
+                    return null;
+                if (!p.parked || 0 != e.length || p.save !== save || p.version !== version || __rocketCars.has(p.wid) != __rocketTracks.has(track.getId()))
+                    return __parkDrop(),
+                    null;
+                t.HEAPU8.set(p.heap),
+                null != p.tm && self.TM.fxLoad(p.wid, p.tm),
+                __royaleInit(p.wid, track),
+                __collide.delete(p.wid),
+                p.parked = !1,
+                __parkAlias.set(id, p.wid);
+                return p.wid
+            }
+            function __parkDrop() {
+                const p = __park;
+                __park = null;
+                null != p && p.parked && (__rocketFree(p.wid),
+                __tmActive.delete(p.wid),
+                __royaleCars.delete(p.wid),
+                __collide.delete(p.wid),
+                t.ccall("deleteCarModel", "void", ["number"], [p.wid]))
+            }
+            // A car driving a parked model sends its states under the page's id.
+            function __parkId(car, u8) {
+                null != car.pageId && new DataView(u8.buffer,u8.byteOffset,4).setUint32(0, car.pageId, !0);
+                return u8
+            }
             function r(e, i, r, s, n, rocketVersion) {
                 const tmCar = null == self.TM ? null : (__tmAddProxies(),
                 self.TM.prepareCar(e, i, r, s, ( (t, e, i) => Ao(t).tiles.rotated(e, i))));
@@ -13786,7 +13855,7 @@
                     c.owedAt.delete(id);
                     __len(impulse) > .05 && hits.push({ id, impulse, at });
                 }
-                hits.length && postMessage({ messageType: 12, carId: car.id, hits })
+                hits.length && postMessage({ messageType: 12, carId: car.pageId ?? car.id, hits })
             }
             // Not So Weekly Shorts: Rocket League mode. On these tracks the car can jump (higher the longer
             // it's held), double jump or flip once in the air, boost, and pitch/yaw/roll in the air. Rocket
@@ -14174,7 +14243,7 @@
                     const held = self.TM.fxSkip(e.id, t.HEAPU8);
                     if (null != held)
                         return self.TM.fxRecord?.(e.id, held, !0),
-                        new Uint8Array(held)
+                        __parkId(e, new Uint8Array(held))
                 }
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
                 tm && self.TM.fxStep(e.id, t.HEAPU8, t.HEAPU8.slice(n, n + s).buffer),
@@ -14184,7 +14253,7 @@
                 const out = new Uint8Array(t.HEAPU8.buffer,n,s);
                 // Runs are recorded from the state's controls: the keys pressed, not the ones Better Editor's effects changed.
                 tm && self.TM.fxRecord?.(e.id, out);
-                return out
+                return __parkId(e, out)
             }
             function a(e, i) {
                 return stepCar(e, i).slice().buffer
