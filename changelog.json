@@ -1,5 +1,14 @@
 [
     {
+        "version": "v12.33",
+        "changes": [
+            "Cuppa: new Casual mode when hosting a cup, next to Competitive",
+            "Casual has no time limit, no points and no winner, just drive the track as long as you like",
+            "Join a casual cup at any time and you're on the track straight away",
+            "Vote for a new track from the cup menu: when over half the racers want one, the track changes"
+        ]
+    },
+    {
         "version": "v12.32",
         "changes": [
             "Tidier bottom bar on the home menu: it fits on one row again",

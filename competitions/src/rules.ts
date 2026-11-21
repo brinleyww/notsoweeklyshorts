@@ -56,6 +56,9 @@ export interface Rules {
   uploads: boolean;
   bots: number;
   botSkill: BotSkill;
+  // No clock, no points and no winner: everyone drives the track as long as they like, joins any time,
+  // and the track changes when the racers vote for a new one (or the organizer moves on).
+  casual: boolean;
 }
 
 export interface Format {
@@ -132,6 +135,7 @@ const base: Rules = {
   uploads: true,
   bots: 0,
   botSkill: 'mixed',
+  casual: false,
 };
 
 const format = (id: string, name: string, icon: string, blurb: string, rules: Partial<Rules>): Format => ({
@@ -193,6 +197,12 @@ export const FORMATS: Format[] = [
     customOnly: true,
     warmupMode: 'first',
     warmup: 45,
+  }),
+  format('casual', 'Casual', 'users', 'No clock, no points, no winner. Drive each track as long as you like and vote for a new one.', {
+    casual: true,
+    style: 'timeattack',
+    perTrack: 1,
+    next: 'vote',
   }),
   format('bumper', 'Bumper Cars', 'burst', 'Cars collide! Shove your rivals off the road. First to 1200.', {
     collisions: true,
@@ -260,7 +270,19 @@ export function cleanRules(value: unknown): Rules {
     uploads: bool(o.uploads, base.uploads),
     bots: int(o.bots, 0, MAX_BOTS, base.bots),
     botSkill: pick(o.botSkill, ['easy', 'medium', 'hard', 'expert', 'mixed', 'match'] as const, base.botSkill),
+    casual: bool(o.casual, base.casual),
   };
+  if (r.casual) {
+    // Endless free driving on each track, open to anyone at any time; a vote moves everyone on.
+    r.mode = 'points';
+    r.finalist = false;
+    r.style = 'timeattack';
+    r.perTrack = 1;
+    r.draft = false;
+    r.warmupMode = 'off';
+    r.skipVotes = true;
+    r.lateJoin = true;
+  }
   if (r.collisions) r.uploads = false;
   if (r.mode === 'knockout') r.lateJoin = false;
   if (r.mode !== 'points') r.finalist = false;
@@ -270,6 +292,10 @@ export function cleanRules(value: unknown): Rules {
 }
 
 export function rulesSummary(r: Rules) {
+  if (r.casual) {
+    const custom = r.build ? `tracks built in ${r.build} min` : r.customOnly ? 'custom tracks only' : r.customTracks ? 'plus custom tracks' : '';
+    return ['No clock, no points', 'vote for a new track any time', NEXT_LABEL[r.next], custom].filter(Boolean).join(' · ');
+  }
   const goal =
     r.mode === 'rounds'
       ? `${r.rounds} rounds, most points wins`

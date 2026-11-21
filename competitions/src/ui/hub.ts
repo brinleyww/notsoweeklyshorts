@@ -26,6 +26,8 @@ interface Settings {
   mix: boolean;
   pick: 'everyone' | 'organizer';
   buildMin: number;
+  // Casual: no clock, no points, no winner. Competitive: the formats with rules and a champion.
+  casual: boolean;
 }
 interface Picked {
   code: string;
@@ -142,12 +144,13 @@ function loadSettings(): Settings {
     max: Number.isInteger(saved.max) ? Math.min(MAX_RACERS, Math.max(2, saved.max as number)) : 10,
     name: typeof saved.name === 'string' ? saved.name : '',
     pool: { shorts: pool.shorts !== false, weeks: Array.isArray(pool.weeks) ? pool.weeks.filter((w) => Number.isInteger(w)) : [], main: strings(pool.main).filter((e) => MAIN.includes(e)), community: strings(pool.community) },
-    format: typeof saved.format === 'string' && formatById(saved.format) && saved.format !== 'build' ? saved.format : 'quickplay',
+    format: typeof saved.format === 'string' && formatById(saved.format) && saved.format !== 'build' && saved.format !== 'casual' ? saved.format : 'quickplay',
     role: saved.role === 'spectator' ? 'spectator' : 'racer',
     source: saved.source === 'custom' || saved.source === 'build' ? saved.source : 'maps',
     mix: saved.mix === true,
     pick: saved.pick === 'organizer' ? 'organizer' : 'everyone',
     buildMin: Number.isInteger(saved.buildMin) ? Math.min(30, Math.max(1, saved.buildMin as number)) : 8,
+    casual: saved.casual === true || saved.format === 'casual',
   };
 }
 
@@ -280,6 +283,14 @@ export class Hub {
     const source = h('div', { class: 'srcrows' });
     const paintSource = (): void => fill(source, ...this.#sourceRows(paintSource));
     paintSource();
+    const hint = h('p', { class: 'hint' });
+    const paintHint = () =>
+      (hint.textContent = st.casual
+        ? 'Casual: no time limit and no winner. Everyone drives the track as long as they like, can join at any time, and votes for a new track when they are ready. Room size counts everyone, racers and spectators.'
+        : st.source === 'build'
+          ? 'You can change the build time and every rule once the room is open. Room size counts everyone, racers and spectators.'
+          : 'You choose the format and rules once the room is open. Room size counts everyone, racers and spectators.');
+    paintHint();
     const right = h(
       'section',
       { class: 'col' },
@@ -303,14 +314,32 @@ export class Hub {
               st.source = v;
               this.#save();
               paintSource();
+              paintHint();
             },
           ),
         ),
         source,
+        h(
+          'div',
+          { class: 'frow' },
+          h('label', null, 'Mode'),
+          seg<boolean>(
+            [
+              [false, 'Competitive'],
+              [true, 'Casual'],
+            ],
+            () => st.casual,
+            (v) => {
+              st.casual = v;
+              this.#save();
+              paintHint();
+            },
+          ),
+        ),
         h('div', { class: 'frow' }, h('label', null, 'Room size'), size, sizeVal),
         h('div', { class: 'frow' }, h('label', null, 'Listed'), seg<boolean>([[true, 'Public'], [false, 'Code only']], () => st.public, (v) => (st.public = v))),
         h('div', { class: 'frow' }, h('label', null, 'You'), seg<'racer' | 'spectator'>([['racer', 'Race'], ['spectator', 'Only organize']], () => st.role, (v) => (st.role = v))),
-        h('p', { class: 'hint' }, st.source === 'build' ? 'You can change the build time and every rule once the room is open. Room size counts everyone, racers and spectators.' : 'You choose the format and rules once the room is open. Room size counts everyone, racers and spectators.'),
+        hint,
         btn('Open the room', () => {
           st.name = name.value.trim();
           this.#save();
@@ -576,7 +605,7 @@ export class Hub {
       if (!loaded?.trackData?.hasStartingPoint?.()) throw new Error("That map couldn't be loaded. Try again.");
       const chat = randomHex(16);
       const saved = formatById(st.format);
-      const format = build ? formatById('build')! : saved && saved.id !== 'build' ? saved : FORMATS[0];
+      const format = st.casual ? formatById('casual')! : build ? formatById('build')! : saved && saved.id !== 'build' && saved.id !== 'casual' ? saved : FORMATS[0];
       const rules = cleanRules({
         ...format.rules,
         ...(custom ? { customTracks: true, customOnly: !st.mix, customPick: st.pick } : {}),

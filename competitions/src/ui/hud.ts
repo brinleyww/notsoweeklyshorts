@@ -118,11 +118,12 @@ export class Hud {
       case 'countdown':
         return 'Get ready';
       case 'racing':
+        if (s.rules.casual) return 'Casual · drive as long as you like · Tab to vote for a new track';
         return s.rules.style === 'timeattack' ? 'Time attack · your best run counts' : r?.closeAt ? 'Someone finished!' : 'Racing';
       case 'checking':
         return 'Checking runs…';
       case 'results':
-        return s.hold ? 'Paused by the organizer' : s.winner != null ? 'We have a winner!' : 'Round results';
+        return s.hold ? 'Paused by the organizer' : s.winner != null ? 'We have a winner!' : s.rules.casual ? 'Best times on this track' : 'Round results';
       case 'vote':
         return s.vote?.kind === 'vote' ? 'Vote for the next track' : 'Picking the next track';
       case 'podium':
@@ -139,11 +140,13 @@ export class Hud {
     if (!this.#changed('bar', key)) return;
     // The big number is the round on this track (2/3); the cup's own round count is in the line below.
     const n = r?.n ?? s.rounds + (s.phase === 'lobby' ? 0 : 1);
-    const onTrack = s.phase === 'lobby' || s.phase === 'draft' || !r ? null : `${Math.max(1, r.k)}/${s.rules.perTrack}`;
-    const label = h('small', null, onTrack ? 'ROUND' : s.phase === 'build' ? 'BUILD' : 'LOBBY');
-    const num = h('div', { class: 'num', title: onTrack ? 'Rounds on this track' : null }, label, h('span', { class: 'mono' }, onTrack ?? icon(s.phase === 'build' ? 'hammer' : 'flag')));
+    const casual = s.rules.casual;
+    // Casual: the big number counts the tracks driven together.
+    const onTrack = s.phase === 'lobby' || s.phase === 'draft' || !r ? null : casual ? String(Math.max(1, n)) : `${Math.max(1, r.k)}/${s.rules.perTrack}`;
+    const label = h('small', null, onTrack ? (casual ? 'TRACK' : 'ROUND') : s.phase === 'build' ? 'BUILD' : 'LOBBY');
+    const num = h('div', { class: 'num', title: onTrack ? (casual ? 'Tracks so far' : 'Rounds on this track') : null }, label, h('span', { class: 'mono' }, onTrack ?? icon(s.phase === 'build' ? 'hammer' : 'flag')));
     const title = !onTrack ? s.name : r!.track.name;
-    const cupRound = onTrack ? (s.rules.mode === 'rounds' ? `Cup round ${Math.max(1, n)}/${s.rules.rounds}` : `Cup round ${Math.max(1, n)}`) : '';
+    const cupRound = !onTrack || casual ? '' : s.rules.mode === 'rounds' ? `Cup round ${Math.max(1, n)}/${s.rules.rounds}` : `Cup round ${Math.max(1, n)}`;
     const mid = h('div', { class: 'mid' }, h('div', { class: 'track ell' }, title), h('div', { class: 'sub ell' }, [cupRound, this.#phaseLabel(s)].filter(Boolean).join(' · ')));
     const clockLabel = h('small');
     const clockVal = h('span', { class: 'mono' });
@@ -177,7 +180,8 @@ export class Hud {
         if (r?.startAt) [label, value] = ['Starts in', fmtClock(r.startAt - now)];
         break;
       case 'racing':
-        if (!r?.startAt) break;
+        // Casual tracks have no clock to show.
+        if (!r?.startAt || s.rules.casual) break;
         if (s.rules.style === 'timeattack' && r.endAt) [label, value, warn] = ['Time left', fmtClock(r.endAt - now), r.endAt - now < 30_000];
         else if (r.closeAt) [label, value, warn] = ['Finish in', fmtClock(Math.min(r.closeAt, r.endAt ?? Infinity) - now), true];
         else if (r.endAt && r.endAt - now < 60_000) [label, value, warn] = ['Time limit', fmtClock(r.endAt - now), r.endAt - now < 15_000];
@@ -247,14 +251,15 @@ export class Hud {
 
   #renderBoard(s: CupState) {
     const app = this.app;
-    const visible = !['podium', 'lobby', 'draft', 'results', 'checking', 'vote'].includes(s.phase);
+    const r = s.round!;
+    const live = ['countdown', 'racing'].includes(s.phase) && !!r;
+    // A casual cup has no standings, only the live times on the track.
+    const visible = !['podium', 'lobby', 'draft', 'results', 'checking', 'vote'].includes(s.phase) && (live || !s.rules.casual);
     show(this.#board, visible);
     if (!visible) {
       this.#rows = [];
       return;
     }
-    const r = s.round!;
-    const live = ['countdown', 'racing'].includes(s.phase) && !!r;
     let order: number[];
     if (live) {
       const runs = r.runs;
@@ -289,8 +294,8 @@ export class Hud {
     const head = h(
       'div',
       { class: 'head' },
-      h('span', null, live ? (s.rules.style === 'timeattack' ? 'TIME ATTACK' : 'LIVE') : 'STANDINGS'),
-      h('span', null, live ? `${Object.keys(r.runs).length}/${r.racers.length} finished` : s.rules.mode === 'knockout' ? `${s.players.filter((p) => p.role === 'racer' && !p.out).length} left` : s.rules.mode === 'rounds' ? `round ${s.rounds}/${s.rules.rounds}` : `to ${s.rules.target}`),
+      h('span', null, live ? (s.rules.casual ? 'BEST TIMES' : s.rules.style === 'timeattack' ? 'TIME ATTACK' : 'LIVE') : 'STANDINGS'),
+      h('span', null, live ? (s.rules.casual ? `${r.racers.filter((u) => !player(s, u)?.away).length} driving` : `${Object.keys(r.runs).length}/${r.racers.length} finished`) : s.rules.mode === 'knockout' ? `${s.players.filter((p) => p.role === 'racer' && !p.out).length} left` : s.rules.mode === 'rounds' ? `round ${s.rounds}/${s.rules.rounds}` : `to ${s.rules.target}`),
     );
     const firstTime = live ? Math.min(...Object.values(r.runs).filter((x) => x.chk !== 2).map((x) => x.f)) : Infinity;
     this.#rows = [];
@@ -312,8 +317,8 @@ export class Hud {
         val.textContent = run.f === firstTime ? fmtTime(run.f) : fmtGap(run.f - firstTime);
         val.classList.add(run.f === firstTime ? 'fast' : 'time');
         if (run.chk === 0) val.textContent += ' ·';
-        if (s.rules.mode !== 'knockout') {
-          const place = Object.values(r.runs).filter((x) => x.chk !== 2 && x.f < run.f).length + 1;
+        if (s.rules.mode !== 'knockout' && !s.rules.casual) {
+          const place =Object.values(r.runs).filter((x) => x.chk !== 2 && x.f < run.f).length + 1;
           gain = h('span', { class: 'gain' }, `+${s.rules.points[place - 1] ?? 0}`);
         }
       } else if (isDnf) val.textContent = 'DNF';
@@ -451,6 +456,8 @@ export class Hud {
       prev.sort((a, b) => b.pts - a.pts).forEach((p, i) => before.set(p.u, i + 1));
     }
     const first = last.rows.find((r) => r[1] != null)?.[1] ?? null;
+    // Casual: times only, no points, totals or moves.
+    const scored = s.rules.mode !== 'knockout' && !s.rules.casual;
     const rows = last.void
       ? [h('tr', null, h('td', { colspan: 7, class: 'dim', style: 'text-align:center;padding:24px' }, 'This round was voided. No points were given.'))]
       : last.rows.map((row, i) => {
@@ -470,11 +477,11 @@ export class Hud {
               (row[5] ?? 0) & 2 ? h('span', { class: 'badge wr' }, 'WR') : (row[5] ?? 0) & 1 ? h('span', { class: 'badge' }, 'PB') : null,
               row[4] ? h('span', { class: 'badge', style: 'color:var(--bad)' }, 'OUT') : null,
             ),
-            h('td', { class: 't mono' + (row[2] === 1 ? ' purple' : '') }, row[1] != null ? fmtTime(row[1]) : h('span', { class: 'bad' }, 'DNF')),
+            h('td', { class: 't mono' + (row[2] === 1 ? ' purple' : '') }, row[1] != null ? fmtTime(row[1]) : s.rules.casual ? h('span', { class: 'dim' }, '—') : h('span', { class: 'bad' }, 'DNF')),
             h('td', { class: 'gap mono' }, row[1] != null && first != null && row[1] !== first ? fmtGap(row[1] - first) : ''),
-            s.rules.mode !== 'knockout' ? h('td', { class: 'pts mono' }, row[3] ? `+${row[3]}` : '') : null,
-            s.rules.mode !== 'knockout' ? h('td', { class: 'tot mono' }, isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p?.pts ?? 0)) : null,
-            h('td', { class: 'mv trend ' + (mv > 0 ? 'up' : mv < 0 ? 'down' : '') }, mv > 0 ? `▲${mv}` : mv < 0 ? `▼${-mv}` : ''),
+            scored ? h('td', { class: 'pts mono' }, row[3] ? `+${row[3]}` : '') : null,
+            scored ? h('td', { class: 'tot mono' }, isFinalist(s, p) ? h('span', { class: 'finalist' }, 'Finalist') : String(p?.pts ?? 0)) : null,
+            s.rules.casual ? null : h('td', { class: 'mv trend ' + (mv > 0 ? 'up' : mv < 0 ? 'down' : '') }, mv > 0 ? `▲${mv}` : mv < 0 ? `▼${-mv}` : ''),
           );
         });
     const winner = s.winner != null ? player(s, s.winner) : null;
@@ -496,7 +503,7 @@ export class Hud {
       h(
         'div',
         { class: 'card results' },
-        h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, `Round ${last.n} results`), h('h2', null, last.track))),
+        h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, s.rules.casual ? `Track ${last.n} · best times` : `Round ${last.n} results`), h('h2', null, last.track))),
         banner,
         h(
           'div',
@@ -504,7 +511,7 @@ export class Hud {
           h(
             'table',
             null,
-            last.void ? null : h('thead', null, h('tr', null, h('th'), h('th', null, 'Racer'), h('th', null, 'Time'), h('th', null, 'Gap'), s.rules.mode !== 'knockout' ? [h('th', null, 'Pts'), h('th', null, 'Total')] : null, h('th'))),
+            last.void ? null : h('thead', null, h('tr', null, h('th'), h('th', null, 'Racer'), h('th', null, 'Time'), h('th', null, 'Gap'), scored ? [h('th', null, 'Pts'), h('th', null, 'Total')] : null, s.rules.casual ? null : h('th'))),
             h('tbody', null, rows),
           ),
         ),
@@ -521,6 +528,7 @@ export class Hud {
 
   #nextLine(s: CupState) {
     const r = s.round;
+    if (s.rules.casual) return s.playlist.length ? 'Next track coming up' : `New track next · ${NEXT_LABEL[s.rules.next]}`;
     if (r && r.k < s.rules.perTrack) return `Same track again: round ${r.k + 1} of ${s.rules.perTrack}`;
     return `New track next · ${NEXT_LABEL[s.rules.next]}`;
   }
@@ -823,6 +831,28 @@ export class Hud {
       acts.push(btn('New tracks', () => app.org!.raceAgain(true)));
       acts.push(btn([icon('exit'), 'Close the cup'], () => app.onLeave('You closed the cup.'), 'danger'));
     } else acts.push(btn([icon('exit'), 'Leave'], () => app.onLeave(''), 'ghost'));
+    if (s.rules.casual) {
+      // Nobody wins a casual session: just who drove and how many tracks.
+      const tracks = app.history.filter((x) => !x.void).length;
+      const who = s.players.filter((p) => !p.bot && (p.role === 'racer' || p.best != null));
+      fill(
+        this.#podium,
+        h(
+          'div',
+          { class: 'podium' },
+          h(
+            'div',
+            { class: 'title' },
+            h('div', { class: 'kicker' }, `${PRODUCT.toUpperCase()} · ${s.name.toUpperCase()}`),
+            h('h1', null, 'Thanks for driving!'),
+            h('div', { class: 'dim', style: 'margin-top:10px;font-size:18px' }, `${tracks} track${tracks === 1 ? '' : 's'} together`),
+          ),
+          who.length ? h('div', { class: 'rest' }, who.map((p) => h('span', null, `${flag(p.cc)} ${p.name}`, botTag(p, s)))) : null,
+          h('div', { class: 'actions' }, acts.filter((b) => !b.textContent?.includes('Full results'))),
+        ),
+      );
+      return;
+    }
     const me = table.findIndex((p) => p.u === app.me);
     const winner = table[0];
     const wrap = h(

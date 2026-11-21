@@ -148,9 +148,10 @@ export class Panel {
       btn(icon('keyboard'), () => this.onKeys(), 'small ghost icon', 'Keys'),
       btn(icon('x'), () => this.setOpen(false), 'small ghost icon', 'Close (Tab or Esc)'),
     ];
+    if (s.rules.casual && this.tab === 'standings') this.tab = 'cup';
     const tabs: [Tab, string, string, string | number | null][] = [
       ['cup', 'Cup', 'cuppa', null],
-      ['standings', 'Standings', 'trophy', null],
+      ...(s.rules.casual ? [] : [['standings', 'Standings', 'trophy', null] as [Tab, string, string, null]]),
       ['rounds', 'Rounds', 'flag', app.history.filter((x) => !x.void).length || null],
       ['players', 'Players', 'users', s.players.filter((p) => !p.away && !(p.bot && p.role !== 'racer')).length],
     ];
@@ -197,7 +198,8 @@ export class Panel {
       out.push(this.#inviteHero(s));
       out.push(this.#roleChooser(s));
       out.push(this.#sourceSection(s));
-      if (!s.rules.build) out.push(this.#formatSection(s));
+      out.push(this.#modeSection(s));
+      if (!s.rules.build && !s.rules.casual) out.push(this.#formatSection(s));
       // Every rule of the chosen format can be changed right here, one by one.
       out.push(...this.#rulesTab(s));
     } else {
@@ -380,8 +382,42 @@ export class Panel {
               h('button', { class: racing ? '' : 'on', onclick: click(() => set('spectator')) }, 'Watch'),
             ),
         !allowed && !racing ? h('span', { class: 'dim', style: 'font-size:14px;width:100%' }, s.rules.mode === 'knockout' ? 'Knockout cups lock the grid once they start.' : 'The grid is closed or full.') : null,
-        racing && s.phase !== 'lobby' ? h('span', { class: 'dim', style: 'font-size:14px;width:100%' }, 'Switching to Watch during a round retires you from it.') : null,
+        racing && s.phase !== 'lobby' && !s.rules.casual ? h('span', { class: 'dim', style: 'font-size:14px;width:100%' }, 'Switching to Watch during a round retires you from it.') : null,
         app.bestRun() ? h('div', { class: 'clip' }, btn([icon('clip'), 'Clip my best run'], () => this.#clip(), 'small ghost')) : null,
+      ),
+    );
+  }
+
+  // Competitive (formats, points, a winner) or Casual (no clock, no points, no winner).
+  #modeSection(s: CupState) {
+    const host = this.app.isHost;
+    const casual = s.rules.casual;
+    const pickMode = (v: boolean) => {
+      if (v === casual) return;
+      const id = v ? 'casual' : s.rules.build ? 'build' : 'quickplay';
+      this.#apply(id, { ...cleanRules(formatById(id)!.rules), uploads: s.rules.uploads, bots: s.rules.bots, botSkill: s.rules.botSkill });
+    };
+    const about = casual
+      ? 'No time limit and no winner. Drive each track as long as you like, join any time, and vote for a new track when you are ready.'
+      : 'Rounds against the clock, points and a champion';
+    return h(
+      'div',
+      { class: 'sect' },
+      h('h3', null, 'Mode'),
+      h(
+        'div',
+        { class: 'rules' },
+        h(
+          'div',
+          { class: 'rule' },
+          h('label', null, casual ? 'Casual' : 'Competitive', h('small', null, about)),
+          h(
+            'div',
+            { class: 'seg' },
+            h('button', { class: casual ? '' : 'on', disabled: !host, onclick: click(() => pickMode(false)) }, 'Competitive'),
+            h('button', { class: casual ? 'on' : '', disabled: !host, onclick: click(() => pickMode(true)) }, 'Casual'),
+          ),
+        ),
       ),
     );
   }
@@ -393,7 +429,7 @@ export class Panel {
     const formats = h(
       'div',
       { class: 'formats' },
-      FORMATS.filter((f) => f.id !== 'build').map((f) =>
+      FORMATS.filter((f) => f.id !== 'build' && f.id !== 'casual').map((f) =>
         h(
           'button',
           {
@@ -438,7 +474,8 @@ export class Panel {
     // The next room starts on the format chosen here.
     try {
       const saved = JSON.parse(localStorage.getItem('nsws-sc-host') || '{}');
-      if (!preset && format !== 'build') localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, format }));
+      if (format === 'casual') localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, casual: true }));
+      else if (!preset) localStorage.setItem('nsws-sc-host', JSON.stringify({ ...saved, casual: false, ...(format !== 'build' ? { format } : {}) }));
     } catch {}
   }
 
@@ -448,8 +485,9 @@ export class Panel {
     const table = standings(s, app.history);
     const myPos = table.findIndex((p) => p.u === app.me) + 1;
     const me = app.self;
-    const goal =
-      s.rules.mode === 'rounds'
+    const goal = s.rules.casual
+      ? 'Just for fun'
+      : s.rules.mode === 'rounds'
         ? `Round ${s.rounds} of ${s.rules.rounds}`
         : s.rules.mode === 'knockout'
           ? `${gridCount(s)} left`
@@ -462,7 +500,7 @@ export class Panel {
       h('div', { class: 'tile stat' }, h('small', null, 'Now'), h('b', null, PHASE_TEXT[s.phase])),
       h('div', { class: 'tile stat' }, h('small', null, 'Track'), h('b', { class: 'ell' }, r?.track.name ?? '—')),
       h('div', { class: 'tile stat' }, h('small', null, 'Goal'), h('b', { class: 'ell' }, goal)),
-      h('div', { class: 'tile stat' }, h('small', null, 'You'), h('b', null, me?.role === 'racer' || me?.pts ? (myPos ? [`${ordinal(myPos)} · `, isFinalist(s, me) ? h('span', { class: 'finalist' }, 'Finalist') : `${me?.pts ?? 0} pts`] : '—') : 'Watching')),
+      h('div', { class: 'tile stat' }, h('small', null, 'You'), h('b', null, s.rules.casual ? (me?.role === 'racer' ? 'Driving' : 'Watching') : me?.role === 'racer' || me?.pts ? (myPos ? [`${ordinal(myPos)} · `, isFinalist(s, me) ? h('span', { class: 'finalist' }, 'Finalist') : `${me?.pts ?? 0} pts`] : '—') : 'Watching')),
     );
   }
 
@@ -475,8 +513,8 @@ export class Panel {
     return h(
       'div',
       { class: 'tile', style: 'display:flex;align-items:center;gap:12px;margin-bottom:18px' },
-      h('span', { style: 'flex:1;font-size:17px' }, `Skip this track? ${r.skip.length} of ${here} racers want to. Over half skips it.`),
-      btn(mine ? 'Take back my vote' : 'Vote to skip', () => app.act({ k: 'act', a: 'skip' }), 'small'),
+      h('span', { style: 'flex:1;font-size:17px' }, s.rules.casual ? `Ready for a new track? ${r.skip.length} of ${here} racers are. Over half changes it.` : `Skip this track? ${r.skip.length} of ${here} racers want to. Over half skips it.`),
+      btn(mine ? 'Take back my vote' : s.rules.casual ? 'Vote for a new track' : 'Vote to skip', () => app.act({ k: 'act', a: 'skip' }), 'small'),
     );
   }
 
@@ -598,7 +636,7 @@ export class Panel {
         h(
           'div',
           { class: 'round' },
-          h('div', null, h('span', { class: 'amber' }, `Round ${r.n}`), h('span', { class: 'ell', style: 'flex:1' }, r.track), r.void ? h('span', { class: 'chip' }, 'Voided') : null),
+          h('div', null, h('span', { class: 'amber' }, `${s.rules.casual ? 'Track' : 'Round'} ${r.n}`), h('span', { class: 'ell', style: 'flex:1' }, r.track), r.void ? h('span', { class: 'chip' }, 'Voided') : null),
           r.void
             ? null
             : h(
@@ -607,7 +645,7 @@ export class Panel {
                 r.rows.map((row) => [
                   h('span', { class: 'mono ' + (row[2] === 1 ? 'amber' : 'dim') }, row[2] ? String(row[2]) : '–'),
                   h('span', { class: 'ell' }, player(s, row[0])?.name ?? 'Left', botTag(player(s, row[0])), row[4] ? h('span', { class: 'bad', style: 'font-size:12px' }, '  OUT') : null, this.#inputsBtn(r.n, r.track, row[0], row[1])),
-                  h('span', { class: 'mono' + (row[1] == null ? ' bad' : '') }, row[1] != null ? fmtTime(row[1]) : 'DNF'),
+                  h('span', { class: 'mono' + (row[1] == null && !s.rules.casual ? ' bad' : '') }, row[1] != null ? fmtTime(row[1]) : s.rules.casual ? '—' : 'DNF'),
                   h('span', { class: 'mono amber' }, row[3] ? `+${row[3]}` : ''),
                 ]),
               ),
@@ -1039,8 +1077,29 @@ export class Panel {
       toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'),
       toggle('uploads', 'Upload PBs', 'Cup PBs go on the leaderboards'),
     );
+    const title = lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules');
+    if (r.casual)
+      return [
+        title,
+        bots,
+        sect(
+          'Tracks',
+          r.build
+            ? null
+            : seg('next', 'Next track', 'Who chooses when the racers want a new one', [
+                ['random', 'Random'],
+                ['vote', 'Vote'],
+                ['host', 'Me'],
+              ]),
+          !r.build && r.next !== 'random' ? slider('voteSeconds', 'Choosing time', r.next === 'host' ? 'You get 3x' : 'For the vote', 5, 60, 1, (n) => `${n} s`) : null,
+          slider('countdownSeconds', 'Countdown', 'Before each new track', 3, 10, 1, (n) => `${n} s`),
+          slider('breakSeconds', 'Break', 'Times shown between tracks', 3, 60, 1, (n) => `${n} s`),
+        ),
+        sect('Players', toggle('freecam', 'Spectator free camera', 'Let spectators fly around'), toggle('collisions', 'Bumper cars', 'Cars collide (times never upload)'), toggle('uploads', 'Upload PBs', 'Cup PBs go on the leaderboards')),
+        host && lobby ? this.#presetSection(s) : null,
+      ];
     return [
-      lobby ? null : h('h3', { class: 'rules-title' }, host ? 'Rules (the greyed-out ones are fixed once the cup starts)' : 'Rules'),
+      title,
       bots,
       winning,
       r.mode === 'knockout' ? null : this.#pointsSection(s, lobby && host, set),
@@ -1173,22 +1232,25 @@ export class Panel {
         items.push(btn('Race again on new tracks', () => (org.raceAgain(true), this.setOpen(false))));
         items.push(btn([icon('exit'), 'Close the cup'], () => app.onLeave('You closed the cup.'), 'small danger'));
       }
-      if (s.phase === 'racing') {
+      if (s.rules.casual && s.phase !== 'lobby' && s.phase !== 'podium' && s.phase !== 'build') {
+        items.push(btn([icon('skip'), 'New track'], () => org.skipTrack(), 'small ghost'));
+        items.push(btn([icon(s.hold ? 'play' : 'pause'), s.hold ? 'Resume' : 'Pause breaks'], () => org.setHold(!s.hold), 'small ' + (s.hold ? 'on' : 'ghost')));
+      } else if (s.phase === 'racing') {
         items.push(btn([icon('stop'), 'End round'], () => org.endRoundNow(), 'small ghost'));
         items.push(btn([icon('clock'), '+30 s'], () => org.extend(30), 'small ghost'));
       }
-      if (live) {
+      if (live && !s.rules.casual) {
         items.push(btn([icon('restart'), 'Restart round'], () => org.restartRound(), 'small ghost'));
         items.push(confirmBtn('Void round', () => org.voidRound(), 'small'));
       }
-      if (s.phase !== 'lobby' && s.phase !== 'podium' && s.phase !== 'build') {
+      if (s.phase !== 'lobby' && s.phase !== 'podium' && s.phase !== 'build' && !s.rules.casual) {
         items.push(btn([icon('skip'), 'Skip track'], () => org.skipTrack(), 'small ghost'));
         items.push(btn([icon(s.hold ? 'play' : 'pause'), s.hold ? 'Resume' : 'Pause breaks'], () => org.setHold(!s.hold), 'small ' + (s.hold ? 'on' : 'ghost')));
       }
       items.push(h('span', { style: 'flex:1' }));
       const shout = this.#shoutInput;
       items.push(h('div', { class: 'announce' }, shout, btn([icon('megaphone')], () => shout.value.trim() && (org.shout(shout.value), (shout.value = '')), 'small ghost icon', 'Show it on every screen')));
-      if (s.phase !== 'lobby' && s.phase !== 'podium') items.push(confirmBtn('End cup', () => org.endCup(), 'small danger'));
+      if (s.phase !== 'lobby' && s.phase !== 'podium') items.push(confirmBtn(s.rules.casual ? 'End session' : 'End cup', () => org.endCup(), 'small danger'));
     } else {
       items.push(h('span', { style: 'flex:1' }));
       items.push(btn([icon('exit'), 'Leave cup'], () => app.onLeave(''), 'small danger'));

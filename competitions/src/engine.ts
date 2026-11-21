@@ -159,10 +159,15 @@ export function closeRound(s: CupState, progress: (u: number) => number): RoundR
   for (const u of timed) {
     const p = player(s, u);
     const pl = place.get(u)!;
-    const pts = rules.mode === 'knockout' ? 0 : (rules.points[pl - 1] ?? 0);
+    const pts = rules.mode === 'knockout' || rules.casual ? 0 : (rules.points[pl - 1] ?? 0);
     const run = r.runs[u];
     rows.push([u, run.f, pl, pts, 0, (run.pb ? 1 : 0) | (run.wr ? 2 : 0)]);
     if (!p) continue;
+    if (rules.casual) {
+      // Nothing is scored in a casual cup; each racer's best time is kept for the fun of it.
+      if (p.best == null || r.runs[u].f < p.best) p.best = r.runs[u].f;
+      continue;
+    }
     p.pts += pts;
     if (pl <= 8) p.places[pl - 1] = (p.places[pl - 1] ?? 0) + 1;
     if (pl === 1) p.wins++;
@@ -172,7 +177,9 @@ export function closeRound(s: CupState, progress: (u: number) => number): RoundR
   for (const u of missing) rows.push([u, null, null, 0, 0]);
   s.rounds = r.n;
 
-  if (rules.mode === 'knockout') {
+  if (rules.casual) {
+    // Never a winner: the cup goes on until the organizer ends it.
+  } else if (rules.mode === 'knockout') {
     // Racers who left are out on their own; the cut falls on those still here.
     for (const p of s.players) if (p.role === 'racer' && !p.out && p.away) p.out = r.n;
     const alive = r.racers.filter((u) => !player(s, u)?.out);

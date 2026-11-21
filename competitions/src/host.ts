@@ -1188,6 +1188,7 @@ export class Organizer {
 
   #limitMs(trackId: string) {
     const r = this.state.rules;
+    if (r.casual) return null;
     if (r.style === 'timeattack') return r.taSeconds * 1000;
     if (r.limit === 'off') return null;
     if (r.limit === 'fixed') return r.limitSeconds * 1000;
@@ -1224,12 +1225,14 @@ export class Organizer {
         break;
       }
       case 'countdown':
+        this.#seatCasual();
         if (now >= (s.round?.startAt ?? Infinity)) {
           E.setPhase(s, 'racing', now);
           this.touch(true);
         }
         break;
       case 'racing':
+        this.#seatCasual();
         this.#botResults(now);
         if (E.roundOver(s, now) && this.#outageFrom(now) == null) {
           if (this.#pendingChecks()) {
@@ -1347,6 +1350,41 @@ export class Organizer {
     } else this.#go(now);
   }
 
+  // A casual track has no end, so nobody waits for the next one: newcomers, racers who come back and
+  // spectators who switch to Race get on track at once.
+  #seatCasual() {
+    const s = this.state,
+      r = s.round;
+    if (!s.rules.casual || !r) return;
+    let changed = false;
+    for (const p of E.humanRacers(s)) {
+      if (p.away) continue;
+      if (!r.racers.includes(p.u)) {
+        r.racers.push(p.u);
+        changed = true;
+      }
+      if (r.dnf.includes(p.u)) {
+        r.dnf = r.dnf.filter((u) => u !== p.u);
+        changed = true;
+      }
+    }
+    if (changed) this.touch(true);
+  }
+
+  // Casual: the track ends now, with everyone's best time in the results, and a new one comes next.
+  #casualNext(note: string) {
+    const s = this.state,
+      r = s.round;
+    if (!r) return;
+    r.skip = [];
+    r.k = s.rules.perTrack;
+    if (s.phase === 'racing' || s.phase === 'countdown') this.endRoundNow();
+    else if (s.phase === 'results') this.advance();
+    else if (['warmup', 'checking'].includes(s.phase)) this.voidRound(true, '');
+    if (note) this.notifyAll(note, 'info');
+    this.touch(true);
+  }
+
   #go(now: number) {
     const s = this.state;
     E.scheduleStart(s, now, this.#limitMs(s.round!.track.id));
@@ -1374,8 +1412,8 @@ export class Organizer {
     const winner = player(s, result.rows.find((row) => row[2] === 1)?.[0]);
     E.setPhase(s, 'results', now, now + s.rules.breakSeconds * 1000);
     if (s.winner != null) s.nextAt = now + Math.max(5000, s.rules.breakSeconds * 1000);
-    if (winner) this.app.native.sound('record');
-    this.#announce(result, leaderBefore, finalistsBefore);
+    if (winner && !s.rules.casual) this.app.native.sound('record');
+    if (!s.rules.casual) this.#announce(result, leaderBefore, finalistsBefore);
     this.#matchField(result);
     this.#rollSecret();
     this.#prePlan();
@@ -1607,6 +1645,7 @@ export class Organizer {
 
   skipTrack(note = 'The organizer skipped this track') {
     const s = this.state;
+    if (s.rules.casual) return this.#casualNext(note && 'New track!');
     if (['countdown', 'racing', 'warmup', 'checking'].includes(s.phase)) this.voidRound(true, note);
     else if (s.phase === 'results') {
       if (s.round) s.round.k = s.rules.perTrack;
@@ -1623,6 +1662,7 @@ export class Organizer {
     r.skip = r.skip.includes(u) ? r.skip.filter((x) => x !== u) : [...r.skip, u];
     const here = r.racers.filter((x) => !player(s, x)?.away && !player(s, x)?.bot);
     if (r.skip.filter((x) => here.includes(x)).length * 2 > here.length) {
+      if (s.rules.casual) return this.#casualNext('Vote passed: new track!');
       r.skip = [];
       if (Object.keys(r.runs).length) {
         r.k = s.rules.perTrack;
@@ -1680,7 +1720,7 @@ export class Organizer {
     delete s.build;
     this.#epoch++;
     this.#loading = null;
-    if (s.winner == null) s.winner = standings(s, this.history)[0]?.u ?? null;
+    if (s.winner == null && !s.rules.casual) s.winner = standings(s, this.history)[0]?.u ?? null;
     E.setPhase(s, 'podium', Date.now());
     s.round = null;
     s.vote = null;

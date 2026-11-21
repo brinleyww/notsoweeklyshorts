@@ -172,6 +172,13 @@ hold it at `leaderPoints(s) + 1`.
   the track to everyone when its round loads. The round's track ref carries `mode` (rocket/royale), and every page
   calls `__nswsTracks.registerModes` for it before the track loads (the organizer in `#load`, others in `App.#apply`).
   The organizer removes any upload, a player their own. Rounds on uploaded tracks never upload PBs and have no world record.
+- **Casual** (`casual`; the hub's Mode row, Competitive / Casual, and the Mode section of the lobby): no clock, no
+  points, no winner. `cleanRules` turns a casual cup into endless time attack, one round per track, skip votes and late
+  joiners on. `#limitMs` is null, so a track ends only when over half the racers vote for a new one or the organizer
+  presses New track (`#casualNext`: end the round now, show everyone's best time, then the next track by the Next track
+  rule or the built playlist). `#seatCasual` puts newcomers, returning racers and Watch -> Race switches on the track
+  at once. `closeRound` scores nothing; End session goes to a "Thanks for driving!" screen with no podium. Works with
+  any track source, Build Off included (format `casual`, list text `casual+build`).
 - **Build Off** (`build`, minutes, 0 = off; the Build Off format starts at 8, rounds mode, 2 per track): Start opens
   the `build` phase (`state.build.until`). Every human racer's page (and the organizer's) opens the editor
   (`mod/nsws_editor.js`) on a new track with the cup's own bar in place of the editor's (`BuildDesk`, build.ts, through
