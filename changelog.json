@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.26",
+        "changes": [
+            "Difference at the bottom shows your live gap to the ghost while you drive"
+        ]
+    },
+    {
         "version": "v12.25",
         "changes": [
             "Update popup now shows what changed"

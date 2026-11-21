@@ -27207,10 +27207,73 @@ window.__nswsAutoGhostNote = function(trackId) {
                         r.className != s && (r.className = s)
                     }
                 }
+                // Not So Weekly Shorts: while driving, Difference is the gap to the ghost at the car's spot on the ghost's
+                // path, not the current time minus the ghost's finish time. undefined = no ghost path to compare with.
+                static liveDifference(e, t) {
+                    const n = e.liveGhost
+                      , i = n?.replay?.replay;
+                    if (null == i || null == e.record || !n.settings.time.equals(e.record))
+                        return;
+                    const r = t.getCarState();
+                    if (!r.hasStarted)
+                        return null;
+                    let a = e.__nswsLive;
+                    (null == a || a.ghost !== n || a.replay !== i || r.frames < a.frames) && (a = e.__nswsLive = {
+                        ghost: n,
+                        replay: i,
+                        frames: 0,
+                        at: 0,
+                        cp: -1
+                    });
+                    const s = n.checkpoints ?? []
+                      , o = r.nextCheckpointIndex
+                      , l = n.settings.time.numberOfFrames
+                      , c = 0 == o ? 0 : s[o - 1]?.time.numberOfFrames;
+                    if (null == c)
+                        return null;
+                    // Only the ghost's frames between the same two checkpoints, so a track that crosses itself can't match the wrong pass.
+                    const h = Math.min(o < s.length ? s[o].time.numberOfFrames - 1 : l, l, n.loadedFrames ?? 0);
+                    if (h < c)
+                        return null;
+                    const d = r.position.x
+                      , u = r.position.y
+                      , p = r.position.z
+                      , f = (from, to, step) => {
+                        let best = -1
+                          , bestD = 1 / 0;
+                        for (let k = from; k <= to; k += step) {
+                            const q = i.getFrame(k)?.position;
+                            if (null == q)
+                                continue;
+                            const D = (q.x - d) ** 2 + (q.y - u) ** 2 + (q.z - p) ** 2;
+                            D < bestD && (bestD = D, best = k)
+                        }
+                        return [best, bestD]
+                    }
+                      , g = a.cp == o ? Math.min(h, Math.max(c, a.at)) : c;
+                    let [m, A] = f(Math.max(c, g - 3e3), Math.min(h, g + 3e3), 4);
+                    // Far from the ghost's path near the last match (a respawn): look through the whole section.
+                    if (A > 400) {
+                        const e = f(c, h, 8);
+                        e[1] < A && ([m, A] = e)
+                    }
+                    return m < 0 ? null : ([m] = f(Math.max(c, m - 8), Math.min(h, m + 8), 1),
+                    a.frames = r.frames,
+                    a.at = m,
+                    a.cp = o,
+                    t.getTime().difference({
+                        numberOfFrames: m
+                    }))
+                }
                 update(e) {
                     const t = e.getFinishTime() ?? e.getTime();
                     let n;
                     if (n = null != this.record ? t.difference(this.record) : null,
+                    null != n && !e.hasFinished()) {
+                        const t = N.liveDifference(this, e);
+                        void 0 !== t && (n = t)
+                    }
+                    if (
                     null != i.get(this, C, "f")) {
                         const e = N.formatTimeString(this.record, !1);
                         if (e != i.get(this, I, "f")) {
@@ -47161,6 +47224,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, na, "f")?.update(a),
                 C.get(this, aa, "f").update(C.get(this, wa, "f")),
                 this.updateLiveInputs(),
+                C.get(this, sa, "f").liveGhost = null == C.get(this, Sa, "f") ? C.get(this, _r, "m", Za).call(this) : null,
                 C.get(this, sa, "f").update(C.get(this, wa, "f")),
                 window.__nswsNR?.update(C.get(this, wa, "f")),
                 C.get(this, ra, "f").update(C.get(this, wa, "f")),
