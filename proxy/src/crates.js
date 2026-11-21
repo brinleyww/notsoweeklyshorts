@@ -1,4 +1,4 @@
-// How many of each crate skin exist across all players (mod/nsws_crates.js). Inventories stay in each browser; pages
+// How many of each crate skin exist across all players (mod/nsws_crates.js), and each account's saved crates. Pages
 // report items made (opened, traded into) and gone (signed away, sold), each item once by its own id. One instance ("global").
 
 import { DurableObject } from "cloudflare:workers";
@@ -24,6 +24,9 @@ const DAY_KEYS = ["er", "eq", "ew", "es", "sc", "sw", "nr", "ns", "nq", "nw", "c
 const ECON_MAX = 1_000_000_000;
 const ECON_GAP_MS = 60_000;
 const ECON_DAYS = 14;
+// A save holds at most 500 parts (about 35 KB); a page leaving sends it with keepalive, which caps the body at 64 KB.
+const MAX_SAVE = 60000;
+const MAX_SAVE_ITEMS = 600;
 
 export class CrateStats extends DurableObject {
     constructor(ctx, env) {
@@ -37,6 +40,28 @@ export class CrateStats extends DurableObject {
         this.sql.exec("CREATE INDEX IF NOT EXISTS econ_bal ON econ (bal)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS econ_sum (id INTEGER PRIMARY KEY, data TEXT NOT NULL)");
         this.sql.exec("CREATE TABLE IF NOT EXISTS econ_day (day INTEGER PRIMARY KEY, data TEXT NOT NULL)");
+        // Each account's crates (Bolts, parts, quests), so they follow the account to any device. rev goes up on every save.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS saves (user_id TEXT PRIMARY KEY, rev INTEGER NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL) WITHOUT ROWID");
+    }
+
+    // data null reads. A save only lands on top of the revision the page last saw; otherwise the page gets the newer copy.
+    sync(userId, rev, data) {
+        const row = this.sql.exec("SELECT rev, data FROM saves WHERE user_id = ?", userId).toArray()[0];
+        const current = row?.rev ?? 0;
+        const saved = () => {
+            try {
+                return row ? JSON.parse(row.data) : null;
+            } catch {
+                return null;
+            }
+        };
+        if (data == null) return { rev: current, data: saved() };
+        if (rev !== current) return { conflict: true, rev: current, data: saved() };
+        this.sql.exec(
+            "INSERT INTO saves (user_id, rev, at, data) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET rev = excluded.rev, at = excluded.at, data = excluded.data",
+            userId, current + 1, Date.now(), data,
+        );
+        return { rev: current + 1 };
     }
 
     jsonRow(query, ...args) {
@@ -157,6 +182,18 @@ function cleanName(raw) {
     return name || null;
 }
 
+// The page's own numbers, like everything else about crates; this only keeps a save to a sane shape and size.
+export function cleanSave(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    if (!Number.isFinite(raw.bolts) || raw.bolts < 0 || raw.bolts > ECON_MAX) return null;
+    if (!Array.isArray(raw.items) || raw.items.length > MAX_SAVE_ITEMS) return null;
+    for (const x of raw.items) {
+        if (!x || typeof x !== "object" || !ITEM_ID.test(x.u ?? "") || typeof x.k !== "string" || !Number.isSafeInteger(x.n)) return null;
+    }
+    const text = JSON.stringify(raw);
+    return text.length <= MAX_SAVE ? text : null;
+}
+
 export function cleanEvents(list) {
     if (!Array.isArray(list)) return null;
     const out = [];
@@ -200,6 +237,22 @@ export async function handleCrates(request, url, env, ctx, h) {
         if (!(await h.isOwner(body?.token))) return h.json({ error: "Only the owner can do that." }, origin, 403);
         if (path === "admin/economy") return h.json(await stub.economyView(), origin);
         return h.json({ error: "Not found." }, origin, 404);
+    }
+
+    // text/plain JSON {token, rev, data?}: no data reads the account's save, data saves it on top of rev.
+    if (path === "sync" && request.method === "POST") {
+        if (h.doLimited()) return h.busy(origin);
+        const text = await h.readSmallBody(request, MAX_SAVE + 1024);
+        if (text == null) return h.json({ error: "Too large." }, origin, 413);
+        let body = null;
+        try {
+            body = JSON.parse(text);
+        } catch {}
+        if (!h.HEX64.test(body?.token ?? "")) return h.json({ error: "Your profile couldn't be read." }, origin, 400);
+        if (!Number.isSafeInteger(body.rev) || body.rev < 0) return h.json({ error: "Bad request." }, origin, 400);
+        const data = body.data == null ? null : cleanSave(body.data);
+        if (body.data != null && !data) return h.json({ error: "Bad request." }, origin, 400);
+        return h.json(await stub.sync(await h.sha256Hex(body.token), body.rev, data), origin);
     }
 
     if (path === "report" && request.method === "POST") {

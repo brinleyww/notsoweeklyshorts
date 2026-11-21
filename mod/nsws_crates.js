@@ -1,5 +1,6 @@
 // Crates: car parts that only come out of crates (mod/nsws_crate_parts.js), bought with Bolts earned by playing. Never real
-// money. The inventory is kept in this browser per profile; the Worker only counts how many of each part exist.
+// money. The inventory is kept in this browser per profile and saved to the account on the Worker (proxy/src/crates.js),
+// so it follows the account to other devices; the Worker also counts how many of each part exist.
 (function () {
     const STORE = "nsws_crates_v2:";
     const OLD_STORE = "nsws_crates_v1:";
@@ -18,6 +19,13 @@
     const SPIN_MS = 6200;
     const COUNTS_MS = 5 * 60 * 1000;
     const REPORT_DELAY_MS = 15000;
+    // Account saves: soon after something done in the crate screens, at most every few minutes for Bolts from driving
+    // (each save is a Worker and a Durable Object request), and a fresh read when Crates opens or the tab comes back.
+    const SYNC_ACTION_MS = 4000;
+    const SYNC_IDLE_MS = 5 * 60 * 1000;
+    const SYNC_READ_MS = 60 * 1000;
+    const SYNC_RETURN_MS = 5 * 60 * 1000;
+    const SYNC_KEYS = ["bolts", "items", "prev", "equipped", "day", "notes", "opened", "q", "wheelSpins", "runMs", "eco"];
     const WHEEL_SPINS_PER_DAY = 5;
     const WHEEL_BETS = [10, 25, 50, 100];
     const WHEEL_MS = 5200;
@@ -283,25 +291,227 @@
         if (!state || typeof state !== "object" || !Array.isArray(state.items)) {
             state = { v: 2, bolts: fromV1(t), items: [], prev: {}, equipped: {}, day: today(), notes: true, opened: 0, pending: [] };
         }
-        state.items = state.items.filter((x) => partOf(x));
+        normalize(state);
+        cached = { key, state };
+        return state;
+    }
+
+    function normalize(state) {
+        if (!Array.isArray(state.items)) state.items = [];
+        state.items = state.items.filter((x) => x && partOf(x));
+        if (!Number.isFinite(state.bolts)) state.bolts = 0;
         state.pending ??= [];
-        state.prev ??= {};
-        state.equipped ??= {};
+        if (!state.prev || typeof state.prev !== "object") state.prev = {};
+        if (!state.equipped || typeof state.equipped !== "object") state.equipped = {};
+        state.notes ??= true;
         // Tracking starts from what the profile holds now, so earned minus spent always matches the balance.
         if (!state.eco || typeof state.eco !== "object") {
             const opened = state.opened ?? 0;
             state.eco = { el: Math.max(0, state.bolts) + opened * PRICE, ls: opened * PRICE, lo: opened };
         }
-        cached = { key, state };
         return state;
     }
 
-    function save() {
+    // "local" only writes this browser's copy (report bookkeeping), "idle" saves to the account within a few minutes
+    // (Bolts from driving), anything else within seconds.
+    let changes = 0;
+    function save(mode) {
         if (!cached) return;
+        if (mode !== "local") {
+            cached.state.dirty = true;
+            changes++;
+            scheduleSync(mode === "idle" ? syncIdleGap() : SYNC_ACTION_MS);
+        }
         try {
             localStorage.setItem(cached.key, JSON.stringify(cached.state));
         } catch {}
     }
+
+    // ---- The account's copy (proxy/src/crates.js). One save per account with a revision number: a save only lands on the
+    // revision this page last saw, and when another device got there first, that device's copy wins and replaces this one.
+    // The first time a browser meets the account's save, whatever this browser had is added to it, so nothing is lost.
+
+    let syncTimer = 0;
+    let syncDue = 0;
+    let syncing = false;
+    let syncAgain = false;
+    let syncedKey = null;
+    let readAt = 0;
+    let retryAt = 0;
+    let failures = 0;
+
+    function syncIdleGap() {
+        return Math.max(SYNC_IDLE_MS, (window.__nswsPlayersOnline || 0) * 3000);
+    }
+
+    function scheduleSync(ms) {
+        const due = Date.now() + ms;
+        if (syncTimer && syncDue <= due) return;
+        clearTimeout(syncTimer);
+        syncDue = due;
+        syncTimer = setTimeout(() => {
+            syncTimer = 0;
+            sync();
+        }, ms);
+    }
+
+    function syncData(state) {
+        const out = {};
+        for (const k of SYNC_KEYS) if (state[k] !== undefined) out[k] = state[k];
+        return out;
+    }
+
+    function untouched(state) {
+        return !state.items.length && !state.opened && !state.q?.got?.length
+            && Object.entries(state.eco).every(([k, v]) => k === "el" || !v);
+    }
+
+    // Parts this browser held that the account's copy doesn't: never counted if their report hadn't gone yet, else gone.
+    function dropItems(state, list) {
+        if (!list.length) return;
+        const ids = new Set(list.map((x) => x.u));
+        const unsent = new Set(state.pending.filter((e) => e.e === 1 && ids.has(e.u)).map((e) => e.u));
+        state.pending = state.pending.filter((e) => !unsent.has(e.u));
+        const gone = list.filter((x) => !unsent.has(x.u)).map((x) => ({ u: x.u, e: -1 }));
+        if (gone.length) queue(state, gone);
+    }
+
+    // Takes the account's copy in place, so screens holding this state keep working on the new numbers.
+    function adopt(state, data) {
+        const keep = new Set((Array.isArray(data.items) ? data.items : []).map((x) => x?.u));
+        const lost = state.items.filter((x) => !keep.has(x.u));
+        for (const k of SYNC_KEYS) delete state[k];
+        for (const k of SYNC_KEYS) if (data[k] !== undefined) state[k] = data[k];
+        normalize(state);
+        dropItems(state, lost);
+    }
+
+    function merge(state, data) {
+        const server = normalize(Object.assign({ pending: [] }, data));
+        const items = server.items.slice();
+        const ids = new Set(items.map((x) => x.u));
+        for (const x of state.items) if (!ids.has(x.u)) items.push(x);
+        dropItems(state, items.slice(MAX_ITEMS));
+        state.items = items.slice(0, MAX_ITEMS);
+        state.bolts = Math.max(0, server.bolts + state.bolts);
+        state.opened = (server.opened ?? 0) + (state.opened ?? 0);
+        state.runMs = (server.runMs ?? 0) + (state.runMs ?? 0);
+        const eco = { ...server.eco };
+        for (const [k, v] of Object.entries(state.eco)) eco[k] = (eco[k] ?? 0) + (v ?? 0);
+        state.eco = eco;
+        const held = new Set(state.items.map((x) => x.u));
+        const equipped = { ...server.equipped, ...state.equipped };
+        for (const k of Object.keys(equipped)) if (!held.has(equipped[k])) delete equipped[k];
+        state.equipped = equipped;
+        state.prev = { ...server.prev, ...state.prev };
+        state.notes = server.notes;
+        const d = today();
+        state.wheelSpins = (server.day === d ? server.wheelSpins ?? 0 : 0) + (state.day === d ? state.wheelSpins ?? 0 : 0);
+        state.day = d;
+        const a = server.q?.day === d ? server.q : null;
+        const b = state.q?.day === d ? state.q : null;
+        if (a && b) {
+            const union = (x, y) => [...new Set([...(x ?? []), ...(y ?? [])])];
+            const p = { ...a.p };
+            for (const [k, v] of Object.entries(b.p ?? {})) p[k] = (p[k] ?? 0) + v;
+            state.q = { day: d, p, trk: union(a.trk, b.trk).slice(0, 50), pbt: union(a.pbt, b.pbt).slice(0, 50), got: union(a.got, b.got), told: union(a.told, b.told) };
+        } else state.q = a ?? b ?? undefined;
+    }
+
+    function syncFailed(push) {
+        failures++;
+        const wait = Math.min(10 * 60 * 1000, 15000 * 2 ** Math.min(failures, 6));
+        retryAt = Date.now() + wait;
+        if (push) scheduleSync(wait);
+    }
+
+    async function sync(leaving) {
+        if (syncing) {
+            syncAgain = true;
+            return;
+        }
+        const state = load();
+        const t = token();
+        if (!state || !t || !api()) return;
+        clearTimeout(syncTimer);
+        syncTimer = 0;
+        const key = cached.key;
+        // A browser that hasn't met the account's copy yet reads it first, then sends the two added together.
+        const push = state.rev != null && !!state.dirty;
+        const body = { token: t, rev: state.rev ?? 0 };
+        if (push) body.data = syncData(state);
+        const sent = changes;
+        syncing = true;
+        let res = null;
+        try {
+            const r = await fetch(api() + "nsws/crates/sync", {
+                method: "POST",
+                headers: { "Content-Type": "text/plain" },
+                body: JSON.stringify(body),
+                keepalive: leaving === true,
+            });
+            if (r.ok) res = await r.json();
+        } catch {}
+        syncing = false;
+        const s = cached?.key === key ? cached.state : null;
+        if (s && res && Number.isSafeInteger(res.rev)) {
+            failures = 0;
+            syncedKey = key;
+            readAt = Date.now();
+            const fresh = res.data && typeof res.data === "object" ? res.data : null;
+            let replaced = false;
+            if (push && !res.conflict) {
+                s.rev = res.rev;
+                // Another tab's write replaces the cached state; what it changed hasn't been sent yet.
+                if (changes === sent && s === state) s.dirty = false;
+            } else if (s.rev == null) {
+                if (fresh && untouched(s)) {
+                    adopt(s, fresh);
+                    s.dirty = false;
+                    replaced = true;
+                } else {
+                    if (fresh) merge(s, fresh);
+                    s.dirty = true;
+                    replaced = !!fresh;
+                }
+                s.rev = res.rev;
+            } else if (fresh && (res.conflict || res.rev !== s.rev)) {
+                adopt(s, fresh);
+                s.rev = res.rev;
+                s.dirty = false;
+                replaced = true;
+            } else if (!fresh && res.rev === 0 && s.rev !== 0) {
+                // The account has no copy (any more): send this one.
+                s.rev = 0;
+                s.dirty = true;
+            }
+            save("local");
+            if (s.dirty) scheduleSync(SYNC_ACTION_MS);
+            if (replaced) {
+                econChanged();
+                render();
+                refreshTop();
+                if (view?.quests) paintQuests(view);
+            }
+        } else if (s) syncFailed(push);
+        if (syncAgain) {
+            syncAgain = false;
+            if (load()?.dirty) scheduleSync(SYNC_ACTION_MS);
+        }
+    }
+
+    // Reads the account's copy once per profile per page load, and again after a while away.
+    function syncIfStale(ms) {
+        const state = load();
+        if (!state || Date.now() < retryAt) return;
+        if (state.dirty && state.rev != null) sync();
+        else if (syncedKey !== cached.key || Date.now() - readAt >= ms) sync();
+    }
+
+    setInterval(() => {
+        const state = load();
+        if (state && syncedKey !== cached.key) syncIfStale(0);
+    }, 5000);
 
     window.addEventListener("storage", (e) => {
         if (cached && e.key === cached.key) {
@@ -561,7 +771,7 @@
             if ((e.detail?.seconds ?? 0) >= 60) bump(q, "long");
             questsTouched(state);
         }
-        save();
+        save("idle");
         if (paid) {
             const enough = before < PRICE && state.bolts >= PRICE ? " That's enough for a crate in Garage \u2192 Crates." : "";
             setTimeout(() => toast("+" + plural(paid, "Bolt") + " for " + Math.round(r.ms / 1000) + " s of driving." + enough), 1800);
@@ -578,7 +788,7 @@
         if (q.pbt.includes(track) || q.pbt.length >= 50) return;
         q.pbt.push(track);
         questsTouched(state);
-        save();
+        save("idle");
         render();
     }
 
@@ -681,7 +891,7 @@
                 fresh.ecoSent = figText;
                 fresh.ecoAt = Date.now();
             }
-            save();
+            save("local");
             if (events.length) countsAt = 0;
         } catch {}
     }
@@ -1307,6 +1517,7 @@
         panel.append(garage.preview, garage.bar);
         loadCounts();
         if (load()?.pending.length) report();
+        syncIfStale(SYNC_READ_MS);
         render();
     }
 
@@ -1459,7 +1670,15 @@
 
     window.addEventListener("nsws-finish", onFinish);
     window.addEventListener("nsws-new-pb", onNewPb);
-    window.addEventListener("pagehide", () => report(true));
+    window.addEventListener("pagehide", () => {
+        report(true);
+        if (load()?.dirty) sync(true);
+    });
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") {
+            if (load()?.dirty) sync(true);
+        } else syncIfStale(SYNC_RETURN_MS);
+    });
     // A profile that hasn't earned anything this sitting still reports its balance once.
     setTimeout(() => report(), 30000);
 

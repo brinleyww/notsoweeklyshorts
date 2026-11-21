@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.30",
+        "changes": [
+            "Crates, Bolts and parts now save to your account, so they follow you to other devices"
+        ]
+    },
+    {
         "version": "v12.29",
         "changes": [
             "Difference at the bottom is back to the old timer",

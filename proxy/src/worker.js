@@ -381,7 +381,7 @@ function renameRefused(ban, nickname) {
 
 // A banned address can still play: reads and the game's own calls go through, and the upload, profile
 // and track routes refuse what a ban covers further on. Chat, cups and anything that publishes stay closed.
-const BANNED_POSTS = new Set(["/v6/leaderboard", "/v6/user", "/nsws/beat", "/nsws/macro",
+const BANNED_POSTS = new Set(["/v6/leaderboard", "/v6/user", "/nsws/beat", "/nsws/macro", "/nsws/crates/sync",
     ...["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view", "clips/rename", "clips/delete",
         "refer/me", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync", "presets/list", "presets/save", "presets/rename",
         "presets/delete", "presets/get", "presets/accept"].map((p) => TRAFFIC_PREFIX + p),
