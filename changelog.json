@@ -1,5 +1,13 @@
 [
     {
+        "version": "v12.39",
+        "changes": [
+            "My Tracks: every track has a drag handle now, in any sort, so you can move your tracks around straight away",
+            "Moving a track while another sort is picked keeps the order you see and switches to My order",
+            "Better Editor tracks built on the editor's new fine grid play here too"
+        ]
+    },
+    {
         "version": "v12.38",
         "changes": [
             "Changelog window is a plain rectangle now, no slanted edge"

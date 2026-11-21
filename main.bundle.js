@@ -31430,14 +31430,16 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , r = -1 / 0
                   , c = -1 / 0
                   , h = -1 / 0;
+                // Better Editor's fine grid: a track with its blocks on half steps writes every position in half steps (flag 64).
+                const tmK = null != self.TM && self.TM.halfSteps && this.hasExtendedParts() && self.TM.halfSteps(this) ? 2 : 1;
                 for (const [,e] of d.get(this, l, "f"))
                     for (const a of e)
-                        t = Math.min(a.x, t),
-                        n = Math.min(a.y, n),
-                        i = Math.min(a.z, i),
-                        r = Math.max(a.x, r),
-                        c = Math.max(a.y, c),
-                        h = Math.max(a.z, h);
+                        t = Math.min(a.x * tmK, t),
+                        n = Math.min(a.y * tmK, n),
+                        i = Math.min(a.z * tmK, i),
+                        r = Math.max(a.x * tmK, r),
+                        c = Math.max(a.y * tmK, c),
+                        h = Math.max(a.z * tmK, h);
                 Number.isFinite(t) && Number.isFinite(n) && Number.isFinite(i) && Number.isFinite(r) && Number.isFinite(c) && Number.isFinite(h) || (t = 0,
                 n = 0,
                 i = 0,
@@ -31450,7 +31452,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                   , g = Math.max(1, Math.min(4, Math.ceil(Math.log2(u + 1) / 8)))
                   , m = Math.max(1, Math.min(4, Math.ceil(Math.log2(p + 1) / 8)))
                   , A = Math.max(1, Math.min(4, Math.ceil(Math.log2(f + 1) / 8)));
-                e.push(255 & t, t >>> 8 & 255, t >>> 16 & 255, t >>> 24 & 255, 255 & n, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255, 255 & i, i >>> 8 & 255, i >>> 16 & 255, i >>> 24 & 255, 255 & (g | m << 2 | A << 4));
+                e.push(255 & t, t >>> 8 & 255, t >>> 16 & 255, t >>> 24 & 255, 255 & n, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255, 255 & i, i >>> 8 & 255, i >>> 16 & 255, i >>> 24 & 255, 255 & (g | m << 2 | A << 4 | (2 == tmK ? 64 : 0)));
                 const tmExt = null != self.TM && this.hasExtendedParts();
                 tmExt && e.push(255 & self.TM.version, self.TM.version >>> 8 & 255);
                 for (const r of d.get(this, o, "f")) {
@@ -31462,9 +31464,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                     const s = a.length;
                     tmExt ? e.push(255 & r, r >>> 8 & 255, 255 & s, s >>> 8 & 255, s >>> 16 & 255, s >>> 24 & 255) : e.push(255 & r, 255 & s, s >>> 8 & 255, s >>> 16 & 255, s >>> 24 & 255);
                     for (const s of a) {
-                        const a = s.x - t
-                          , o = s.y - n
-                          , l = s.z - i;
+                        const a = s.x * tmK - t
+                          , o = s.y * tmK - n
+                          , l = s.z * tmK - i;
                         if (1 == g ? e.push(255 & a) : 2 == g ? e.push(255 & a, a >>> 8 & 255) : 3 == g ? e.push(255 & a, a >>> 8 & 255, a >>> 16 & 255) : 4 == g && e.push(255 & a, a >>> 8 & 255, a >>> 16 & 255, a >>> 24 & 255),
                         1 == m ? e.push(255 & o) : 2 == m ? e.push(255 & o, o >>> 8 & 255) : 3 == m ? e.push(255 & o, o >>> 8 & 255, o >>> 16 & 255) : 4 == m && e.push(255 & o, o >>> 8 & 255, o >>> 16 & 255, o >>> 24 & 255),
                         1 == A ? e.push(255 & l) : 2 == A ? e.push(255 & l, l >>> 8 & 255) : 3 == A ? e.push(255 & l, l >>> 8 & 255, l >>> 16 & 255) : 4 == A && e.push(255 & l, l >>> 8 & 255, l >>> 16 & 255, l >>> 24 & 255),

@@ -978,6 +978,24 @@
         emit({ type: "update", ids: [...changes.keys()] });
     }
 
+    // Gives the tracks in ids this order, the rest after them in My order. Used when a track is moved while another sort
+    // shows: the order on screen becomes My order.
+    async function setOrder(ids) {
+        const all = await loadAll();
+        const seq = [...ids.filter((id) => all.has(id)), ...byOrder(all.values()).map((t) => t.id).filter((id) => !ids.includes(id))];
+        const STEP = 1024;
+        const changed = [];
+        for (const [i, id] of seq.entries()) {
+            const t = all.get(id);
+            if (t.order === (i + 1) * STEP) continue;
+            await putTrack({ ...t, order: (i + 1) * STEP, updated: (t.updated || 0) + 1, sync: t.sync === "ok" ? "meta" : t.sync });
+            changed.push(id);
+        }
+        if (!changed.length) return;
+        schedulePush();
+        emit({ type: "update", ids: changed });
+    }
+
     // The entry's track saved again in the editor: same entry (folder, favourite, picture), new blocks.
     async function replaceCode(id, code) {
         const info = await parseAsync(code);
@@ -2634,18 +2652,30 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             return out;
         }
 
-        // Drag handle for My order. The row moves live while dragging; a search or filter only moves it among what's shown.
+        // Drag handle on every row. The row moves live while dragging; a search or filter only moves it among what's shown.
         const rowsNow = () => [...listEl.children].filter((n) => n.dataset?.ntId);
         function placeOf(r) {
             const rows = rowsNow();
             const i = rows.indexOf(r);
             return rows[i + 1] ? { before: rows[i + 1].dataset.ntId } : rows[i - 1] ? { after: rows[i - 1].dataset.ntId } : null;
         }
-        function commitMove(t, place) {
+        // seq: the shown ids with the move made. Under another sort the order on screen becomes My order.
+        function commitMove(t, place, seq) {
             if (!place) return;
             state.focusId = t.id;
-            moveTrack(t.id, place).catch((e) => toast(e.message || "Couldn't move that track."));
+            if (state.sort === "custom") return moveTrack(t.id, place).catch((e) => toast(e.message || "Couldn't move that track."));
+            state.sort = "custom";
+            sort.value = "custom";
+            try {
+                localStorage.setItem(SORT_KEY, "custom");
+            } catch {}
+            const pos = new Map(seq.map((id, i) => [id, i]));
+            // Copies: these are the library's own objects, and setOrder skips tracks already in place.
+            state.tracks = state.tracks.map((x) => (pos.has(x.id) ? { ...x, order: (pos.get(x.id) + 1) * 1024 } : x));
+            draw();
+            setOrder(seq).catch((e) => toast(e.message || "Couldn't move that track."));
         }
+        const shownIds = () => rowsNow().map((n) => n.dataset.ntId);
         function handle(r, t) {
             const h = el("div", "nt-grip");
             h.title = "Drag to move (or focus and use the arrow keys)";
@@ -2661,7 +2691,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 const i = rows.indexOf(r);
                 const j = e.key === "ArrowUp" ? i - 1 : i + 1;
                 if (i < 0 || j < 0 || j >= rows.length) return;
-                commitMove(t, e.key === "ArrowUp" ? { before: rows[j].dataset.ntId } : { after: rows[j].dataset.ntId });
+                const seq = shownIds();
+                [seq[i], seq[j]] = [seq[j], seq[i]];
+                commitMove(t, e.key === "ArrowUp" ? { before: rows[j].dataset.ntId } : { after: rows[j].dataset.ntId }, seq);
             });
             h.addEventListener("pointerdown", (e) => {
                 if (e.button !== 0) return;
@@ -2713,7 +2745,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                     state.dragging = false;
                     r.classList.remove("dragging");
                     const moved = ev.type !== "pointercancel" && r.nextElementSibling !== startNext;
-                    if (moved) commitMove(t, placeOf(r));
+                    if (moved) commitMove(t, placeOf(r), shownIds());
                     if (state.redraw || !moved) {
                         state.redraw = false;
                         draw();
@@ -2736,7 +2768,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 };
                 r.appendChild(check(state.selected.has(t.id), toggle));
                 r.addEventListener("click", toggle);
-            } else if (state.sort === "custom") r.appendChild(handle(r, t));
+            } else r.appendChild(handle(r, t));
             r.appendChild(thumbNode(t));
             const info = el("div", "nt-info");
             const name = el("div", "nt-name", t.name || "Untitled track");
