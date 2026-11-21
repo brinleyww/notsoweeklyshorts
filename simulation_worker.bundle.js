@@ -13281,6 +13281,7 @@
                         __rocketFree(l),
                         __tmActive.delete(l),
                         t.ccall("deleteCarModel", "void", ["number"], [l]),
+                        __det.delete(l),
                         n.dispose()
                     }(s);
                     break;
@@ -13329,9 +13330,9 @@
                         if (null == o)
                             throw new Error("Track has no starting point");
                         const l = t.carId
-                          , parked = __parkTake(l, t.trackData, version, i);
+                          , parked = __parkTake(l, t.trackData, version, i, t.mountainVertices, t.mountainOffset);
                         null == parked && (r(l, t.mountainVertices, new R(t.mountainOffset.x,t.mountainOffset.y,t.mountainOffset.z), i, o, version),
-                        __parkKeep(l, t.trackData, version)),
+                        __parkKeep(l, t.trackData, version, t.mountainVertices, t.mountainOffset)),
                         e.push({
                             id: parked ?? l,
                             pageId: null == parked ? null : l,
@@ -13341,6 +13342,11 @@
                             frames: 0,
                             targetSimulationFrames: null,
                             isPaused: !1
+                        }),
+                        // The page waits for this before a race starts (window.__nswsPrewarm).
+                        postMessage({
+                            messageType: 15,
+                            carId: l
                         })
                     }(s);
                     break;
@@ -13360,6 +13366,7 @@
                                 __rocketFree(r),
                                 __tmActive.delete(r),
                                 t.ccall("deleteCarModel", "void", ["number"], [r]),
+                                __det.delete(r),
                                 e.splice(i, 1);
                                 break
                             }
@@ -13450,33 +13457,34 @@
             let __park = null
               , __parkOn = !1;
             const __parkAlias = new Map;
-            function __parkKeep(id, save, version) {
-                if (!__parkOn || 0 != e.length || null != __park)
+            // The mountain the car was built with, as the physics took it (float32), and its offset.
+            const __parkHill = (v, o) => ({ v: Float32Array.from(v ?? []), o: [o?.x, o?.y, o?.z] });
+            function __parkKeep(id, save, version, hill, hillAt) {
+                if (!__parkOn || null != __park)
                     return;
                 const H = t.HEAPU8
                   , mem = self.navigator?.deviceMemory;
-                // The copy is as big as the heap: never more than an eighth of the device's memory.
-                if (H.length > ("number" == typeof mem ? mem : 8) * 134217728)
-                    return;
-                let tm = null;
-                if (__tmActive.has(id)) {
-                    if ("function" != typeof self.TM?.fxSave || "function" != typeof self.TM.fxLoad)
-                        return;
-                    tm = self.TM.fxSave(id)
-                }
-                __park = { wid: id, save, version, heap: H.slice(), tm, parked: !1 }
+                // The copy is as big as the heap (never more than an eighth of the device's memory), and with other cars
+                // here it would bring theirs back too. Without one, the car is still handed on until it has driven a frame.
+                let copy = 0 == e.length && H.length <= ("number" == typeof mem ? mem : 8) * 134217728
+                  , tm = null;
+                __tmActive.has(id) && ("function" == typeof self.TM?.fxSave && "function" == typeof self.TM.fxLoad ? copy && (tm = self.TM.fxSave(id)) : copy = !1);
+                __park = { wid: id, save, version, hill: __parkHill(hill, hillAt), heap: copy ? H.slice() : null, tm, parked: !1, stepped: !1 }
             }
-            function __parkTake(id, save, version, track) {
+            function __parkTake(id, save, version, track, hill, hillAt) {
                 const p = __park;
                 if (null == p)
                     return null;
-                if (!p.parked || 0 != e.length || p.save !== save || p.version !== version || __rocketCars.has(p.wid) != __rocketTracks.has(track.getId()))
+                const h = __parkHill(hill, hillAt);
+                if (!p.parked || p.stepped && (null == p.heap || 0 != e.length) || p.save !== save || p.version !== version || __rocketCars.has(p.wid) != __rocketTracks.has(track.getId()) || h.o.some((x, k) => x !== p.hill.o[k]) || h.v.length !== p.hill.v.length || h.v.some((x, k) => x !== p.hill.v[k] && !(x !== x && p.hill.v[k] !== p.hill.v[k])))
                     return __parkDrop(),
                     null;
-                t.HEAPU8.set(p.heap),
-                null != p.tm && self.TM.fxLoad(p.wid, p.tm),
+                p.stepped && (t.HEAPU8.set(p.heap),
+                null != p.tm && self.TM.fxLoad(p.wid, p.tm)),
+                p.stepped = !1,
                 __royaleInit(p.wid, track),
                 __collide.delete(p.wid),
+                __det.has(p.wid) && (__det.get(p.wid).resetWas = !0),
                 p.parked = !1,
                 __parkAlias.set(id, p.wid);
                 return p.wid
@@ -13488,7 +13496,115 @@
                 __tmActive.delete(p.wid),
                 __royaleCars.delete(p.wid),
                 __collide.delete(p.wid),
+                __det.delete(p.wid),
                 t.ccall("deleteCarModel", "void", ["number"], [p.wid]))
+            }
+            // Checkpoint and finish detectors. Every frame the physics tests the car against each detector in a list
+            // (the finish list once every checkpoint is in, else the checkpoint list) and takes the first hit, keeping a
+            // copy of that detector, not its place in the list. Tracks drawn with thousands of checkpoint planes spent
+            // most of a frame there. Before each frame the lists hold only the detectors within reach, in their own
+            // order, so the first hit is the same one; a respawn frame (and the one after) gets the whole lists back.
+            // Lists: std::vector of 32-byte entries {part, x, y, z, rotation, axis, order, config} at track + 24 (finish)
+            // and + 36 (checkpoints); the car's track at car + 20. Config: center at +4, size at +20 (floats).
+            const __det = new Map
+              , __DET_CELL = 32;
+            function __detInit(id) {
+                if (__det.delete(id),
+                "nsws-cuppa-bots" === self.name)
+                    return;
+                const car = __royaleCarPointer(id)
+                  , U = new Uint32Array(t.HEAPU8.buffer)
+                  , tr = car ? U[car + 20 >> 2] : 0;
+                if (!tr)
+                    return;
+                const F = new Float32Array(t.HEAPU8.buffer)
+                  , lists = [];
+                for (const off of [24, 36]) {
+                    const b = U[tr + off >> 2]
+                      , len = U[tr + off + 4 >> 2] - b;
+                    if (len < 64 * 32 || len % 32 != 0)
+                        continue;
+                    const n = len / 32
+                      , full = new Int32Array(t.HEAPU8.buffer,b,8 * n).slice()
+                      , o = new Float32Array(4 * n)
+                      , grid = new Map;
+                    let rmax = 0;
+                    for (let j = 0; j < n; j++) {
+                        const c = full[8 * j + 7] >> 2
+                          , r = Math.hypot(F[c + 1], F[c + 2], F[c + 3]) + Math.hypot(F[c + 5], F[c + 6], F[c + 7]) / 2;
+                        if (!Number.isFinite(r))
+                            return;
+                        o[4 * j] = 5 * full[8 * j + 1],
+                        o[4 * j + 1] = 5 * full[8 * j + 2],
+                        o[4 * j + 2] = 5 * full[8 * j + 3],
+                        o[4 * j + 3] = r,
+                        r > rmax && (rmax = r);
+                        const k = Math.floor(o[4 * j] / __DET_CELL) + "," + Math.floor(o[4 * j + 1] / __DET_CELL) + "," + Math.floor(o[4 * j + 2] / __DET_CELL);
+                        let l = grid.get(k);
+                        l || grid.set(k, l = []),
+                        l.push(j)
+                    }
+                    lists.push({ at: tr + off, b, n, full, o, rmax, grid, end: b + len, cut: !1, cx: 0, cy: 0, cz: 0, R: 0 })
+                }
+                lists.length && __det.set(id, { lists, resetWas: !0 })
+            }
+            function __detCut(car, reset) {
+                const d = __det.get(car.id);
+                if (null == d)
+                    return;
+                const U = new Uint32Array(t.HEAPU8.buffer)
+                  , p = car.__detPos
+                  , whole = reset || d.resetWas || null == p;
+                d.resetWas = reset;
+                let reach = 0;
+                if (!whole) {
+                    const ptr = __royaleCarPointer(car.id)
+                      , body = ptr ? U[ptr + 36 >> 2] : 0
+                      , F = t.HEAPF32
+                      , v = body + 312 >> 2
+                      , speed = body ? Math.hypot(F[v], F[v + 1], F[v + 2]) : NaN;
+                    reach = 6 + .003 * speed
+                }
+                for (const L of d.lists) {
+                    // The heap went back (a restored copy): whatever is in the list now, start from the whole list.
+                    U[L.at + 4 >> 2] !== L.end && (L.cut = !0, L.R = -1);
+                    if (whole || !Number.isFinite(reach)) {
+                        L.cut && (new Int32Array(t.HEAPU8.buffer).set(L.full, L.b >> 2), U[L.at + 4 >> 2] = L.end = L.b + 32 * L.n, L.cut = !1);
+                        continue
+                    }
+                    if (L.cut && Math.hypot(p[0] - L.cx, p[1] - L.cy, p[2] - L.cz) + reach <= L.R)
+                        continue;
+                    const R = reach + 24
+                      , q = R + L.rmax
+                      , pick = [];
+                    for (let gx = Math.floor((p[0] - q) / __DET_CELL); gx <= Math.floor((p[0] + q) / __DET_CELL); gx++)
+                        for (let gy = Math.floor((p[1] - q) / __DET_CELL); gy <= Math.floor((p[1] + q) / __DET_CELL); gy++)
+                            for (let gz = Math.floor((p[2] - q) / __DET_CELL); gz <= Math.floor((p[2] + q) / __DET_CELL); gz++) {
+                                const l = L.grid.get(gx + "," + gy + "," + gz);
+                                if (l)
+                                    for (const j of l)
+                                        Math.hypot(L.o[4 * j] - p[0], L.o[4 * j + 1] - p[1], L.o[4 * j + 2] - p[2]) <= R + L.o[4 * j + 3] && pick.push(j)
+                            }
+                    pick.sort( (a, b) => a - b);
+                    const H = new Int32Array(t.HEAPU8.buffer)
+                      , w = L.b >> 2;
+                    for (let k = 0; k < pick.length; k++)
+                        H.set(L.full.subarray(8 * pick[k], 8 * pick[k] + 8), w + 8 * k);
+                    U[L.at + 4 >> 2] = L.end = L.b + 32 * pick.length,
+                    L.cut = !0,
+                    L.cx = p[0],
+                    L.cy = p[1],
+                    L.cz = p[2],
+                    L.R = R
+                }
+            }
+            // Where the car ended the frame (the state's position), for the next frame's cut.
+            function __detSaw(car, u8) {
+                if (!__det.has(car.id))
+                    return;
+                const v = new DataView(u8.buffer,u8.byteOffset,u8.byteLength)
+                  , o = 12 + (2 & u8[11] ? 3 : 0) + 2;
+                car.__detPos = [v.getFloat32(o, !0), v.getFloat32(o + 4, !0), v.getFloat32(o + 8, !0)]
             }
             // A car driving a parked model sends its states under the page's id.
             function __parkId(car, u8) {
@@ -13535,7 +13651,8 @@
                 t.ccall("free", "void", ["number"], [a]),
                 t.ccall("free", "void", ["number"], [l]),
                 __royaleInit(e, s),
-                __rocketInit(e, s, rocketVersion)
+                __rocketInit(e, s, rocketVersion),
+                __detInit(e)
             }
             // Royale tracks: crossing a checkpoint moves the respawn point to the gate of the same order
             // that starts the next segment, facing its rotation's travel direction. With two gates per order
@@ -14235,6 +14352,7 @@
             }
             )();
             function stepCar(e, i) {
+                __park?.wid === e.id && (__park.stepped = !0);
                 const tm = __tmActive.has(e.id);
                 if (tm) {
                     const f = self.TM.fxControls(e.id, i);
@@ -14245,12 +14363,14 @@
                         return self.TM.fxRecord?.(e.id, held, !0),
                         __parkId(e, new Uint8Array(held))
                 }
+                __detCut(e, !!i.reset),
                 t.ccall("updateCarModel", "void", ["number", "boolean", "boolean", "boolean", "boolean", "boolean", "number"], [e.id, i.up, i.right, i.down, i.left, i.reset, n]),
                 tm && self.TM.fxStep(e.id, t.HEAPU8, t.HEAPU8.slice(n, n + s).buffer),
                 __royaleStep(e.id),
                 __collideStep(e),
                 __rocketStep(e, i);
                 const out = new Uint8Array(t.HEAPU8.buffer,n,s);
+                __detSaw(e, out);
                 // Runs are recorded from the state's controls: the keys pressed, not the ones Better Editor's effects changed.
                 tm && self.TM.fxRecord?.(e.id, out);
                 return __parkId(e, out)

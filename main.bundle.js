@@ -4188,6 +4188,11 @@ window.__nswsAutoGhostNote = function(trackId) {
                                 r.get(this, p, "f").length = 0;
                                 break
                             }
+                        // Not So Weekly Shorts: the worker has built a car (window.__nswsPrewarm waits for it).
+                        case 15:
+                            this.__built?.get(t.carId)?.(),
+                            this.__built?.delete(t.carId);
+                            break;
                         // Not So Weekly Shorts: hits the worker's collision step reported (cup collisions).
                         case 12:
                             (this.__bumps ??= []).push({ carId: t.carId, hits: t.hits }),
@@ -64456,7 +64461,36 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ))
             }
+              // The physics builds the race's car ahead of the race: it parks a car for the track (the worker's __park),
+              // and the race's own car only has to put it back. Resolves once the worker has built it.
+              , prewarm = window.__nswsPrewarm = data => {
+                try {
+                    const sim = simsFor(data)?.p ?? p
+                      , start = data.getStartTransform()
+                      , m = null == start ? null : window.__nswsVerifyPayload?.(data);
+                    if (null == m)
+                        return Promise.resolve(!1);
+                    const id = sim.createCar(start, m.mountainVertices, m.mountainOffset, data, null, ( () => {}
+                    )).id
+                      , built = new Promise((res => {
+                        (sim.__built ??= new Map).set(id, ( () => res(!0)));
+                        setTimeout(( () => {
+                            sim.__built?.delete(id);
+                            res(!1)
+                        }
+                        ), 2e4)
+                    }
+                    ));
+                    sim.deleteCar(id);
+                    return built
+                } catch (e) {
+                    return console.warn(e),
+                    Promise.resolve(!1)
+                }
+            }
               , W = (t, n, i, a, c, onExit=null) => {
+                // A launch card already had the car built for this track.
+                window.__nswsPrewarmed === n ? window.__nswsPrewarmed = null : prewarm(n);
                 o.trigger(( () => P.RN("start-game").finally(( () => {
                     let o, d;
                     P.pS(),

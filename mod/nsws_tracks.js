@@ -1291,7 +1291,14 @@
             return false;
         }
         const restoring = opts.watch || isKnown(info.trackId) ? null : restoreBest(info.trackId, 3000);
+        // The physics builds the car while the launch card is up, and the card stays until it has (big tracks take seconds).
+        const early = opts.intro && opts.start && !opts.watch && !isKnown(info.trackId) && !!window.__nswsPrewarm;
+        // Its mode first: a Rocket League or Royale car is built differently.
+        if (early) registerModes([{ trackId: info.trackId, mode }]);
+        const built = early ? window.__nswsPrewarm(loaded.data) : null;
+        if (built) window.__nswsPrewarmed = loaded.data;
         const intro = opts.intro && !isKnown(info.trackId) ? await launchCard(item, info, mode, loaded.data) : null;
+        if (intro && built) await Promise.race([built, new Promise((r) => setTimeout(r, 15000))]);
         closeAll(true);
         try {
             window.__nswsEditor?.close?.();
