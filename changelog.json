@@ -1,5 +1,12 @@
 [
     {
+        "version": "v12.29",
+        "changes": [
+            "Difference at the bottom is back to the old timer",
+            "New Live difference setting shows your live gap to the ghost instead"
+        ]
+    },
+    {
         "version": "v12.28",
         "changes": [
             "Changelog button on the main menu, with a dot when there's something new"
