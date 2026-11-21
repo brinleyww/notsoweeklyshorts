@@ -16121,7 +16121,8 @@ void main() {
         }
         #endif
      
-        float finalAo = pow(texel.r, intensity);
+        // Unoccluded faces can come out a little above 1; raised to the intensity power that lit them up.
+        float finalAo = pow(clamp(texel.r, 0.0, 1.0), intensity);
         if (aoTones > 0.0) {
             finalAo = ceil(finalAo * aoTones) / aoTones;
         }
@@ -18834,10 +18835,12 @@ uniform float polyfxGlowIntensity;`
   }
   function cfgFor(preset) {
     switch (preset) {
+      // AO radii are world units (a track tile is 5); a screen-space radius of a few pixels was
+      // invisible. `ao.auto` turns AO on with the preset (NSWS has no PolyModLoader AO setting).
       case PRESET.VERY_LOW:
         return {
           composer: true,
-          tone: TONE_MODES[DEFAULT_TONE_INDEX].value,
+          tone: NoToneMapping,
           exposure: 1,
           env: false,
           ao: null,
@@ -18845,78 +18848,84 @@ uniform float polyfxGlowIntensity;`
           smaa: false,
           ssr: null,
           godrays: null,
-          grade: { contrast: 1.02, saturation: 1.02, vignette: 0.03, split: 0 }
+          grade: { contrast: 1.04, saturation: 1, vibrance: 0.12, vignette: 0.06, split: 0.08, shoulder: 1 },
+          finish: { sharpness: 0 }
         };
       case PRESET.BALANCED:
         return {
           composer: true,
-          tone: TONE_MODES[DEFAULT_TONE_INDEX].value,
+          tone: NoToneMapping,
           exposure: 1,
           env: false,
-          ao: { aoRadius: 2.2, distanceFalloff: 0.9, intensity: 1.6, halfRes: true, screenSpaceRadius: true, aoSamples: 8, denoiseSamples: 4, denoiseRadius: 8 },
-          bloom: { strength: 0.07, radius: 0.45, threshold: 1.2 },
+          ao: { aoRadius: 2, distanceFalloff: 1, intensity: 3.5, halfRes: true, screenSpaceRadius: false, aoSamples: 8, denoiseSamples: 4, denoiseRadius: 8 },
+          bloom: { strength: 0.06, radius: 0.45, threshold: 1.8 },
           smaa: true,
           ssr: null,
           godrays: null,
-          grade: { contrast: 1.04, saturation: 1.06, vignette: 0.05, split: 0.12 }
+          grade: { contrast: 1.06, saturation: 1.02, vibrance: 0.18, vignette: 0.1, split: 0.14, shoulder: 1 },
+          finish: { sharpness: 0.25 }
         };
       case PRESET.ENHANCED:
         return {
           composer: true,
-          tone: TONE_MODES[DEFAULT_TONE_INDEX].value,
+          tone: NoToneMapping,
           exposure: 1,
           env: true,
-          envIntensity: 0.4,
-          ao: { aoRadius: 3.2, distanceFalloff: 1, intensity: 2, halfRes: true, screenSpaceRadius: true, aoSamples: 16, denoiseSamples: 8, denoiseRadius: 10 },
-          bloom: { strength: 0.09, radius: 0.5, threshold: 1.15 },
+          envIntensity: 0.3,
+          ao: { auto: true, aoRadius: 2, distanceFalloff: 1, intensity: 4, halfRes: true, screenSpaceRadius: false, aoSamples: 12, denoiseSamples: 8, denoiseRadius: 10 },
+          bloom: { strength: 0.08, radius: 0.5, threshold: 1.7 },
           smaa: true,
           ssr: null,
           godrays: null,
-          grade: { contrast: 1.06, saturation: 1.1, vignette: 0.08, split: 0.22 }
+          grade: { contrast: 1.08, saturation: 1.03, vibrance: 0.22, vignette: 0.14, split: 0.2, shoulder: 1 },
+          finish: { sharpness: 0.35 }
         };
       case PRESET.SEMI_REAL:
         return {
           composer: true,
-          tone: TONE_MODES[DEFAULT_TONE_INDEX].value,
+          tone: NoToneMapping,
           exposure: 1,
           env: true,
-          envIntensity: 0.55,
-          ao: { aoRadius: 4.2, distanceFalloff: 1.05, intensity: 2.6, halfRes: false, screenSpaceRadius: true, aoSamples: 20, denoiseSamples: 10, denoiseRadius: 12 },
-          bloom: { strength: 0.13, radius: 0.58, threshold: 1.05 },
+          envIntensity: 0.4,
+          ao: { auto: true, aoRadius: 2, distanceFalloff: 1, intensity: 4.5, halfRes: false, screenSpaceRadius: false, aoSamples: 16, denoiseSamples: 8, denoiseRadius: 12 },
+          bloom: { strength: 0.1, radius: 0.55, threshold: 1.6 },
           smaa: true,
           ssr: null,
           // threshold and exposure are tuned together (see smoothWidth in GodRaysShader).
           godrays: { intensity: 0.4, density: 0.9, weight: 0.42, decay: 0.95, exposure: 0.016, threshold: 2.4, samples: 32 },
-          grade: { contrast: 1.08, saturation: 1.14, vignette: 0.14, split: 0.3 }
+          grade: { contrast: 1.1, saturation: 1.04, vibrance: 0.26, vignette: 0.18, split: 0.26, shoulder: 1 },
+          finish: { sharpness: 0.4 }
         };
       case PRESET.PHOTO_REAL:
         return {
           composer: true,
-          tone: TONE_MODES[DEFAULT_TONE_INDEX].value,
+          tone: NoToneMapping,
           exposure: 1,
           env: true,
-          envIntensity: 0.7,
-          ao: { aoRadius: 5, distanceFalloff: 1.1, intensity: 3.2, halfRes: false, screenSpaceRadius: true, aoSamples: 24, denoiseSamples: 16, denoiseRadius: 14 },
-          bloom: { strength: 0.17, radius: 0.65, threshold: 0.95 },
+          envIntensity: 0.5,
+          ao: { auto: true, aoRadius: 2.2, distanceFalloff: 1, intensity: 5, halfRes: false, screenSpaceRadius: false, aoSamples: 24, denoiseSamples: 12, denoiseRadius: 12 },
+          bloom: { strength: 0.12, radius: 0.6, threshold: 1.5 },
           smaa: true,
           // SSR and AO both need to own RenderPass and don't compose, so presets leave SSR off
           // (the tuning panel can still turn it on).
           ssr: null,
           godrays: { intensity: 0.65, density: 0.94, weight: 0.46, decay: 0.96, exposure: 0.022, threshold: 2, samples: 56 },
-          grade: { contrast: 1.1, saturation: 1.18, vignette: 0.18, split: 0.36 }
+          grade: { contrast: 1.12, saturation: 1.05, vibrance: 0.3, vignette: 0.2, split: 0.3, shoulder: 1 },
+          finish: { sharpness: 0.45 }
         };
       default:
         return { composer: false };
     }
   }
   // The stock game never tone-maps and clips at 1.0, so a white car in sun sits at 2-3.5 in the
-  // HDR buffer (more with the sky reflections). These keep the effects but grade like the stock game.
+  // HDR buffer (more with the sky reflections). These keep the effects but stay closer to the
+  // stock game's colours: weaker sky reflections, bloom only on the hottest highlights, a lighter grade.
   function correctedCfg(cfg) {
     if (!cfg.composer) return cfg;
     const out = { ...cfg, tone: NoToneMapping, exposure: 1 };
-    if (cfg.envIntensity != null) out.envIntensity = cfg.envIntensity * 0.3;
-    if (cfg.bloom) out.bloom = { ...cfg.bloom, strength: cfg.bloom.strength * 0.6, threshold: Math.max(cfg.bloom.threshold, 3) };
-    if (cfg.grade) out.grade = { ...cfg.grade, contrast: 1 + (cfg.grade.contrast - 1) * 0.6, saturation: 1 + (cfg.grade.saturation - 1) * 0.5, split: (cfg.grade.split ?? 0) * 0.4, correct: true };
+    if (cfg.envIntensity != null) out.envIntensity = cfg.envIntensity * 0.5;
+    if (cfg.bloom) out.bloom = { ...cfg.bloom, strength: cfg.bloom.strength * 0.7, threshold: Math.max(cfg.bloom.threshold, 2.2) };
+    if (cfg.grade) out.grade = { ...cfg.grade, contrast: 1 + (cfg.grade.contrast - 1) * 0.7, saturation: 1 + (cfg.grade.saturation - 1) * 0.5, vibrance: (cfg.grade.vibrance ?? 0) * 0.7, split: (cfg.grade.split ?? 0) * 0.5 };
     return out;
   }
   function hourLabel(hour) {
@@ -18946,46 +18955,79 @@ uniform float polyfxGlowIntensity;`
       this.fsQuad.dispose();
     }
   };
+  // The game's colours are display values that it clips at 1.0 (it never tone-maps), so every
+  // preset grades them as display values. Tone mapping them as scene light, as the presets used
+  // to with Neutral, turned sunlit yellow faces brown and the whole frame grey.
   var GradeShader = {
     uniforms: {
       tDiffuse: { value: null },
       contrast: { value: 1 },
       saturation: { value: 1 },
+      vibrance: { value: 0 },
       vignette: { value: 0 },
       splitStrength: { value: 0 },
-      correct: { value: 0 },
-      shadowTint: { value: new Color(0.94, 0.98, 1.05) },
-      highlightTint: { value: new Color(1.05, 1.01, 0.94) }
+      shoulder: { value: 1 },
+      aspect: { value: 16 / 9 },
+      shadowTint: { value: new Color(0.93, 0.97, 1.06) },
+      highlightTint: { value: new Color(1.05, 1.01, 0.93) }
     },
     vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `
     varying vec2 vUv; uniform sampler2D tDiffuse;
-    uniform float contrast, saturation, vignette, splitStrength, correct;
+    uniform float contrast, saturation, vibrance, vignette, splitStrength, shoulder, aspect;
     uniform vec3 shadowTint, highlightTint;
-    const float PIVOT = 0.18; // linear-light "middle grey"
+    const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+    // Identity up to K, then eases into white instead of clipping, so sunlit faces that the stock
+    // game paints one flat colour keep their shading.
+    vec3 rollOff(vec3 x){
+      const float K = 0.8, W = 1.12;
+      vec3 over = max(x - K, 0.0);
+      return min(x, vec3(K)) + (W - K) * (1.0 - exp(-over / (W - K)));
+    }
     void main(){
       vec4 c = texture2D(tDiffuse, vUv);
       vec3 col = max(c.rgb, 0.0);
-      float lum;
-      if (correct > 0.5) {
-        // The game's colours are display values that it clips at 1.0, so grade them that way:
-        // an S-curve that keeps black and white where they are instead of a power around 0.18.
-        col = min(col, 1.0);
-        col = mix(col, col * col * (3.0 - 2.0 * col), clamp((contrast - 1.0) * 2.0, 0.0, 1.0));
-        lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        col = clamp(mix(vec3(lum), col, saturation), 0.0, 1.0);
-        vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 1.0, lum));
-        col = mix(col, min(col * split, 1.0), splitStrength);
-      } else {
-        col = PIVOT * pow(col / PIVOT, vec3(contrast));
-        lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-        col = mix(vec3(lum), col, saturation);
-        vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 1.4, lum));
-        col = mix(col, col * split, splitStrength);
+      col = min(mix(min(col, 1.0), rollOff(col), shoulder), 1.0);
+      col = mix(col, col * col * (3.0 - 2.0 * col), clamp((contrast - 1.0) * 2.0, 0.0, 1.0));
+      float lum = dot(col, LUMA);
+      float chroma = max(max(col.r, col.g), col.b) - min(min(col.r, col.g), col.b);
+      col = clamp(mix(vec3(lum), col, saturation + vibrance * (1.0 - chroma)), 0.0, 1.0);
+      vec3 split = mix(shadowTint, highlightTint, smoothstep(0.05, 0.9, lum));
+      col = mix(col, min(col * split, 1.0), splitStrength);
+      float r = length((vUv - 0.5) * vec2(aspect, 1.0)) / (0.5 * sqrt(aspect * aspect + 1.0));
+      float v = 1.0 - vignette * smoothstep(0.4, 1.0, r);
+      gl_FragColor = vec4(col * v, c.a);
+    }`
+  };
+  // Last pass: contrast-adaptive sharpening (after SMAA, so it brings back the edges SMAA softens
+  // without re-sharpening its jaggies) plus a 1/255 dither that hides banding in the sky.
+  var FinishShader = {
+    uniforms: {
+      tDiffuse: { value: null },
+      texel: { value: new Vector2(1 / 1920, 1 / 1080) },
+      sharpness: { value: 0 },
+      dither: { value: 1 }
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+    varying vec2 vUv; uniform sampler2D tDiffuse; uniform vec2 texel; uniform float sharpness, dither;
+    float hash(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+    void main(){
+      vec4 base = texture2D(tDiffuse, vUv);
+      vec3 col = base.rgb;
+      if (sharpness > 0.0) {
+        vec3 n = texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb;
+        vec3 s = texture2D(tDiffuse, vUv - vec2(0.0, texel.y)).rgb;
+        vec3 e = texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb;
+        vec3 w = texture2D(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb;
+        vec3 mn = min(col, min(min(n, s), min(e, w)));
+        vec3 mx = max(col, max(max(n, s), max(e, w)));
+        vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, 1e-4), 0.0, 1.0));
+        vec3 wt = -amp / mix(8.0, 5.0, sharpness);
+        col = clamp((col + (n + s + e + w) * wt) / (1.0 + 4.0 * wt), 0.0, 1.0);
       }
-      vec2 d = vUv - 0.5;
-      float v = 1.0 - dot(d, d) * vignette * 2.0;
-      gl_FragColor = vec4(max(col, 0.0) * clamp(v, 0.0, 1.0), c.a);
+      col += (hash(gl_FragCoord.xy) + hash(gl_FragCoord.xy + 17.17) - 1.0) * dither / 255.0;
+      gl_FragColor = vec4(col, base.a);
     }`
   };
   // Cinematic watch mode (mod/nsws_cinematic.js): blur that grows away from the followed car,
@@ -19483,7 +19525,7 @@ uniform float polyfxGlowIntensity;`
             aoSetting = parseInt(window.polyModLoader?.getSetting(AMBIENT_OCCLUSION_ID), 10);
           } catch (_) {
           }
-          if (!Number.isFinite(aoSetting)) aoSetting = 0;
+          if (!Number.isFinite(aoSetting)) aoSetting = this.cfg?.ao?.auto && guardLevel < 2 ? 1 : 0;
         }
         if (this.cinematic) aoSetting = Math.max(aoSetting, 1);
         if (aoSetting !== this.lastAoSetting) {
@@ -19623,6 +19665,7 @@ uniform float polyfxGlowIntensity;`
       this.cineLens.enabled = false;
       this.output = new OutputPass();
       this.smaa = new SMAAPass();
+      this.finish = new FullscreenShaderPass(FinishShader);
       this.composer.addPass(this.renderPass);
       this.composer.addPass(this.n8ao);
       this.composer.addPass(this.bloom);
@@ -19632,6 +19675,7 @@ uniform float polyfxGlowIntensity;`
       this.composer.addPass(this.cineLens);
       this.composer.addPass(this.output);
       this.composer.addPass(this.smaa);
+      this.composer.addPass(this.finish);
       this.renderer = renderer;
       this.builtFor = renderer;
       this.size.set(-1, -1);
@@ -19708,7 +19752,8 @@ uniform float polyfxGlowIntensity;`
       renderer.toneMappingExposure = cfg.exposure;
       this.aoAvailable = !!cfg.ao;
       if (cfg.ao) {
-        Object.assign(this.n8ao.configuration, cfg.ao);
+        const { auto, ...ao } = cfg.ao;
+        Object.assign(this.n8ao.configuration, ao);
         if (guardLevel >= 1) this.n8ao.configuration.halfRes = true;
         if (this.n8ao.configuration.color && this.n8ao.configuration.color.set) this.n8ao.configuration.color.set(0);
       }
@@ -19747,10 +19792,12 @@ uniform float polyfxGlowIntensity;`
         const u = this.grade.material.uniforms;
         u.contrast.value = cfg.grade.contrast;
         u.saturation.value = cfg.grade.saturation;
+        u.vibrance.value = cfg.grade.vibrance ?? 0;
         u.vignette.value = cfg.grade.vignette;
         u.splitStrength.value = cfg.grade.split ?? 0;
-        u.correct.value = cfg.grade.correct ? 1 : 0;
+        u.shoulder.value = cfg.grade.shoulder ?? 1;
       }
+      this.finish.material.uniforms.sharpness.value = cfg.finish ? cfg.finish.sharpness : 0;
       this.smaa.enabled = !!cfg.smaa;
       this.output.enabled = true;
       if (cfg.env) {
@@ -19874,6 +19921,8 @@ uniform float polyfxGlowIntensity;`
       this.bloom.setSize(w, h);
       if (this.ssr && this.ssr.setSize) this.ssr.setSize(w, h);
       if (this.smaa.setSize) this.smaa.setSize(w, h);
+      this.finish.material.uniforms.texel.value.set(1 / w, 1 / h);
+      this.grade.material.uniforms.aspect.value = w / h;
     }
     _updateSun(camera, sunDir) {
       const u = this.godrays.material.uniforms;
@@ -20107,6 +20156,15 @@ uniform float polyfxGlowIntensity;`
         case "grade.split":
           if (this.grade) this.grade.material.uniforms.splitStrength.value = value;
           break;
+        case "grade.vibrance":
+          if (this.grade) this.grade.material.uniforms.vibrance.value = value;
+          break;
+        case "grade.shoulder":
+          if (this.grade) this.grade.material.uniforms.shoulder.value = value;
+          break;
+        case "finish.sharpness":
+          if (this.finish) this.finish.material.uniforms.sharpness.value = value;
+          break;
         case "underglow.intensity":
           if (this.underglow) this.underglow.applyConfig({ stripIntensity: value });
           break;
@@ -20234,6 +20292,9 @@ uniform float polyfxGlowIntensity;`
           "grade.saturation": gr ? gr.saturation.value : 1,
           "grade.vignette": gr ? gr.vignette.value : 0,
           "grade.split": gr ? gr.splitStrength.value : 0,
+          "grade.vibrance": gr ? gr.vibrance.value : 0,
+          "grade.shoulder": gr ? gr.shoulder.value : 1,
+          "finish.sharpness": this.finish ? this.finish.material.uniforms.sharpness.value : 0,
           "underglow.intensity": ug ? ug.stripIntensity : 0,
           "underglow.blobOpacity": ug ? ug.blobOpacity : 0,
           "underglow.blobRadius": ug ? ug.blobRadius : 0,
@@ -20362,7 +20423,7 @@ uniform float polyfxGlowIntensity;`
     ["Exposure", "exposure", 0.2, 2, 0.01],
     ["IBL intensity", "envIntensity", 0, 1.5, 0.01],
     ["Ambient Occlusion"],
-    ["AO intensity", "ao.intensity", 0, 6, 0.05],
+    ["AO intensity", "ao.intensity", 0, 12, 0.05],
     ["AO radius", "ao.radius", 0.1, 6, 0.05],
     ["AO falloff", "ao.falloff", 0.1, 4, 0.05],
     ["AO half-res", "ao.halfRes", ["No", "Yes"]],
@@ -20370,7 +20431,7 @@ uniform float polyfxGlowIntensity;`
     ["Bloom"],
     ["Bloom strength", "bloom.strength", 0, 1.5, 0.01],
     ["Bloom radius", "bloom.radius", 0, 1, 0.01],
-    ["Bloom threshold", "bloom.threshold", 0, 2, 0.01],
+    ["Bloom threshold", "bloom.threshold", 0, 4, 0.01],
     ["Reflections"],
     ["SSR opacity", "ssr.opacity", 0, 1, 0.01],
     ["SSR distance", "ssr.maxDistance", 0, 40, 0.5],
@@ -20382,8 +20443,11 @@ uniform float polyfxGlowIntensity;`
     ["Color Grade"],
     ["Contrast", "grade.contrast", 0.5, 1.6, 0.01],
     ["Saturation", "grade.saturation", 0, 2, 0.01],
+    ["Vibrance", "grade.vibrance", 0, 1, 0.01],
+    ["Highlight roll-off", "grade.shoulder", 0, 1, 0.01],
     ["Vignette", "grade.vignette", 0, 0.8, 0.01],
     ["Split-tone", "grade.split", 0, 1, 0.01],
+    ["Sharpen", "finish.sharpness", 0, 1, 0.01],
     ["Underglow"],
     ["Strip intensity", "underglow.intensity", 0, 3, 0.05],
     ["Blob opacity", "underglow.blobOpacity", 0, 1, 0.02],
