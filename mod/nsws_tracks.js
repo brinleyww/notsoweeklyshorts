@@ -941,6 +941,43 @@
         return next;
     }
 
+    // My order: `order` travels in the meta like the favourite. Tracks without one (new ones) come first, newest on top.
+    const hasOrder = (t) => Number.isFinite(t.order);
+    function byOrder(tracks) {
+        return [...tracks].sort((a, b) => (hasOrder(a) ? 1 : 0) - (hasOrder(b) ? 1 : 0) || (hasOrder(a) ? a.order - b.order : (b.added || 0) - (a.added || 0)) || String(a.id).localeCompare(String(b.id)));
+    }
+
+    // Puts `id` just before place.before or just after place.after (neither = at the end). Only the moved track changes
+    // unless the list needs numbering.
+    async function moveTrack(id, place = {}) {
+        const all = byOrder((await loadAll()).values());
+        const moving = all.find((t) => t.id === id);
+        if (!moving) return;
+        const rest = all.filter((t) => t.id !== id);
+        let at = rest.length;
+        if (place.before != null) at = rest.findIndex((t) => t.id === place.before);
+        else if (place.after != null) at = rest.findIndex((t) => t.id === place.after) + 1;
+        if (at < 0) at = rest.length;
+        const next = [...rest.slice(0, at), moving, ...rest.slice(at)];
+        const prev = next[at - 1], after = next[at + 1];
+        const changes = new Map();
+        const STEP = 1024;
+        if ((!prev || hasOrder(prev)) && (!after || hasOrder(after))) {
+            const o = prev && after ? (prev.order + after.order) / 2 : prev ? prev.order + STEP : after ? after.order - STEP : STEP;
+            if ((!prev || o - prev.order > 1e-6) && (!after || after.order - o > 1e-6)) changes.set(id, o);
+        }
+        if (!changes.size) next.forEach((t, i) => { if (t.order !== (i + 1) * STEP) changes.set(t.id, (i + 1) * STEP); });
+        if (!changes.size) return;
+        for (const [tid, order] of changes) {
+            const t = (await loadAll()).get(tid);
+            if (!t) continue;
+            // One millisecond newer is enough for other devices to take it, and keeps the Recent sort as it was.
+            await putTrack({ ...t, order, updated: (t.updated || 0) + 1, sync: t.sync === "ok" ? "meta" : t.sync });
+        }
+        schedulePush();
+        emit({ type: "update", ids: [...changes.keys()] });
+    }
+
     // The entry's track saved again in the editor: same entry (folder, favourite, picture), new blocks.
     async function replaceCode(id, code) {
         const info = await parseAsync(code);
@@ -1476,6 +1513,13 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 .nt-row.open{cursor:pointer;}
 .nt-row.open:hover{background:rgba(255,255,255,.05);}
 .nt-row.expanded,.nt-row.expanded:hover{background:#192042;border-bottom-color:transparent;}
+.nt-grip{flex:none;display:flex;flex-direction:column;justify-content:center;gap:4px;width:22px;height:40px;margin:0 -4px 0 -6px;padding:0 3px;cursor:grab;touch-action:none;outline:none;}
+.nt-grip>span{display:block;height:3px;background:rgba(255,255,255,.35);}
+.nt-grip:hover>span{background:rgba(255,255,255,.75);}
+.nt-grip:focus-visible{box-shadow:inset 0 0 0 2px #7272c2;}
+.nt-row.dragging,.nt-row.dragging:hover{background:#192042;box-shadow:inset 3px 0 0 #7272c2;}
+.nt-row.dragging .nt-grip{cursor:grabbing;}
+.nt-row.dragging .nt-grip>span{background:#fff;}
 .nt-drop{overflow:hidden;background:#192042;border-bottom:1px solid rgba(255,255,255,.08);transition:height .28s ease-out;outline:none;}
 .nt-drop>.nt-pbody{height:min(440px,62vh);box-sizing:border-box;padding:6px 14px 14px;}
 .nt-drop .nt-hero .nt-lthumb{width:min(100%,150px);}
@@ -2514,7 +2558,13 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     }
 
     function renderMyTracks(pane) {
-        const state = { q: "", sort: "recent", filter: "all", selecting: false, selected: new Set(), tracks: [], loaded: false };
+        const SORT_KEY = "nswsTracksSort";
+        let savedSort = "recent";
+        try {
+            savedSort = localStorage.getItem(SORT_KEY) || "recent";
+        } catch {}
+        if (!["recent", "custom", "name", "author"].includes(savedSort)) savedSort = "recent";
+        const state = { q: "", sort: savedSort, filter: "all", selecting: false, selected: new Set(), tracks: [], loaded: false };
         const toolbar = el("div", "nt-toolbar");
         const listEl = el("div");
         const foot = el("div", "nt-foot");
@@ -2522,7 +2572,13 @@ select.nt-select{padding-right:10px;cursor:pointer;}
 
         const search = input({ placeholder: "Search name or author", onInput: (v) => { state.q = v.trim().toLowerCase(); draw(); } });
         search.classList.add("nt-grow");
-        const sort = select([{ id: "recent", label: "Recent" }, { id: "name", label: "Name" }, { id: "author", label: "Author" }], "recent", (v) => { state.sort = v; draw(); });
+        const sort = select([{ id: "recent", label: "Recent" }, { id: "custom", label: "My order" }, { id: "name", label: "Name" }, { id: "author", label: "Author" }], state.sort, (v) => {
+            state.sort = v;
+            try {
+                localStorage.setItem(SORT_KEY, v);
+            } catch {}
+            draw();
+        });
         sort.title = "Sort";
         const filter = select(
             [{ id: "all", label: "All tracks" }, { id: "fav", label: "Favourites" }, { id: "normal", label: "Normal" }, { id: "rocket", label: "Rocket League" }, { id: "royale", label: "Royale" }, { id: "be", label: "Better Editor" }, { id: "stock", label: "Plays in NSWS" }],
@@ -2572,9 +2628,102 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 if (state.filter !== "all") return normMode(t.mode) === state.filter;
                 return true;
             });
-            if (state.sort === "name") out = out.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+            if (state.sort === "custom") out = byOrder(out);
+            else if (state.sort === "name") out = out.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
             else if (state.sort === "author") out = out.sort((a, b) => (a.author || "").localeCompare(b.author || "") || (a.name || "").localeCompare(b.name || ""));
             return out;
+        }
+
+        // Drag handle for My order. The row moves live while dragging; a search or filter only moves it among what's shown.
+        const rowsNow = () => [...listEl.children].filter((n) => n.dataset?.ntId);
+        function placeOf(r) {
+            const rows = rowsNow();
+            const i = rows.indexOf(r);
+            return rows[i + 1] ? { before: rows[i + 1].dataset.ntId } : rows[i - 1] ? { after: rows[i - 1].dataset.ntId } : null;
+        }
+        function commitMove(t, place) {
+            if (!place) return;
+            state.focusId = t.id;
+            moveTrack(t.id, place).catch((e) => toast(e.message || "Couldn't move that track."));
+        }
+        function handle(r, t) {
+            const h = el("div", "nt-grip");
+            h.title = "Drag to move (or focus and use the arrow keys)";
+            h.tabIndex = 0;
+            h.dataset.ntGrip = t.id;
+            h.append(el("span"), el("span"), el("span"));
+            h.addEventListener("click", (e) => e.stopPropagation());
+            h.addEventListener("keydown", (e) => {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                e.stopPropagation();
+                const rows = rowsNow();
+                const i = rows.indexOf(r);
+                const j = e.key === "ArrowUp" ? i - 1 : i + 1;
+                if (i < 0 || j < 0 || j >= rows.length) return;
+                commitMove(t, e.key === "ArrowUp" ? { before: rows[j].dataset.ntId } : { after: rows[j].dataset.ntId });
+            });
+            h.addEventListener("pointerdown", (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (drop.node) drop.close?.(true);
+                const startNext = r.nextElementSibling;
+                const scroller = pane.closest(".nt-scroll");
+                let y = e.clientY;
+                let raf = 0;
+                state.dragging = true;
+                r.classList.add("dragging");
+                // No pointer capture: moving the row out of the page and back drops it. Window listeners see every move.
+                const place = () => {
+                    const others = rowsNow().filter((n) => n !== r);
+                    const below = others.find((n) => {
+                        const b = n.getBoundingClientRect();
+                        return y < b.top + b.height / 2;
+                    });
+                    if (below) {
+                        if (r.nextElementSibling !== below) listEl.insertBefore(r, below);
+                    } else if (others.length && others[others.length - 1].nextElementSibling !== r) others[others.length - 1].after(r);
+                };
+                const tick = () => {
+                    raf = 0;
+                    if (!scroller || !state.dragging) return;
+                    const b = scroller.getBoundingClientRect();
+                    const edge = 48;
+                    const dy = y < b.top + edge ? -Math.ceil((b.top + edge - y) / 4) : y > b.bottom - edge ? Math.ceil((y - b.bottom + edge) / 4) : 0;
+                    if (!dy) return;
+                    scroller.scrollTop += dy;
+                    place();
+                    raf = requestAnimationFrame(tick);
+                };
+                const move = (ev) => {
+                    // Let go outside the window: no pointerup ever came.
+                    if (!(ev.buttons & 1)) return end(ev);
+                    y = ev.clientY;
+                    place();
+                    if (!raf) raf = requestAnimationFrame(tick);
+                };
+                const end = (ev) => {
+                    if (!state.dragging) return;
+                    window.removeEventListener("pointermove", move, true);
+                    window.removeEventListener("pointerup", end, true);
+                    window.removeEventListener("pointercancel", end, true);
+                    cancelAnimationFrame(raf);
+                    raf = 0;
+                    state.dragging = false;
+                    r.classList.remove("dragging");
+                    const moved = ev.type !== "pointercancel" && r.nextElementSibling !== startNext;
+                    if (moved) commitMove(t, placeOf(r));
+                    if (state.redraw || !moved) {
+                        state.redraw = false;
+                        draw();
+                    }
+                };
+                window.addEventListener("pointermove", move, true);
+                window.addEventListener("pointerup", end, true);
+                window.addEventListener("pointercancel", end, true);
+            });
+            return h;
         }
 
         function row(t) {
@@ -2587,7 +2736,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 };
                 r.appendChild(check(state.selected.has(t.id), toggle));
                 r.addEventListener("click", toggle);
-            }
+            } else if (state.sort === "custom") r.appendChild(handle(r, t));
             r.appendChild(thumbNode(t));
             const info = el("div", "nt-info");
             const name = el("div", "nt-name", t.name || "Untitled track");
@@ -2653,6 +2802,10 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         };
 
         function draw() {
+            if (state.dragging) {
+                state.redraw = true;
+                return;
+            }
             drawToolbar();
             if (drop.node) drop.node.remove();
             listEl.replaceChildren();
@@ -2673,6 +2826,14 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             const visible = shown();
             if (!visible.length) listEl.appendChild(el("div", "nt-empty", "No tracks match."));
             for (const t of visible) listEl.appendChild(row(t));
+            if (state.focusId) {
+                const g = [...listEl.querySelectorAll(".nt-grip")].find((n) => n.dataset.ntGrip === String(state.focusId));
+                state.focusId = null;
+                if (g) {
+                    g.focus({ preventScroll: true });
+                    g.scrollIntoView({ block: "nearest" });
+                }
+            }
             // The open track page moves under its redrawn row, or goes with it.
             if (drop.node) {
                 const r = rowOf(drop.id);

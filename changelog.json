@@ -1,5 +1,13 @@
 [
     {
+        "version": "v12.35",
+        "changes": [
+            "My Tracks: new My order sort, drag a track by its handle to put your tracks in any order",
+            "Your order is saved to your account, so it's the same on every device",
+            "New tracks show up at the top until you move them"
+        ]
+    },
+    {
         "version": "v12.34",
         "changes": [
             "Changelog shows when each update came out, in your own time zone"
