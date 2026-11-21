@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.34",
+        "changes": [
+            "Changelog shows when each update came out, in your own time zone"
+        ]
+    },
+    {
         "version": "v12.33",
         "changes": [
             "Cuppa: new Casual mode when hosting a cup, next to Competitive",
