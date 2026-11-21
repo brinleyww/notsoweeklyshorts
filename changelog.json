@@ -1,5 +1,12 @@
 [
     {
+        "version": "v12.37",
+        "changes": [
+            "Penalty grass sprites lag much less, especially on tracks with lots of penalty grass",
+            "Far away sprites fade into the grass instead of being drawn"
+        ]
+    },
+    {
         "version": "v12.36",
         "changes": [
             "New Penalty grass sprites setting in Graphics, to turn the grass tufts on Better Editor penalty grass on or off",

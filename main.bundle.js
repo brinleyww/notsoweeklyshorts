@@ -33092,6 +33092,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                             A && v.geometries.push(a);
                             for (let e = 0; e < i.length; ++e)
                                 t.setMatrixAt(e, i[e].matrix);
+                            // Better Editor penalty grass tufts (TM.tufts): their own meshes, children of this one.
+                            n.userData?.tufts && self.TM?.tufts?.beside(THREE, scene, t, n.userData.tufts.geometry, n.userData.tufts.material);
                             addMesh(a, t, i.map(e => e.matrix), out)
                         }
                     }
@@ -59880,7 +59882,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     vertexColors: !0
                 });
                 e.addMaterial(s),
-                this.__tmMaterial = s;
+                this.__tmMaterial = s,
+                this.__tmRenderer = e;
                 const o = async e => {
                     if (t.addResource(),
                     C.get(this, ld, "f").has(e.id))
@@ -60173,6 +60176,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // Better Editor blocks: a part's mesh in a colour is built from tm_blocks.bin the first time it is drawn.
             // They have no physics shape here; the physics worker adds them to the terrain mesh itself.
             addTMParts(list) {
+                // Penalty grass tufts get their own meshes (tm_runtime.js TM.tufts, placed in addInstanced).
+                if (null == this.__tmTuftMaterial && self.TM.tufts) {
+                    this.__tmTuftMaterial = self.TM.tufts.material(new THREE.MeshLambertMaterial({
+                        vertexColors: !0
+                    }));
+                    this.__tmRenderer?.addMaterial(this.__tmTuftMaterial)
+                }
+                const tuftMaterial = this.__tmTuftMaterial ?? null;
                 for (const e of list) {
                     if (C.get(this, ld, "f").has(e.id))
                         continue;
@@ -60183,11 +60194,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                       , palettes = new Map(e.colors.map((t => [t.id, t])));
                     n.colors.build = t => {
-                        const {pos: i, col: r, groups: g} = self.TM.renderArrays(e.id, palettes.get(t).colors, (e => {
+                        const rgb = e => {
                             const t = new THREE.Color(e);
                             return [t.r, t.g, t.b]
                         }
-                        ))
+                          , {pos: i, col: r, groups: g} = self.TM.renderArrays(e.id, palettes.get(t).colors, rgb, null != tuftMaterial)
                           , a = new THREE.BufferGeometry;
                         a.setAttribute("position", new THREE.BufferAttribute(i,3)),
                         a.setAttribute("color", new THREE.BufferAttribute(r,3)),
@@ -60198,7 +60209,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         if (water)
                             for (const [s, c, k] of g)
                                 q.addGroup(s, c, k);
-                        return new THREE.Mesh(q, water ? [this.__tmMaterial, water] : this.__tmMaterial)
+                        const mesh = new THREE.Mesh(q, water ? [this.__tmMaterial, water] : this.__tmMaterial);
+                        if (null != tuftMaterial)
+                            mesh.userData.tufts = {
+                                geometry: self.TM.tufts.geometry(THREE, e.id, palettes.get(t).colors, rgb),
+                                material: tuftMaterial
+                            };
+                        return mesh
                     }
                     ,
                     C.get(this, ld, "f").set(e.id, n)
@@ -60210,7 +60227,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         if (null == e.tm || null == c.build || !1 === self.TM?.hasTufts?.(e.id))
                             continue;
                         for (const [k, m] of Map.prototype.entries.call(c))
-                            null != m && (m.geometry?.dispose(), Map.prototype.set.call(c, k, null))
+                            null != m && (m.geometry?.dispose(), m.userData.tufts?.geometry?.dispose(), Map.prototype.set.call(c, k, null))
                     }
                 }
             }
@@ -62403,7 +62420,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 self.TM?.hud?.setWheels(this.getSettingBoolean(R.A.WheelInfo)),
                 self.TM?.hud?.setWheelsSize?.(this.getSettingFloat(R.A.WheelInfoScale));
-                // Better Editor's penalty grass tufts are part of each block's mesh, so the blocks are built again.
+                // Better Editor's penalty grass tufts are built with each block's mesh, so the blocks are built again.
                 const tufts = this.getSettingBoolean(R.A.GrassTufts);
                 null != this.__nswsTufts && tufts !== this.__nswsTufts && window.__nswsTMRebuildMeshes?.();
                 this.__nswsTufts = tufts
