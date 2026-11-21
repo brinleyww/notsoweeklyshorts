@@ -46206,7 +46206,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     renderer.setCamera(spectator.camera);
                     C.get(g, ea, "f").isVisible = !1 !== C.get(g, $r, "f");
                 },
-                showRoundTime: (g, frames) => C.get(g, sa, "f").update({ getTime: () => new yt.A(frames), getFinishTime: () => null }),
+                // hasFinished true only skips the live difference (it reads the real car's run, without the lost time); the
+                // plain difference to the record still shows.
+                showRoundTime: (g, frames) => C.get(g, sa, "f").update({ getTime: () => new yt.A(frames), getFinishTime: () => null, hasFinished: () => !0 }),
                 showRoundCheckpoint: (g, frames) => C.get(g, sa, "f").showCheckpointTime(new yt.A(frames), null),
                 showRoundFinish: (g, frames) => {
                     const banner = C.get(g, ea, "f")?.element.querySelector(".time-announcer-ui"), time = banner?.querySelector(".current .time");
@@ -46288,9 +46290,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     return payload && { ...payload, mountainVertices: new Float32Array(payload.mountainVertices) };
                 },
                 // The organizer replays a racer's run through the physics; null when it can't be checked.
-                verifyRun: (g, recording, frames) => {
+                // trackData: the round's own track. A hidden organizer page draws no frames, so the game it last saw can
+                // still be the previous track's, and every run failed against that track.
+                verifyRun: (g, recording, frames, trackData) => {
                     const sim = C.get(g, Rr, "f")
-                      , track = C.get(g, Yr, "f")
+                      , track = trackData ?? C.get(g, Yr, "f")
                       , run = window.__clipRecordingClass?.deserialize?.(recording);
                     if (!run)
                         return Promise.resolve(!1);

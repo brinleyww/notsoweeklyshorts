@@ -148,7 +148,7 @@ export interface Native {
   guard(fn: (g: Game) => boolean): void;
   guardRestart(fn: (g: Game) => boolean): void;
   inviteError(c: Connection): string | null;
-  verifyRun(g: Game, recording: string, frames: number): Promise<boolean | null>;
+  verifyRun(g: Game, recording: string, frames: number, trackData?: TrackData): Promise<boolean | null>;
   collisions(g: Game, ids: number[] | null): void;
   // A hit's frame `at` is on the other car's own clock.
   bumps(g: Game): { id: number; impulse: number[]; at?: number }[];

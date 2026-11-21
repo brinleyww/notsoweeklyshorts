@@ -84,6 +84,14 @@
 #nsws-editor .nse-cup .who{display:flex;flex-wrap:wrap;gap:2px 10px;color:rgba(255,255,255,.5);}
 #nsws-editor .nse-cup .who>span.done{color:#96ff96;}
 #nsws-editor .nse-cup .who>span.me{text-decoration:underline;}
+#nsws-editor .nse-cup .who>span.can{cursor:pointer;text-decoration:underline dotted rgba(255,255,255,.4);text-underline-offset:3px;}
+#nsws-editor .nse-cup .who>span.can:hover{color:#fff;}
+#nsws-editor .nse-cup .who>span.watched{color:#ffd26b;text-decoration:underline;}
+#nsws-editor .nse-cup .watch{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:4px 10px 5px 12px;background:#3a3f7a;font-size:15px;}
+#nsws-editor .nse-cup .watch.hidden{display:none;}
+#nsws-editor .nse-cup .watch .button{padding:3px 10px;font-size:15px;}
+#nsws-editor .nse-cup .watch>b{font-weight:normal;color:#ffd26b;}
+#nsws-editor .nse-cup .watch>.gap{flex:1 1 0;}
 #nsws-editor .nse-fallback{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);font-size:15px;}
 #nsws-editor .nse-fallback.hidden{display:none;}
 #nsws-editor .nse-fallback>span{flex:1 1 300px;color:rgba(255,255,255,.75);}
@@ -477,7 +485,18 @@
         const cupLeave = twice("Leave cup", () => cupBar?.onLeave?.());
         cupLeave.prepend(Object.assign(el("img"), { src: "images/quit.svg", alt: "" }));
         cupRow.append(cupStatus, cupWho, cupMore, cupEnd, cupLeave);
-        cup.append(cupTop, cupRow);
+        // Watching another builder: who, the next and previous builder, their camera, and back to your own track.
+        const cupWatch = el("div", "watch hidden");
+        const cupWatchName = el("b");
+        const cupPrev = button("", () => cupBar?.watching?.onPrev?.(), "images/arrow_left.svg");
+        cupPrev.title = "Watch the builder before";
+        const cupNext = button("", () => cupBar?.watching?.onNext?.(), "images/arrow_right.svg");
+        cupNext.title = "Watch the next builder";
+        const cupFollow = button("Follow their camera", () => cupBar?.watching?.onFollow());
+        cupFollow.title = "Look around yourself any time; this puts you back on their camera.";
+        const cupStop = button("Back to my track", () => cupBar?.watching?.onStop(), "images/back.svg");
+        cupWatch.append(el("span", null, "Watching"), cupWatchName, cupPrev, cupNext, el("div", "gap"), cupFollow, cupStop);
+        cup.append(cupTop, cupRow, cupWatch);
         cup.addEventListener("click", () => setTimeout(focusFrame, 0));
 
         const info = el("div", "nse-info");
@@ -511,7 +530,7 @@
         frameBox.appendChild(loader);
         host.append(bar, cup, info, fallback, frameBox);
         document.body.appendChild(host);
-        ui = { host, bar, auto, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderTitle, loaderText, loaderFill, send, cup, cupTop, cupGap, cupTitle, cupPhase, cupClock, cupStatus, cupWho, cupSend, cupMore, cupEnd, cupLeave };
+        ui = { host, bar, auto, seg, help, note: noteEl, fallback, fbBox, fbCopy, frameBox, autoBtn, loader, loaderTitle, loaderText, loaderFill, send, cup, cupTop, cupGap, cupTitle, cupPhase, cupClock, cupStatus, cupWho, cupSend, cupMore, cupEnd, cupLeave, cupWatch, cupWatchName, cupPrev, cupNext, cupFollow, cupStop };
         renderCup();
         renderPicker();
         renderMode();
@@ -1435,12 +1454,32 @@
         renderCupStatus();
         ui.cupSend.lastChild.textContent = c.sent ? "Send again" : "Send to the cup";
         ui.cupSend.disabled = !!c.closed;
+        ui.cupSend.style.display = c.canSend === false || c.watching ? "none" : "";
         const builders = c.builders || [];
         ui.cupWho.textContent = "";
         if (builders.length) {
             ui.cupWho.append("Sent " + builders.filter((b) => b.done).length + "/" + builders.length + ":");
-            for (const b of builders) ui.cupWho.appendChild(el("span", (b.done ? "done" : "") + (b.me ? " me" : ""), b.name));
-            ui.cupWho.title = "Green: track sent. The rest are still building.";
+            for (const b of builders) {
+                const chip = el("span", (b.done ? "done" : "") + (b.me ? " me" : "") + (b.onWatch ? " can" : "") + (b.watched ? " watched" : ""), b.name + (b.watchers ? " (" + b.watchers + " watching)" : ""));
+                if (b.onWatch) {
+                    chip.title = b.watched ? "Stop watching " + b.name : "Watch " + b.name + " build";
+                    chip.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        window.__nswsUIClick?.();
+                        b.onWatch();
+                    });
+                }
+                ui.cupWho.appendChild(chip);
+            }
+            ui.cupWho.title = builders.some((b) => b.onWatch) ? "Green: track sent. Click a name to watch them build." : "Green: track sent. The rest are still building.";
+        }
+        const w = c.watching;
+        ui.cupWatch.classList.toggle("hidden", !w);
+        if (w) {
+            ui.cupWatchName.textContent = w.name;
+            ui.cupPrev.style.display = w.onPrev ? "" : "none";
+            ui.cupNext.style.display = w.onNext ? "" : "none";
+            ui.cupFollow.style.display = w.follow ? "none" : "";
         }
         ui.cupMore.style.display = c.more ? "" : "none";
         ui.cupEnd.style.display = c.endNow ? "" : "none";
@@ -1459,7 +1498,8 @@
 
     function renderCupStatus() {
         if (!ui || !cupBar) return;
-        ui.cupStatus.textContent = cupAlert || cupBar.status;
+        const eyes = !cupAlert && !cupBar.watching && cupBar.watchers > 0 ? " " + cupBar.watchers + (cupBar.watchers === 1 ? " person is" : " people are") + " watching you build." : "";
+        ui.cupStatus.textContent = (cupAlert || cupBar.status) + eyes;
         ui.cupStatus.className = "st" + (cupAlert ? " bad" : cupBar.sent ? " good" : "");
     }
 
@@ -1468,6 +1508,13 @@
     function guard(op, extra, ms) {
         if (!ready || bridgeVersion < 7) return Promise.resolve(null);
         return request("cup", Object.assign({}, extra, { op }), ms || 4000).catch(() => null);
+    }
+
+    // Cuppa Build Off: watching another builder (BE nsws_watch.js, bridge 8): show, stop, cam, view, status. null when the
+    // editor can't answer.
+    function watch(op, extra, ms) {
+        if (!ready || bridgeVersion < 8) return Promise.resolve(null);
+        return request("watch", Object.assign({}, extra, { op }), ms || 4000).catch(() => null);
     }
 
     // The editor's open track, saved or not, with its mode.
@@ -1510,6 +1557,8 @@
             renderCupStatus();
         },
         guard,
+        watch,
+        canWatch: () => (ready ? bridgeVersion >= 8 : null),
         note,
         isOpen: () => !!host && !host.classList.contains("hidden"),
     };

@@ -32,7 +32,8 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
 - `net.ts` adds the cup's own data channel (id 40, JSON) on each player connection.
 - `host.ts` (`Organizer`) runs only on the organizer's page. It owns the cup state (`state.ts`),
   runs the round clock, loads tracks, replays each finish through the game's physics
-  (`verifyRun`) and broadcasts the state when it changes. `engine.ts` is its pure tournament logic
+  (`verifyRun`, against the round's own track: a hidden organizer page draws no frames, so the game it last saw
+  can still be the previous track's, and every run failed there) and broadcasts the state when it changes. `engine.ts` is its pure tournament logic
   (scoring, knockouts, finals, votes, standings), `rules.ts` the formats and rule limits.
 - `app.ts` runs on every page: it adopts the game's multiplayer connection, says hello with a
   random identity key kept per cup code (so a player who reloads gets their place and points back),
@@ -134,7 +135,9 @@ Quickplay, Sprint, Championship, Formula, Pick & Ban, Knockout, Time Attack and 
 starting points: every format is a set of the same rules (`rules.ts`), and the organizer can change
 each one on its own on the cup panel's setup page. Players see the same rules read-only. Mid-cup,
 the safe ones stay editable: break, finish window, late joiners, free camera, next track, ready ends
-warm-up, countdown, choosing time, skip votes and the points cap. The cap never goes to a total a
+warm-up, countdown, choosing time, skip votes, the points cap, and how the cup is won (points, rounds, knockout, the
+finalist rule, rounds, knocked out per round). Rounds never go below the rounds played plus one; leaving knockout
+brings the knocked-out racers back; a Build Off's rounds show Auto until its tracks are built. The cap never goes to a total a
 racer already has (`pts >= target` takes the cup), so both the box's floor and `Organizer.adjust`
 hold it at `leaderPoints(s) + 1`.
 
@@ -181,6 +184,19 @@ hold it at `leaderPoints(s) + 1`.
   (`playlist`), a rounds cup lasting exactly tracks x rounds per track; with nothing built it goes back to the lobby.
   `state.built` marks a cup whose tracks are built: Race again races them again, Race again on new tracks builds anew.
   Outside the build phase only the organizer adds tracks. The organizer has **+2 min** and **End building now**.
+- **Watching builders** (Build Off): anyone not building, a racer once the cup has their track, and the organizer
+  (`mayWatch` in host.ts, `canWatch` in build.ts) get **Watch** beside every other builder in the Cup tab's build
+  list, and can click a name in the editor's cup bar. The editor then shows that builder's track as it is now, their
+  camera (eased, ~1 s behind; moving your own camera stops following until **Follow their camera**) and the block in
+  their hand at the tile they point at; ◀ ▶ go to the next builder and **Back to my track** ends it. The watcher's
+  own track and undo history wait untouched in Better Editor (`nsws_watch.js`, bridge 8): each new copy only changes
+  the parts that differ (no reload, no unsaved mark), anything the watcher edits meanwhile is undone on the next sync,
+  and the bridge answers `current` and autosave with the watcher's own track the whole time, so time up, Send and the
+  finish guard never see the watched one (time up stops watching first anyway). A page tells the organizer whom it
+  watches with the usual `act watch` (the state goes out at once during build time); a builder's page sends its track
+  (`bs`, parts like `trk`, every 2 s and only when it changed) and its camera plus hand (`bc`, twice a second when
+  they change) only while someone watches it, and the organizer keeps the latest of each for new watchers and passes
+  them on. An editor older than bridge 8 says it needs a reload.
 - **Saving tracks:** every uploaded track has **Save** (Tracks tab, and a list on the podium's Cup tab, raced ones first
   from `state.played`; the podium has **Save tracks**). Only the organizer keeps codes, so a page asks for one
   (`act code` -> `code` parts like `trk`, an empty answer for no) one at a time, 1.6 s apart (the organizer answers

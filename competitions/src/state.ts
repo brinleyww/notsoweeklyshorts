@@ -48,7 +48,7 @@ export interface Player {
   fin?: 1;
   // Round trip to the organizer in ms, measured by the player's page.
   ping?: number;
-  // The racer this player's camera follows.
+  // The racer this player's camera follows (in a Build Off's build time: the builder they watch).
   watch?: number;
   away?: 1;
   ready?: 1;

@@ -1,5 +1,16 @@
 [
     {
+        "version": "v12.31",
+        "changes": [
+            "Build Off: once you've sent your track you can watch the others build from the cup menu, with their camera and the block in their hand",
+            "Spectators can watch the builders too",
+            "Your own track stays safe while you watch and comes back when you stop",
+            "Organizers can change how the cup is won (points, rounds, knockout) and the number of rounds after it has started",
+            "Fixed everyone getting a DNF when the organizer's tab was in the background",
+            "Fixed the \"e.hasFinished is not a function\" error after a restart"
+        ]
+    },
+    {
         "version": "v12.30",
         "changes": [
             "Crates, Bolts and parts now save to your account, so they follow you to other devices"

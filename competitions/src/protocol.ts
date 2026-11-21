@@ -27,6 +27,12 @@ export type Msg =
   | { k: 'bump'; n: number; to?: number; from?: number; i: number[]; f?: number }
   // A track's import code in parts: upload id, part index, part count, text, and the track's mode.
   | { k: 'trk'; id: string; i: number; n: number; c: string; m?: TrackMode }
+  // A Build Off builder's track as it is now (for whoever watches them build), in parts like 'trk': copy number s.
+  // From the organizer it carries the builder (u).
+  | { k: 'bs'; u?: number; s: number; i: number; n: number; c: string }
+  // That builder's editor camera (position x, y, z and look-at x, y, z) and the part in their hand ([id, x, y, z,
+  // rotation, axis, colour], null for none).
+  | { k: 'bc'; u?: number; v: number[]; h?: number[] | null }
   // Organizer to everyone.
   | { k: 'st'; s: CupState }
   | { k: 'hist'; from: number; rows: RoundResult[] }

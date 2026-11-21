@@ -1,13 +1,30 @@
 // A Build Off's build time on this page: the editor (mod/nsws_editor.js) opens on a new track with a
 // countdown bar, and once time is up the track open in it goes to the organizer by itself.
+// Anyone not building (and a builder once the cup has their track) can watch another builder from the cup menu: the
+// editor shows that builder's track as it is now and follows their camera (BE nsws_watch.js), while this player's own
+// track waits untouched; it comes back when they stop watching. A builder's page only sends its track and camera
+// while someone watches it (the organizer passes them on).
 import type { App } from './app.ts';
 import { beReady, ensureBE, isBE, site } from './game.ts';
-import type { TrackMode } from './state.ts';
+import { player, type TrackMode } from './state.ts';
+
+// A watched builder's track goes out at most this often (only when it changed), its camera twice a second.
+const SNAP_MS = 2000;
+const TICK_MS = 500;
 
 interface EditorTrack {
   name: string;
   code: string;
   mode?: string;
+}
+interface BarBuilder {
+  name: string;
+  done: boolean;
+  me: boolean;
+  // Watching them: on this page, and how many watch them.
+  watched?: boolean;
+  watchers?: number;
+  onWatch?: () => void;
 }
 interface CupBar {
   title: string;
@@ -15,7 +32,19 @@ interface CupBar {
   status: string;
   sent: boolean;
   closed: boolean;
-  builders: { name: string; done: boolean; me: boolean }[];
+  // False for someone who only watches (no Send button).
+  canSend: boolean;
+  builders: BarBuilder[];
+  // How many watch this page's player build.
+  watchers: number;
+  watching: {
+    name: string;
+    follow: boolean;
+    onFollow: () => void;
+    onPrev: (() => void) | null;
+    onNext: (() => void) | null;
+    onStop: () => void;
+  } | null;
   left: () => number;
   onSubmit: () => void;
   onBack: () => void;
@@ -36,6 +65,10 @@ interface Editor {
   // The finish guard (BE nsws_cup.js); null when the editor can't answer.
   guard?(op: 'status' | 'lock' | 'unlock' | 'fill', extra?: Record<string, unknown>, ms?: number): Promise<GuardReply | null>;
   cupAlert?(text: string): void;
+  // Watching another builder (BE nsws_watch.js, bridge 8); null when the editor can't answer.
+  watch?(op: 'show' | 'stop' | 'cam' | 'view' | 'status', extra?: Record<string, unknown>, ms?: number): Promise<WatchReply | null>;
+  // Whether the loaded editor can watch builders; null while it is still loading.
+  canWatch?(): boolean | null;
 }
 interface GuardReply {
   ok?: boolean;
@@ -44,6 +77,17 @@ interface GuardReply {
   locked?: boolean;
   placed?: { start: boolean; finish: boolean };
 }
+interface WatchReply {
+  ok?: boolean;
+  watching?: boolean;
+  follow?: boolean;
+  v?: number[];
+  // The part in hand: [id, x, y, z, rotation, axis, colour].
+  hand?: number[] | null;
+}
+
+const moved = (a: number[] | null, b: number[]) => !a || a.some((x, i) => Math.abs(x - b[i]) > 0.05);
+const handKey = (h: number[] | null | undefined) => (Array.isArray(h) && h.length === 7 && h.every(Number.isFinite) ? h.join(',') : '');
 
 export class BuildDesk {
   #key = '';
@@ -60,7 +104,34 @@ export class BuildDesk {
   #guardBusy = false;
   #locked = false;
 
-  constructor(private app: App) {}
+  // The builder this page watches (their uid), the copy of their track on screen, and the latest copies received.
+  watching: number | null = null;
+  #shown = '';
+  #showing = false;
+  #follow = true;
+  #snaps = new Map<number, string>();
+  #cams = new Map<number, { v: number[]; h: number[] | null }>();
+  // The editor was opened only to watch (someone not building): it closes again with the watching.
+  #watchOpened = false;
+  #noEditorTold = false;
+  // This page's own build as last sent to its watchers.
+  #streamCode = '';
+  #streamAt = 0;
+  #streamBusy = false;
+  #camSent: number[] | null = null;
+  #handSent = '';
+  #camBusy = false;
+  #statusBusy = false;
+
+  constructor(private app: App) {
+    window.setInterval(() => {
+      try {
+        this.#tick();
+      } catch (error) {
+        console.error('[Cuppa]', error);
+      }
+    }, TICK_MS);
+  }
 
   get editor() {
     return site.__nswsEditor as Editor | undefined;
@@ -75,6 +146,26 @@ export class BuildDesk {
     const app = this.app,
       me = app.self;
     return !!me && !me.bot && !me.out && (me.role === 'racer' || app.isHost);
+  }
+
+  // Watching builders: anyone not building, a builder once the cup has their track, and the organizer (host.ts mayWatch).
+  canWatch() {
+    const s = this.app.state,
+      me = this.app.self;
+    if (!s || s.phase !== 'build' || !s.build || s.build.closing || !me || me.bot || !this.editor?.watch) return false;
+    return this.app.isHost || me.role !== 'racer' || !!me.out || !!this.mine();
+  }
+
+  // Everyone building in this cup, this page's player included.
+  builders() {
+    const s = this.app.state;
+    if (!s) return [];
+    const sent = new Set((s.custom ?? []).map((t) => t.by));
+    return s.players.filter((p) => !p.bot && !p.away && (p.role === 'racer' || sent.has(p.u)));
+  }
+
+  watchersOf(u: number) {
+    return this.app.state?.players.filter((p) => p.watch === u && p.u !== u && !p.away).length ?? 0;
   }
 
   // The track this page's player has in the cup, if any.
@@ -92,10 +183,13 @@ export class BuildDesk {
         this.#key = '';
         this.#barKey = '';
         this.#stopGuard();
-        ed?.cup?.(null);
-        if (this.#opened && ed?.isOpen?.()) ed.close();
+        if (this.watching == null) {
+          ed?.cup?.(null);
+          if (this.#opened && ed?.isOpen?.()) ed.close();
+        }
         this.#opened = false;
       }
+      if (this.watching != null) this.#pushBar();
       return;
     }
     const key = `${s.id}:${s.phaseAt}`;
@@ -124,6 +218,184 @@ export class BuildDesk {
     this.#pushBar();
   }
 
+  // ---- Watching ----
+
+  watch(u: number) {
+    const ed = this.editor;
+    if (u === this.app.me) return;
+    if (!ed?.watch) return this.app.notify("The editor isn't available on this page.", 'bad');
+    if (!this.canWatch()) return this.app.notify(this.canBuild() ? 'Send your track to the cup first, then you can watch the others build.' : "Building is over.", 'bad');
+    if (ed.canWatch?.() === false) return this.app.notify('The editor on this page is too old to watch builders. Reload the page.', 'bad');
+    const was = this.watching;
+    this.watching = u;
+    this.#shown = '';
+    this.#follow = true;
+    if (!ed.isOpen?.()) {
+      if (was == null && !this.#opened && !this.canBuild()) this.#watchOpened = true;
+      ed.open();
+    }
+    this.#barKey = '';
+    this.#pushBar();
+    this.app.changed();
+    const code = this.#snaps.get(u);
+    if (code) void this.#show(u, code);
+  }
+
+  async stopWatching() {
+    if (this.watching == null) return;
+    this.watching = null;
+    this.#shown = '';
+    const ed = this.editor;
+    await ed?.watch?.('stop', undefined, 8000).catch(() => null);
+    this.#barKey = '';
+    const s = this.app.state;
+    const building = !!s && s.phase === 'build' && !!s.build && this.canBuild();
+    if (!building) {
+      ed?.cup?.(null);
+      if (this.#watchOpened && ed?.isOpen?.()) ed.close();
+    } else this.#pushBar();
+    this.#watchOpened = false;
+    this.app.changed();
+  }
+
+  // The builder before or after the one watched, in the cup's order.
+  #step(dir: 1 | -1) {
+    const list = this.builders().filter((p) => p.u !== this.app.me);
+    if (list.length < 2 || this.watching == null) return null;
+    const at = list.findIndex((p) => p.u === this.watching);
+    return list[(at + dir + list.length) % list.length].u;
+  }
+
+  #setFollow(on: boolean) {
+    this.#follow = on;
+    const cam = this.watching != null ? this.#cams.get(this.watching) : undefined;
+    void this.editor?.watch?.('view', { follow: on, ...(cam ? { v: cam.v } : {}) });
+    this.#barKey = '';
+    this.#pushBar();
+  }
+
+  onSnap(u: number, code: string) {
+    if (typeof code !== 'string' || !code) return;
+    this.#snaps.set(u, code);
+    if (u === this.watching) void this.#show(u, code);
+  }
+
+  // The watched builder's camera (followed unless the player looks around) and the part in their hand (always shown).
+  onCam(u: number, v: number[], h: number[] | null = null) {
+    if (v.length !== 6 || !v.every(Number.isFinite)) return;
+    const hand = handKey(h) ? h : null;
+    this.#cams.set(u, { v, h: hand });
+    if (u !== this.watching || !this.#shown) return;
+    void this.editor?.watch?.('view', { v, hand }).then((r) => this.#followFrom(r));
+  }
+
+  #followFrom(r: WatchReply | null) {
+    if (!r?.ok || r.follow == null || r.follow === this.#follow || this.watching == null) return;
+    this.#follow = r.follow;
+    this.#barKey = '';
+    this.#pushBar();
+  }
+
+  // Puts a builder's track on screen. The first time, the editor must have this player's own track open, which it keeps.
+  async #show(u: number, code: string) {
+    if (this.#showing) return;
+    const ed = this.editor;
+    if (!ed?.watch) return;
+    this.#showing = true;
+    try {
+      const own = await ed.current?.().catch(() => null);
+      if (!own || this.watching !== u) return;
+      const r = await ed.watch('show', { code }, 10_000);
+      if (!r?.ok || this.watching !== u) return;
+      this.#shown = code;
+      this.#barKey = '';
+      this.#pushBar();
+      const cam = this.#cams.get(u);
+      if (cam) void ed.watch('view', { v: cam.v, hand: cam.h, ...(this.#follow ? { follow: true } : {}) }).then((x) => this.#followFrom(x));
+    } finally {
+      this.#showing = false;
+    }
+  }
+
+  #tick() {
+    const s = this.app.state,
+      ed = this.editor;
+    if (!ed) return;
+    if (this.watching != null) {
+      const target = s ? player(s, this.watching) : undefined;
+      if (!this.canWatch() || !target || target.away) void this.stopWatching();
+      else {
+        if (ed.canWatch?.() === false) {
+          if (!this.#noEditorTold) this.app.notify('The editor on this page is too old to watch builders. Reload the page.', 'bad');
+          this.#noEditorTold = true;
+          void this.stopWatching();
+          return;
+        }
+        const code = this.#snaps.get(this.watching);
+        if (code && code !== this.#shown) void this.#show(this.watching, code);
+        else if (this.#shown && !this.#statusBusy) {
+          // Put away (Back, Esc) or reloaded: the editor stopped watching on its own.
+          this.#statusBusy = true;
+          void ed
+            .watch?.('status')
+            .then((r) => {
+              if (r?.ok && !r.watching && this.watching != null && this.#shown) void this.stopWatching();
+              else this.#followFrom(r ?? null);
+            })
+            .finally(() => (this.#statusBusy = false));
+        }
+      }
+    }
+    this.#stream();
+  }
+
+  // While someone watches this page's player build: their track (when it changed) and their camera.
+  #stream() {
+    const s = this.app.state,
+      me = this.app.me,
+      ed = this.editor;
+    const watched = !!s && !!ed && me != null && s.phase === 'build' && !!s.build && !s.build.closing && this.canBuild() && this.watchersOf(me) > 0;
+    if (!watched) {
+      this.#streamCode = '';
+      this.#camSent = null;
+      this.#handSent = '';
+      return;
+    }
+    const now = Date.now();
+    if (now - this.#streamAt >= SNAP_MS && !this.#streamBusy && ed.current) {
+      this.#streamAt = now;
+      this.#streamBusy = true;
+      void ed
+        .current()
+        .catch(() => null)
+        .then((t) => {
+          if (t?.code && t.code !== this.#streamCode && this.app.state?.phase === 'build') {
+            this.#streamCode = t.code;
+            this.app.sendBuildSnap(t.code);
+          }
+        })
+        .finally(() => (this.#streamBusy = false));
+    }
+    // The camera and the part in hand only while this player looks at their own track.
+    if (this.watching == null && !this.#camBusy && ed.isOpen?.() && ed.watch) {
+      this.#camBusy = true;
+      void ed
+        .watch('cam')
+        .then((r) => {
+          const v = r?.ok && Array.isArray(r.v) && r.v.length === 6 && r.v.every(Number.isFinite) ? r.v : null;
+          const hand = handKey(r?.hand);
+          if (v && (moved(this.#camSent, v) || hand !== this.#handSent)) {
+            this.#camSent = v;
+            this.#handSent = hand;
+            this.app.sendBuildCam(v, hand ? r!.hand! : null);
+          }
+        })
+        .finally(() => (this.#camBusy = false));
+    }
+  }
+
+  // ---- Building ----
+
   #watchBlank(key: string) {
     clearInterval(this.#blankWatch);
     const started = Date.now();
@@ -145,20 +417,39 @@ export class BuildDesk {
   }
 
   #pushBar() {
-    const s = this.app.state,
+    const app = this.app,
+      s = app.state,
       ed = this.editor;
     if (!s?.build || !ed?.cup) return;
     const mine = this.mine();
     const closing = !!s.build.closing;
-    const status = closing ? (mine ? `Time's up. The cup has "${mine.name}".` : "Time's up. Sending your track…") : mine ? `The cup has "${mine.name}". Send again after more changes.` : 'Build a track with a start and a finish, then send it. It goes by itself when time runs out.';
+    const canSend = this.canBuild();
+    const target = this.watching != null ? player(s, this.watching) : undefined;
     const sent = new Set((s.custom ?? []).map((t) => t.by));
-    const builders = s.players
-      .filter((p) => !p.bot && !p.away && (p.role === 'racer' || sent.has(p.u)))
-      .map((p) => ({ name: p.name, done: sent.has(p.u), me: p.u === this.app.me }));
+    const canWatch = this.canWatch();
+    const builders = this.builders().map((p) => {
+      const me = p.u === app.me;
+      return {
+        name: p.name,
+        done: sent.has(p.u),
+        me,
+        watched: p.u === this.watching,
+        watchers: this.watchersOf(p.u),
+        onWatch: canWatch && !me ? () => (p.u === this.watching ? void this.stopWatching() : this.watch(p.u)) : undefined,
+      };
+    });
+    const watchers = app.me != null ? this.watchersOf(app.me) : 0;
+    let status: string;
+    if (target) status = this.#shown ? `Watching ${target.name} build. Your own track is kept and comes back when you stop.` : `Waiting for ${target.name}'s track…`;
+    else if (!canSend) status = closing ? "Time's up. Collecting the tracks…" : 'Click a builder above to watch them build.';
+    else if (closing) status = mine ? `Time's up. The cup has "${mine.name}".` : "Time's up. Sending your track…";
+    else if (mine) status = `The cup has "${mine.name}". Send again after more changes, or click a builder to watch them.`;
+    else status = 'Build a track with a start and a finish, then send it. It goes by itself when time runs out.';
     const per = s.rules.perTrack;
     const phase = closing ? 'Collecting the tracks' : `Build Off · then ${per} round${per === 1 ? '' : 's'} on every track`;
-    const org = !!this.app.org;
-    const key = JSON.stringify([status, !!mine, closing, phase, s.name, builders]);
+    const org = !!app.org;
+    const follow = this.#follow;
+    const key = JSON.stringify([status, !!mine, closing, canSend, phase, s.name, builders.map((b) => [b.name, b.done, b.me, b.watched, b.watchers, !!b.onWatch]), watchers, this.watching, follow]);
     if (key === this.#barKey) return;
     this.#barKey = key;
     ed.cup({
@@ -167,14 +458,28 @@ export class BuildDesk {
       status,
       sent: !!mine,
       closed: closing,
+      canSend,
       builders,
+      watchers,
+      watching: target
+        ? {
+            name: target.name,
+            follow,
+            onFollow: () => this.#setFollow(!this.#follow),
+            onPrev: this.#step(-1) != null ? () => this.watch(this.#step(-1)!) : null,
+            onNext: this.#step(1) != null ? () => this.watch(this.#step(1)!) : null,
+            onStop: () => void this.stopWatching(),
+          }
+        : null,
       left: () => (this.app.state?.build?.until ?? 0) - this.app.now(),
       onSubmit: () => void this.submit(false),
       onBack: () => {
+        void this.stopWatching();
         ed.close();
         this.app.onOpenPanel();
       },
       onLeave: () => {
+        void this.stopWatching();
         ed.close();
         this.app.onLeave(org ? 'You closed the cup.' : '');
       },
@@ -191,7 +496,8 @@ export class BuildDesk {
     else this.app.notify(text, tone);
   }
 
-  // Sends the editor's open track; auto is the send when time runs out.
+  // Sends the editor's open track; auto is the send when time runs out. While watching, the editor answers with this
+  // player's own track (BE nsws_bridge.js), never the one on screen.
   async submit(auto: boolean) {
     const app = this.app,
       ed = this.editor;
@@ -228,6 +534,8 @@ export class BuildDesk {
   }
 
   async #timeUp() {
+    // The player's own track back on screen first: the start and finish are filled in on it.
+    await this.stopWatching();
     // A send already on its way finishes first.
     while (this.#busy) await new Promise((r) => setTimeout(r, 100));
     this.#guardOff();
@@ -280,7 +588,8 @@ export class BuildDesk {
     const ed = this.editor;
     const left = this.#left();
     if (left == null || !ed?.guard || this.#guardBusy) return;
-    if (left > 15_000) return this.#guardOff();
+    // The guard looks at the player's own track, which isn't on screen while they watch someone.
+    if (left > 15_000 || this.watching != null) return this.#guardOff();
     if (left <= 0) return;
     this.#guardBusy = true;
     try {

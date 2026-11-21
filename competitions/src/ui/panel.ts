@@ -222,7 +222,10 @@ export class Panel {
     const desk = app.build;
     const mine = desk.mine();
     const sent = new Map((s.custom ?? []).map((t) => [t.by, t]));
-    const builders = s.players.filter((p) => !p.bot && !p.away && (p.role === 'racer' || sent.has(p.u)));
+    const builders = desk.builders();
+    const canWatch = !b.closing && desk.canWatch();
+    // A builder still building is told why they can't watch yet.
+    const watchLater = !b.closing && !canWatch && desk.canBuild() && !mine;
     const acts: (HTMLElement | null)[] = [];
     if (!b.closing && desk.canBuild()) {
       acts.push(btn([icon('hammer'), mine ? 'Back to the editor' : 'Open the editor'], () => (this.setOpen(false), desk.open()), 'primary'));
@@ -235,13 +238,24 @@ export class Panel {
     return h(
       'div',
       { class: 'sect' },
-      h('div', { class: 'hero' }, h('span', { class: 'mark' }, icon('hammer')), h('div', { class: 'grow' }, h('div', { class: 'big' }, b.closing ? "Time's up · collecting the tracks" : `Build time · ${fmtClock(b.until - app.now())} left`), h('p', null, mine ? `The cup has your track "${mine.name}". Send it again after more changes.` : desk.canBuild() ? 'Build a track with a start and a finish. Whatever is open in your editor goes to the cup when time runs out.' : 'The racers are building. You can practice on the lobby track meanwhile.')), h('div', { class: 'share' }, acts)),
+      h('div', { class: 'hero' }, h('span', { class: 'mark' }, icon('hammer')), h('div', { class: 'grow' }, h('div', { class: 'big' }, b.closing ? "Time's up · collecting the tracks" : `Build time · ${fmtClock(b.until - app.now())} left`), h('p', null, mine ? `The cup has your track "${mine.name}". Send it again after more changes, or watch the others build meanwhile.` : desk.canBuild() ? 'Build a track with a start and a finish. Whatever is open in your editor goes to the cup when time runs out.' : canWatch ? 'The racers are building. Watch any of them below, or practice on the lobby track meanwhile.' : 'The racers are building. You can practice on the lobby track meanwhile.')), h('div', { class: 'share' }, acts)),
       h(
         'div',
         { class: 'list' },
         builders.map((p) => {
           const t = sent.get(p.u);
-          return h('div', { class: 'prow' + (p.u === app.me ? ' me' : '') }, h('span', { class: 'mark' }, icon(t ? 'check' : 'hammer')), h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`), h('div', { class: 'sub ell' }, t ? `Sent "${t.name}"` : 'Building…')));
+          const me = p.u === app.me;
+          const eyes = desk.watchersOf(p.u);
+          const on = desk.watching === p.u;
+          const watch = me
+            ? null
+            : canWatch
+              ? btn([icon('eye'), on ? 'Stop watching' : 'Watch'], () => (on ? void desk.stopWatching() : (this.setOpen(false), desk.watch(p.u))), on ? 'small' : 'small ghost')
+              : watchLater
+                ? h('span', { class: 'dim', style: 'font-size:14px', title: 'Send your track to the cup, then you can watch the others build' }, 'Watch after you send')
+                : null;
+          const sub = (t ? `Sent "${t.name}"` : 'Building…') + (eyes ? ` · ${eyes} watching` : '');
+          return h('div', { class: 'prow' + (me ? ' me' : '') }, h('span', { class: 'mark' }, icon(t ? 'check' : 'hammer')), h('div', { class: 'grow' }, h('div', { class: 'ell' }, `${flag(p.cc)} ${p.name}`), h('div', { class: 'sub ell' }, sub)), watch);
         }),
       ),
     );
@@ -849,7 +863,7 @@ export class Panel {
       if (lobby) app.org.configure(s.format, { ...r, ...change });
       else app.org.adjust(change as never);
     };
-    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill', 'customTracks', 'customOnly', 'customPick', 'customLimit'];
+    const MID_CUP: (keyof Rules)[] = ['breakSeconds', 'freecam', 'lateJoin', 'finishWindow', 'next', 'readyEnds', 'countdownSeconds', 'voteSeconds', 'skipVotes', 'target', 'bots', 'botSkill', 'customTracks', 'customOnly', 'customPick', 'customLimit', 'mode', 'finalist', 'rounds', 'knockout'];
     const live = (field: keyof Rules) => host && (lobby || MID_CUP.includes(field));
     const row = (label: string, hint: string, ...control: (HTMLElement | null)[]) => h('div', { class: 'rule' }, h('label', null, label, hint ? h('small', null, hint) : null), ...control);
     const toggle = (field: keyof Rules, label: string, hint: string) => {
@@ -898,6 +912,9 @@ export class Panel {
     const { app, host, lobby, r, set, live, row, toggle, seg, slider, number } = this.#ruleKit(s);
     const sec = (n: number) => fmtDuration(n);
     const sect = (title: string, ...rows: (HTMLElement | null)[]) => h('div', { class: 'sect' }, h('h3', null, title), h('div', { class: 'rules' }, rows));
+    // A Build Off's rounds are counted from its tracks once they are built; after that they can be changed.
+    const builtRounds = !lobby && s.phase !== 'build';
+    const minRounds = lobby ? 1 : s.rounds + 1;
 
     const winning = sect(
       'Winning',
@@ -916,8 +933,10 @@ export class Panel {
           )
         : null,
       r.mode === 'points' ? toggle('finalist', 'Finalist rule', 'Reaching the cap makes you a finalist; then win a round to take the cup') : null,
-      r.mode === 'rounds' && !r.build ? slider('rounds', 'Rounds', 'Length of the season', 1, 50, 1, (n) => `${n}`) : null,
-      r.mode === 'rounds' && r.build ? row('Rounds', 'Every built track, rounds per track times each', h('span', { class: 'val' }, lobby ? 'Auto' : String(r.rounds))) : null,
+      r.mode === 'rounds' && (!r.build || builtRounds)
+        ? slider('rounds', 'Rounds', lobby ? 'Length of the season' : `Length of the season; ${s.rounds} played so far`, minRounds, Math.max(50, r.rounds, minRounds), 1, (n) => `${n}`)
+        : null,
+      r.mode === 'rounds' && r.build && !builtRounds ? row('Rounds', 'Every built track, rounds per track times each', h('span', { class: 'val' }, 'Auto')) : null,
       r.mode === 'knockout' ? slider('knockout', 'Knocked out', 'Racers out per round', 1, 8, 1, (n) => `${n}`) : null,
     );
     const tracks = sect(

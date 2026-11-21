@@ -624,7 +624,87 @@ export class Organizer {
         return this.#bump(pid, m);
       case 'trk':
         return this.#uploadPart(p, m);
+      case 'bs':
+        return this.#snapPart(p, m);
+      case 'bc':
+        return this.buildCam(p.u, m.v, m.h);
     }
+  }
+
+  // ---- Watching a Build Off's builders ----
+  // A builder's page sends its track while someone watches it build (and its camera); this page keeps the latest copy
+  // of each, for anyone who starts watching, and passes both on to that builder's watchers.
+
+  #snaps = new Map<number, string>();
+  #cams = new Map<number, { v: number[]; h: number[] | null }>();
+  #snapIn = new Map<number, { s: number; parts: (string | null)[]; got: number }>();
+
+  // Who may watch the builders: anyone not building, a racer once the cup has their track, and the organizer.
+  mayWatch(u: number) {
+    const s = this.state,
+      p = player(s, u);
+    if (!p || p.bot || s.phase !== 'build') return false;
+    return u === this.me || p.role !== 'racer' || !!p.out || !!s.custom?.some((t) => t.by === u);
+  }
+
+  #building(u: number) {
+    const s = this.state,
+      p = player(s, u);
+    return s.phase === 'build' && !!s.build && !s.build.closing && !!p && !p.bot && (p.role === 'racer' || u === this.me);
+  }
+
+  #snapPart(p: Player, m: Extract<Msg, { k: 'bs' }>) {
+    const valid = Number.isSafeInteger(m.s) && Number.isInteger(m.n) && m.n >= 1 && m.n <= UPLOAD_PARTS && Number.isInteger(m.i) && m.i >= 0 && m.i < m.n && typeof m.c === 'string' && m.c.length <= UPLOAD_CHUNK;
+    if (!valid || !this.#building(p.u)) return;
+    let got = this.#snapIn.get(p.u);
+    if (!got || got.s !== m.s || got.parts.length !== m.n) {
+      got = { s: m.s, parts: Array(m.n).fill(null), got: 0 };
+      this.#snapIn.set(p.u, got);
+    }
+    if (got.parts[m.i] != null) return;
+    got.parts[m.i] = m.c;
+    if (++got.got < got.parts.length) return;
+    this.#snapIn.delete(p.u);
+    this.buildSnap(p.u, got.parts.join(''));
+  }
+
+  #watchersOf(u: number) {
+    return this.state.players.filter((w) => w.watch === u && w.u !== u && this.mayWatch(w.u));
+  }
+
+  #sendSnap(w: Player, u: number, code: string) {
+    if (w.u === this.me) return this.app.build.onSnap(u, code);
+    if (w.pid == null) return;
+    const n = Math.ceil(code.length / UPLOAD_CHUNK);
+    const s = Date.now();
+    for (let i = 0; i < n; i++) this.app.net.send(w.pid, { k: 'bs', u, s, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK) });
+  }
+
+  #sendCam(w: Player, u: number, cam: { v: number[]; h: number[] | null }) {
+    if (w.u === this.me) return this.app.build.onCam(u, cam.v, cam.h);
+    if (w.pid != null) this.app.net.send(w.pid, { k: 'bc', u, v: cam.v, h: cam.h });
+  }
+
+  // A builder's track as it is now (from their page, or this page's own BuildDesk).
+  buildSnap(u: number, code: string) {
+    if (!this.#building(u) || typeof code !== 'string' || !code || code.length > UPLOAD_CHUNK * UPLOAD_PARTS || this.#snaps.get(u) === code) return;
+    this.#snaps.set(u, code);
+    for (const w of this.#watchersOf(u)) this.#sendSnap(w, u, code);
+  }
+
+  buildCam(u: number, v: unknown, h?: unknown) {
+    const nums = (a: unknown, n: number): a is number[] => Array.isArray(a) && a.length === n && a.every((x) => typeof x === 'number' && Number.isFinite(x));
+    if (!this.#building(u) || !nums(v, 6)) return;
+    const cam = { v: v.map((x) => Math.round(x * 100) / 100), h: nums(h, 7) ? h.map(Math.round) : null };
+    this.#cams.set(u, cam);
+    for (const w of this.#watchersOf(u)) this.#sendCam(w, u, cam);
+  }
+
+  #clearSnaps() {
+    if (!this.#snaps.size && !this.#cams.size && !this.#snapIn.size) return;
+    this.#snaps.clear();
+    this.#cams.clear();
+    this.#snapIn.clear();
   }
 
   #finish(u: number, m: Extract<Msg, { k: 'fin' }>, now: number) {
@@ -666,7 +746,7 @@ export class Organizer {
       const key = `${r.n}.${r.try}.${u}`;
       this.#checks.set(key, (this.#checks.get(key) ?? 0) + 1);
       this.app.native
-        .verifyRun(this.app.game, m.rec, af!)
+        .verifyRun(this.app.game, m.rec, af!, this.#planTrack?.ref.id === r.track.id ? this.#planTrack.data : undefined)
         .catch(() => null)
         .then((ok) => {
           this.#checks.set(key, Math.max(0, (this.#checks.get(key) ?? 1) - 1));
@@ -719,12 +799,21 @@ export class Organizer {
     const now = Date.now();
     // At most one change a second per player; pages resend until their choice shows in the state.
     if (!p || now - (this.#watchAt.get(u) ?? 0) < 1000) return;
-    const to = typeof v === 'number' && v !== u && player(this.state, v) ? v : undefined;
+    let to = typeof v === 'number' && v !== u && player(this.state, v) ? v : undefined;
+    const build = this.state.phase === 'build';
+    if (build && to != null && !this.mayWatch(u)) to = undefined;
     if (p.watch === to) return;
     this.#watchAt.set(u, now);
     if (to == null) delete p.watch;
     else p.watch = to;
-    this.#softTouch();
+    if (!build) return this.#softTouch();
+    // A builder starts sending once it sees a watcher; the watcher gets the latest copy at once.
+    this.touch();
+    if (to == null) return;
+    const code = this.#snaps.get(to),
+      cam = this.#cams.get(to);
+    if (code) this.#sendSnap(p, to, code);
+    if (cam) this.#sendCam(p, to, cam);
   }
 
   #ballot(u: number, v: number) {
@@ -1112,6 +1201,7 @@ export class Organizer {
   tick(now: number) {
     const s = this.state;
     this.#syncLobby(now);
+    if (s.phase !== 'build') this.#clearSnaps();
     switch (s.phase) {
       case 'build':
         this.#tickBuild(now);
@@ -1420,12 +1510,20 @@ export class Organizer {
   }
 
   // Changes that are safe mid-cup.
-  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill' | 'customTracks' | 'customOnly' | 'customPick' | 'customLimit'>>) {
+  adjust(change: Partial<Pick<Rules, 'breakSeconds' | 'freecam' | 'lateJoin' | 'finishWindow' | 'next' | 'readyEnds' | 'target' | 'bots' | 'botSkill' | 'customTracks' | 'customOnly' | 'customPick' | 'customLimit' | 'mode' | 'finalist' | 'rounds' | 'knockout'>>) {
     const s = this.state;
+    const was = s.rules.mode;
     const next = { ...change };
+    const mid = s.phase !== 'lobby';
     // The points cap can still move during a cup, but never onto a total someone already has.
-    if (next.target != null && s.phase !== 'lobby') next.target = Math.max(next.target, E.leaderPoints(s) + 1);
+    if (mid && (next.target != null || (next.mode === 'points' && was !== 'points'))) next.target = Math.max(next.target ?? s.rules.target, E.leaderPoints(s) + 1);
+    // Rounds already played stay played: the round still to finish can be the last.
+    if (mid && next.rounds != null) next.rounds = Math.max(next.rounds, s.rounds + 1);
+    if (mid && next.mode === 'rounds' && was !== 'rounds') next.rounds = Math.max(next.rounds ?? s.rules.rounds, s.rounds + 1);
     s.rules = cleanRules({ ...s.rules, ...next });
+    // Out of knockout, nobody is knocked out: they race again.
+    if (was === 'knockout' && s.rules.mode !== 'knockout') for (const p of s.players) delete p.out;
+    if (!s.rules.finalist || s.rules.mode !== 'points') for (const p of s.players) delete p.fin;
     this.#poolAt = 0;
     this.#syncBots();
     this.touch(true);

@@ -98,6 +98,9 @@ export class App {
   // The organizer answers one code request per player every 1.5 s, so this page asks one at a time, spaced out.
   #codeQueue: Promise<unknown> = Promise.resolve();
   #codeAskAt = 0;
+  // A watched builder's track arriving in parts (Build Off).
+  #snapIn: { u: number; s: number; parts: (string | null)[]; got: number } | null = null;
+  #snapSeq = 0;
   onChange: () => void = () => {};
   onLeave: (message: string) => void = () => {};
   onOpenPanel: () => void = () => {};
@@ -505,7 +508,8 @@ export class App {
     if (!me || site.__nswsMuxQuiet) return;
     const w = this.watch;
     const pid = w.active && w.mode !== 'free' ? w.target : null;
-    const want = pid == null ? null : (this.playerByPid(pid)?.u ?? null);
+    // In a Build Off's build time: the builder this page watches build.
+    const want = this.state?.phase === 'build' ? this.build.watching : pid == null ? null : (this.playerByPid(pid)?.u ?? null);
     const now = performance.now();
     if (want !== this.#watchWant) {
       this.#watchWant = want;
@@ -603,6 +607,21 @@ export class App {
         return;
       case 'bots':
         this.bots.receive(m);
+        return;
+      case 'bs': {
+        if (!Number.isSafeInteger(m.u) || !Number.isSafeInteger(m.s) || !Number.isInteger(m.i) || !Number.isInteger(m.n) || typeof m.c !== 'string' || m.n < 1 || m.n > UPLOAD_PARTS || m.i < 0 || m.i >= m.n) return;
+        let got = this.#snapIn;
+        if (!got || got.u !== m.u || got.s !== m.s || got.parts.length !== m.n) got = this.#snapIn = { u: m.u!, s: m.s, parts: Array(m.n).fill(null), got: 0 };
+        if (got.parts[m.i] != null) return;
+        got.parts[m.i] = m.c;
+        if (++got.got === got.parts.length) {
+          this.#snapIn = null;
+          this.build.onSnap(got.u, got.parts.join(''));
+        }
+        return;
+      }
+      case 'bc':
+        if (Number.isSafeInteger(m.u) && Array.isArray(m.v)) this.build.onCam(m.u!, m.v, Array.isArray(m.h) ? m.h : null);
         return;
       case 'bye':
         this.onLeave(typeof m.why === 'string' ? m.why.slice(0, 200) : 'You left the cup.');
@@ -743,6 +762,20 @@ export class App {
   act(m: Msg) {
     if (this.org) return this.report(m);
     if (!this.net.send(0, m, true)) this.notify('Not connected to the organizer right now', 'bad');
+  }
+
+  // A Build Off: this page's track as it is now, for whoever watches its player build.
+  sendBuildSnap(code: string) {
+    if (this.org) return this.org.buildSnap(this.org.me, code);
+    const n = Math.ceil(code.length / UPLOAD_CHUNK);
+    if (n > UPLOAD_PARTS) return;
+    const s = ++this.#snapSeq;
+    for (let i = 0; i < n; i++) this.net.send(0, { k: 'bs', s, i, n, c: code.slice(i * UPLOAD_CHUNK, (i + 1) * UPLOAD_CHUNK) });
+  }
+
+  sendBuildCam(v: number[], h: number[] | null) {
+    if (this.org) return this.org.buildCam(this.org.me, v, h);
+    this.net.send(0, { k: 'bc', v, h });
   }
 
   // Sends a track's import code to the organizer; returns why it can't go, or null.
