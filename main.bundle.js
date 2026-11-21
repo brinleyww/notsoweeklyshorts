@@ -58126,6 +58126,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Bc, "f").appendChild(bingoBtn);
                 C.get(this, Gc, "f").push(bingoBtn);
             }
+            if (window.__nswsChangelog) {
+                const changelogBtn = document.createElement("button");
+                changelogBtn.className = "button";
+                window.__nswsChangelog.mountButton(changelogBtn);
+                changelogBtn.addEventListener("click", ( () => {
+                    n.playUIClick();
+                    window.__nswsChangelog.open();
+                }
+                ));
+                C.get(this, Bc, "f").appendChild(changelogBtn);
+                C.get(this, Gc, "f").push(changelogBtn);
+            }
             const P = o.getCurrentUserProfile();
 
             if (P.isVerifier) {

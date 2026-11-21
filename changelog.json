@@ -1,5 +1,17 @@
 [
     {
+        "version": "v12.28",
+        "changes": [
+            "Changelog button on the main menu, with a dot when there's something new"
+        ]
+    },
+    {
+        "version": "v12.27",
+        "changes": [
+            "Big custom tracks get your car ready while the track loads, so the start isn't stuck"
+        ]
+    },
+    {
         "version": "v12.26",
         "changes": [
             "Difference at the bottom shows your live gap to the ghost while you drive"
