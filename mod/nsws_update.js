@@ -23,6 +23,11 @@
 .nsws-update>h3{margin:0;padding:6px 20px 14px 20px;font-size:22px;font-weight:normal;text-align:center;color:var(--text-color);opacity:.8;}
 .nsws-update>.version{margin:0 10px;padding:18px 20px;background-color:var(--surface-secondary-color);font-size:48px;text-align:center;color:var(--text-color);overflow-wrap:anywhere;}
 .nsws-update>.version>span{display:block;margin-bottom:8px;font-size:18px;opacity:.6;}
+.nsws-update>.changes{margin:10px 10px 0 10px;padding:12px 20px;max-height:240px;overflow-y:auto;background-color:var(--surface-secondary-color);color:var(--text-color);font-size:20px;}
+.nsws-update>.changes>div{margin-top:10px;font-size:18px;opacity:.6;}
+.nsws-update>.changes>div:first-child{margin-top:0;}
+.nsws-update>.changes>ul{margin:4px 0 0 0;padding-left:22px;}
+.nsws-update>.changes>ul>li{margin:3px 0;overflow-wrap:anywhere;}
 .nsws-update>.buttons{display:flex;justify-content:space-between;gap:10px;padding:10px 24px 10px 10px;}
 .nsws-update>.buttons>.button{min-width:170px;}
 @keyframes nsws-update-in{0%{opacity:0;transform:translateY(12px);}100%{opacity:1;transform:none;}}
@@ -58,6 +63,22 @@
             return run ? (run.head_commit?.message || run.display_title || "").split("\n")[0] || null : null;
         } catch (e) {
             return null;
+        }
+    }
+
+    // Every version from the live one back to (not including) the one this page is running.
+    async function changesSince(latest) {
+        try {
+            const res = await fetch(new URL("changelog.json", location.href), { cache: "no-store" });
+            if (!res.ok) return [];
+            const log = (await res.json()).filter(e => e && typeof e.version === "string" && Array.isArray(e.changes));
+            const from = log.findIndex(e => e.version === latest);
+            if (from < 0) return [];
+            const loadedName = await window.__nswsLoadedVersion;
+            const loaded = log.findIndex(e => e.version === loadedName);
+            return log.slice(from, loaded > from ? Math.min(loaded, from + 5) : from + 1);
+        } catch (e) {
+            return [];
         }
     }
 
@@ -169,6 +190,23 @@
         version.append(pending.name || "New version");
         box.appendChild(version);
 
+        if (pending.changes?.length) {
+            const changes = document.createElement("div");
+            changes.className = "changes";
+            for (const entry of pending.changes) {
+                const title = document.createElement("div");
+                title.textContent = pending.changes.length > 1 ? entry.version : "What's new";
+                const list = document.createElement("ul");
+                for (const line of entry.changes) {
+                    const li = document.createElement("li");
+                    li.textContent = String(line);
+                    list.appendChild(li);
+                }
+                changes.append(title, list);
+            }
+            box.appendChild(changes);
+        }
+
         const buttons = document.createElement("div");
         buttons.className = "buttons";
         const ignoreButton = makeButton("back", "Ignore");
@@ -199,7 +237,8 @@
         try {
             const live = await liveDeployTime();
             if (live > dismissedAt && !(pending && pending.deployedAt >= live)) {
-                pending = { deployedAt: live, name: await versionName(live) };
+                const name = await versionName(live);
+                pending = { deployedAt: live, name, changes: name ? await changesSince(name) : [] };
                 tryShow();
             }
         } catch (e) {

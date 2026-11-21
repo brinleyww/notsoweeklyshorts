@@ -1,0 +1,26 @@
+[
+    {
+        "version": "v12.25",
+        "changes": [
+            "Update popup now shows what changed"
+        ]
+    },
+    {
+        "version": "v12.24",
+        "changes": [
+            "Restarting on big Better Editor tracks doesn't freeze the car anymore"
+        ]
+    },
+    {
+        "version": "v12.23",
+        "changes": [
+            "PolyFX colours, shading and sharpness redone"
+        ]
+    },
+    {
+        "version": "v12.22",
+        "changes": [
+            "Graphics presets turn fog off"
+        ]
+    }
+]
