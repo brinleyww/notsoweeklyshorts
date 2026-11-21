@@ -780,7 +780,7 @@
                     }
                     break;
                 case "surge":
-                    // Speed: the frame pulls back while streaks and speed lines rush past.
+                    // Speed: the frame pulls back and its edges smear outwards.
                     zoom -= 0.06 * h.s * env(0.04, 0.35);
                     blur += 0.12 * h.s * env(0.03, 0.3);
                     chroma += 0.012 * h.s * env(0.02, 0.25);
@@ -984,6 +984,14 @@ void main() {
     q = mat2(c, -s, s, c) * q / Z;
     q.x /= asp;
     vec2 uv = q + ZC + SH;
+    float rush = 0.0;
+    if (LN > 0.0) {
+        vec2 r = uv - ZC;
+        r.x *= asp;
+        float rr = dot(r, r);
+        rush = smoothstep(0.06, 0.55, rr) * LN;
+        uv = ZC + (uv - ZC) * (1.0 - 0.045 * LN * rr);
+    }
     float ring = 0.0;
     if (WVA > 0.0) {
         vec2 wq = uv - WV.xy;
@@ -1002,14 +1010,15 @@ void main() {
             gl = GL;
         }
     }
-    vec2 d = (uv - ZC) * BL + WD * WH;
-    vec2 rd = (uv - 0.5) * (CH + gl * 0.02);
+    vec2 d = (uv - ZC) * (BL + 0.14 * rush) + WD * WH;
+    vec2 rd = (uv - 0.5) * (CH + gl * 0.02 + 0.01 * rush);
     int n = dot(d, d) * R.x * R.x > 1.0 ? 16 : 1;
+    float jt = h(v * R + fract(TM * 3.7) * 57.0);
     vec3 acc = vec3(0.0);
     float ws = 0.0;
     for (int i = 0; i < 16; i++) {
         if (i >= n) break;
-        float k = n > 1 ? float(i) / 15.0 : 0.0;
+        float k = n > 1 ? (float(i) + jt) / 16.0 : 0.0;
         float wt = 1.0 - 0.7 * k;
         vec2 u = uv - d * k;
         acc += vec3(texture(T, u + rd).r, texture(T, u).g, texture(T, u - rd).b) * wt;
@@ -1055,15 +1064,6 @@ void main() {
             vec3 ec = i == 2 ? vec3(1.0) : i == 3 ? hue(ECC.rgb, 2.1) : ECC.rgb;
             col = mix(col, ec, mm * ECH * world);
         }
-    }
-    if (LN > 0.0) {
-        vec2 r = v - vec2(0.5, 0.48);
-        r.x *= asp;
-        float a = atan(r.y, r.x) * 38.0 / 3.14159265;
-        float cell = floor(a);
-        float on = step(0.86, h(vec2(cell, floor(TM * 24.0))));
-        float thin = pow(1.0 - abs(fract(a) - 0.5) * 2.0, 6.0);
-        col = mix(col, vec3(1.0), on * thin * smoothstep(0.42, 0.95, length(r)) * LN * 0.5 * world);
     }
     if (BGK > 0.0 && BGH > 0.5) {
         vec3 b = texture(B, uv).rgb;
