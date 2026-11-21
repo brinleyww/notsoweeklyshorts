@@ -14,7 +14,7 @@
     const CSS = `
 #nsws-changelog{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7);}
 #nsws-changelog *{box-sizing:border-box;}
-#nsws-changelog>.box{display:flex;flex-direction:column;width:min(640px,96vw);max-height:90vh;background:var(--surface-color);color:var(--text-color);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,0 100%);}
+#nsws-changelog>.box{display:flex;flex-direction:column;width:min(640px,96vw);max-height:90vh;background:var(--surface-color);color:var(--text-color);}
 #nsws-changelog .checker{height:8px;flex-shrink:0;background:repeating-conic-gradient(#fff 0 25%,#112052 0 50%) 0 0/8px 8px;opacity:.85;}
 #nsws-changelog .top{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--surface-secondary-color);}
 #nsws-changelog .top>h1{margin:0 auto 0 0;font-size:32px;font-weight:normal;color:#b3c1ff;text-shadow:0 2px 0 #112052;}

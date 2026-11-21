@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.38",
+        "changes": [
+            "Changelog window is a plain rectangle now, no slanted edge"
+        ]
+    },
+    {
         "version": "v12.37",
         "changes": [
             "Penalty grass sprites lag much less, especially on tracks with lots of penalty grass",
