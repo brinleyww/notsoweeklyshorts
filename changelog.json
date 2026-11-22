@@ -1,5 +1,12 @@
 [
     {
+        "version": "v12.44",
+        "changes": [
+            "Open 3 crates at a time for 140 Bolts",
+            "Parts you sold or traded up come off your car"
+        ]
+    },
+    {
         "version": "v12.43",
         "changes": [
             "Changelog opens just as fast however long it gets, older updates load as you scroll"

@@ -5,6 +5,8 @@
     const STORE = "nsws_crates_v2:";
     const OLD_STORE = "nsws_crates_v1:";
     const PRICE = 50;
+    const MULTI = 3;
+    const MULTI_PRICE = 140;
     const START_BOLTS = 50;
     // A finished run pays 1 Bolt per RUN_MS_PER_BOLT of race clock that ran while this tab was in view.
     const RUN_MS_PER_BOLT = 10000;
@@ -15,8 +17,10 @@
     const QUESTS_PER_DAY = 3;
     const MAX_ITEMS = 500;
     const TILE = 150;
+    const TILE_SMALL = 100;
     const GAP = 6;
     const SPIN_MS = 6200;
+    const SPIN_STAGGER_MS = 600;
     const COUNTS_MS = 5 * 60 * 1000;
     const REPORT_DELAY_MS = 15000;
     // Account saves: soon after something done in the crate screens, at most every few minutes for Bolts from driving
@@ -152,6 +156,9 @@
 #nsws-crate .reel{position:relative;height:${TILE + 46}px;margin:6px 0 4px;overflow:hidden;background:var(--surface-tertiary-color);}
 #nsws-crate .reel>.strip{position:absolute;left:0;top:8px;display:flex;gap:${GAP}px;will-change:transform;}
 #nsws-crate .reel .tile{width:${TILE}px;flex-shrink:0;}
+#nsws-crate .reel.small{height:${TILE_SMALL + 34}px;}
+#nsws-crate .reel.small .tile{width:${TILE_SMALL}px;}
+#nsws-crate .reel.small .tile>.star{font-size:48px;}
 #nsws-crate .reel>.mark{position:absolute;left:50%;top:0;bottom:0;width:3px;margin-left:-1px;background:#ffc94a;box-shadow:0 0 6px #ffc94a;z-index:1;}
 #nsws-crate .actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px;}
 #nsws-crate .actions>.button{margin:0;font-size:20px;padding:6px 16px;}
@@ -167,6 +174,14 @@
 #nsws-crate .won .quip{margin-top:8px;font-size:17px;font-style:italic;}
 #nsws-crate .won.pop{animation:nsws-crate-pop .45s ease-out;}
 @keyframes nsws-crate-pop{0%{transform:scale(.9);opacity:0;}100%{transform:none;opacity:1;}}
+#nsws-crate .haul{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px 0 0;}
+#nsws-crate .haul>.won{flex-direction:column;align-items:stretch;gap:6px;padding:0;}
+#nsws-crate .haul>.won>img{width:100%;height:170px;object-fit:contain;}
+#nsws-crate .haul>.won>div{flex:1;display:flex;flex-direction:column;}
+#nsws-crate .haul .nm{font-size:20px;}
+#nsws-crate .haul .actions{margin-top:auto;padding-top:8px;gap:6px;}
+#nsws-crate .haul .actions>.button{font-size:16px;padding:4px 10px;}
+#nsws-crate .haul-quip{margin-top:10px;font-size:17px;font-style:italic;}
 #nsws-crate .line{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:46px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:17px;}
 #nsws-crate .line>div>small{display:block;font-size:13px;color:rgba(255,255,255,.6);}
 #nsws-crate .line>.button{margin:0;font-size:17px;padding:5px 14px;flex-shrink:0;}
@@ -199,6 +214,7 @@
 #nsws-crate .wheel .result>small{display:block;font-size:14px;font-style:italic;color:rgba(255,255,255,.65);}
 #nsws-crate .wheel .result.win{color:#96ff96;}
 #nsws-crate .wheel .result.lose{color:#ff9696;}
+@media (max-width:620px){#nsws-crate .haul{grid-template-columns:minmax(0,1fr);}#nsws-crate .haul>.won{flex-direction:row;}#nsws-crate .haul>.won>img{width:96px;height:96px;}}
 @media (max-width:620px){#nsws-crate .won{flex-direction:column;align-items:flex-start;}#nsws-crate .won>img{width:160px;height:160px;}#nsws-crate .top>small{display:none;}}
 .nsws-crate-chat{color:rgba(255,255,255,.8);}
 .nsws-crate-chat>b{font-weight:normal;color:var(--rc);}
@@ -493,6 +509,7 @@
                 refreshTop();
                 if (view?.quests) paintQuests(view);
             }
+            takeOffGone();
         } else if (s) syncFailed(push);
         if (syncAgain) {
             syncAgain = false;
@@ -511,12 +528,15 @@
     setInterval(() => {
         const state = load();
         if (state && syncedKey !== cached.key) syncIfStale(0);
+        // The game can load the account's saved car after the crates were read.
+        takeOffGone();
     }, 5000);
 
     window.addEventListener("storage", (e) => {
         if (cached && e.key === cached.key) {
             cached = null;
             render();
+            takeOffGone();
         }
     });
 
@@ -681,8 +701,12 @@
         return window.__clipCarStyleClass;
     }
 
+    function liveGarage() {
+        return garage?.panel.isConnected ? garage : null;
+    }
+
     function currentStyle() {
-        return garage?.hooks?.current?.() ?? profile()?.carStyle ?? null;
+        return liveGarage()?.hooks.current?.() ?? profile()?.carStyle ?? null;
     }
 
     function withPart(style, kind, index) {
@@ -1065,7 +1089,7 @@
         if (!state) return;
         const v = overlay("Crates");
         const base = currentStyle();
-        v.body.appendChild(el("h2", null, "Each crate costs " + PRICE + " Bolts and holds one part you can't get anywhere else"));
+        v.body.appendChild(el("h2", null, "Each crate costs " + PRICE + " Bolts (" + MULTI + " for " + MULTI_PRICE + ") and holds one part you can't get anywhere else"));
         const shop = el("div", "shop");
         for (const c of CRATES) {
             const list = parts().PARTS[c.kind];
@@ -1102,26 +1126,35 @@
         const actions = el("div", "actions");
         const buy = button("Buy and open \u2014 " + PRICE + " Bolts", () => spin(kind), "main");
         buy.disabled = state.bolts < PRICE;
-        actions.append(buy, button("Back", () => openShop()));
-        actions.appendChild(el("span", "msg", state.bolts < PRICE ? "You have " + plural(state.bolts, "Bolt") + ". Finish runs and do quests to earn more." : ""));
+        const buyMulti = button("Open " + MULTI + " \u2014 " + MULTI_PRICE + " Bolts", () => spin(kind, MULTI));
+        const room = state.items.length + MULTI <= MAX_ITEMS;
+        buyMulti.disabled = state.bolts < MULTI_PRICE || !room;
+        actions.append(buy, buyMulti, button("Back", () => openShop()));
+        let msg = "";
+        if (state.bolts < PRICE) msg = "You have " + plural(state.bolts, "Bolt") + ". Finish runs and do quests to earn more.";
+        else if (!room) msg = "No room for " + MULTI + " more parts. Sell some or trade up first.";
+        actions.appendChild(el("span", "msg", msg));
         v.body.appendChild(actions);
     }
 
-    function spin(kind) {
+    function spin(kind, amount = 1) {
         const state = load();
-        if (!state || state.bolts < PRICE || !view) return;
-        state.bolts -= PRICE;
-        state.opened = (state.opened ?? 0) + 1;
-        add(state, "sc", PRICE);
-        add(state, CRATE_KEY[kind], 1);
-        bump(questState(state), "crate");
+        const multi = amount === MULTI;
+        const cost = multi ? MULTI_PRICE : PRICE;
+        if (!state || !view || state.bolts < cost) return;
+        if (multi && state.items.length + amount > MAX_ITEMS) return openCrate(kind);
+        state.bolts -= cost;
+        state.opened = (state.opened ?? 0) + amount;
+        add(state, "sc", cost);
+        add(state, CRATE_KEY[kind], amount);
+        bump(questState(state), "crate", amount);
         questsTouched(state);
         econChanged();
-        const item = makeItem(kind, rollRarity());
-        const kept = state.items.length < MAX_ITEMS;
+        const won = Array.from({ length: amount }, () => makeItem(kind, rollRarity()));
+        const kept = state.items.length + amount <= MAX_ITEMS;
         if (kept) {
-            state.items.push(item);
-            queue(state, [{ u: item.u, i: partOf(item).g, e: 1 }]);
+            state.items.push(...won);
+            queue(state, won.map((x) => ({ u: x.u, i: partOf(x).g, e: 1 })));
         }
         save();
 
@@ -1129,22 +1162,26 @@
         const base = currentStyle();
         refreshTop();
         v.body.textContent = "";
-        const reel = el("div", "reel");
-        const strip = el("div", "strip");
+        const tileWidth = multi ? TILE_SMALL : TILE;
         const COUNT = 56, WIN = 48;
-        for (let n = 0; n < COUNT; n++) {
-            const idx = n === WIN ? item.n : rollPart(kind, rollRarity());
-            strip.appendChild(tileFor(kind, idx, base, n !== WIN, false));
-        }
-        reel.append(strip, el("div", "mark"));
-        v.body.appendChild(reel);
+        const reels = won.map((item, i) => {
+            const reel = el("div", multi ? "reel small" : "reel");
+            const strip = el("div", "strip");
+            for (let n = 0; n < COUNT; n++) {
+                const idx = n === WIN ? item.n : rollPart(kind, rollRarity());
+                strip.appendChild(tileFor(kind, idx, base, n !== WIN, false));
+            }
+            reel.append(strip, el("div", "mark"));
+            v.body.appendChild(reel);
+            return { reel, strip, ms: SPIN_MS + i * SPIN_STAGGER_MS };
+        });
         const actions = el("div", "actions");
         actions.appendChild(button("Skip", () => v.skip()));
         v.body.appendChild(actions);
 
-        const width = reel.clientWidth || 900;
-        const step = TILE + GAP;
-        const end = WIN * step + TILE / 2 - width / 2 + (Math.random() - 0.5) * TILE * 0.8;
+        const width = reels[0].reel.clientWidth || 900;
+        const step = tileWidth + GAP;
+        for (const r of reels) r.end = WIN * step + tileWidth / 2 - width / 2 + (Math.random() - 0.5) * tileWidth * 0.8;
         const started = performance.now();
         let lastIndex = -1;
         v.spinning = true;
@@ -1152,15 +1189,20 @@
             if (!v.spinning) return;
             v.spinning = false;
             cancelAnimationFrame(v.raf);
-            strip.style.transform = "translateX(" + -end + "px)";
-            setTimeout(() => view === v && reveal(item, kind, kept), 350);
+            for (const r of reels) r.strip.style.transform = "translateX(" + -r.end + "px)";
+            setTimeout(() => view === v && reveal(won, kind, kept), 350);
         };
         v.skip = finish;
         const frame = (now) => {
             if (!v.spinning) return;
-            const t = Math.min(1, (now - started) / SPIN_MS);
-            const x = end * (1 - Math.pow(1 - t, 4));
-            strip.style.transform = "translateX(" + -x + "px)";
+            let t = 0;
+            let x = 0;
+            for (const r of reels) {
+                t = Math.min(1, (now - started) / r.ms);
+                x = r.end * (1 - Math.pow(1 - t, 4));
+                r.strip.style.transform = "translateX(" + -x + "px)";
+            }
+            // Only the last reel ticks. It is also the last to stop.
             const index = Math.floor((x + width / 2) / step);
             if (index !== lastIndex) {
                 if (lastIndex >= 0) tick();
@@ -1172,58 +1214,73 @@
         v.raf = requestAnimationFrame(frame);
     }
 
-    function reveal(item, kind, kept = true) {
+    function reveal(items, kind, kept = true) {
         const state = load();
         if (!state || !view) return;
-        const p = partOf(item);
-        const rarity = R[p.r];
         const v = view;
+        const multi = items.length > 1;
+        const best = Math.max(...items.map((x) => R[partOf(x).r]));
+        const quip = pick(QUIPS[best]);
+        const base = currentStyle();
         v.body.textContent = "";
-        const won = el("div", "won pop");
-        won.style.setProperty("--rc", RARITIES[rarity].color);
-        const text = el("div");
-        text.appendChild(el("div", "kind", RARITIES[rarity].name + " " + CRATE[item.k].one + (p.r === "gold" ? " \u2605" : "")));
-        const name = el("div", "nm" + (item.st != null ? " st" : ""), fullName(item));
-        text.appendChild(name);
-        const meta = el("div", "meta");
-        const exist = el("span", null, existText(p));
-        exist.dataset.g = p.g;
-        exist.dataset.bare = "1";
-        meta.append(exist, " exist \u00b7 you own " + state.items.filter((x) => x.k === item.k && x.n === item.n).length);
-        text.appendChild(meta);
-        text.appendChild(el("div", "quip", pick(QUIPS[rarity])));
-        won.append(partImage(item.k, item.n, currentStyle()), text);
-        v.body.appendChild(won);
-        fanfare(rarity);
-
         const actions = el("div", "actions");
-        if (kept) {
-            const eq = button(isWorn(item) ? "Equipped" : "Equip", (b) => {
-                equip(item);
-                b.disabled = true;
-                b.textContent = "Equipped";
-            }, "main");
-            eq.disabled = isWorn(item);
-            actions.appendChild(eq);
+        const msg = el("span", "msg", kept ? "" : "Your inventory is full, so this one wasn't kept.");
+        const equips = [];
+        const paintEquips = () => {
+            for (const { item, btn } of equips) {
+                btn.disabled = isWorn(item);
+                btn.textContent = btn.disabled ? "Equipped" : "Equip";
+            }
+        };
+        const cards = multi ? v.body.appendChild(el("div", "haul")) : v.body;
+        for (const item of items) {
+            const p = partOf(item);
+            const rarity = RARITIES[R[p.r]];
+            const card = el("div", "won pop");
+            card.style.setProperty("--rc", rarity.color);
+            const text = el("div");
+            text.appendChild(el("div", "kind", rarity.name + " " + CRATE[item.k].one + (p.r === "gold" ? " \u2605" : "")));
+            text.appendChild(el("div", "nm" + (item.st != null ? " st" : ""), fullName(item)));
+            const meta = el("div", "meta");
+            const exist = el("span", null, existText(p));
+            exist.dataset.g = p.g;
+            exist.dataset.bare = "1";
+            meta.append(exist, " exist \u00b7 you own " + state.items.filter((x) => x.k === item.k && x.n === item.n).length);
+            text.appendChild(meta);
+            if (!multi) text.appendChild(el("div", "quip", quip));
+            // With several parts each card has its own buttons.
+            const row = multi ? text.appendChild(el("div", "actions")) : actions;
+            if (kept) {
+                const btn = button("", () => {
+                    equip(item);
+                    paintEquips();
+                }, "main");
+                equips.push({ item, btn });
+                row.appendChild(btn);
+            }
+            const chat = window.__nswsChat;
+            if (chat?.isEnabled?.() && chat.feed?.active?.()) {
+                row.appendChild(button("Show in chat", (b) => {
+                    b.disabled = true;
+                    chat.feed.post(chatText(item)).then(() => (b.textContent = "Posted"), (err) => {
+                        b.disabled = false;
+                        msg.textContent = err?.message ?? "Message not sent.";
+                    });
+                }));
+            }
+            card.append(partImage(item.k, item.n, base), text);
+            cards.appendChild(card);
         }
-        const chat = window.__nswsChat;
-        if (chat?.isEnabled?.() && chat.feed?.active?.()) {
-            actions.appendChild(button("Show in chat", (b) => {
-                b.disabled = true;
-                chat.feed.post(chatText(item)).then(() => (b.textContent = "Posted"), (err) => {
-                    b.disabled = false;
-                    const msg = actions.querySelector(".msg");
-                    if (msg) msg.textContent = err?.message ?? "Message not sent.";
-                });
-            }));
-        }
+        paintEquips();
+        if (multi) v.body.appendChild(el("div", "haul-quip", quip));
+        fanfare(best);
+
         if (kind) {
-            const again = button("Open another \u2014 " + PRICE + " Bolts", () => openCrate(kind));
+            const again = button(multi ? "Open more" : "Open another \u2014 " + PRICE + " Bolts", () => openCrate(kind));
             again.disabled = state.bolts < PRICE;
             actions.appendChild(again);
         }
-        actions.appendChild(button("Done", () => closeOverlay()));
-        actions.appendChild(el("span", "msg", kept ? "" : "Your inventory is full, so this one wasn't kept."));
+        actions.append(button("Done", () => closeOverlay()), msg);
         refreshTop();
         v.body.appendChild(actions);
     }
@@ -1248,7 +1305,12 @@
     }
 
     function applyStyle(style) {
-        if (garage?.hooks?.apply) return garage.hooks.apply(style);
+        const g = liveGarage();
+        if (g?.hooks.apply) return g.hooks.apply(style);
+        saveStyle(style);
+    }
+
+    function saveStyle(style) {
         const services = window.__nswsCup?.services?.();
         const p = services?.profiles?.getCurrentUserProfile?.();
         if (!services || !p) return;
@@ -1260,6 +1322,7 @@
         const state = load();
         const p = partOf(item);
         if (!state || !p) return;
+        if (!state.items.some((x) => x.u === item.u)) return render();
         const current = currentStyle();
         const now = wornIndex(item.k, current);
         if (now != null && !parts().byIndex(item.k, now)) state.prev[item.k] = now;
@@ -1273,14 +1336,45 @@
     // Back to the stock part the car had before its first crate part in that slot.
     function unequip(kind) {
         const state = load();
-        const C = CarStyle();
-        if (!state || !C) return;
-        const defaults = { patterns: C.defaultPattern, rims: C.defaultRims, exhausts: C.defaultExhaust, bodies: C.defaultBody };
-        const back = state.prev[kind] ?? defaults[kind];
+        if (!state || !CarStyle()) return;
+        const back = stockPart(state, kind);
         delete state.equipped[kind];
         save();
         const style = withPart(currentStyle(), kind, back);
         if (style) applyStyle(style);
+        render();
+    }
+
+    function stockPart(state, kind) {
+        const back = state.prev[kind];
+        if (back != null && !parts().byIndex(kind, back)) return back;
+        const C = CarStyle();
+        return { patterns: C.defaultPattern, rims: C.defaultRims, exhausts: C.defaultExhaust, bodies: C.defaultBody }[kind];
+    }
+
+    // Takes parts that aren't owned any more off the saved car and the one in the Garage. "removed" were just sold or signed
+    // away. Any other counts as gone only once the account's copy has been read (another device may have found it), and
+    // never with no crates opened (the part may be in a browser that hasn't saved to the account yet).
+    function takeOffGone(removed = []) {
+        const state = load();
+        const me = profile();
+        if (!state || !me || !CarStyle()) return;
+        const known = syncedKey === cached.key && state.opened > 0;
+        const fix = (style) => {
+            let fixed = null;
+            for (const c of CRATES) {
+                const p = parts().byIndex(c.kind, style[c.field]);
+                if (!p || !(known || removed.includes(p)) || state.items.some((x) => partOf(x) === p)) continue;
+                fixed = withPart(fixed ?? style, c.kind, stockPart(state, c.kind));
+            }
+            return fixed;
+        };
+        const inGarage = window.__nswsGarageFix?.(fix);
+        const saved = fix(me.carStyle);
+        if (saved) saveStyle(saved);
+        if (!inGarage && !saved) return;
+        const g = liveGarage();
+        if (inGarage && g) g.selected = null;
         render();
     }
 
@@ -1321,8 +1415,9 @@
         state.items.push(item);
         queue(state, [...used.map((x) => ({ u: x.u, e: -1 })), { u: item.u, i: partOf(item).g, e: 1 }]);
         save();
+        takeOffGone(used.map(partOf));
         view.top.querySelector("h1").textContent = "Contract signed";
-        reveal(item, null);
+        reveal([item], null);
     }
 
     function wheelSvg() {
@@ -1558,7 +1653,7 @@
         const count = el("div", "count", state.bolts.toLocaleString());
         count.appendChild(el("small", null, state.bolts === 1 ? "Bolt" : "Bolts"));
         head.appendChild(count);
-        head.appendChild(el("div", "sub", "Earn Bolts by driving (the longer the run, the more you get) and from daily quests. A crate costs " + PRICE + " and holds a part you can't get anywhere else. Looks only, never speed."));
+        head.appendChild(el("div", "sub", "Earn Bolts by driving (the longer the run, the more you get) and from daily quests. A crate costs " + PRICE + " (" + MULTI + " for " + MULTI_PRICE + ") and holds a part you can't get anywhere else. Looks only, never speed."));
         head.appendChild(button("Crates", () => openShop(), "main"));
         const ready = questsReady(state);
         head.appendChild(button(ready ? "Quests (" + ready + ")" : "Quests", () => quests(), ready ? "main" : ""));
@@ -1594,7 +1689,8 @@
                     window.__nswsUIClick?.();
                     g.selected = g.selected === key ? null : key;
                     g.armed = false;
-                    const style = g.selected ? withPart(current, x.k, p.index) : current;
+                    const car = currentStyle();
+                    const style = g.selected ? withPart(car, x.k, p.index) : car;
                     if (style) window.__nswsGarageCar?.(style);
                     render();
                 });
@@ -1616,6 +1712,8 @@
         const xs = g.selected ? groups.get(g.selected) : null;
         g.preview.style.display = xs ? "" : "none";
         if (!xs) {
+            // The previewed part is gone, so it mustn't stay on the car that Save writes.
+            if (g.selected && current) window.__nswsGarageCar?.(current);
             g.selected = null;
             return;
         }
@@ -1643,19 +1741,20 @@
                 g.armed = true;
                 return render();
             }
-            const victim = xs.slice().sort((a, b) => (a.st ?? -1) - (b.st ?? -1))[0];
-            state.items = state.items.filter((y) => y !== victim);
-            state.bolts += value;
-            add(state, "es", value);
-            econChanged();
-            queue(state, [{ u: victim.u, e: -1 }]);
             g.armed = false;
-            if (xs.length === 1) {
-                g.selected = null;
-                if (current) window.__nswsGarageCar?.(current);
-            }
+            const victim = xs.slice().sort((a, b) => (a.st ?? -1) - (b.st ?? -1))[0];
+            // Checked again: the car or the inventory can have changed since this button was drawn.
+            const now = load();
+            if (!now?.items.some((y) => y.u === victim.u)) return render();
+            if (isWorn(victim) && now.items.filter((y) => partOf(y) === p).length === 1) return render();
+            now.items = now.items.filter((y) => y.u !== victim.u);
+            now.bolts += value;
+            add(now, "es", value);
+            econChanged();
+            queue(now, [{ u: victim.u, e: -1 }]);
             save();
             render();
+            takeOffGone([p]);
         }, g.armed ? "armed" : "");
         sell.disabled = lastOnCar;
         if (lastOnCar) sell.title = "Unequip it first";

@@ -1219,7 +1219,7 @@
                                 this.setCarStyle(s),
                                 i.get(this, Yt, "m", dn).call(this)
                             },
-                            current: () => new y.A(i.get(this, Kt, "f"),i.get(this, $t, "f"),i.get(this, tn, "f"),i.get(this, cn, "f")[0].color.getHex(),i.get(this, cn, "f")[1].color.getHex(),i.get(this, cn, "f")[2].color.getHex(),i.get(this, cn, "f")[3].color.getHex(),i.get(this, bodyIdx, "f"))
+                            current: () => this.getCarStyle()
                         })) : window.__nswsCrates?.leaveGarage?.(),
                         p = n
                     }
@@ -1239,6 +1239,9 @@
                 i.get(this, Zt, "f").removeChild(i.get(this, Jt, "f"));
                 for (const t of i.get(this, cn, "f"))
                     t.dispose()
+            }
+            getCarStyle() {
+                return new y.A(i.get(this, Kt, "f"),i.get(this, $t, "f"),i.get(this, tn, "f"),i.get(this, cn, "f")[0].color.getHex(),i.get(this, cn, "f")[1].color.getHex(),i.get(this, cn, "f")[2].color.getHex(),i.get(this, cn, "f")[3].color.getHex(),i.get(this, bodyIdx, "f"))
             }
             setCarStyle(t) {
                 i.set(this, Kt, t.pattern, "f"),
@@ -1961,6 +1964,18 @@
                 )), "f"),
                 // Crates show a skin on this car without touching the saved paint (mod/nsws_crates.js).
                 window.__nswsGarageCar = t => i.get(this, Sn, "f").setCarStyle(t),
+                // Takes sold crate parts off the car being edited. That alone isn't an unsaved change.
+                window.__nswsGarageFix = fix => {
+                    const t = fix(i.get(this, $n, "f").getCarStyle());
+                    if (!t)
+                        return !1;
+                    const unsaved = i.get(this, se, "f");
+                    return i.get(this, $n, "f").setCarStyle(t),
+                    i.get(this, Sn, "f").setCarStyle(t),
+                    i.set(this, se, unsaved, "f"),
+                    !0
+                }
+                ,
                 i.get(this, Dn, "f").appendChild(i.get(this, _n, "f")),
                 i.get(this, $n, "f").setCarStyle(i.get(this, ne, "f").carStyle),
                 i.get(this, Sn, "f").setCarStyle(i.get(this, ne, "f").carStyle),
@@ -1980,6 +1995,7 @@
                 }
                 window.__nswsCrates?.leaveGarage?.(),
                 window.__nswsGarageCar = null,
+                window.__nswsGarageFix = null,
                 i.get(this, Pn, "f").scene.remove(i.get(this, Xn, "f")),window.__polyfxInGarage = false,
                 window.removeEventListener("keydown", i.get(this, Rn, "f")),
                 i.get(this, $n, "f").dispose(),
