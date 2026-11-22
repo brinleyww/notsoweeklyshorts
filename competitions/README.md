@@ -102,7 +102,8 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   chat feed, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules, chat;
   the Tracks tab lists the cup's whole map pool to everyone, and only the organizer gets Play next),
   `hub.ts` (the Competitions screen), `layer.ts` (mounting, keys, the game toolbar buttons, layout),
-  `keymenu.ts` (a Keys button joined to the speedometer that lists a racer's keys).
+  `keymenu.ts` (a Keys button joined to the speedometer that lists a racer's keys), `touchmenu.ts`
+  and `touch.ts` (the same controls on touch screens).
 - Layout (`layer.ts`): four times a second the layer measures what the game draws (timer, speedometer,
   checkpoint count, touch buttons, other mods' counters) and places the round bar, the right column
   (watchers and the live board, with as many rows as fit) and the chat feed in the room left over. A
@@ -113,6 +114,20 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   box ends the typing. Phone keyboards cover the page without resizing it, so while a box of the layer
   has focus the layer shrinks to `visualViewport` (`#fitKeyboard`) and the chat boxes sit above the
   keyboard.
+- Touch controls: touch screens have no keys, so every key has a button. A dock with Cup and Chat
+  sits in the gap between the pedals and the steering (`#placeTouch` in `layer.ts`, which also places
+  the warm-up and spectator bars). Cup opens a menu with the cup panel, hide other cars, hide HUD,
+  restart, retire, skip vote, the camera modes and the organizer's quick round buttons; anything that
+  can't be undone asks for a second tap. A new key needs an item there too. On a phone
+  (`pointer: coarse`) the panel is one column with the chat as a tab.
+- Touch traps:
+  - Browsers make a click only from the first finger down, so `tapWithOtherFingers` clicks a button
+    tapped while a thumb holds accelerate.
+  - The pedals stay up through the countdown (`native.touchPads`), and what they hold goes in at GO
+    next to the held keys (`native.touchControls`).
+  - The game's Reset button doesn't send a key, so in a race it asks the cup (`native.touchReset`):
+    it starts over before the first checkpoint or when pressed again standing after a respawn, and
+    never retires.
 - Never assign an `on*` property a handler that can return `false` (`el.onkeydown = (e) => e.key ===
   'Enter' && go()`): returning false cancels the event, which once made the cup code box untypable.
   `h()` attaches handlers with `addEventListener`, where the return value doesn't matter.

@@ -353,7 +353,7 @@ export class Hub {
       h(
         'div',
         { class: 'hub' },
-        h('header', null, h('div', { class: 'titles' }, h('h2', null, PRODUCT), h('p', null, 'Live cups: race other players in short rounds for points.')), btn('Keys', () => this.onKeys(), 'small'), btn('Close', () => this.close(), 'small')),
+        h('header', null, h('div', { class: 'titles' }, h('h2', null, PRODUCT), h('p', null, 'Live cups: race other players in short rounds for points.')), btn('Keys', () => this.onKeys(), 'small keysbtn'), btn('Close', () => this.close(), 'small')),
         h('div', { class: 'body' }, left, right),
         this.#status,
         this.#card,

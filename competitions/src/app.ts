@@ -349,7 +349,8 @@ export class App {
       let shown = pids;
       if (this.watch.ghostsHidden && !s.rules.collisions) shown = pids.filter((id) => id === this.selfPid || (this.watch.active && id === this.watch.target));
       this.native.visibility(g, shown, this.selfPid, this.watch.ghostsHidden ? [] : gone);
-    } else this.native.visibility(g, null, this.selfPid);
+    } else if (this.watch.ghostsHidden && !s.rules.collisions && this.selfPid != null) this.native.visibility(g, [this.selfPid], this.selfPid);
+    else this.native.visibility(g, null, this.selfPid);
     this.native.presentation(g, true, this.watch.active || covered);
     const crashing = s.rules.collisions && s.phase === 'racing' && this.driver.racing && !this.driver.done;
     this.native.bumperLook?.(g, s.rules.collisions && s.phase === 'racing');

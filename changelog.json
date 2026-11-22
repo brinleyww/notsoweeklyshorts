@@ -1,5 +1,18 @@
 [
     {
+        "version": "v13.3",
+        "changes": [
+            "Cuppa controls work on phones, tap Cup to hide other cars, restart, retire and more",
+            "The Cuppa panel fits on phone screens",
+            "You can hold gas through the countdown on touch",
+            "You can tap Cuppa buttons while holding gas",
+            "Reset on touch works before the first checkpoint in Cuppa races",
+            "Hiding other cars works in the Cuppa lobby",
+            "Cuppa chat works on Rocket League tracks",
+            "The Build Off bar is smaller on phones"
+        ]
+    },
+    {
         "version": "v13.2",
         "changes": [
             "Leaving a race while it's still loading doesn't crash the game anymore"

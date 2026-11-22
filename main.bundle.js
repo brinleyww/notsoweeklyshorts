@@ -43281,6 +43281,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 l.appendChild(p),
                 d.appendChild(c),
                 d.appendChild(h)),
+                this.nswsHeld = { up: !1, right: !1, down: !1, left: !1 },
                 C.set(this, Tt, (t => {
                     let n = !1
                       , i = !1
@@ -43309,6 +43310,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     e.right = i,
                     e.down = r,
                     e.left = a,
+                    this.nswsHeld = { up: n, right: i, down: r, left: a },
                     c.className = n ? "active" : "",
                     p.className = i ? "active" : "",
                     h.className = r ? "active" : "",
@@ -43331,6 +43333,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             set isEnabled(e) {
                 e != C.get(this, Mt, "f") && (C.get(this, kt, "f").className = e ? "touch-controls-ui" : "hidden",
+                e || (this.nswsHeld = { up: !1, right: !1, down: !1, left: !1 }),
                 C.set(this, Mt, e, "f"))
             }
             setFreecamAvailable(e) {
@@ -45998,6 +46001,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         let cupPhysicsInit = null;
         // Called by every race session once a frame, after the cars moved and before the frame is drawn.
         let cupFrameHook = null;
+        // Cuppa on touch: pedals that stay up through the countdown, and the Reset button in a race.
+        let cupPadsHook = null;
+        let cupTouchResetHook = null;
         // Called once a frame just before the other cars are moved and drawn.
         let cupCarsHook = null;
         // Game access for Competitions (competitions/src/game.ts). Names are the race session's
@@ -46118,6 +46124,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 clearInput: g => {
                     const controls = C.get(g, ya, "f");
                     if (controls) for (const key of ["up", "right", "down", "left", "reset"]) controls[key] = !1;
+                    const pads = C.get(g, ma, "f");
+                    pads && (pads.nswsHeld = { up: !1, right: !1, down: !1, left: !1 });
                     const spectator = C.get(g, Ba, "f");
                     if (spectator) for (const field of [_moveForward, _moveRight, _moveBackward, _moveLeft, _speedModifier]) field.set(spectator, !1);
                 },
@@ -46129,6 +46137,24 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         down: settings.getKeyBindings(KeyBind.VehicleBrake),
                         left: settings.getKeyBindings(KeyBind.VehicleTurnLeft)
                     };
+                },
+                touchPads: check => {
+                    cupPadsHook = check;
+                },
+                touchReset: handle => {
+                    cupTouchResetHook = handle;
+                },
+                touchControls: g => C.get(g, ma, "f").nswsHeld,
+                restart: g => {
+                    const car = C.get(g, wa, "f");
+                    P.ip() || C.get(g, Ba, "f").isEnabled || !restartAllowed(g) || !car.hasStarted() || Qa.call(g);
+                },
+                // As the Hide UI key does.
+                hudShown: g => !!C.get(g, $r, "f"),
+                toggleHud: g => {
+                    if (!restartAllowed(g)) return;
+                    C.set(g, $r, !C.get(g, $r, "f"), "f");
+                    C.get(g, ea, "f").isVisible = C.get(g, $r, "f");
                 },
                 applyDrivingInput: (g, controls) => {
                     const input = C.get(g, ya, "f");
@@ -46466,7 +46492,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     C.get(this, _r, "m", qa).call(this)
                 }
                 ),( () => {
-                    !P.ip() && C.get(this, wa, "f").hasStarted() && (C.get(this, _r, "m", ja).call(this) ? C.get(this, ya, "f").reset = !0 : (C.get(this, _r, "m", Qa).call(this),
+                    !P.ip() && C.get(this, wa, "f").hasStarted() && (C.get(this, _r, "m", ja).call(this) ? C.get(this, ya, "f").reset = !0 : (cupTouchResetHook?.(this, 0 === C.get(this, wa, "f").getNextCheckpointIndex() || !C.get(this, va, "f")) || C.get(this, _r, "m", Qa).call(this),
                     C.get(this, ya, "f").reset = !1))
                 }
                 ),( () => {
@@ -47234,9 +47260,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                   , r = C.get(this, xa, "f").reduce(( (e, t) => e + t.maxFrames), 0);
                 let a;
                 a = r > 0 ? i / r : 1,
-                C.get(this, ma, "f").isEnabled = C.get(this, Wr, "f").touchEnabled && !C.get(this, _r, "m", Ha).call(this) && !C.get(this, Ba, "f").isEnabled,
+                this.nswsPadsHeld = C.get(this, _r, "m", Ha).call(this) && !!cupPadsHook?.(this),
+                C.get(this, ma, "f").isEnabled = C.get(this, Wr, "f").touchEnabled && (this.nswsPadsHeld || !C.get(this, _r, "m", Ha).call(this)) && !C.get(this, Ba, "f").isEnabled,
                 this.nswsFreecamBlocked ??= !!window.__nswsFreecamBlocked?.(C.get(this, Yr, "f").getId(), !0),
-                C.get(this, ma, "f").setFreecamAvailable(!this.nswsFreecamBlocked && (null == C.get(this, Sa, "f") || !C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").hasFinished())),
+                C.get(this, ma, "f").setFreecamAvailable(!this.nswsFreecamBlocked && !this.nswsPadsHeld && (null == C.get(this, Sa, "f") || !C.get(this, wa, "f").hasStarted() || C.get(this, wa, "f").hasFinished())),
                 C.get(this, ta, "f").update(C.get(this, wa, "f"), e, t && null == C.get(this, ha, "f") && null == C.get(this, da, "f")),
                 C.get(this, na, "f")?.update(a),
                 C.get(this, aa, "f").update(C.get(this, wa, "f")),
@@ -63667,7 +63694,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             e(C.get(this, Pf, "f"))
                     }
                 }
-                )),
+                // Captured, so a touch on an overlay that keeps its touches (Cuppa) still brings the touch layout.
+                ), { capture: !0, passive: !0 }),
                 window.addEventListener("keydown", ( () => {
                     if (C.get(this, Pf, "f")) {
                         C.set(this, Pf, !1, "f");

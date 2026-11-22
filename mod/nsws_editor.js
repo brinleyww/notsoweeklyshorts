@@ -96,6 +96,18 @@
 #nsws-editor .nse-cup .watch .button{padding:3px 10px;font-size:15px;}
 #nsws-editor .nse-cup .watch>b{font-weight:normal;color:#ffd26b;}
 #nsws-editor .nse-cup .watch>.gap{flex:1 1 0;}
+@media (pointer:coarse) and (max-height:500px){
+#nsws-editor .nse-cup .top{padding:3px 8px;gap:4px 8px;}
+#nsws-editor .nse-cup .top .nse-seg>button{font-size:13px;padding:4px 6px;}
+#nsws-editor .nse-cup .ttl>span{display:none;}
+#nsws-editor .nse-cup .ttl>b{font-size:16px;max-width:110px;}
+#nsws-editor .nse-cup .clock{min-width:64px;padding:1px 10px;font-size:20px;}
+#nsws-editor .nse-cup .row{padding:2px 8px;gap:2px 8px;font-size:13px;}
+#nsws-editor .nse-cup .st{flex-basis:170px;}
+#nsws-editor .nse-cup .who>span.can{padding:6px 2px;}
+#nsws-editor .nse-cup .watch{padding:2px 8px;gap:2px 6px;font-size:13px;}
+#nsws-editor .nse-cup .row .button,#nsws-editor .nse-cup .watch .button{min-height:28px;font-size:13px;}
+}
 #nsws-editor .nse-fallback{flex-shrink:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:#28346a;border-bottom:1px solid rgba(255,255,255,.15);font-size:15px;}
 #nsws-editor .nse-fallback.hidden{display:none;}
 #nsws-editor .nse-fallback>span{flex:1 1 300px;color:rgba(255,255,255,.75);}

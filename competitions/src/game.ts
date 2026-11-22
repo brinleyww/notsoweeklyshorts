@@ -123,6 +123,15 @@ export interface Native {
   personalBest(id: string): number | null;
   clearInput(g: Game): void;
   drivingBindings(g: Game): Bindings;
+  // Touch. Missing on a page that loaded the game before they existed.
+  // check: keep the pedals on screen although the cup holds the car.
+  touchPads?(check: (g: Game) => boolean): void;
+  // handle: true when the cup took the Reset button's press (fromStart: the game would start the run over).
+  touchReset?(handle: (g: Game, fromStart: boolean) => boolean): void;
+  touchControls?(g: Game): Controls;
+  restart?(g: Game): void;
+  hudShown?(g: Game): boolean;
+  toggleHud?(g: Game): void;
   applyDrivingInput(g: Game, c: Controls): void;
   remoteCar(g: Game, id: number): Car | undefined;
   followCar(g: Game, id: number, cockpit: boolean, dt: number): boolean;
@@ -271,6 +280,7 @@ export const site = window as unknown as {
   __nswsCupPool?: { shorts: boolean; weeks?: number[]; main: string[]; community: string[] };
   __nswsTrackWeekMap?: Record<string, number>;
   __nswsWeeks?: { week: number; label?: string; event?: unknown }[];
+  __nswsFreecamBlocked?: (trackId: string, quiet?: boolean) => boolean;
   __nswsMessageBox?: { show(text: string, button: string, callback: null): void };
   __nswsOwner?: { check(): Promise<boolean>; token(): Promise<string | null> };
   __nswsUIClick?: () => void;

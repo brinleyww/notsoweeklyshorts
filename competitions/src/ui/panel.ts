@@ -7,12 +7,14 @@ import { player, standings, type Category, type CupState, type CustomTrack, type
 import { btn, click, confirmBtn, range, flag, fmtClock, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
 import { nameColor } from './hud.ts';
+import { isPhone, isTouch } from './touch.ts';
 import { beReady, ensureBE, isBE, site } from '../game.ts';
 import { UPLOAD_CHUNK } from '../protocol.ts';
 
 const MODE_LABEL: Record<TrackMode, string> = { normal: '', rocket: 'Rocket League', royale: 'Royale' };
 
-type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
+// chat: only on a phone, where the panel is one column.
+type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks' | 'chat';
 
 const botTag = (p: Player | undefined) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, 'BOT') : null);
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -46,6 +48,7 @@ export class Panel {
   // Built once: only the header and the main column are rebuilt, so the chat keeps its focus.
   #head = h('header');
   #main = h('div', { class: 'main' });
+  #frame = h('div', { class: 'panel' });
   #mounted = false;
   #draft: { format: string; rules: Rules } | null = null;
   #search = '';
@@ -73,8 +76,16 @@ export class Panel {
     return !this.el.hidden;
   }
 
+  openChat() {
+    this.setOpen(true);
+    if (isPhone()) this.tab = 'chat';
+    this.render(true);
+    this.#chatUi?.input.focus();
+  }
+
   setOpen(open: boolean) {
     if (open === this.open) return;
+    if (open && this.tab === 'chat') this.tab = 'cup';
     this.el.hidden = !open;
     this.app.panelOpen = open;
     this.#key = '';
@@ -97,8 +108,13 @@ export class Panel {
       this.#renderChat();
       return;
     }
+    const phone = isPhone();
+    if (!phone && this.tab === 'chat') this.tab = 'cup';
     const key = JSON.stringify([
       this.tab,
+      phone,
+      isTouch(),
+      phone && this.tab !== 'chat' ? app.chat.cup.unread + app.chat.unreadAll : 0,
       s.seq,
       s.phase,
       app.history.length,
@@ -145,7 +161,7 @@ export class Panel {
             btn(icon('link'), () => this.#copy(this.#link(), 'Invite link copied'), 'small ghost icon', 'Copy an invite link'),
           )
         : null,
-      btn(icon('keyboard'), () => this.onKeys(), 'small ghost icon', 'Keys'),
+      btn(icon('keyboard'), () => this.onKeys(), 'small ghost icon keysbtn', 'Keys'),
       btn(icon('x'), () => this.setOpen(false), 'small ghost icon', 'Close (Tab or Esc)'),
     ];
     if (s.rules.casual && this.tab === 'standings') this.tab = 'cup';
@@ -156,6 +172,12 @@ export class Panel {
       ['players', 'Players', 'users', s.players.filter((p) => !p.away && !(p.bot && p.role !== 'racer')).length],
     ];
     tabs.push(['tracks', 'Tracks', 'search', null]);
+    const phone = isPhone();
+    if (phone) tabs.push(['chat', 'Chat', 'chat', this.tab === 'chat' ? null : app.chat.cup.unread + app.chat.unreadAll || null]);
+    const chatting = phone && this.tab === 'chat';
+    // On a phone only the Start button stays pinned; the other controls scroll with the Cup tab.
+    const pinned = !phone || (app.isHost && s.phase === 'lobby');
+    const controls = pinned || this.tab === 'cup' ? this.#controls(s) : null;
     const tabBar = h(
       'div',
       { class: 'tabs' },
@@ -163,15 +185,28 @@ export class Panel {
         h('button', { class: 'tab' + (this.tab === id ? ' on' : ''), onclick: click(() => ((this.tab = id), (this.#key = ''), this.render())) }, icon(ic), label, count != null ? h('span', { class: 'count' }, String(count)) : null),
       ),
     );
-    const content = h('div', { class: 'content' }, this.#content(s));
+    const inline = pinned ? null : controls;
+    const content = h('div', { class: 'content' }, app.isHost ? inline : null, chatting ? null : this.#content(s), app.isHost ? null : inline);
     if (!this.#mounted) {
       this.#mounted = true;
-      fill(this.el, h('div', { class: 'scrim', onclick: () => this.setOpen(false) }), h('div', { class: 'panel' }, this.#head, this.#main, this.#side));
+      fill(this.el, h('div', { class: 'scrim', onclick: () => this.setOpen(false) }), this.#frame);
+      fill(this.#frame, this.#head, this.#main, this.#side);
     }
+    const wasChatting = this.#frame.classList.contains('chatting');
+    toggle(this.#frame, 'phone', phone);
+    toggle(this.#frame, 'chatting', chatting);
     fill(this.#head, ...header);
-    fill(this.#main, tabBar, content, this.#controls(s));
-    content.scrollTop = scroll;
+    fill(this.#main, tabBar, chatting ? null : content, !chatting && pinned ? controls : null);
+    content.scrollTop = this.tab === this.#builtTab ? scroll : 0;
+    this.#builtTab = this.tab;
+    // The chat couldn't scroll while it was hidden behind another tab.
+    if (chatting && !wasChatting) {
+      this.#chatKey = '';
+      this.#chatToEnd = true;
+    }
   }
+  #builtTab: Tab = 'cup';
+  #chatToEnd = false;
 
   #content(s: CupState) {
     switch (this.tab) {
@@ -185,6 +220,8 @@ export class Panel {
         return this.#playersTab(s);
       case 'tracks':
         return this.#tracksTab(s);
+      case 'chat':
+        return null;
     }
   }
 
@@ -455,7 +492,7 @@ export class Panel {
             { style: 'display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center' },
             h('span', { class: 'dim', style: 'font-size:14px' }, 'Your presets:'),
             presets.map((p) =>
-              h('span', { class: 'chip', style: 'pointer-events:auto;cursor:pointer', onclick: click(() => this.#apply('custom:' + p.name, p.rules)) }, p.name, h('span', { style: 'opacity:.6', title: 'Delete', onclick: click(() => (deletePreset(p.name), (this.#key = ''), this.render())) }, ' ×')),
+              h('span', { class: 'chip', style: 'pointer-events:auto;cursor:pointer', onclick: click(() => this.#apply('custom:' + p.name, p.rules)) }, p.name, h('span', { class: 'del', title: 'Delete', onclick: click(() => (deletePreset(p.name), (this.#key = ''), this.render())) }, ' ×')),
             ),
           )
         : null,
@@ -698,8 +735,8 @@ export class Panel {
               p.bot
                 ? null
                 : p.role === 'racer'
-                  ? btn([icon('eye')], () => app.org!.setRole(p.u, 'spectator'), 'small ghost icon', 'Move to spectators')
-                  : btn([icon('flag')], () => app.org!.setRole(p.u, 'racer'), 'small ghost icon', 'Put on the grid'),
+                  ? btn(isTouch() ? 'To watch' : [icon('eye')], () => app.org!.setRole(p.u, 'spectator'), isTouch() ? 'small ghost' : 'small ghost icon', 'Move to spectators')
+                  : btn(isTouch() ? 'To race' : [icon('flag')], () => app.org!.setRole(p.u, 'racer'), isTouch() ? 'small ghost' : 'small ghost icon', 'Put on the grid'),
               p.bot ? confirmBtn('Remove', () => app.org!.removeBot(p.u), 'small danger', 'Take this bot off the grid (one bot fewer)') : confirmBtn('Remove', () => app.org!.kick(p.u), 'small danger', 'Remove from the cup'),
             )
           : null,
@@ -1270,8 +1307,10 @@ export class Panel {
     if (ui.box.parentElement !== this.#side) fill(this.#side, ui.box);
     const onCup = chat.target === 'cup';
     // What's on screen counts as read.
-    if (onCup) cup.unread = 0;
-    else chat.unreadAll = 0;
+    if (!isPhone() || this.tab === 'chat') {
+      if (onCup) cup.unread = 0;
+      else chat.unreadAll = 0;
+    }
     const off = !onCup && !chat.mainOn;
     const muted = onCup && cup.muted;
     ui.input.disabled = muted || off;
@@ -1287,7 +1326,8 @@ export class Panel {
     tab(ui.cupTab, 'Cup chat', onCup, cup.unread);
     tab(ui.allTab, 'Everyone', !onCup, chat.unreadAll);
     const msgs = ui.msgs;
-    const atBottom = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    const atBottom = this.#chatToEnd || msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
+    this.#chatToEnd = false;
     fill(
       msgs,
       off

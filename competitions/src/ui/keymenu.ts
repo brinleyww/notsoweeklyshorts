@@ -4,6 +4,7 @@
 import type { App } from '../app.ts';
 import { site } from '../game.ts';
 import { btn, h, icon } from './dom.ts';
+import { isTouch } from './touch.ts';
 
 export const KEYMENU_CSS = `
 .speedometer-ui>.sc-keys-button{align-self:stretch;display:flex;align-items:center;justify-content:center;gap:8px;margin:0 0 3px;padding:5px 12px 5px 18px;font-size:20px;opacity:.9;clip-path:polygon(13px 0,100% 0,100% 100%,8px 100%)}
@@ -34,7 +35,6 @@ const LIST: [group: string, label: string, ids: string[], note?: string, times?:
   ['Cup', 'Watch the previous / next car', ['spectatePrevious', 'spectateNext']],
 ];
 
-const COARSE = matchMedia('(pointer: coarse)');
 const WIDE = 640,
   NARROW = 340;
 
@@ -83,7 +83,7 @@ export class KeyMenu {
   sync() {
     const app = this.app,
       s = app.state;
-    const speedo = app.game && s && !COARSE.matches ? document.querySelector<HTMLElement>('.game-ui > .speedometer-ui') : null;
+    const speedo = app.game && s && !isTouch() ? document.querySelector<HTMLElement>('.game-ui > .speedometer-ui') : null;
     if (s && s.phase !== this.#phase) {
       this.#phase = s.phase;
       this.close();

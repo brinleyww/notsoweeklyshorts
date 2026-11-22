@@ -2,11 +2,13 @@
 import type { App } from '../app.ts';
 import { site } from '../game.ts';
 import { KeysPanel } from '../keys.ts';
-import { h, icon, onUiError } from './dom.ts';
+import { h, icon, onUiError, toggle } from './dom.ts';
 import { Hub } from './hub.ts';
 import { Hud } from './hud.ts';
 import { KEYMENU_CSS, KeyMenu } from './keymenu.ts';
 import { Panel } from './panel.ts';
+import { isPhone, isTouch, tapWithOtherFingers, watchTouch } from './touch.ts';
+import { TouchMenu } from './touchmenu.ts';
 import css from './style.css';
 
 const DOC_CSS = `
@@ -20,6 +22,7 @@ const DOC_CSS = `
 .game-ui.sc-watching>:is(.time-announcer-ui,.hint-ui,.timer-ui,.checkpoint-ui,.speedometer-ui),
 .game-ui.sc-session-ended>.player-list-ui,
 .session-end-ui.sc-session-ended{display:none!important}
+body.sc-touch .game-ui>.hint-ui{top:var(--sc-hint-top,150px)}
 ` + KEYMENU_CSS;
 
 export class Layer {
@@ -30,7 +33,11 @@ export class Layer {
   hub: Hub;
   keys = new KeysPanel();
   keyMenu: KeyMenu;
+  touchMenu: TouchMenu;
+  #root: HTMLElement;
   #stage = h('div', { class: 'stage' });
+  // As big as the screen's safe-area insets, to read them.
+  #safe = h('i', { class: 'safe' });
   #raf = 0;
   #toolbar: { el: HTMLElement | null; items: HTMLElement[]; key: string } = { el: null, items: [], key: '' };
   #layoutAt = 0;
@@ -45,8 +52,9 @@ export class Layer {
     const doc = document.createElement('style');
     doc.textContent = DOC_CSS;
     document.head.append(doc);
-    const root = h('div', { class: 'root' }, this.#stage);
-    this.root.append(style, root);
+    this.#root = h('div', { class: 'root' }, this.#stage, this.#safe);
+    this.#touchClasses();
+    this.root.append(style, this.#root);
     document.body.append(this.host);
     this.hud = new Hud(app);
     this.panel = new Panel(app);
@@ -58,11 +66,18 @@ export class Layer {
       this.panel.tab = 'cup';
       this.panel.setOpen(true);
     };
-    this.hud.onChatPanel = () => {
-      this.panel.setOpen(true);
-      this.panel.render();
-      this.root.querySelector<HTMLInputElement>('.side form input')?.focus();
-    };
+    this.hud.onChatPanel = () => this.panel.openChat();
+    this.touchMenu = new TouchMenu(
+      app,
+      () => this.panel.setOpen(true),
+      () => this.hud.openChat(),
+    );
+    this.hud.addControls(this.touchMenu.menu, this.touchMenu.dock);
+    tapWithOtherFingers(this.host);
+    watchTouch(() => {
+      this.render();
+      this.#layout();
+    });
     this.hud.onChatSubmit = (text) => app.chat.post(text);
     this.panel.onKeys = this.hub.onKeys = () => this.keys.open();
     this.hub.onJoined = () => setTimeout(() => app.isHost && this.panel.setOpen(true), 1500);
@@ -113,7 +128,7 @@ export class Layer {
     const el = this.root.querySelector<HTMLElement>('.root');
     if (!vv || !el) return;
     const active = this.root.activeElement;
-    const typing = active instanceof HTMLInputElement && active.type === 'text';
+    const typing = active instanceof HTMLInputElement && (active.type === 'text' || active.type === 'number');
     // Less than this missing is browser chrome coming and going, not a keyboard.
     const covered = window.innerHeight - vv.height;
     const key = typing && covered > 120 ? `${Math.round(vv.offsetTop)},${Math.round(vv.height)}` : '';
@@ -133,8 +148,11 @@ export class Layer {
   }
 
   #phase = '';
+  #shownKey = '';
   render() {
     const s = this.app.state;
+    this.#touchClasses();
+    toggle(document.body, 'sc-touch', !!s && isTouch());
     let relayout = false;
     if (s && s.phase !== this.#phase) {
       this.#phase = s.phase;
@@ -149,8 +167,21 @@ export class Layer {
     this.panel.render();
     this.#renderToolbar();
     this.keyMenu.sync();
-    // Bars that come with a phase (warm-up, spectating) move the chat feed straight away.
+    const menu = this.touchMenu;
+    menu.render(this.panel.open || this.hub.isOpen || this.hud.chatOpen || !!this.#keyboard);
+    const shown = JSON.stringify([menu.dock.hidden, menu.menu.hidden, menu.menu.childElementCount, this.hud.spec.hidden, this.hud.spec.childElementCount, this.hud.warm.hidden, this.hud.chatOpen]);
+    if (shown !== this.#shownKey) {
+      this.#shownKey = shown;
+      relayout = true;
+    }
+    // Bars that come and go move the chat feed straight away.
     if (relayout) this.#layout();
+  }
+
+  // Also set before any cup, for the Competitions screen.
+  #touchClasses() {
+    toggle(this.#root, 'touch', isTouch());
+    toggle(this.#root, 'phone', isPhone());
   }
 
   #frame() {
@@ -186,9 +217,14 @@ export class Layer {
       if (cs.display === 'none' || cs.visibility === 'hidden') return;
       list.push({ r, touch });
     };
-    for (const el of document.querySelectorAll('#ui > *, .game-ui > *, .touch-controls-ui > *')) {
+    for (const el of document.querySelectorAll('#ui > *, .game-ui > *, .touch-controls-ui > *, .nsws-rocket-pad')) {
       if (el.matches('.game-ui, .touch-controls-ui, .hint-ui')) continue;
-      const touch = !!el.parentElement?.classList.contains('touch-controls-ui');
+      // Rocket League's pads stick out of the pedals' own boxes.
+      if (el.classList.contains('nsws-rocket-pad')) {
+        if (el.closest('.touch-controls-ui')) add(el, true);
+        continue;
+      }
+      const touch = !!el.parentElement?.classList.contains('touch-controls-ui') || el.classList.contains('nsws-freecam-touch');
       if (el.getBoundingClientRect().width > W * 0.6) for (const child of el.children) add(child, touch);
       else add(el, touch);
     }
@@ -199,7 +235,7 @@ export class Layer {
     const gameScale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--ui-scale-factor')) || 1;
     // On a phone the game's scale makes cup text and tiles too small to read or tap, so the layer
     // is drawn as if the screen were about 640 x 480 (never smaller than the game's own scale).
-    const coarse = matchMedia('(pointer: coarse)').matches;
+    const coarse = isPhone();
     const want = coarse ? Math.max(gameScale, Math.min(window.innerWidth / 640, window.innerHeight / 480)) : 0;
     const value0 = want ? want.toFixed(3) : '';
     const scale = want || gameScale;
@@ -233,6 +269,11 @@ export class Layer {
       if (r.right < W / 2) left = Math.max(left, r.right + 14 * u);
       else if (r.left > W / 2) right = Math.max(right, W - r.left + 14 * u);
     }
+    // Upright, or on a tablet, the game's top buttons leave no room beside them, so the bar goes under them.
+    if (coarse && W < H * 1.5 && W - left - right < 360 * u) {
+      for (const { r } of obstacles) if (r.top < barTop + 56 * u && r.bottom >= barTop && r.bottom < H * 0.4) barTop = Math.max(barTop, r.bottom + 6 * u);
+      left = right = 12 * u;
+    }
     const roundEl = this.root.querySelector<HTMLElement>('.roundbar');
     const rr = roundEl && !roundEl.hidden ? roundEl.getBoundingClientRect() : null;
     const name = roundEl?.querySelector<HTMLElement>('.track');
@@ -244,6 +285,13 @@ export class Layer {
     set(hud, '--bar-x', barX);
     set(hud, '--bar-max', Math.max(260 * u, barMax));
     const round = rr?.width ? new DOMRect(barX - rr.width / 2, barTop, rr.width, rr.height) : null;
+    if (isTouch()) {
+      // The game's reset hint starts under the round bar when that would cover it.
+      const own = 150 * gameScale;
+      const top = round && round.top < own + 60 * gameScale && round.bottom > own ? round.bottom + 6 : own;
+      const value = `${Math.round(top / gameScale)}px`;
+      if (document.body.style.getPropertyValue('--sc-hint-top') !== value) document.body.style.setProperty('--sc-hint-top', value);
+    }
 
     // Right column (who is watching, the live board): below what sits top right, above what sits
     // lower down (the speedometer, touch steering); the board shows as many rows as fit.
@@ -256,6 +304,8 @@ export class Layer {
     for (const r of column) if (across(r, x0, x1) && r.top >= colTop) colBottom = Math.min(colBottom, r.top - 8 * u);
     set(hud, '--tr-top', colTop);
     this.hud.boardRoom = (colBottom - colTop) / u;
+
+    const placed = this.#placeTouch(obstacles, u, H, set);
 
     // Chat feed: bottom left, beside the touch pedals when there are any, and above anything low on
     // its side (the checkpoint count, the warm-up and spectator bars).
@@ -270,7 +320,7 @@ export class Layer {
       fx1 = Math.min(fx0 + 380 * u, W - 12 * u);
     }
     let feedBottom = 16 * u;
-    const low = obstacles.filter((o) => squeezed || !o.touch).map((o) => o.r);
+    const low = [...obstacles.filter((o) => squeezed || !o.touch).map((o) => o.r), ...placed];
     for (const sel of ['.warm', '.spec']) {
       const el = this.root.querySelector<HTMLElement>(sel);
       if (el && !el.hidden) low.push(el.getBoundingClientRect());
@@ -289,6 +339,81 @@ export class Layer {
     set(this.hud.feed, '--feed-bottom', feedBottom);
   }
 
+  // The touch buttons and the bars along the bottom: in the gap between the pedals and the steering
+  // when they fit there, else above whatever is in their way. Returns where they went.
+  #placeTouch(obstacles: { r: DOMRect; touch: boolean }[], u: number, H: number, set: (el: HTMLElement, name: string, px: number) => void) {
+    if (!isTouch()) return [];
+    const W = window.innerWidth,
+      gap = 6,
+      safe = this.#safe.getBoundingClientRect(),
+      minX = Math.max(gap, safe.width),
+      maxX = W - Math.max(gap, parseFloat(getComputedStyle(this.#safe).marginRight) || 0),
+      floor = H - Math.max(gap, safe.height);
+    const taken = obstacles.filter(({ r }) => r.bottom > H * 0.35).map((o) => o.r);
+    let gapL = minX,
+      gapR = maxX;
+    for (const { r, touch } of obstacles) {
+      if (!touch || r.bottom <= H * 0.5) continue;
+      if (r.left + r.right < W) gapL = Math.max(gapL, r.right + gap);
+      else gapR = Math.min(gapR, r.left - gap);
+    }
+    const hits = (box: DOMRect, list: DOMRect[]) => list.filter((r) => r.right > box.left && r.left < box.right && r.bottom > box.top && r.top < box.bottom);
+    const raise = (x: number, w: number, tall: number) => {
+      let box = new DOMRect(x, floor - tall, w, tall);
+      for (let hit = hits(box, taken); hit.length; hit = hits(box, taken)) {
+        const top = Math.min(...hit.map((r) => r.top)) - gap - tall;
+        if (top < 0) break;
+        box = new DOMRect(x, top, w, tall);
+      }
+      return box;
+    };
+    const size = (el: HTMLElement) => [el.offsetWidth * u, el.offsetHeight * u] as const;
+    const placed: DOMRect[] = [];
+    const { dock, menu } = this.touchMenu;
+
+    if (!dock.hidden && dock.offsetWidth) {
+      const [w, tall] = size(dock);
+      let x = gapL;
+      // Along the bottom, past the toolbar, as long as the steering leaves room.
+      for (const r of [...taken].sort((a, b) => a.left - b.left))
+        if (r.bottom > floor - tall && r.top < floor && r.right > x && r.left < x + w && r.right + gap + w <= gapR) x = r.right + gap;
+      const box = raise(x + w <= gapR ? x : minX, w, tall);
+      set(dock, '--x', box.x);
+      set(dock, '--b', H - box.bottom);
+      placed.push(box);
+      taken.push(box);
+
+      if (!menu.hidden) {
+        const room = gapR - gapL;
+        // Beside the pedals when that is wide enough, else over them.
+        const inGap = room >= (W > H ? 250 : 320) * u;
+        const width = Math.min(440 * u, inGap ? room : maxX - minX);
+        const left = inGap ? Math.max(gapL, Math.min(box.x, gapR - width)) : minX;
+        let bottom = box.top - gap;
+        if (!inGap) for (const { r, touch } of obstacles) if (touch && r.bottom > H * 0.5) bottom = Math.min(bottom, r.top - gap);
+        // Too little room above the pedals: over them after all.
+        if (bottom < 200 * u) bottom = box.top - gap;
+        set(menu, '--x', left);
+        set(menu, '--w', width);
+        set(menu, '--b', H - bottom);
+        set(menu, '--max', bottom - gap);
+      }
+    }
+
+    for (const el of [this.hud.warm, this.hud.spec]) {
+      if (el.hidden || !el.offsetWidth) continue;
+      const [w, tall] = size(el);
+      const free = [(W - w) / 2, maxX - w].find((x) => x >= minX && !hits(new DOMRect(x, floor - tall, w, tall), taken).length);
+      const middle = w <= gapR - gapL ? Math.min(gapR - w, Math.max(gapL, (W - w) / 2)) : (W - w) / 2;
+      const box = raise(free ?? middle, w, tall);
+      set(el, '--x', box.x);
+      set(el, '--b', H - box.bottom);
+      placed.push(box);
+      taken.push(box);
+    }
+    return placed;
+  }
+
   // A Cup button in the game's own toolbar, and the organizer's quick round controls next to it.
   #renderToolbar() {
     const app = this.app,
@@ -296,13 +421,15 @@ export class Layer {
     const toolbar = app.game && s ? (document.querySelector('.game-toolbar-ui') as HTMLElement | null) : null;
     const container = toolbar?.querySelector(':scope > .button-container') as HTMLElement | null;
     const live = !!s && ['countdown', 'racing', 'warmup'].includes(s.phase);
-    const key = JSON.stringify([!!container, app.isHost, live, s?.phase]);
+    const key = JSON.stringify([!!container, app.isHost, live, s?.phase, isTouch()]);
     if (this.#toolbar.el === container && this.#toolbar.key === key && this.#toolbar.items.every((i) => i.isConnected)) return;
     for (const item of this.#toolbar.items) item.remove();
     this.#toolbar.el?.classList.remove('sc-toolbar');
     this.#toolbar = { el: container, items: [], key };
     if (!container || !toolbar) return;
     toolbar.classList.add('sc-toolbar');
+    // Touch has its own Cup button, and the organizer's controls are in that menu.
+    if (isTouch()) return;
     const make = (label: string, ic: string, fn: () => void, extra = '') => {
       const b = document.createElement('button');
       b.className = 'button sc-toolbar-button ' + extra;
@@ -359,6 +486,12 @@ export class Layer {
       this.keyMenu.close();
       return;
     }
+    if (e.key === 'Escape' && this.touchMenu.open) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.touchMenu.setOpen(false);
+      return;
+    }
     if (e.key === 'Escape' && (this.panel.open || this.hud.chatOpen)) {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -376,14 +509,13 @@ export class Layer {
       e.preventDefault();
       e.stopImmediatePropagation();
       if (e.repeat) return;
-      if (this.panel.open) this.root.querySelector<HTMLInputElement>('.side form input')?.focus();
+      if (this.panel.open) this.panel.openChat();
       else this.hud.openChat();
       return;
     }
     if (match(keys.ghosts()) && !app.state.rules.collisions) {
       if (e.repeat) return;
-      app.watch.ghostsHidden = !app.watch.ghostsHidden;
-      app.notify(app.watch.ghostsHidden ? 'Other cars hidden' : 'Other cars shown', 'info');
+      app.watch.toggleGhosts();
       return;
     }
     if (app.watch.active && match(keys.spectatePrevious())) return app.watch.cycle(-1);

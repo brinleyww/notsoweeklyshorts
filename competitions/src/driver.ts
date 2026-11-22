@@ -52,6 +52,8 @@ export class Driver {
     window.addEventListener('keyup', (e) => this.held.release(e.code), { capture: true });
     window.addEventListener('blur', () => this.clearInput());
     document.addEventListener('visibilitychange', () => document.hidden && this.clearInput());
+    app.native.touchPads?.((g) => g === this.app.game && this.waitingForGo && !this.app.chatTyping);
+    app.native.touchReset?.((g, fromStart) => this.#touchReset(g, fromStart));
   }
 
   clearInput() {
@@ -74,6 +76,63 @@ export class Driver {
     const s = this.app.state,
       me = this.app.me;
     return !!s && me != null && roundDone(s, me);
+  }
+
+  // On the grid before GO: pedals can be held for the launch.
+  get waitingForGo() {
+    const s = this.app.state,
+      r = s?.round;
+    if (!s || !r || (s.phase !== 'countdown' && s.phase !== 'racing') || !this.racing) return false;
+    return r.startAt == null || this.app.now() < r.startAt;
+  }
+
+  // A race's clock runs through a restart; everywhere else the game's own restart does it.
+  get #inRace() {
+    const s = this.app.state,
+      r = s?.round;
+    return !!s && !!r && s.phase === 'racing' && s.rules.style !== 'timeattack' && this.racing && r.startAt != null && this.app.now() >= r.startAt;
+  }
+
+  get canRestart() {
+    const g = this.app.game,
+      car = this.app.info?.car;
+    if (!g || !car?.hasStarted() || this.app.info?.spectator.isEnabled || this.blocks(g)) return false;
+    // Over the line counts as over, before the organizer has said so.
+    return !(this.#inRace && car.hasFinished());
+  }
+
+  get canRetire() {
+    return this.#inRace && !this.done && !this.app.info?.car.hasFinished();
+  }
+
+  restart() {
+    const g = this.app.game;
+    if (!g || !this.canRestart) return;
+    if (!this.#inRace) return this.app.native.restart?.(g);
+    this.#restartRun(g, this.app.state!.round!.startAt!);
+    this.app.notify('Run restarted. The clock keeps running', 'bad');
+  }
+
+  retire() {
+    if (!this.canRetire) return;
+    const r = this.app.state!.round!;
+    this.app.report({ k: 'dnf', n: r.n, t: r.try });
+  }
+
+  // Reset starts over before the first checkpoint and when pressed again after a respawn, never
+  // from a double tap at speed.
+  #touchReset(g: Game, fromStart: boolean) {
+    if (g !== this.app.game || !this.canRetire) return false;
+    if (fromStart) this.restart();
+    return true;
+  }
+
+  // Keys and pedals held right now.
+  #input(g: Game): Controls {
+    const keys = this.held.controls();
+    const pads = this.app.native.touchControls?.(g);
+    if (!pads) return keys;
+    return { up: keys.up || pads.up, right: keys.right || pads.right, down: keys.down || pads.down, left: keys.left || pads.left };
   }
 
   // True blocks the car's controls (the game's own check is OR-ed in).
@@ -162,7 +221,7 @@ export class Driver {
       this.#goCar = car;
       this.held.bindings = app.native.drivingBindings(g);
       app.native.release(g, this.#view);
-      app.native.applyDrivingInput(g, this.held.controls());
+      app.native.applyDrivingInput(g, this.#input(g));
       // A late frame (a busy or hidden tab) still counts from GO. Time attack runs are timed on their own.
       this.offset = s.rules.style === 'timeattack' ? 0 : Math.max(0, Math.floor(now - r.startAt) - car.getTime().numberOfFrames);
       car.start();
@@ -264,7 +323,7 @@ export class Driver {
     app.live.clearLocal();
     this.offset = elapsed;
     this.#goCar = app.info!.car;
-    app.native.applyDrivingInput(g, this.held.controls());
+    app.native.applyDrivingInput(g, this.#input(g));
     app.info!.car.start();
   }
 

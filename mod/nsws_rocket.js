@@ -156,8 +156,8 @@
     }
 
     const isTyping = t => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
-    // Anything on screen that takes clicks itself: menus, buttons, the tutorial, chat.
-    const isUi = t => !!(t && t.closest && t.closest("button, a, input, select, textarea, label, [role=button], .button, .nsws-rocket-tutorial, .nsws-rocket-pad"));
+    // Anything on screen that takes clicks itself: menus, buttons, the tutorial, chat, Cuppa.
+    const isUi = t => !!(t && t.closest && t.closest("button, a, input, select, textarea, label, [role=button], .button, .nsws-rocket-tutorial, .nsws-rocket-pad, #nsws-cuppa"));
     function drivingKey(e) {
         const s = window.__nswsKeyBindings?.settings();
         return !!s && DRIVING_BINDS.some(b => s.checkKeyBinding(e, b));
@@ -170,7 +170,8 @@
     // Capture phase, so a Rocket League key never also triggers a less important binding on the same key
     // (Space also pauses outside these tracks). Driving keys are left alone even if bound here too.
     addEventListener("keydown", e => {
-        if (!live() || window.__nswsKeyBindCapturing || isTyping(e.target)) return;
+        // Cuppa's text boxes are in a shadow root, where e.target is only its host.
+        if (!live() || window.__nswsKeyBindCapturing || isTyping(e.composedPath()[0])) return;
         const ids = actionsFor(e);
         if (!ids.length) return;
         drivingKey(e) || (e.preventDefault(), e.stopImmediatePropagation());

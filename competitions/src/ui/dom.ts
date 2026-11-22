@@ -1,3 +1,5 @@
+import { isTouch } from './touch.ts';
+
 type Child = Node | string | number | null | undefined | false | Child[];
 type Attrs = Record<string, unknown> & { class?: string; style?: string };
 
@@ -147,7 +149,7 @@ export function confirmBtn(label: string, fn: () => unknown, cls = '', title?: s
   const b = btn(label, () => {
     if (Date.now() - armed > 3000) {
       armed = Date.now();
-      b.textContent = 'Click again to confirm';
+      b.textContent = isTouch() ? 'Tap again to confirm' : 'Click again to confirm';
       b.classList.add('danger');
       setTimeout(() => {
         if (Date.now() - armed >= 3000) {

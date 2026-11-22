@@ -6,6 +6,7 @@ import { NEXT_LABEL, PRODUCT } from '../rules.ts';
 import { botLevel } from '../bots/roster.ts';
 import { site } from '../game.ts';
 import { isFinalist, player, standings, type CupState, type Player } from '../state.ts';
+import { isTouch } from './touch.ts';
 import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
 
 const BOARD_FULL = 10;
@@ -38,6 +39,8 @@ export class Hud {
   #split = h('div', { class: 'split', hidden: true });
   #splitAt = 0;
   feed = h('div', { class: 'feed' });
+  spec = this.#spec;
+  warm = this.#warm;
   #keys: Record<string, string> = {};
   #clock: { el: HTMLElement; label: HTMLElement; box: HTMLElement } | null = null;
   #countN = -1;
@@ -54,6 +57,13 @@ export class Hud {
 
   constructor(private app: App) {
     this.el.append(this.#right, this.#split, this.#bar, this.#shout, this.#toasts, this.#count, this.#warm, this.#spec, this.#center, this.feed, this.#podium);
+    // Who is watching, which a mouse gets by hovering.
+    this.#watchers.addEventListener('click', () => isTouch() && this.app.notify(`Watching you: ${this.#watchers.title}`));
+  }
+
+  // The touch buttons sit under the podium and over the rest of the HUD.
+  addControls(...els: HTMLElement[]) {
+    for (const el of els) this.el.insertBefore(el, this.#podium);
   }
 
   #changed(name: string, key: string) {
@@ -110,7 +120,7 @@ export class Hud {
       case 'build':
         return s.build?.closing ? 'Build Off · collecting the tracks' : 'Build Off · build your track';
       case 'lobby':
-        return this.app.isHost ? 'Lobby · press Tab to set up and start' : 'Lobby · free practice until the organizer starts';
+        return this.app.isHost ? `Lobby · ${isTouch() ? 'tap Cup' : 'press Tab'} to set up and start` : 'Lobby · free practice until the organizer starts';
       case 'loading':
         return 'Loading the track…';
       case 'warmup':
@@ -118,7 +128,7 @@ export class Hud {
       case 'countdown':
         return 'Get ready';
       case 'racing':
-        if (s.rules.casual) return 'Casual · drive as long as you like · Tab to vote for a new track';
+        if (s.rules.casual) return `Casual · drive as long as you like · ${isTouch() ? 'Cup' : 'Tab'} to vote for a new track`;
         return s.rules.style === 'timeattack' ? 'Time attack · your best run counts' : r?.closeAt ? 'Someone finished!' : 'Racing';
       case 'checking':
         return 'Checking runs…';
@@ -289,7 +299,7 @@ export class Hud {
       more = order.length - shown.length;
     }
     const watched = app.watch.active ? app.watch.target : null;
-    const key = JSON.stringify([live, s.phase, shown, more, full, r?.runs, r?.dnf, watched, s.rules.botSkill, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away, p.bot?.s])]);
+    const key = JSON.stringify([isTouch(), live, s.phase, shown, more, full, r?.runs, r?.dnf, watched, s.rules.botSkill, s.players.map((p) => [p.u, p.name, p.pts, p.out, p.fin, p.away, p.bot?.s])]);
     if (!this.#changed('board', key)) return;
     const head = h(
       'div',
@@ -333,7 +343,7 @@ export class Hud {
     // Rows slide to their new places instead of jumping.
     const before = new Map<string, number>();
     for (const el of this.#board.querySelectorAll<HTMLElement>('[data-u]')) before.set(el.dataset.u!, el.offsetTop);
-    fill(this.#board, head, ...rows, more ? h('div', { class: 'more' }, `+${more} more · Tab for all`) : null);
+    fill(this.#board, head, ...rows, more ? h('div', { class: 'more' }, `+${more} more${isTouch() ? '' : ' · Tab for all'}`) : null);
     for (const el of this.#board.querySelectorAll<HTMLElement>('[data-u]')) {
       const was = before.get(el.dataset.u!);
       if (was != null && was !== el.offsetTop) el.animate([{ transform: `translateY(${was - el.offsetTop}px)` }, { transform: 'none' }], { duration: 350, easing: 'ease-out' });
@@ -540,7 +550,7 @@ export class Hud {
     const me = app.me;
     const myVote = me != null ? v.ballots[me] : undefined;
     const canVote = me != null && (v.kind === 'vote' ? player(s, me)?.role === 'racer' && !player(s, me)?.out : v.picker === me);
-    const key = JSON.stringify([v, canVote]);
+    const key = JSON.stringify([v, canVote, isTouch()]);
     if (!this.#changed('center', key)) return;
     const picker = player(s, v.picker);
     const title =
@@ -581,7 +591,7 @@ export class Hud {
         h('div', { class: 'cap' }, h('div', null, h('div', { class: 'kicker' }, kicker), h('h2', null, title)), this.#votePart(v.until)),
         this.#voteBar(v.until, s.phaseAt),
         h('div', { class: 'opts' }, opts),
-        h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, canVote ? 'Click a track to vote. You can change your mind until it closes.' : 'Watch the votes come in.'), hostBrowse),
+        h('div', { class: 'foot' }, h('span', { class: 'grow dim' }, canVote ? `${isTouch() ? 'Tap' : 'Click'} a track to vote. You can change your mind until it closes.` : 'Watch the votes come in.'), hostBrowse),
       ),
     );
   }
@@ -694,7 +704,7 @@ export class Hud {
     }).length;
     if (!this.#changed('warm', JSON.stringify([me?.ready, ready, r.racers.length]))) return;
     fill(this.#warm, 
-      h('span', null, icon('flag'), ' Warm-up'),
+      h('span', { class: 'what' }, icon('flag'), ' Warm-up'),
       h('span', { class: 'dim' }, `${ready}/${r.racers.length} ready`),
       me?.ready ? h('span', { class: 'chip good' }, icon('check'), 'Ready') : btn([icon('check'), "I'm ready"], () => app.act({ k: 'act', a: 'ready' }), 'small good'),
     );
@@ -725,7 +735,8 @@ export class Hud {
       return;
     }
     const target = w.mode === 'free' ? null : app.playerByPid(w.target);
-    if (!this.#changed('spec', JSON.stringify([w.mode, target?.u, target?.name, w.cockpit, s.rules.freecam]))) return;
+    const touch = isTouch();
+    if (!this.#changed('spec', JSON.stringify([touch, w.mode, target?.u, target?.name, w.cockpit, s.rules.freecam]))) return;
     const keys = [h('i'), h('i'), h('i'), h('i')];
     const name = h('div', { class: 'name ell' }, w.mode === 'free' ? 'Free camera' : target ? [`${flag(target.cc)} ${target.name}`, botTag(target, s)] : '—');
     const speed = h('b', { class: 'mono' }),
@@ -746,11 +757,13 @@ export class Hud {
           { class: 'main' },
           h('div', { class: 'label' }, w.mode === 'director' ? 'Director cam' : w.mode === 'free' ? 'Spectating' : 'Watching'),
           name,
-          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, document.body.classList.contains('nsws-touch') ? 'Drag to look, use the pad to fly' : 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), lag, h('div', { class: 'keys4' }, keys)),
+          w.mode === 'free' ? h('div', { class: 'stats' }, h('span', null, touch ? 'Drag to look, use the pad to fly' : 'Fly with the driving keys')) : h('div', { class: 'stats' }, h('span', null, speed, ' km/h'), h('span', null, cp), h('span', null, time), lag, h('div', { class: 'keys4' }, keys)),
         ),
         w.mode === 'free' ? null : h('button', { class: 'arrow', title: `Next racer (${kb.next})`, onclick: () => w.cycle(1) }, icon('right')),
+        // The touch layout has the camera modes in the Cup menu, so only the way back is out here.
+        touch && w.mode === 'free' ? h('button', { class: 'arrow back', onclick: () => w.setMode('director') }, 'Back') : null,
       ),
-      h(
+      touch ? null : h(
         'div',
         { class: 'modes' },
         mode('director', 'Director', 'video'),
@@ -936,12 +949,12 @@ export class Hud {
       this.#feedLines.append(el);
     }
     toggle(this.feed, 'open', this.chatOpen);
-    const target = chat.target + chat.mainOn + matchMedia('(pointer: coarse)').matches;
+    const target = chat.target + chat.mainOn + isTouch();
     if (this.#feedOpen === this.chatOpen && this.#feedTarget === target) return;
     this.#feedOpen = this.chatOpen;
     this.#feedTarget = target;
     if (this.chatOpen) {
-      const touch = matchMedia('(pointer: coarse)').matches;
+      const touch = isTouch();
       const to = chat.target === 'all' ? 'Message everyone online' : 'Message the cup';
       const input = h('input', { class: 'text', maxlength: 200, enterkeyhint: 'send', autocomplete: 'off', placeholder: touch ? to : `${to}… (Enter to send, Esc to close)` }) as HTMLInputElement;
       input.value = this.#draft;
@@ -997,7 +1010,8 @@ export class Hud {
       if (hadFocus) input.focus();
     } else {
       this.#feedInput = null;
-      fill(this.#feedBottom, h('div', { class: 'hint', onclick: () => this.openChat() }, matchMedia('(pointer: coarse)').matches ? 'Chat' : `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
+      // Touch has the Chat button (touchmenu.ts) instead.
+      fill(this.#feedBottom, isTouch() ? null : h('div', { class: 'hint', onclick: () => this.openChat() }, `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
     }
   }
 

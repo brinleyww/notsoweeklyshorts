@@ -7,6 +7,7 @@
 import type { App } from './app.ts';
 import { beReady, ensureBE, isBE, site } from './game.ts';
 import { player, type TrackMode } from './state.ts';
+import { isTouch } from './ui/touch.ts';
 
 // A watched builder's track goes out at most this often (only when it changed), its camera twice a second.
 const SNAP_MS = 2000;
@@ -441,9 +442,9 @@ export class BuildDesk {
     const watchers = app.me != null ? this.watchersOf(app.me) : 0;
     let status: string;
     if (target) status = this.#shown ? `Watching ${target.name} build. Your own track is kept and comes back when you stop.` : `Waiting for ${target.name}'s track…`;
-    else if (!canSend) status = closing ? "Time's up. Collecting the tracks…" : 'Click a builder above to watch them build.';
+    else if (!canSend) status = closing ? "Time's up. Collecting the tracks…" : `${isTouch() ? 'Tap' : 'Click'} a builder above to watch them build.`;
     else if (closing) status = mine ? `Time's up. The cup has "${mine.name}".` : "Time's up. Sending your track…";
-    else if (mine) status = `The cup has "${mine.name}". Send again after more changes, or click a builder to watch them.`;
+    else if (mine) status = `The cup has "${mine.name}". Send again after more changes, or ${isTouch() ? 'tap' : 'click'} a builder to watch them.`;
     else status = 'Build a track with a start and a finish, then send it. It goes by itself when time runs out.';
     const per = s.rules.perTrack;
     const phase = closing ? 'Collecting the tracks' : `Build Off · then ${per} round${per === 1 ? '' : 's'} on every track`;

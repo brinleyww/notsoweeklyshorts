@@ -48,6 +48,11 @@ export class Spectate {
     return this.mode === 'free' ? s.rules.freecam : this.watchable().length > 0;
   }
 
+  toggleGhosts() {
+    this.ghostsHidden = !this.ghostsHidden;
+    this.app.notify(this.ghostsHidden ? 'Other cars hidden' : 'Other cars shown', 'info');
+  }
+
   watchNow() {
     const r = this.app.state?.round;
     if (r) this.#manual = `${r.n}.${r.try}`;

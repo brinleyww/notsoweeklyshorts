@@ -502,3 +502,79 @@ input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-bu
 .keymenu .keys { flex: 0 1 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; }
 .keymenu .kc { padding: 3px 7px; border-radius: 4px; background: var(--s3); font-style: normal; font-size: 15px; white-space: nowrap; }
 .keymenu .times { font-size: 13px; color: var(--dim); }
+
+/* ---------- Touch ---------- */
+/* Sizes that start from a screen size (calc(40px / var(--cs))) stay tappable at every scale. */
+.safe { position: absolute; left: 0; top: 0; visibility: hidden; width: env(safe-area-inset-left, 0px); height: env(safe-area-inset-bottom, 0px); margin-right: env(safe-area-inset-right, 0px); }
+.chip .del { opacity: .6; }
+.root.touch button { touch-action: manipulation; }
+/* A tap leaves the hover fill behind, which reads as switched on. */
+@media (hover: none) {
+  .btn:hover:not(:active)::after { width: 0; }
+}
+.dock { position: absolute; left: var(--x, 12px); bottom: var(--b, 12px); display: flex; gap: 4px; }
+.dock .btn { min-width: 92px; height: max(36px, 40px / var(--cs)); padding: 0 20px; opacity: .85; }
+.touchmenu { position: absolute; left: var(--x, 12px); bottom: var(--b, 80px); width: var(--w, 440px); max-height: var(--max, 100%); overflow-y: auto; overscroll-behavior: contain; pointer-events: auto; padding: 8px; background: var(--s1); }
+.touchmenu h4 { margin: 8px 0 4px; font-size: 15px; font-weight: 400; color: var(--dim); }
+.touchmenu .items { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.touchmenu .btn { min-width: 0; min-height: max(38px, 40px / var(--cs)); padding: 4px 10px; font-size: 18px; white-space: normal; }
+.touchmenu .btn:only-child { grid-column: 1 / -1; }
+.root.touch .warm, .root.touch .spec { left: var(--x, 12px); bottom: var(--b, 12px); transform: none; }
+.root.touch .warm { white-space: nowrap; padding-left: 12px; gap: 10px; font-size: 16px; }
+/* The round bar says it is the warm-up. */
+.root.touch .warm .what { display: none; }
+.root.touch .warm .btn { min-height: max(34px, 38px / var(--cs)); }
+.root.touch .spec .who { height: max(50px, 46px / var(--cs)); }
+.root.touch .spec .who .arrow { min-width: calc(44px / var(--cs)); padding: 0 12px; }
+.root.touch .spec .who .arrow.back { font-size: 18px; }
+.root.touch .spec .who .main { min-width: 170px; max-width: 280px; gap: 3px; padding: 2px 12px; }
+.root.touch .spec .who .label, .root.touch .spec .keys4, .root.touch .spec .lag { display: none; }
+.root.touch .spec .who .name { max-width: 100%; font-size: 19px; }
+.root.touch .spec .who .stats { gap: 10px; font-size: 13px; white-space: nowrap; }
+.root.touch .spec .modes .btn { min-height: calc(40px / var(--cs)); }
+.root.touch .feed .box .btn, .root.touch .feed .box input { height: max(36px, 40px / var(--cs)); }
+
+/* A phone's panel is one column: the chat is a tab and the header is one line. */
+.root.phone .keysbtn { display: none; }
+.panel.phone { width: calc(100% - 16px); height: calc(100% - 16px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.panel.phone > header { padding: 6px 10px; gap: 8px; }
+.panel.phone > header .brand, .panel.phone > header .meta .ell { display: none; }
+.panel.phone > header .titles { flex-direction: row; align-items: center; gap: 10px; }
+.panel.phone > header h1 { font-size: 24px; }
+.panel.phone > header .meta { flex: none; }
+.panel.phone > header .code .c { font-size: 20px; letter-spacing: 2px; }
+.panel.phone > .main { grid-column: 1; grid-row: 2; }
+.panel.phone .side { display: none; }
+.panel.phone.chatting { grid-template-rows: auto auto minmax(0, 1fr); }
+.panel.phone.chatting .side { display: flex; grid-column: 1; grid-row: 3; border: none; }
+.panel.phone .tabs { padding: 6px 8px 0; }
+.panel.phone .tab { min-width: 0; font-size: 16px; padding: 12px 4px; gap: 4px; }
+.panel.phone .content { padding: 12px 12px 18px; overscroll-behavior: contain; }
+.panel.phone .content > .ctl { margin: 0 0 16px; padding: 10px; }
+.panel.phone .content > .ctl:last-child { margin: 16px 0 0; }
+.panel.phone .formats { grid-template-columns: repeat(2, 1fr); }
+.panel.phone .chat .ctabs { padding: 6px 8px 0; }
+.panel.phone .msg .mute { padding: 10px 14px; font-size: 15px; }
+.panel.phone .chip .del { padding: 8px 4px 8px 12px; }
+.root.kb .panel.phone > header, .root.kb .panel.phone .tabs, .root.kb .panel.phone .ctabs { display: none; }
+.root.kb .panel.phone, .root.kb .panel.phone.chatting { grid-template-rows: auto minmax(0, 1fr); }
+.root.kb .panel.phone.chatting > .main { display: none; }
+.root.kb .panel.phone.chatting .side { grid-row: 1 / -1; }
+
+.root.phone .center { width: max-content; max-width: calc(100% - 16px); }
+.root.phone .card { max-width: 100%; }
+.root.phone .vote:not(.draft) .opts { min-height: 0; overflow-y: auto; padding: 10px; }
+.root.phone .vote:not(.draft) .opt { align-self: flex-start; }
+.root.phone .vote:not(.draft) .opt .thumb { width: 100%; max-height: 92px; }
+.root.phone .vote:not(.draft) .opt .info { padding: 8px 10px; }
+.root.phone .vote:not(.draft) .cap h2 { font-size: 24px; }
+.root.phone .shout { max-width: calc(100% - 16px); }
+.root.phone .podium { gap: 10px; padding: 6px 10px; }
+.root.phone .podium .title h1 { font-size: 36px; }
+.root.phone .podium .car { height: 64px; }
+.root.phone .podium .s1 .block { height: 76px; }
+.root.phone .podium .s2 .block { height: 56px; }
+.root.phone .podium .s3 .block { height: 42px; }
+.root.phone .podium .block { font-size: 36px; }
+.root.phone .podium .rest { flex: none; max-height: 56px; overflow-y: auto; }
+.root.phone .podium .actions .btn { min-height: calc(36px / var(--cs)); padding: 6px 14px; font-size: 17px; }
