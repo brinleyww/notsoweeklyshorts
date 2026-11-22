@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.1",
+        "changes": [
+            "Better Editor updates that don't change physics count up after the dot, like v34.1 and v34.2"
+        ]
+    },
+    {
         "version": "v13.0",
         "changes": [
             "Week 13 is out: Circuit, dirty tires, wood go brr, tech-nique, THIS IS ART",

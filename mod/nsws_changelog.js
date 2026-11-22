@@ -291,9 +291,14 @@
         return numbers.get(path);
     }
 
+    // "34.5": physics 34, the fifth update on it. A string, since 34.10 comes after 34.9.
+    function beVersion(e) {
+        return typeof e.version === "string" && /^\d+\.\d+$/.test(e.version) ? e.version : null;
+    }
+
     // A Better Editor entry went live with the first deploy whose changelog.json has its id (ids only go up).
     // Entries written after the fact name their commit instead; a deploy cancelled by the next push went live with that one.
-    // The version shown is physics.json's as of that deploy.
+    // An entry without a version of its own shows physics.json's as of that deploy.
     async function beReleases(want, before) {
         const maxId = run => numberAtTop(run.sha, "changelog.json", "id");
         const named = want.filter(e => typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit));
@@ -333,9 +338,11 @@
                     run = runs[lo];
                 }
                 found[e.id] = { at: run.at };
-                const version = await numberAtTop(run.sha, "physics.json", "version");
-                if (!version) return;
-                found[e.id].version = version;
+                if (!beVersion(e)) {
+                    const version = await numberAtTop(run.sha, "physics.json", "version");
+                    if (!version) return;
+                    found[e.id].version = version;
+                }
                 final[e.id] = found[e.id];
             } catch (err) {}
         }));
@@ -367,7 +374,10 @@
         id: e => e.id,
         known: () => cached(BE_DEPLOYS_KEY),
         find: beReleases,
-        title: (e, release) => (release?.version ? "Better Editor v" + release.version : "Better Editor"),
+        title: (e, release) => {
+            const version = beVersion(e) || release?.version;
+            return version ? "Better Editor v" + version : "Better Editor";
+        },
         cls: "ver be",
     };
 
