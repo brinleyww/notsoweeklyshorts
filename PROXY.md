@@ -502,7 +502,8 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
 - **Favourites** are in `localStorage` (`_nswsChatGifStars`, up to 100). A starred upload also keeps
   a copy of the file in IndexedDB (`nsws-chat`), since uploads leave the server; sending it uploads
   it again, which the hash makes cheap.
-- **Whispers** (main room only): `{t:"whisper", to, text}`. The room asks Accounts `whisperTarget`
+- **Whispers** (main room only): typed as `/w name` or `/r` (`@name` is always a ping), sent as
+  `{t:"whisper", to, text}`. The room asks Accounts `whisperTarget`
   for the account holding that name (cached 5 min) and its newest 20 chat ids, then sends
   `{t:"whisper", m}` only to sockets and pollers with the sender's or those ids. Rows sit in
   `whispers` (one per participant id, 30 min) so `init` (socket and poll) and polls with `wafter`

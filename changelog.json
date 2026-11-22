@@ -1,5 +1,14 @@
 [
     {
+        "version": "v13.6",
+        "changes": [
+            "@name pings people again",
+            "Whispers are /w name or /r now, @name messages are seen by everyone",
+            "Typing /w shows who is online to pick from",
+            "Fixed whispers and pings going to the wrong player when names start the same"
+        ]
+    },
+    {
         "version": "v13.5",
         "changes": [
             "New Tutorial on the main menu: six short races with a coach, then a tour of the game",

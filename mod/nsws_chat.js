@@ -805,11 +805,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         el.append(text.slice(at));
     }
 
-    // What the text before the caret is asking to complete: ":so" (emoji) or "@na" (a player).
+    // What the text before the caret is asking to complete: ":so" (emoji), "/w na" or "@na" (a player).
     function completionQuery() {
         const before = input.value.slice(0, input.selectionStart ?? input.value.length);
         const colon = /(^|[\s([{"'])(:([a-z0-9_+-]{2,32}))$/i.exec(before);
         if (colon) return { kind: "emoji", at: before.length - colon[2].length, query: colon[3].toLowerCase() };
+        const to = !whisperTo && /^\/w\s+@?((?:[^\s@].{0,31})?)$/i.exec(before);
+        if (to) return { kind: "mention", whisper: true, at: before.length - to[1].length, query: to[1].toLowerCase() };
         const at = before.lastIndexOf("@");
         if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]))) return null;
         const query = before.slice(at + 1);
@@ -862,8 +864,11 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 if (u.uid === me.uid || seen.has(key) || !key.startsWith(q.query)) return false;
                 seen.add(key);
                 return true;
-            }).slice(0, 6).map((u) => ({ label: "@" + u.nick, uid: u.uid, insert: "@" + u.nick }));
-            if (me.owner && "everyone".startsWith(q.query)) list.push({ label: "@everyone", insert: "@everyone" });
+            }).sort((a, b) => a.nick.length - b.nick.length).slice(0, 6).map((u) => {
+                const name = (q.whisper ? "" : "@") + u.nick;
+                return { label: name, uid: u.uid, insert: name };
+            });
+            if (me.owner && !q.whisper && "everyone".startsWith(q.query)) list.push({ label: "@everyone", insert: "@everyone" });
         }
         if (!list.length) return hideSuggest();
         suggest = { kind: q.kind, items: list, index: Math.min(index, list.length - 1) };
@@ -871,7 +876,9 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         suggestBox.textContent = "";
         const head = document.createElement("div");
         head.className = "head";
-        head.textContent = q.kind === "emoji" ? "Emoji matching :" + q.query : q.at === 0 && !whisperTo ? "Whisper to a player online" : "Players online";
+        head.textContent = q.kind === "emoji" ? "Emoji matching :" + q.query
+            : q.whisper ? "Whisper to a player online"
+            : q.at === 0 && !whisperTo ? "Ping a player (/w name to whisper)" : "Players online";
         const box = document.createElement("div");
         box.className = "list";
         list.forEach((item, i) => {
@@ -904,7 +911,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         insertAtCaret(item.insert + " ", q.at, input.selectionStart ?? input.value.length);
         if (item.e) useEmoji(item.e);
         hideSuggest();
-        if (!item.e) whisperStart();
+        if (!item.e) whisperStart(true);
     }
 
     function suggestKeys(e) {
@@ -2031,12 +2038,12 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (input) input.placeholder = whisperTo ? "Whisper to " + whisperTo + "..." : "Say something...";
     }
 
-    // "@name text", "/w name text" or "/r text" at the start: { to, text }, or null for a public message.
+    // "/w name text" or "/r text" at the start: { to, text }, or null for a public message. "@name" is always a ping.
     // A name can hold spaces, so the longest online name that fits wins; otherwise the first word.
     function typedWhisper(value) {
         if (/^\/r(\s|$)/i.test(value)) return { to: whisperFrom, text: value.slice(2).trim(), reply: true };
-        const m = /^(?:@|\/w\s+)(\S.*)$/i.exec(value);
-        if (!m || !me || /^everyone(?![\p{L}\p{N}_])/iu.test(m[1])) return null;
+        const m = /^\/w\s+@?(\S.*)$/i.exec(value);
+        if (!m || !me) return null;
         const rest = m[1];
         const lower = rest.toLowerCase();
         let name = null;
@@ -2049,8 +2056,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         return { to: name, text: rest.slice(name.length).trim() };
     }
 
-    // Typing the space after "@name", "/w name" or "/r" switches the box to whispering, as /w did in Roblox.
-    function whisperStart() {
+    // Typing the space after "/w name" or "/r" switches the box to whispering, as /w did in Roblox.
+    function whisperStart(picked) {
         if (whisperTo || !me || !input) return;
         const value = input.value;
         if (!/\s$/.test(value) || /\s\s$/.test(value)) return;
@@ -2058,12 +2065,12 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (!typed || typed.text) return;
         if (typed.reply && !typed.to) {
             input.value = "";
-            addSystem("Nobody has whispered you yet. Start one with @name or /w name.");
+            addSystem("Nobody has whispered you yet. Start one with /w name.");
             return;
         }
-        // "@Bob" of "@Bob Smith": wait while a longer online name could still be on its way.
+        // "/w Bob" of "/w Bob Smith": wait while a longer online name could still be on its way.
         const lower = typed.to.toLowerCase();
-        if (!typed.reply && users.some((u) => u.uid !== me.uid && u.nick.toLowerCase().startsWith(lower + " ")) && !users.some((u) => u.nick.toLowerCase() === lower)) return;
+        if (!picked && !typed.reply && users.some((u) => u.uid !== me.uid && u.nick.toLowerCase().startsWith(lower + " "))) return;
         input.value = "";
         setWhisper(typed.to);
         hideSuggest();
@@ -2830,7 +2837,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         let to = whisperTo;
         const typed = to ? null : typedWhisper(text);
         if (typed) {
-            if (!typed.to) return addSystem("Nobody has whispered you yet. Start one with @name or /w name.");
+            if (!typed.to) return addSystem("Nobody has whispered you yet. Start one with /w name.");
             to = typed.to;
             text = typed.text;
             input.value = typed.text;
@@ -2991,7 +2998,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (!me.owner && readyAt > Date.now()) return Promise.reject(new Error("Slow mode: one message a second."));
         const typed = typedWhisper(text);
         if (typed && !typed.to) return Promise.reject(new Error("Nobody has whispered you yet."));
-        if (typed && !typed.text) return Promise.reject(new Error("Write the whisper after the name: @name your message"));
+        if (typed && !typed.text) return Promise.reject(new Error("Write the whisper after the name: /w name your message"));
         lastText = typed ? typed.text : text;
         lastReply = null;
         lastWhisper = typed ? typed.to : null;
