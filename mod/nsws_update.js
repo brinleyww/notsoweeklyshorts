@@ -10,7 +10,7 @@
 
     const POLL_MS = 60000;
     const RUNS_API = "https://api.github.com/repos/" + site.repo + "/actions/runs?event=dynamic&branch=main&per_page=20";
-    const BUSY = ".game-ui, .editor-ui, .device-preset-ui, dialog[open], .clip-box-bg, #nrc-overlay";
+    const BUSY = ".game-ui, #nsws-tutorial, #nsws-tour, .editor-ui, .device-preset-ui, dialog[open], .clip-box-bg, #nrc-overlay";
 
     // The title screen names the build this page was served from, which can trail the repo's newest commit.
     window.__nswsLoadedVersion = versionName(loadedDeployTime());

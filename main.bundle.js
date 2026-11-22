@@ -1317,6 +1317,10 @@ window.__nswsAutoGhostNote = function(trackId) {
     }
     // A clip saved on purpose; auto-clips leave the clipboard alone (one per finish would also use up the hourly link limit).
     function createClip(copyLink) {
+        if (window.__nswsTutorial?.racing()) {
+            if (copyLink) showClipSavedNotification("📹 Tutorial runs can't be clipped");
+            return;
+        }
         if (runHasClip) {
             showRunAlreadyClippedNotification();
             return;
@@ -42762,7 +42766,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                     C.get(this, Je, "m", et).call(this, n)) : g.className = "difference red"
                 }
                 {
-                    const _wasPB = "personal-best" === s && !c.classList.contains("hidden");
+                    // A tutorial finish is nobody's personal best.
+                    const _wasPB = !window.__nswsTutorial?.racing() && "personal-best" === s && !c.classList.contains("hidden");
                     if (_wasPB && getAutoClipOnPB()) createClip();
                     else if (getAutoClipOnEveryRun()) createClip();
                     // Share button and bingo squares (mod/nsws_share.js, mod/nsws_bingo.js).
@@ -45674,7 +45679,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             const s = new VisualCar(C.get(this, Cr, "f"),i,null,C.get(this, ya, "f"),C.get(this, zr, "f"),C.get(this, Nr, "f"),C.get(this, Ir, "f"),C.get(this, Pr, "f"),C.get(this, Yr, "f"),C.get(this, Gr, "f"),a);
             recordingClass = s;
             const __nswsTrackId = C.get(this, Yr, "f").getId();
-            window.__nswsTraffic?.event("attempts", __nswsTrackId);
+            // Practice (the tutorial): no records, and none of the per-track counters.
+            const __nswsPractice = "practice" == C.get(this, Zr, "f");
+            __nswsPractice ? window.__nswsTutorial?.newCar(s, C.get(this, ea, "f")?.element) : window.__nswsTraffic?.event("attempts", __nswsTrackId);
             // Only solo runs count: test drives have records off, and multiplayer has a session.
             window.__nswsGrind?.newCar(s, __nswsTrackId, C.get(this, Xr, "f").name, C.get(this, jr, "f") && null == C.get(this, Sa, "f"));
             // Bolts pay for this car's race clock (mod/nsws_crates.js); test drives have records off and earn nothing.
@@ -45717,9 +45724,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     speed: e.getSpeedKmh(),
                     refSpeed: splitRef?.finishSpeedKmh ?? null
                 });
-                window.__nswsTraffic?.event("finishes", __nswsTrackId);
-                // The weekly bingo judges each run by its time (mod/nsws_bingo.js).
-                window.dispatchEvent(new CustomEvent("nsws-finish", { detail: { track: __nswsTrackId, seconds: e.getTime().time } }));
+                if (__nswsPractice)
+                    window.__nswsTutorial?.finish(e);
+                else {
+                    window.__nswsTraffic?.event("finishes", __nswsTrackId);
+                    // The weekly bingo judges each run by its time (mod/nsws_bingo.js).
+                    window.dispatchEvent(new CustomEvent("nsws-finish", { detail: { track: __nswsTrackId, seconds: e.getTime().time } }));
+                }
                 const t = e.getTime()
                   , i = e.getRecording()
                   , r = e.getCarStyle();
@@ -47006,6 +47017,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 cupBotCars.set(this, null),
                 C.get(this, Ra, "f").clear(),
                 window.__nswsGrind?.leave(),
+                "practice" == C.get(this, Zr, "f") && window.__nswsTutorial?.leave(),
                 window.removeEventListener("keydown", C.get(this, Na, "f")),
                 window.removeEventListener("keyup", C.get(this, Da, "f")),
                 C.get(this, Ba, "f").dispose(),
@@ -47271,11 +47283,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, sa, "f").liveGhost = null == C.get(this, Sa, "f") ? C.get(this, _r, "m", Za).call(this) : null,
                 C.get(this, sa, "f").update(C.get(this, wa, "f")),
                 window.__nswsNR?.update(C.get(this, wa, "f")),
+                "practice" == C.get(this, Zr, "f") && window.__nswsTutorial?.tick(C.get(this, wa, "f")),
                 C.get(this, ra, "f").update(C.get(this, wa, "f")),
                 C.get(this, ma, "f").setResetCheckpointAvailable(C.get(this, _r, "m", ja).call(this)),
                 C.get(this, Ga, "f")?.update(),
                 cupFrameHook?.(this, n),
-                n > 0 && C.get(this, wa, "f").hasStarted() && !C.get(this, wa, "f").hasFinished() && window.__nswsTraffic?.drive?.(C.get(this, Yr, "f").getId()),
+                n > 0 && "practice" != C.get(this, Zr, "f") && C.get(this, wa, "f").hasStarted() && !C.get(this, wa, "f").hasFinished() && window.__nswsTraffic?.drive?.(C.get(this, Yr, "f").getId()),
                 C.get(this, Ir, "f").update(C.get(this, Pr, "f")),
                 C.get(this, Lr, "f").update(n, C.get(this, zr, "f").camera, C.get(this, Pr, "f").sunDirection),
                 C.get(this, Nr, "f").update(e, !1, C.get(this, zr, "f")),
@@ -57521,7 +57534,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 // Give feedback over Standings + Play, then: Clips | Settings over Garage | big Standings | big Play | Competitions over Custom Tracks | Editor.
                 const fit = document.createElement("style");
                 fit.id = "nsws-menu-fit";
-                fit.textContent = ".menu-ui > .main-buttons-container{container-type:size;min-height:0;margin-bottom:max(140px,var(--nsws-discord-h,100px) + 76px)}.menu-ui > .main-buttons-container:not(.hidden){display:grid;grid-template-columns:repeat(8,auto);gap:16px;place-content:center;align-items:center;grid-template-areas:'. . feedback feedback feedback feedback . .' 'clips settings standings standings play play comps editor' 'clips customize standings standings play play load editor'}.menu-ui .main-buttons-container > .nsws-mb-feedback{--s:max(40px,min(170px,(100cqw - 160px) / 8,(100cqh - 36px) / 2.4));grid-area:feedback;margin:0;height:calc(var(--s) * .4);padding:0 calc(var(--s) * .12);display:flex;align-items:center;justify-content:center;gap:calc(var(--s) * .08);font-size:calc(var(--s) * .15)}.menu-ui .main-buttons-container > .nsws-mb-feedback > img{margin:0;width:calc(var(--s) * .2);height:calc(var(--s) * .2)}.menu-ui .nsws-mb-feedback.button-spawn{animation:button-spawn .5s ease-out forwards;opacity:0}.menu-ui .main-buttons-container > .button-image{--s:max(40px,min(170px,(100cqw - 160px) / 8,(100cqh - 36px) / 2.4));margin:0;width:var(--s);height:var(--s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--s) * .06)}.menu-ui .main-buttons-container > .button-image > img{margin:0;width:calc(var(--s) * .44);height:calc(var(--s) * .44)}.menu-ui .main-buttons-container > .button-image > p{padding:0 4px;font-size:calc(var(--s) * .125);line-height:1.15}.menu-ui .main-buttons-container > .nsws-mb-big{width:calc(var(--s) * 2 + 16px);height:calc(var(--s) * 2 + 16px)}.menu-ui .main-buttons-container > .nsws-mb-big > img{width:calc(var(--s) * .9);height:calc(var(--s) * .9)}.menu-ui .main-buttons-container > .nsws-mb-big > p{font-size:calc(var(--s) * .21)}.nsws-mb-clips{grid-area:clips}.nsws-mb-settings{grid-area:settings}.nsws-mb-garage{grid-area:customize}.nsws-mb-standings{grid-area:standings}.nsws-mb-play{grid-area:play}.nsws-mb-comps{grid-area:comps}.nsws-mb-load{grid-area:load}.nsws-mb-editor{grid-area:editor}";
+                fit.textContent = ".menu-ui > .main-buttons-container{container-type:size;min-height:0;margin-bottom:max(140px,var(--nsws-discord-h,100px) + 76px)}.menu-ui > .main-buttons-container:not(.hidden){display:grid;grid-template-columns:repeat(8,auto);gap:16px;place-content:center;align-items:center;grid-template-areas:'. . tutorial tutorial feedback feedback . .' 'clips settings standings standings play play comps editor' 'clips customize standings standings play play load editor'}.menu-ui .main-buttons-container > .nsws-mb-feedback{--s:max(40px,min(170px,(100cqw - 160px) / 8,(100cqh - 36px) / 2.4));grid-area:feedback;margin:0;height:calc(var(--s) * .4);padding:0 calc(var(--s) * .12);display:flex;align-items:center;justify-content:center;gap:calc(var(--s) * .08);font-size:calc(var(--s) * .15)}.menu-ui .main-buttons-container > .nsws-mb-feedback > img{margin:0;width:calc(var(--s) * .2);height:calc(var(--s) * .2)}.menu-ui .nsws-mb-feedback.button-spawn{animation:button-spawn .5s ease-out forwards;opacity:0}.menu-ui .main-buttons-container > .button-image{--s:max(40px,min(170px,(100cqw - 160px) / 8,(100cqh - 36px) / 2.4));margin:0;width:var(--s);height:var(--s);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:calc(var(--s) * .06)}.menu-ui .main-buttons-container > .button-image > img{margin:0;width:calc(var(--s) * .44);height:calc(var(--s) * .44)}.menu-ui .main-buttons-container > .button-image > p{padding:0 4px;font-size:calc(var(--s) * .125);line-height:1.15}.menu-ui .main-buttons-container > .nsws-mb-big{width:calc(var(--s) * 2 + 16px);height:calc(var(--s) * 2 + 16px)}.menu-ui .main-buttons-container > .nsws-mb-big > img{width:calc(var(--s) * .9);height:calc(var(--s) * .9)}.menu-ui .main-buttons-container > .nsws-mb-big > p{font-size:calc(var(--s) * .21)}.menu-ui .main-buttons-container > .nsws-mb-tutorial{grid-area:tutorial}.nsws-mb-clips{grid-area:clips}.nsws-mb-settings{grid-area:settings}.nsws-mb-garage{grid-area:customize}.nsws-mb-standings{grid-area:standings}.nsws-mb-play{grid-area:play}.nsws-mb-comps{grid-area:comps}.nsws-mb-load{grid-area:load}.nsws-mb-editor{grid-area:editor}";
                 document.head.appendChild(fit);
             }
             // Custom Tracks is a menu of its own (mod/nsws_tracks.js): the main menu's buttons and logo hide while it is open.
@@ -57638,6 +57651,19 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 });
                 C.get(this, Nc, "f").appendChild(fbBtn);
                 C.get(this, Dc, "f").push(fbBtn);
+
+                if (window.__nswsTutorial) {
+                    const tutBtn = document.createElement("button");
+                    tutBtn.className = "button nsws-mb-feedback nsws-mb-tutorial";
+                    tutBtn.innerHTML = '<img src="images/help.svg">';
+                    tutBtn.appendChild(document.createTextNode("Tutorial"));
+                    tutBtn.addEventListener("click", () => {
+                        n.playUIClick();
+                        window.__nswsTutorial.open();
+                    });
+                    C.get(this, Nc, "f").insertBefore(tutBtn, fbBtn);
+                    C.get(this, Dc, "f").push(tutBtn);
+                }
 
                 if (!document.getElementById("nsws-standings-overlay")) {
                     const LOG102 = Math.log10(2);
@@ -64319,6 +64345,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // (the main menu is showing then).
             window.__nswsRaceTrack = (meta, data, onExit, ghosts) => !!data?.hasStartingPoint?.() && (W(meta, data, "custom", Array.isArray(ghosts) ? ghosts : [], null, "function" == typeof onExit ? onExit : null),
             !0);
+            // A tutorial race: nothing is saved, uploaded or counted.
+            window.__nswsPractice = (meta, data, onExit, ghosts) => !!data?.hasStartingPoint?.() && (W(meta, data, "practice", ghosts ?? [], null, onExit),
+            !0);
             // Replays runs of a parsed track, then calls done. tmBase gives them a simulation of their own that loads
             // Better Editor's blocks from there: an older commit, for runs driven on older physics.
             let ownSim = null;
@@ -64685,7 +64714,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     } : null;
                     const pinned = simsFor(n);
                     try {
-                    Q = new ts(pinned?.p ?? p,pinned?.f ?? f,v,A,m,b,h,l,w,S,e,r,s,E,T,y,t,n,i,a,_,c,!0,(e => {
+                    Q = new ts(pinned?.p ?? p,pinned?.f ?? f,v,A,m,b,h,l,w,S,e,r,s,E,T,y,t,n,i,a,_,c,"practice" != i,(e => {
                         let t;
                         switch (e) {
                         case "kicked":
@@ -64793,14 +64822,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             ;
             let Q = new gh(p,v,A,m,y,b,E,w,S,h,l,e,n,r,x,t,!1,null,_,C,W,j,K,q)
               , J = 0;
-            window.__nswsFirstLaunchStart = __nswsFirstLaunch ? () => {
-                window.__nswsFirstLaunchStart = null;
+            const __nswsStartFirstTrack = () => {
                 const first = window.__nswsTracksForWeek?.(window.__nswsCurrentWeek)?.[0];
                 if (!first || !window.__bw_selectTrackById?.(first.id)) return;
                 try {
                     localStorage.setItem("_nswsAutoStarted", "1");
                 } catch (e) {}
                 document.querySelector(".track-info-ui .button.play")?.click();
+            };
+            // New players are asked about the tutorial; turning it down starts this week's first track.
+            window.__nswsFirstLaunchStart = __nswsFirstLaunch || window.__nswsTutorial?.pending() ? () => {
+                window.__nswsFirstLaunchStart = null;
+                window.__nswsTutorial?.firstLaunch(__nswsStartFirstTrack) || __nswsStartFirstTrack();
             } : null;
             h.setAnimationLoop((function(e) {
                 const t = Math.max(e - J, 0) / 1e3;

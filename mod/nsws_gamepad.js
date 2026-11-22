@@ -241,6 +241,8 @@
         get names() {
             return Object.fromEntries(ACTIONS.filter(a => a[3] === "rocket").map(([id]) => [id, nameOf(id)]));
         },
+        // One action's controller input, by this file's action ids ("" when unbound).
+        nameFor: id => binds[id]?.some(Boolean) ? nameOf(id) : "",
         get driveNames() {
             return ["up", "right", "down", "left"].map(nameOf);
         },

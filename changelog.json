@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.5",
+        "changes": [
+            "New Tutorial on the main menu: six short races with a coach, then a tour of the game",
+            "New players get asked if they want the tutorial"
+        ]
+    },
+    {
         "version": "v13.4",
         "changes": [
             "Club tags show up for other players without refreshing"
