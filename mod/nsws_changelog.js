@@ -28,6 +28,7 @@
     const NEWEST = 30;
     const LOAD_AHEAD_PX = 600;
     const MAX_PAGES = 5;
+    const BE_POLL_TIMEOUT_MS = 15000;
     const WAIT_FOR_TIMES_MS = 2500;
     const STAMP = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
     const CSS = `
@@ -105,11 +106,11 @@
     }
 
     // A browser that preflights Range can't send it to GitHub (no OPTIONS there), so that one gets the whole file.
-    async function getPart(url, from, size, cache) {
+    async function getPart(url, from, size, cache, signal) {
         try {
-            return await get(url, { cache, headers: { Range: "bytes=" + from + "-" + (from + size - 1) } });
+            return await get(url, { cache, signal, headers: { Range: "bytes=" + from + "-" + (from + size - 1) } });
         } catch (e) {
-            return get(url, { cache });
+            return get(url, { cache, signal });
         }
     }
 
@@ -176,7 +177,7 @@
             // The mirror only when github.io can't be reached at all, not when it answers.
             for (const url of this.url ? [this.url] : this.kind.urls()) {
                 try {
-                    part = await getPart(url, this.offset, this.size, "no-store");
+                    part = await getPart(url, this.offset, this.size, "no-store", this.kind.signal);
                     this.url = url;
                     break;
                 } catch (e) {}
@@ -201,7 +202,7 @@
                 return;
             }
             // The whole file: the server ignored Range, or a deploy moved the bytes since the last read.
-            if (part.status === 206) part = await get(this.url, { cache: "no-store" });
+            if (part.status === 206) part = await get(this.url, { cache: "no-store", signal: this.kind.signal });
             if (!part.bytes) throw new Error("changelog " + part.status);
             let all = objectReader()(part.bytes).filter(this.kind.valid);
             if (this.last) {
@@ -564,6 +565,22 @@
         return { log, complete: file.done && !file.waiting.length };
     }
 
+    // Better Editor's newest id, for the update prompt: from its own site, or from the mirror only. 0 when unreachable.
+    function beFrom(mirror) {
+        // Asked every minute: a connection that went silent has to be let go, or they pile up and block the site's own.
+        return { ...BE, signal: AbortSignal.timeout?.(BE_POLL_TIMEOUT_MS), urls: () => (mirror ? BE.urls().slice(-1) : BE.urls().slice(0, 1)) };
+    }
+
+    async function beNewest(mirror) {
+        const [top] = await new LogFile(beFrom(mirror), TOP_BYTES).take(1);
+        return top?.id || 0;
+    }
+
+    async function beSince(id, mirror) {
+        const log = await new LogFile(beFrom(mirror), READ_BYTES).take(NEWEST);
+        return log.filter(e => e.id > id).map(e => ({ version: BE.title(e), changes: e.changes }));
+    }
+
     async function checkForNew() {
         const ours = new LogFile(NSWS, TOP_BYTES);
         const be = new LogFile(BE, TOP_BYTES);
@@ -573,6 +590,6 @@
         paint();
     }
 
-    window.__nswsChangelog = { open, mountButton, newest };
+    window.__nswsChangelog = { open, mountButton, newest, beNewest, beSince };
     checkForNew();
 })();

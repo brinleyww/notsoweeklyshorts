@@ -197,6 +197,8 @@
         }
         if (url === DEFAULT_URL && window.__nswsApiBase && (useMirror ?? mirrorOn())) url = window.__nswsApiBase + "be/";
         if (!/[?&]nsws=1/.test(url)) url += (url.includes("?") ? "&" : "?") + "nsws=1";
+        // The frame's own page can't be re-fetched from out here, so each editor update gets a new address for it.
+        if (window.__nswsBEStamp) url += "&u=" + window.__nswsBEStamp;
         return url + prefsHash();
     }
 
@@ -909,6 +911,8 @@
     }
 
     // The editor's Save, autosave or import: {key: My Tracks id or null, tmp: "tmp:n" for a new track, code, name, imported}.
+    // The editor calls a track saved as soon as it has sent it, so one My Tracks turned down is still unsaved work.
+    let saveFailed = false;
     async function saveFromEditor(m) {
         const T = lib();
         if (!T || typeof m.code !== "string") return;
@@ -926,6 +930,7 @@
         }
         if (t && tmp) tmpIds.set(tmp, t.id);
         if (t) libSent.set(t.id, t.hash);
+        saveFailed = !t;
         post({ type: "saved", tmp, key: typeof m.key === "string" ? m.key : null, id: t?.id || null, hash: t?.hash || null, ok: !!t });
         if (t && !m.imported) {
             try {
@@ -1800,8 +1805,28 @@
         editTrack(null, { fresh: true, quiet: true });
     }
 
+    // Would a reload of the page lose work? An editor from before bridge 10 can't say, so it counts as yes.
+    async function unsaved() {
+        if (!frame) return false;
+        if (!ready) return !!ui && !ui.fallback.classList.contains("hidden");
+        await autosave();
+        // A save reaches My Tracks after the editor has answered.
+        await saveChain;
+        if (saveFailed || bridgeVersion < 10) return true;
+        try {
+            return (await request("dirty", null, 3000)).dirty !== false;
+        } catch {
+            return true;
+        }
+    }
+
     window.__nswsEditor = {
         open,
+        unsaved,
+        // Removed first, an editor with unsaved work can't hold the reload behind a "Leave site?" of its own.
+        discard: unloadFrame,
+        focus: focusFrame,
+        refreshUrl: () => new URL("refresh.html?t=" + Date.now(), editorUrl()).href,
         close,
         current: currentTrack,
         fresh,

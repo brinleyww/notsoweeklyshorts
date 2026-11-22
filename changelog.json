@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.7",
+        "changes": [
+            "Better Editor updates now show the update popup, and Install loads the new editor"
+        ]
+    },
+    {
         "version": "v13.6",
         "changes": [
             "@name pings people again",

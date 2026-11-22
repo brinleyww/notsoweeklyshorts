@@ -1,5 +1,6 @@
 // Each copy of the site watches only its own deploys: GitHub Pages stamps every file's
 // Last-Modified with the deploy time, so the page compares its own stamp with the live one.
+// Better Editor deploys on its own, so its updates are told by the newest id in its changelog.json.
 (function () {
     const SITES = [
         { host: "brinleyww.github.io", path: /^\/notsoweeklyshorts(\/|$)/i, repo: "brinleyww/notsoweeklyshorts" },
@@ -23,6 +24,8 @@
 .nsws-update>h3{margin:0;padding:6px 20px 14px 20px;font-size:22px;font-weight:normal;text-align:center;color:var(--text-color);opacity:.8;}
 .nsws-update>.version{margin:0 10px;padding:18px 20px;background-color:var(--surface-secondary-color);font-size:48px;text-align:center;color:var(--text-color);overflow-wrap:anywhere;}
 .nsws-update>.version>span{display:block;margin-bottom:8px;font-size:18px;opacity:.6;}
+.nsws-update>.version>small{display:block;margin-top:6px;font-size:24px;color:#8fd8ff;}
+.nsws-update>.warn{margin:10px 10px 0 10px;padding:12px 20px;background-color:var(--surface-secondary-color);color:#ff9a9a;font-size:20px;}
 .nsws-update>.changes{margin:10px 10px 0 10px;padding:12px 20px;max-height:240px;overflow-y:auto;background-color:var(--surface-secondary-color);color:var(--text-color);font-size:20px;}
 .nsws-update>.changes>div{margin-top:10px;font-size:18px;opacity:.6;}
 .nsws-update>.changes>div:first-child{margin-top:0;}
@@ -39,6 +42,8 @@
 #nsws-update-toast>.row>.text>div{font-size:22px;white-space:nowrap;}
 #nsws-update-toast>.row>.text>span{display:block;font-size:16px;opacity:.65;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 #nsws-update-toast>.row>.button{flex-shrink:0;padding:6px 16px;font-size:22px;}
+#nsws-update-bg.over,#nsws-update-toast.over{position:fixed;z-index:10006;}
+#nsws-update-toast.over{top:auto;bottom:12px;left:0;right:0;margin:0 auto;}
 @keyframes nsws-update-toast{0%{opacity:0;transform:translateX(40px);}3%{opacity:1;transform:none;}45%{opacity:1;}100%{opacity:0;}}
 `;
 
@@ -83,7 +88,69 @@
         }
     }
 
+    function within(promise, ms, fallback) {
+        return Promise.race([
+            Promise.resolve(promise).catch(() => fallback),
+            new Promise(r => setTimeout(r, ms, fallback)),
+        ]);
+    }
+
+    async function refetch(url, options) {
+        const res = await fetch(url, { cache: "reload", ...options });
+        // Starting the request is enough to drop the cached copy, and the blocks file is about 80 MB.
+        if (/\.bin(\?|$)/.test(url)) await res.body?.cancel();
+        else await res.arrayBuffer();
+    }
+
+    // What the game itself loads from Better Editor, at the addresses main.bundle.js uses.
+    async function refreshBEGameFiles() {
+        let base = window.__nswsTM?.base || BE_SITE;
+        const readPhysics = () => fetch(base + "physics.json", { cache: "reload", signal: AbortSignal.timeout?.(5000) }).then(r => r.json());
+        const physics = await readPhysics().catch(() => {
+            // Like the game, which takes these files from the mirror when github.io can't be reached.
+            base = window.__nswsApiBase + "be/";
+            return readPhysics();
+        });
+        const signal = AbortSignal.timeout?.(BE_REFRESH_MS);
+        const query = "?p=" + (Number.isSafeInteger(physics.version) && physics.version > 0 ? physics.version : 1);
+        await Promise.allSettled([
+            // no-cors with cookies, as a script tag asks, so it's the same cache entry.
+            ...BE_GAME_FILES.map(file => refetch(base + file + query, { mode: "no-cors", credentials: "include", signal })),
+            refetch(base + "models/tm_blocks.bin", { signal }),
+        ]);
+    }
+
+    // The editor's frame has a cache of its own on the fork and on the mirror, so Better Editor's refresh.html does that part.
+    function refreshBEFrame() {
+        const url = window.__nswsEditor?.refreshUrl?.();
+        if (!url) return Promise.resolve();
+        return new Promise(resolve => {
+            const frame = document.createElement("iframe");
+            let started = false;
+            const finish = () => {
+                window.removeEventListener("message", onMessage);
+                frame.remove();
+                resolve();
+            };
+            const onMessage = e => {
+                if (e.source !== frame.contentWindow || e.data?.nsws !== "be-refresh") return;
+                started = true;
+                if (e.data.done) finish();
+            };
+            window.addEventListener("message", onMessage);
+            frame.addEventListener("load", () => setTimeout(() => {
+                if (!started) finish();
+            }, 2000));
+            setTimeout(finish, BE_REFRESH_MS);
+            frame.style.display = "none";
+            frame.src = url;
+            document.body.appendChild(frame);
+        });
+    }
+
     async function hardRefresh() {
+        // An update from the last minute is being installed too, and mustn't prompt again after the reload.
+        const latestBE = Math.max(liveBE, await within(window.__nswsChangelog?.beNewest(false), 3000, 0));
         const urls = new Set([location.origin + location.pathname]);
         for (const s of document.scripts) if (s.src) urls.add(s.src);
         for (const e of performance.getEntriesByType("resource")) urls.add(e.name);
@@ -96,37 +163,102 @@
             }
         });
         // A plain reload keeps serving scripts from the 10-minute Pages cache; re-fetching them first replaces those entries.
-        await Promise.race([
-            Promise.allSettled(own.map(u => fetch(u, { cache: "reload" }))),
-            new Promise(r => setTimeout(r, 10000)),
+        await Promise.all([
+            within(Promise.allSettled(own.map(u => refetch(u))), 10000),
+            within(refreshBEGameFiles(), BE_REFRESH_MS),
+            refreshBEFrame(),
         ]);
+        if (latestBE) rememberBE(latestBE);
+        // They've said to lose the unsaved track, so the editor needn't ask again.
+        if (armed) window.__nswsEditor?.discard?.();
         location.reload();
     }
+
+    const BE_SITE = "https://brinleyww.github.io/Better-Editor-PT/";
+    const BE_GAME_FILES = ["tm_parts.js", "tm_runtime.js", "tm_water.js", "tm_vehicles.js", "tm_hud.js"];
+    const BE_REFRESH_MS = 20000;
+    const BE_KEY = "_nswsUpdateBE";
+    // GitHub Pages files stay in the browser's cache this long.
+    const BE_CACHE_MS = 600000;
+    // The mirror is a Worker request each time, so a network that blocks github.io asks it less often.
+    const BE_MIRROR_POLL_MS = 300000;
+    const EDITOR_OPEN = "#nsws-editor:not(.hidden)";
+
+    function storedBE() {
+        try {
+            const saved = JSON.parse(localStorage.getItem(BE_KEY));
+            return Date.now() - saved.at < BE_CACHE_MS && saved.id > 0 ? saved.id : 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    function rememberBE(id) {
+        try {
+            // Another tab may have installed a newer one into the same cache.
+            if (storedBE() <= id) localStorage.setItem(BE_KEY, JSON.stringify({ id, at: Date.now() }));
+        } catch (e) {}
+    }
+
+    // A reload inside the cache time still runs the files of the update this browser last had.
+    let runningBE = storedBE();
+    let liveBE = 0;
+    let dismissedBE = 0;
+    let pendingBE = null;
+    let mirrorCheckedAt = -Infinity;
+    let checkingBE = false;
+    let installing = false;
+    let armed = false;
+    if (runningBE) window.__nswsBEStamp = runningBE;
 
     let dismissedAt = loadedDeployTime();
     let pending = null;
     let popup = null;
     let toast = null;
-    let toastedAt = -Infinity;
+    let toastedFor = "";
     let checking = false;
 
     function onKey(e) {
         if (e.code !== "Escape" || !popup) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        ignore();
+        if (installing) return;
+        if (armed) saveFirst();
+        else ignore();
     }
 
     function close() {
         popup?.remove();
         popup = null;
+        armed = false;
         window.removeEventListener("keydown", onKey, true);
     }
 
     function ignore() {
         if (pending) dismissedAt = pending.deployedAt;
-        pending = null;
+        if (pendingBE) dismissedBE = pendingBE.id;
+        pending = pendingBE = null;
         close();
+        window.__nswsEditor?.focus?.();
+    }
+
+    // The update stays pending, and is offered again when the editor closes.
+    function saveFirst() {
+        close();
+        toastedFor = pendingKey();
+        window.__nswsEditor?.open();
+    }
+
+    function pendingKey() {
+        return (pending?.deployedAt || "") + "|" + (pendingBE?.id || "");
+    }
+
+    // The editor covers #ui, so over it both the toast and the popup go on the page itself.
+    function mount(node) {
+        const over = !!document.querySelector(EDITOR_OPEN);
+        node.classList.toggle("over", over);
+        ((!over && document.getElementById("ui")) || document.body).appendChild(node);
+        return over;
     }
 
     function makeButton(icon, label) {
@@ -152,7 +284,7 @@
 
     function showToast() {
         addStyle();
-        toastedAt = pending.deployedAt;
+        toastedFor = pendingKey();
         toast = document.createElement("div");
         toast.id = "nsws-update-toast";
         toast.innerHTML = '<div class="checker"></div>';
@@ -162,19 +294,19 @@
         text.className = "text";
         text.innerHTML = "<div>New update available</div>";
         const version = document.createElement("span");
-        version.textContent = pending.name || "New version";
+        version.textContent = [pending && (pending.name || "New version"), pendingBE?.name].filter(Boolean).join(" + ");
         text.appendChild(version);
         const viewButton = makeButton("arrow_right", "View");
         viewButton.addEventListener("click", () => {
             closeToast();
-            if (pending && !popup) show();
+            if ((pending || pendingBE) && !popup) show();
         });
         row.append(text, viewButton);
         toast.appendChild(row);
         toast.addEventListener("animationend", closeToast);
+        if (mount(toast)) return;
         const cps = document.getElementById("_nsws-cps");
         if (cps && cps.offsetHeight) toast.style.top = cps.offsetTop + cps.offsetHeight + 8 + "px";
-        (document.getElementById("ui") || document.body).appendChild(toast);
     }
 
     function show() {
@@ -184,19 +316,26 @@
         popup.id = "nsws-update-bg";
         const box = document.createElement("div");
         box.className = "nsws-update";
-        box.innerHTML = '<div class="checker"></div><h2>New update available</h2><h3>You\'re playing an older version of the site.</h3>';
+        box.innerHTML = '<div class="checker"></div><h2>New update available</h2><h3></h3>';
+        box.querySelector("h3").textContent = pending ? "You're playing an older version of the site." : "You're using an older version of Better Editor.";
         const version = document.createElement("div");
         version.className = "version";
         version.innerHTML = "<span>Latest version</span>";
-        version.append(pending.name || "New version");
+        version.append(pending ? pending.name || "New version" : pendingBE.name);
+        if (pending && pendingBE) {
+            const editor = document.createElement("small");
+            editor.textContent = "+ " + pendingBE.name;
+            version.appendChild(editor);
+        }
         box.appendChild(version);
 
-        if (pending.changes?.length) {
+        const entries = [...(pending?.changes || []), ...(pendingBE?.changes || [])];
+        if (entries.length) {
             const changes = document.createElement("div");
             changes.className = "changes";
-            for (const entry of pending.changes) {
+            for (const entry of entries) {
                 const title = document.createElement("div");
-                title.textContent = pending.changes.length > 1 ? entry.version : "What's new";
+                title.textContent = entries.length > 1 ? entry.version : "What's new";
                 const list = document.createElement("ul");
                 for (const line of entry.changes) {
                     const li = document.createElement("li");
@@ -211,25 +350,46 @@
         const buttons = document.createElement("div");
         buttons.className = "buttons";
         const ignoreButton = makeButton("back", "Ignore");
-        ignoreButton.addEventListener("click", ignore);
+        ignoreButton.addEventListener("click", () => (armed ? saveFirst() : ignore()));
         const installButton = makeButton("refresh", "Install");
-        installButton.addEventListener("click", () => {
+        installButton.addEventListener("click", async () => {
+            installing = true;
             ignoreButton.disabled = installButton.disabled = true;
             installButton.lastChild.textContent = "Installing...";
+            if (!armed && (await within(window.__nswsEditor?.unsaved?.(), 8000, true))) {
+                installing = false;
+                armed = true;
+                const warn = document.createElement("div");
+                warn.className = "warn";
+                warn.textContent = "Your track in the editor may have unsaved changes. Installing now loses them.";
+                box.insertBefore(warn, buttons);
+                ignoreButton.disabled = installButton.disabled = false;
+                ignoreButton.lastChild.textContent = "Save first";
+                installButton.lastChild.textContent = "Install anyway";
+                return;
+            }
             hardRefresh();
         });
         buttons.append(ignoreButton, installButton);
         box.appendChild(buttons);
 
         popup.appendChild(box);
-        (document.getElementById("ui") || document.body).appendChild(popup);
+        mount(popup);
         window.addEventListener("keydown", onKey, true);
     }
 
     function tryShow() {
-        if (!pending || popup) return;
-        if (!document.querySelector(BUSY)) show();
-        else if (!toast && toastedAt < pending.deployedAt && document.visibilityState === "visible") showToast();
+        if ((!pending && !pendingBE) || popup) return;
+        if (!document.querySelector(BUSY) && !document.querySelector(EDITOR_OPEN)) show();
+        else if (!toast && toastedFor !== pendingKey() && document.visibilityState === "visible") showToast();
+    }
+
+    // Both sites often deploy seconds apart, so a second update can land while the first one's popup is up.
+    function found() {
+        if (!popup) return tryShow();
+        if (installing || armed) return;
+        close();
+        show();
     }
 
     async function check() {
@@ -240,7 +400,7 @@
             if (live > dismissedAt && !(pending && pending.deployedAt >= live)) {
                 const name = await versionName(live);
                 pending = { deployedAt: live, name, changes: name ? await changesSince(name) : [] };
-                tryShow();
+                found();
             }
         } catch (e) {
         } finally {
@@ -248,12 +408,45 @@
         }
     }
 
+    async function checkBE() {
+        const log = window.__nswsChangelog;
+        // The first one runs in a background tab too: it's what later ones compare against.
+        if (!log?.beNewest || checkingBE || popup || (liveBE && document.visibilityState === "hidden")) return;
+        checkingBE = true;
+        try {
+            let live = await within(log.beNewest(false), 15000, 0);
+            let mirror = false;
+            if (!live && Date.now() - mirrorCheckedAt >= BE_MIRROR_POLL_MS) {
+                mirrorCheckedAt = Date.now();
+                mirror = true;
+                live = await within(log.beNewest(true), 15000, 0);
+            }
+            if (!live) return;
+            liveBE = live;
+            runningBE ||= live;
+            window.__nswsBEStamp = runningBE;
+            rememberBE(runningBE);
+            if (live <= Math.max(runningBE, dismissedBE) || pendingBE?.id >= live) return;
+            const changes = await within(log.beSince(runningBE, mirror), 15000, []);
+            pendingBE = { id: live, name: changes[0]?.version || "Better Editor", changes: changes.slice(0, 5) };
+            found();
+        } finally {
+            checkingBE = false;
+        }
+    }
+
     setInterval(tryShow, 1000);
     setInterval(() => {
-        if (document.visibilityState === "visible") check();
+        if (document.visibilityState !== "visible") return;
+        check();
+        checkBE();
     }, POLL_MS);
     document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") check();
+        if (document.visibilityState !== "visible") return;
+        check();
+        checkBE();
     });
+    // Right away, since it's the version this visit counts as running (the changelog's script comes after this one).
+    document.addEventListener("DOMContentLoaded", checkBE);
     setTimeout(check, 5000);
 })();
