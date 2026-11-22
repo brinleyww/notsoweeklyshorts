@@ -1887,7 +1887,9 @@
                 t = new THREE.Vector3(get(this, editor_orbitControls, "f").target.x / Track.A.partSize,get(this, editor_orbitControls, "f").target.y / Track.A.partSize,get(this, editor_orbitControls, "f").target.z / Track.A.partSize);
             else {
                 let e;
-                if (null != get(this, editor_mouseNDC, "f") ? (get(this, editor_raycaster, "f").setFromCamera(get(this, editor_mouseNDC, "f"), get(this, editor_renderer, "f").camera),
+                // With the cursor locked it is the middle of the screen.
+                const pointer = window.__nswsCursorLock?.locked() ? new THREE.Vector2(0,0) : get(this, editor_mouseNDC, "f");
+                if (null != pointer ? (get(this, editor_raycaster, "f").setFromCamera(pointer, get(this, editor_renderer, "f").camera),
                 e = get(this, editor_raycaster, "f").intersectObjects([get(this, editor_gridPlane, "f")])) : e = [],
                 e.length > 0) {
                     const n = e[0]
@@ -3090,6 +3092,8 @@
             }
             disable() {
                 set(this, editor_isActive, !1, "f"),
+                // update() stops during a test drive, and a locked cursor would keep turning this camera.
+                get(this, editor_orbitControls, "f").enabled = !1,
                 get(this, editor_previewGroup, "f").visible = !1,
                 set(this, editor_isCopyMode, !1, "f"),
                 set(this, editor_isCutMode, !1, "f"),

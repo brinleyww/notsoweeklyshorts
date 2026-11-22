@@ -411,6 +411,12 @@
         }
     }
 
+    // Sent each time, not in #nswsPrefs: the key can change while the editor stays loaded, and saves from before it don't hold it.
+    function sendCursorLock() {
+        const keys = window.__nswsKeyBindings?.cursorLockKeys?.();
+        if (keys) post({ type: "cursorLock", keys });
+    }
+
     function focusFrame() {
         if (!frame || !host || host.classList.contains("hidden") || dialogClose) return;
         try {
@@ -818,6 +824,7 @@
         clearTimeout(fallbackTimer);
         helloTimer = fallbackTimer = null;
         ui?.fallback.classList.add("hidden");
+        sendCursorLock();
         if (!libWatch && lib()?.onChange) libWatch = lib().onChange(() => copyLibrary());
         if (bridgeVersion >= 9 && lib()) {
             startLibrary().then(() => {
@@ -1648,6 +1655,7 @@
         hideTimer = null;
         if (!frame) createFrame();
         host.classList.remove("hidden");
+        window.__nswsCursorLock?.release();
         // The game stops drawing under the editor (RenderManager.update in main.bundle.js).
         window.__nswsEditorCovering = true;
         post({ type: "pause", paused: false });
@@ -1656,6 +1664,7 @@
             settings = JSON.parse(localStorage.getItem("polytrack_v5_prod_settings"));
         } catch {}
         post({ type: "settings", settings });
+        sendCursorLock();
         try {
             (frame || host).focus();
         } catch {}

@@ -1,5 +1,14 @@
 [
     {
+        "version": "v13.8",
+        "changes": [
+            "New Lock cursor key (Ctrl by default) hides your cursor and keeps it in the middle, press it again to get it back",
+            "While locked, moving the mouse turns the camera in freecam, replays, the garage and photo mode",
+            "You can change the key in Settings under Controls, the Custom Tracks Editor uses it too",
+            "Track pages and the chat question don't show up on top of the main menu anymore"
+        ]
+    },
+    {
         "version": "v13.7",
         "changes": [
             "Better Editor updates now show the update popup, and Install loads the new editor"

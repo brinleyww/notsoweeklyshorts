@@ -1558,10 +1558,18 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 this.lastInput = performance.now();
             };
             this.onMove = (e) => {
-                if (!this.drag || e.pointerId !== this.drag.id) return;
-                const dx = e.clientX - this.drag.x, dy = e.clientY - this.drag.y;
-                this.drag.x = e.clientX;
-                this.drag.y = e.clientY;
+                let dx, dy;
+                if (window.__nswsCursorLock?.locked()) {
+                    if (!this.active()) return;
+                    dx = e.movementX;
+                    dy = e.movementY;
+                } else {
+                    if (!this.drag || e.pointerId !== this.drag.id) return;
+                    dx = e.clientX - this.drag.x;
+                    dy = e.clientY - this.drag.y;
+                    this.drag.x = e.clientX;
+                    this.drag.y = e.clientY;
+                }
                 this.tYaw -= dx * 0.006;
                 this.tPitch = clamp(this.tPitch + dy * 0.005, -1.2, 1.3);
                 this.lastInput = performance.now();
@@ -1588,7 +1596,7 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
         }
 
         tick(dt) {
-            if (this.c.enabled && !this.drag && performance.now() - this.lastInput > 2500) {
+            if (this.c.enabled && !this.drag && !window.__nswsCursorLock?.locked() && performance.now() - this.lastInput > 2500) {
                 const k = damp(1.2, dt);
                 this.tYaw -= this.tYaw * k;
                 this.tPitch -= this.tPitch * k;

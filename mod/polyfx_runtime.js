@@ -19229,7 +19229,7 @@ uniform float polyfxGlowIntensity;`
       }
     }
     _look(e) {
-      if (!this.active || !this.dragging) return;
+      if (!this.active || !this.dragging && !window.__nswsCursorLock?.locked()) return;
       this.yaw -= e.movementX * 3e-3;
       this.pitch = MathUtils.clamp(this.pitch - e.movementY * 3e-3, -Math.PI / 2 + 0.02, Math.PI / 2 - 0.02);
       e.preventDefault();

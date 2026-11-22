@@ -161,6 +161,7 @@
             return;
         }
         if (shown) return;
+        window.__nswsCursorLock?.release();
         ensureFrame();
         frame.style.visibility = "visible";
         shown = true;

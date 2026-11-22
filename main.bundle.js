@@ -26904,7 +26904,8 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e[e.SpectatorMoveLeft = 29] = "SpectatorMoveLeft",
                 e[e.SpectatorSpeedModifier = 30] = "SpectatorSpeedModifier",
                 e[e.PreviewStepForward = 31] = "PreviewStepForward",
-                e[e.PreviewStepBack = 32] = "PreviewStepBack"
+                e[e.PreviewStepBack = 32] = "PreviewStepBack",
+                e[e.ToggleCursorLock = 33] = "ToggleCursorLock"
             }(i || (i = {}));
             const r = i
         }
@@ -28157,6 +28158,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     this._pointerPositions = {},
                     this._controlActive = !1,
                     this._onPointerMove = S.bind(this),
+                    this._onLockedMove = lockedMove.bind(this),
                     this._onPointerDown = x.bind(this),
                     this._onPointerUp = k.bind(this),
                     this._onContextMenu = P.bind(this),
@@ -28174,6 +28176,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 connect(e) {
                     super.connect(e),
                     this.domElement.addEventListener("pointerdown", this._onPointerDown),
+                    this.domElement.addEventListener("pointermove", this._onLockedMove),
                     this.domElement.addEventListener("pointercancel", this._onPointerUp),
                     this.domElement.addEventListener("contextmenu", this._onContextMenu),
                     this.domElement.addEventListener("wheel", this._onMouseWheel, {
@@ -28187,6 +28190,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
                 disconnect() {
                     this.domElement.removeEventListener("pointerdown", this._onPointerDown),
+                    this.domElement.removeEventListener("pointermove", this._onLockedMove),
                     this.domElement.removeEventListener("pointermove", this._onPointerMove),
                     this.domElement.removeEventListener("pointerup", this._onPointerUp),
                     this.domElement.removeEventListener("pointercancel", this._onPointerUp),
@@ -28560,14 +28564,30 @@ window.__nswsAutoGhostNote = function(trackId) {
                 }
             }
             function x(e) {
-                !1 !== this.enabled && (0 === this._pointers.length && (this.domElement.setPointerCapture(e.pointerId),
+                // setPointerCapture throws while the pointer is locked.
+                !1 !== this.enabled && (0 === this._pointers.length && (document.pointerLockElement || this.domElement.setPointerCapture(e.pointerId),
                 this.domElement.addEventListener("pointermove", this._onPointerMove),
                 this.domElement.addEventListener("pointerup", this._onPointerUp)),
                 this._isTrackingPointer(e) || (this._addPointer(e),
                 "touch" === e.pointerType ? this._onTouchStart(e) : this._onMouseDown(e)))
             }
             function S(e) {
-                !1 !== this.enabled && ("touch" === e.pointerType ? this._onTouchMove(e) : this._onMouseMove(e))
+                !1 !== this.enabled && ("touch" === e.pointerType ? this._onTouchMove(e) : window.__nswsCursorLock?.locked() || this._onMouseMove(e))
+            }
+            // clientX stands still under pointer lock: moving turns the camera, or pans it while a pan button is held.
+            function lockedMove(e) {
+                if (!1 === this.enabled || "mouse" !== e.pointerType || !window.__nswsCursorLock?.locked()) return;
+                if (this.state === g) {
+                    if (!this.enablePan) return;
+                    this._pan(e.movementX * this.panSpeed, e.movementY * this.panSpeed);
+                } else {
+                    if (!this.enableRotate) return;
+                    this.state === u && this.dispatchEvent(a);
+                    const turn = d * this.rotateSpeed / this.domElement.clientHeight;
+                    this._rotateLeft(turn * e.movementX);
+                    this._rotateUp(turn * e.movementY);
+                }
+                this.update();
             }
             function k(e) {
                 switch (this._removePointer(e),
@@ -43072,11 +43092,19 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                   , r = 0
                   , a = 0;
+                // The game's Math is imprecise, so angles read back from the camera lose the heading looking straight up
+                // or down: they are only read when something else turned it.
+                const turnedTo = new THREE.Quaternion(0,0,0,0)
+                  , readAngles = () => {
+                    const q = C.get(this, _camera, "f").quaternion;
+                    if (q.equals(turnedTo)) return;
+                    const look = (new THREE.Euler).setFromQuaternion(q, "YXZ");
+                    r = look.y,
+                    a = look.x
+                };
                 renderer.canvas.addEventListener("mousedown", C.set(this, _onMouseDown, (e => {
                     n = !0;
-                    const t = (new THREE.Euler).setFromQuaternion(C.get(this, _camera, "f").quaternion, "YXZ");
-                    r = t.y,
-                    a = t.x,
+                    readAngles(),
                     i = {
                         x: e.clientX,
                         y: e.clientY
@@ -43088,10 +43116,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 }
                 ), "f")),
                 window.addEventListener("mousemove", C.set(this, _onMouseMove, (e => {
-                    if (n) {
+                    const locked = window.__nswsCursorLock?.locked();
+                    if (locked ? C.get(this, _isEnabled, "f") : n) {
+                        locked && readAngles();
                         const t = Math.max(window.innerWidth, window.innerHeight)
-                          , n = (e.clientX - i.x) / t
-                          , s = (e.clientY - i.y) / t;
+                          , n = (locked ? e.movementX : e.clientX - i.x) / t
+                          , s = (locked ? e.movementY : e.clientY - i.y) / t;
                         i = {
                             x: e.clientX,
                             y: e.clientY
@@ -43105,7 +43135,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         a = Math.round(1e4 * a) / 1e4;
                         const l = (new THREE.Quaternion).setFromAxisAngle(new THREE.Vector3(1,0,0), a)
                           , c = (new THREE.Quaternion).setFromAxisAngle(new THREE.Vector3(0,1,0), r);
-                        C.get(this, _camera, "f").quaternion.copy(c).multiply(l)
+                        turnedTo.copy(C.get(this, _camera, "f").quaternion.copy(c).multiply(l))
                     }
                 }
                 ), "f")),
@@ -53861,6 +53891,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Pause"), KeyBind.Pause),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle FPS counter"), KeyBind.ToggleFpsCounter),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle spectator camera"), KeyBind.ToggleSpectatorCamera),
+            C.get(this, ms, "m", Os).call(this, "Lock cursor", KeyBind.ToggleCursorLock),
             C.get(this, ms, "m", Ds).call(this, "Chat"),
             ( () => {
                 const _key = "_nswsChatEnabled";
@@ -57333,6 +57364,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, vc, "m", Yc).call(this)
             }
             ),( (s, h, d, u, p, f) => {
+                // A track can be opened by id with the main menu showing, and its page comes back if it fails to load.
+                C.get(this, vc, "m", qc).call(this),
+                C.get(this, vc, "m", Xc).call(this),
                 C.get(this, Rc, "f").hide();
                 const g = () => {
                     C.get(this, Rc, "f").show(),
@@ -57572,8 +57606,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Rc, "f").show()
             }
             ));
-            // Opens a track's screen the way the Play menu does. __bw_selectTrackById alone leaves the main
-            // menu on screen behind it.
+            // Opens a track's screen the way the Play menu does.
             window.__nswsOpenTrack = trackId => {
                 document.querySelector(".track-selection-ui:not(.hidden)") || (C.get(this, vc, "m", qc).call(this),
                 C.get(this, vc, "m", Xc).call(this),
@@ -62449,6 +62482,14 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const n = e.loadKeyBindings();
                 null != n && C.get(this, Mu, "m", Pu).call(this, n);
                 keyBindSettings = this;
+                // Saved before Lock cursor existed: it only gets the Ctrl keys that nothing else uses.
+                if (null != n && !n.some(([k]) => k === KeyBind.ToggleCursorLock)) {
+                    const binds = C.get(this, Ru, "f"), keys = binds.get(KeyBind.ToggleCursorLock);
+                    binds.set(KeyBind.ToggleCursorLock, [null, null]);
+                    binds.set(KeyBind.ToggleCursorLock, keys.map(k => isKeyBindingInUse(k) ? null : k));
+                }
+                window.__nswsKeyBindings.isCursorLock = e => this.checkKeyBinding(e, KeyBind.ToggleCursorLock);
+                window.__nswsKeyBindings.cursorLockKeys = () => [...this.getKeyBindings(KeyBind.ToggleCursorLock)];
                 window.__nswsSettingBoolean = (name) => name in R.A && this.getSettingBoolean(R.A[name]);
                 window.__nswsSetting = (name) => name in R.A ? this.getSetting(R.A[name]) : null;
                 // Read by Better Editor's tm_runtime.js when it builds a block's mesh.
@@ -62458,7 +62499,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return new Map([[R.A.ImperialUnitsEnabled, "false"], [R.A.ResetHintEnabled, "true"], [R.A.GhostCarEnabled, "true"], [R.A.DefaultCameraMode, "false"], [R.A.CockpitCameraToggle, "true"], [R.A.Checkpoints, "bottom"], [R.A.Timer, "bottom"], [R.A.Speedometer, "bottom"], [R.A.Language, "en-US"], [R.A.ShadowQuality, "2"], [R.A.CloudsEnabled, "true"], [R.A.ParticlesEnabled, "true"], [R.A.SkidmarksEnabled, "true"], [R.A.FogEnabled, "false"], [R.A.RenderScale, "1"], [R.A.ScreenPixelDensity, "true"], [R.A.Antialiasing, "true"], [R.A.MasterVolume, "1"], [R.A.SoundEffectVolume, "1"], [R.A.MusicVolume, "1"], [R.A.CheckpointVolume, "1"], [R.A.GhostCarSoundsEnabled, "true"], [R.A.VibrationEnabled, "false"], [R.A.TouchSteeringSide, "true"], [R.A.LowPerformanceMode, "false"], [R.A.SolidMenuBackground, "false"], [R.A.TrackCulling, "auto"], [R.A.TrackViewDistance, "auto"], [R.A.FogDistance, "10000"], [R.A.FogStart, "0"], [R.A.FogStrength, "1"], [R.A.FogColor, "sky"], [R.A.AutoGhost, "false"], [R.A.GrindPanel, "false"], [R.A.GrindLayout, "full"], [R.A.GrindBackground, "solid"], [R.A.GrindColor, "blue"], [R.A.GrindPosition, "left"], [R.A.GrindSize, "medium"], [R.A.LiveInputs, "false"], [R.A.CpSplits, "false"], [R.A.CpsCounter, "true"], [R.A.WheelInfo, "false"], [R.A.WheelInfoScale, "auto"], [R.A.WatchUnlimited, "false"], [R.A.NoRespawnTime, "true"], [R.A.LiveDifference, "false"], [R.A.GrassTufts, "true"]])
             }
             defaultKeyBindings() {
-                return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]]])
+                return new Map([[KeyBind.VehicleAccelerate, ["KeyW", "ArrowUp"]], [KeyBind.VehicleTurnRight, ["KeyD", "ArrowRight"]], [KeyBind.VehicleBrake, ["KeyS", "ArrowDown"]], [KeyBind.VehicleTurnLeft, ["KeyA", "ArrowLeft"]], [KeyBind.VehicleCheckpointReset, ["KeyR", "Enter"]], [KeyBind.VehicleStartReset, ["KeyT", "Backspace"]], [KeyBind.VehicleCockpitCamera, ["KeyC", "KeyM"]], [KeyBind.ToggleUI, ["KeyH", null]], [KeyBind.Pause, ["KeyP", "Space"]], [KeyBind.EditorRotatePart, ["KeyR", "Space"]], [KeyBind.EditorHeightModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.EditorDelete, ["Delete", "KeyX"]], [KeyBind.EditorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.EditorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.EditorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.EditorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.EditorRotateViewUp, ["KeyY", null]], [KeyBind.EditorRotateViewDown, ["KeyH", null]], [KeyBind.EditorRotateViewLeft, ["KeyQ", null]], [KeyBind.EditorRotateViewRight, ["KeyE", null]], [KeyBind.EditorMoveDown, ["KeyZ", null]], [KeyBind.EditorMoveUp, ["KeyC", null]], [KeyBind.EditorTest, ["KeyT", null]], [KeyBind.EditorPick, ["KeyG", null]], [KeyBind.ToggleFpsCounter, ["Equal", null]], [KeyBind.ToggleSpectatorCamera, ["Slash", null]], [KeyBind.SpectatorMoveForwards, ["KeyW", "ArrowUp"]], [KeyBind.SpectatorMoveRight, ["KeyD", "ArrowRight"]], [KeyBind.SpectatorMoveBackwards, ["KeyS", "ArrowDown"]], [KeyBind.SpectatorMoveLeft, ["KeyA", "ArrowLeft"]], [KeyBind.SpectatorSpeedModifier, ["ShiftLeft", "ShiftRight"]], [KeyBind.PreviewStepForward, ["Period", null]], [KeyBind.PreviewStepBack, ["Comma", null]], [KeyBind.ToggleCursorLock, ["ControlLeft", "ControlRight"]]])
             }
             getSettings() {
                 return Array.from(C.get(this, Cu, "f"))
