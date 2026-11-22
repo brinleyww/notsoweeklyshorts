@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.41",
+        "changes": [
+            "Better Editor updates show up in the Changelog too, as soon as they come out"
+        ]
+    },
+    {
         "version": "v12.40",
         "changes": [
             "Load in Better Editor now shows your My Tracks, in the same order as your Custom Tracks sort",

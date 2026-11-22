@@ -1,6 +1,8 @@
-// Changelog window, opened from the main menu's bottom bar. Reads changelog.json (newest first).
+// Changelog window, opened from the main menu's bottom bar. Reads changelog.json (newest first) and Better Editor's
+// own changelog.json, which goes live with Better Editor's site, not with ours.
 (function () {
     const SEEN_KEY = "_nswsChangelogSeen";
+    const BE_SEEN_KEY = "_nswsChangelogBESeen";
     const TIMES_KEY = "_nswsChangelogTimes:";
     // Each copy of the site has its own deploys; the fork deploys in batches when someone syncs it.
     const SITES = [
@@ -8,8 +10,13 @@
         { host: "notweeklyshorts.github.io", repo: "notweeklyshorts/notweeklyshorts.github.io" },
     ];
     const REPO = (SITES.find(s => s.host === location.hostname) || SITES[0]).repo;
-    const RUNS_API = "https://api.github.com/repos/" + REPO + "/actions/runs?branch=main&status=success&per_page=100&page=";
+    const BE_REPO = "brinleyww/Better-Editor-PT";
+    const BE_SITE = "https://brinleyww.github.io/Better-Editor-PT/";
+    const BE_MIRROR = "https://pt-leaderboard-proxy.bringleyw.workers.dev/be/";
+    // Better Editor deploys from before its changelog started.
+    const BE_LOG_START = Date.parse("2026-11-21T20:00:00Z");
     const MAX_PAGES = 5;
+    const WAIT_FOR_TIMES_MS = 2500;
     const STAMP = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
     const CSS = `
 #nsws-changelog{position:fixed;inset:0;z-index:9998;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7);}
@@ -21,6 +28,7 @@
 #nsws-changelog .top>.button{margin:0;font-size:20px;padding:6px 14px;}
 #nsws-changelog .body{overflow-y:auto;padding:12px 20px 18px;}
 #nsws-changelog .ver{margin:14px 0 4px;font-size:24px;color:#ffc94a;}
+#nsws-changelog .ver.be{color:#8fd8ff;}
 #nsws-changelog .ver:first-child{margin-top:0;}
 #nsws-changelog .ver>span{margin-left:10px;font-size:15px;color:var(--text-color);opacity:.55;white-space:nowrap;}
 #nsws-changelog ul{margin:0;padding-left:24px;font-size:19px;}
@@ -31,6 +39,7 @@
 `;
     let overlay = null;
     let latest = null;
+    let beLatest = 0;
     const buttons = new Set();
 
     function el(tag, cls, text) {
@@ -40,33 +49,70 @@
         return e;
     }
 
-    function seen() {
+    function getItem(key) {
         try {
-            return localStorage.getItem(SEEN_KEY);
+            return localStorage.getItem(key);
         } catch (e) {
             return null;
         }
     }
 
-    function markSeen() {
-        if (!latest) return;
+    function setItem(key, value) {
         try {
-            localStorage.setItem(SEEN_KEY, latest);
+            localStorage.setItem(key, value);
         } catch (e) {}
+    }
+
+    function markSeen() {
+        if (latest) setItem(SEEN_KEY, latest);
+        if (beLatest) setItem(BE_SEEN_KEY, String(beLatest));
         paint();
     }
 
     function paint() {
-        for (const b of buttons) b.classList.toggle("fresh", !!latest && seen() !== latest);
+        const fresh = (!!latest && getItem(SEEN_KEY) !== latest) || beLatest > (Number(getItem(BE_SEEN_KEY)) || 0);
+        for (const b of buttons) b.classList.toggle("fresh", fresh);
+    }
+
+    async function fetchJson(url) {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(url + " " + res.status);
+        return res.json();
+    }
+
+    function beSites() {
+        // Same local override as the page's Better Editor files, for testing a local copy.
+        if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+            const own = getItem("nswsBEBase");
+            if (own && /^https?:\/\/\S+$/.test(own)) return [own.replace(/\/?$/, "/")];
+        }
+        return [BE_SITE, BE_MIRROR];
+    }
+
+    async function loadBE() {
+        // The mirror only when github.io can't be reached at all, not when it answers.
+        for (const site of beSites()) {
+            let res;
+            try {
+                res = await fetch(site + "changelog.json", { cache: "no-store" });
+            } catch (e) {
+                continue;
+            }
+            const log = res.ok ? await res.json().catch(() => null) : null;
+            return Array.isArray(log) ? log.filter(e => e && Number.isSafeInteger(e.id) && e.id > 0 && Array.isArray(e.changes)) : [];
+        }
+        return [];
     }
 
     async function load() {
-        const res = await fetch(new URL("changelog.json", location.href), { cache: "no-store" });
-        if (!res.ok) throw new Error("changelog " + res.status);
-        const log = (await res.json()).filter(e => e && typeof e.version === "string" && Array.isArray(e.changes));
+        const [log, be] = await Promise.all([
+            fetchJson(new URL("changelog.json", location.href)).then(j => j.filter(e => e && typeof e.version === "string" && Array.isArray(e.changes))),
+            loadBE(),
+        ]);
         latest = log[0]?.version || null;
+        beLatest = be.reduce((m, e) => Math.max(m, e.id), 0);
         paint();
-        return log;
+        return { log, be };
     }
 
     function versionKey(v) {
@@ -82,45 +128,120 @@
         return 0;
     }
 
-    function cachedTimes() {
+    function cachedTimes(repo) {
         try {
-            return JSON.parse(localStorage.getItem(TIMES_KEY + REPO)) || {};
+            return JSON.parse(localStorage.getItem(TIMES_KEY + repo)) || {};
         } catch (e) {
             return {};
         }
     }
 
+    // Successful Pages deploys of main, newest first, a page of 100 at a time. onPage returns true to stop.
+    // Resolves true when it saw every deploy it needed.
+    async function deploys(repo, onPage) {
+        const api = "https://api.github.com/repos/" + repo + "/actions/runs?branch=main&status=success&per_page=100&page=";
+        for (let page = 1; page <= MAX_PAGES; page++) {
+            const res = await fetch(api + page);
+            if (!res.ok) return false;
+            const runs = (await res.json()).workflow_runs || [];
+            const list = runs.map(r => ({ sha: r.head_sha || "", msg: r.head_commit?.message || r.display_title, at: Date.parse(r.updated_at) })).filter(r => r.at > 0);
+            if (onPage(list) || runs.length < 100) return true;
+        }
+        return false;
+    }
+
     // A version went live with the first deploy of it or anything newer (one fork sync can carry several versions).
     // A time is only final once an older deploy has been seen, so only final times are kept.
     async function releaseTimes(log) {
-        const times = cachedTimes();
+        const times = cachedTimes(REPO);
         const want = log.map(e => ({ v: e.version, key: versionKey(e.version) })).filter(w => w.key && !(w.v in times));
         if (!want.length) return times;
         const oldest = want.reduce((a, w) => (compare(w.key, a) < 0 ? w.key : a), want[0].key);
         const found = {};
         const final = new Set();
-        let done = false;
-        for (let page = 1; page <= MAX_PAGES && !done; page++) {
-            const res = await fetch(RUNS_API + page);
-            if (!res.ok) break;
-            const runs = (await res.json()).workflow_runs || [];
+        await deploys(REPO, runs => {
+            let done = false;
             for (const run of runs) {
-                const key = versionKey(run.head_commit?.message || run.display_title);
-                const at = Date.parse(run.updated_at);
-                if (!key || !(at > 0)) continue;
+                const key = versionKey(run.msg);
+                if (!key) continue;
                 for (const w of want) {
-                    if (compare(key, w.key) >= 0) found[w.v] = at;
+                    if (compare(key, w.key) >= 0) found[w.v] = run.at;
                     else if (w.v in found) final.add(w.v);
                 }
                 if (compare(key, oldest) < 0) done = true;
             }
-            if (runs.length < 100) break;
-        }
+            return done;
+        });
         for (const v of final) times[v] = found[v];
-        try {
-            localStorage.setItem(TIMES_KEY + REPO, JSON.stringify(times));
-        } catch (e) {}
+        setItem(TIMES_KEY + REPO, JSON.stringify(times));
         return Object.assign({}, found, times);
+    }
+
+    // A Better Editor entry went live with the first deploy whose changelog.json has its id (ids only go up).
+    // Entries written after the fact name the commit whose deploy carried them instead.
+    async function beReleaseTimes(be) {
+        const times = cachedTimes(BE_REPO);
+        const want = be.filter(e => !(e.id in times));
+        if (!want.length) return times;
+        const runs = [];
+        const complete = await deploys(BE_REPO, list => {
+            runs.push(...list);
+            return !list.length || list[list.length - 1].at < BE_LOG_START;
+        });
+        const maxIds = new Map();
+        const maxId = i => {
+            const sha = runs[i].sha;
+            if (!maxIds.has(sha))
+                maxIds.set(sha, fetch("https://raw.githubusercontent.com/" + BE_REPO + "/" + sha + "/changelog.json").then(async res => {
+                    if (res.status === 404) return 0;
+                    if (!res.ok) throw new Error("changelog at " + sha + " " + res.status);
+                    const log = await res.json();
+                    return Array.isArray(log) ? log.reduce((m, e) => Math.max(m, Number.isSafeInteger(e?.id) ? e.id : 0), 0) : 0;
+                }));
+            return maxIds.get(sha);
+        };
+        const found = {};
+        for (const e of want) {
+            if (typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit)) {
+                const run = runs.find(r => r.sha.startsWith(e.commit));
+                if (run) times[e.id] = run.at;
+                continue;
+            }
+            if (!runs.length || (await maxId(0)) < e.id) continue;
+            // Runs are newest first, so the oldest deploy that has the id is the last index that has it.
+            let lo = 0;
+            let hi = runs.length - 1;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if ((await maxId(mid)) >= e.id) lo = mid;
+                else hi = mid - 1;
+            }
+            if (lo < runs.length - 1 || complete) times[e.id] = runs[lo].at;
+            else found[e.id] = runs[lo].at;
+        }
+        setItem(TIMES_KEY + BE_REPO, JSON.stringify(times));
+        return Object.assign(found, times);
+    }
+
+    // Both lists are newest first; an entry without a time keeps its place in its own list.
+    function merge(log, be, times, beTimes) {
+        const out = [];
+        let i = 0;
+        let j = 0;
+        while (i < log.length || j < be.length) {
+            const a = log[i];
+            const b = be[j];
+            const ta = a && times[a.version];
+            const tb = b && beTimes[b.id];
+            if (!b || (a && (!ta || !tb || ta >= tb))) {
+                out.push({ title: a.version, changes: a.changes, at: ta, key: "v" + a.version });
+                i++;
+            } else {
+                out.push({ title: "Better Editor", be: true, changes: b.changes, at: tb, key: "b" + b.id });
+                j++;
+            }
+        }
+        return out;
     }
 
     function addStyle() {
@@ -168,24 +289,36 @@
         window.addEventListener("keydown", onKey, true);
 
         const view = overlay;
-        load().then(log => {
+        load().then(async ({ log, be }) => {
+            // The order between the two lists needs the times, so wait for them a little (they're cached once final).
+            const timed = Promise.all([releaseTimes(log).catch(() => ({})), beReleaseTimes(be).catch(() => ({}))]);
+            const first = await Promise.race([timed, new Promise(ok => setTimeout(ok, WAIT_FOR_TIMES_MS, null))]);
             if (overlay !== view) return;
+            const [times, beTimes] = first || [{}, {}];
             body.textContent = "";
-            if (!log.length) body.appendChild(el("div", "msg", "Nothing here yet."));
+            const entries = merge(log, be, times, beTimes);
+            if (!entries.length) body.appendChild(el("div", "msg", "Nothing here yet."));
             const stamps = new Map();
-            for (const entry of log) {
-                const ver = el("div", "ver", entry.version);
-                const stamp = el("span");
+            for (const entry of entries) {
+                const ver = el("div", entry.be ? "ver be" : "ver", entry.title);
+                const stamp = el("span", null, entry.at ? STAMP.format(new Date(entry.at)) : "");
                 ver.appendChild(stamp);
-                stamps.set(entry.version, stamp);
+                stamps.set(entry.key, stamp);
                 const list = el("ul");
                 for (const line of entry.changes) list.appendChild(el("li", null, String(line)));
                 body.append(ver, list);
             }
             markSeen();
-            releaseTimes(log).then(times => {
-                for (const [v, span] of stamps) if (times[v]) span.textContent = STAMP.format(new Date(times[v]));
-            }).catch(() => {});
+            if (first) return;
+            // Times that come too late only fill in the stamps; the list doesn't move under the reader.
+            timed.then(([late, beLate]) => {
+                const fill = (key, at) => {
+                    const span = stamps.get(key);
+                    if (span && at && !span.textContent) span.textContent = STAMP.format(new Date(at));
+                };
+                for (const e of log) fill("v" + e.version, late[e.version]);
+                for (const e of be) fill("b" + e.id, beLate[e.id]);
+            });
         }).catch(() => {
             if (overlay !== view) return;
             body.textContent = "";
