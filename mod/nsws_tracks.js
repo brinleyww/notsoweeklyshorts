@@ -43,13 +43,17 @@
         if (clearedModes.size) nswsModes.normal = [...clearedModes];
         // Where the worker loads Better Editor's blocks from, when a track with them arrives. A worker of its own (older
         // physics) loads a fixed commit; the others tag the files with the page's physics version, and read the block
-        // file from the page's copy (nswsTMBin) once the page has it.
+        // file from the page's copy (nswsTMBin, or nswsTMBlocks while it holds only some parts) once the page has it.
         const message = { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
-        const bin = worker?.nswsTMBase && !worker.nswsTMSameBin ? null : window.__nswsTM?.blocksUrl?.();
-        if (bin) message.nswsTMBin = bin;
+        if (!worker?.nswsTMBase || worker.nswsTMSameBin) {
+            const pack = window.__nswsTM?.blocksPack?.();
+            const bin = pack ? null : window.__nswsTM?.blocksUrl?.();
+            if (pack) message.nswsTMBlocks = pack;
+            else if (bin) message.nswsTMBin = bin;
+        }
         return message;
     }
-    const sentKey = (message) => message.nswsTMBase + message.nswsTMQuery + (message.nswsTMBin || "");
+    const sentKey = (message) => message.nswsTMBase + message.nswsTMQuery + (message.nswsTMBin || message.nswsTMBlocks?.url || "");
 
     const NativeWorker = window.Worker;
     if (typeof NativeWorker === "function") {

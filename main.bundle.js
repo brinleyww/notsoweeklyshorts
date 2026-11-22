@@ -59544,7 +59544,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             masks: ["3e9dbd4d6ed1739e", "7cbcae0d76a37079", "db8887a80718f5b8", "1582237d3b704f69"],
             file: "tracks/community/week13.track",
             // Pinned as in week 12. Track 4 has only stock parts, so the pin doesn't touch it.
-            be: { physics: 34, commit: "b60ce7137b178ebc2f993309390255bfb096f67b", bin: !0 },
+            be: { physics: 34, commit: "22e1641ae9133aabf3c44ae44fa3e32fd500c097", bin: !0 },
             tracks: [{ id: "0ff024cf6c4f9de003266857ea785b712d6f581de8a297490971fb5f11896d84", name: "1 - Circuit", short: "Circ", author: "S|owest【Woiz】🦥", env: "Summer", thumb: "tracks/community/thumbnails/week13_1.png", modified: 1795309546000 }, { id: "873c5683edeebd9f075a521d96e8c93bfd99463c5a47b19a616c9c2132eef8a0", name: "2 - dirty tires", short: "Dirty", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week13_2.png", modified: 1795300113000 }, { id: "34a1dfe7fd722355453cc99dbc4a6139e4a5131ebe74db9e7d8b1a1ab31d15ef", name: "3 - wood go brr", short: "Wood", author: "Schemzboi", env: "Summer", thumb: "tracks/community/thumbnails/week13_3.png", modified: 1795309536000 }, { id: "a5709abce5764517ae67d0f90e49c6352a2b01b82ae4cc13bb15ef691a740def", name: "4 - tech-nique", short: "Tech", author: "Lime_syrup?", env: "Summer", thumb: "tracks/community/thumbnails/week13_4.png", modified: 1795309432000 }, { id: "c79f471a506861d8090b73ae93fd62fd39b1545e316294aca6f0ea9697723a77", name: "5 - THIS IS ART", short: "Art", author: "My5t3ry(discord name ck09cobo alt)", env: "Winter", thumb: "tracks/community/thumbnails/week13_5.png", modified: 1795309578000 }]
         },
         {
@@ -64087,7 +64087,29 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 // request, and Cache Storage keeps each part's bytes. False when the whole file should load instead: a Better
                 // Editor without useBlocks, the whole file cached already, or a server that ignores Range (the Worker mirror).
                 let partBuf = null
-                  , pruned = !1;
+                  , pruned = !1
+                  , packed = null;
+                const packs = [];
+                // While the page holds only some parts, the workers get those parts' bytes back to back, with where each
+                // run of them goes: the file as a blob was its whole 80 MB, nearly all zeros, copied again in every worker.
+                const packBlocks = () => {
+                    const parts = partBuf && self.TM?.blocksParts?.();
+                    if (!parts)
+                        return null;
+                    const key = parts.join();
+                    if (packed?.key !== key) {
+                        const runs = [];
+                        for (const [a, e] of parts.flatMap((id => self.TM.rangesOf(id))).sort(( (x, y) => x[0] - y[0]))) {
+                            const last = runs[runs.length - 1];
+                            last && a <= last[1] ? last[1] = Math.max(last[1], e) : runs.push([a, e])
+                        }
+                        const url = URL.createObjectURL(new Blob(runs.map((([a, e]) => new Uint8Array(partBuf,a,e - a)))));
+                        // The one before stays: a worker may not have read it yet.
+                        packs.push(url) > 2 && URL.revokeObjectURL(packs.shift());
+                        packed = { key, message: { url, runs, parts: [...parts], bytes: partBuf.byteLength } }
+                    }
+                    return packed.message
+                };
                 const RANGE_GAP = 32768
                   , RANGE_JOBS = 8;
                 const rangeOf = async (url, a, e, onBytes) => {
@@ -64275,6 +64297,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         return base
                     },
                     blocksUrl: () => self.TM?.blocksUrl?.() ?? null,
+                    blocksPack: packBlocks,
                     get physics() {
                         return physics
                     },

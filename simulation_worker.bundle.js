@@ -13100,6 +13100,34 @@
         let __nswsTMBase = "https://brinleyww.github.io/Better-Editor-PT/";
         // The page's physics version tag for those files (?p=N), so the worker runs the same physics the page loaded.
         let __nswsTMQuery = "";
+        // The page's blocks for the tracks it has loaded (mod/nsws_tracks.js), until __nswsTMBlocksTake puts them in place.
+        let __nswsTMPack = null;
+        function __nswsTMBlocksTake() {
+            const p = __nswsTMPack
+              , TM = self.TM;
+            if (null == p || null == TM)
+                return;
+            __nswsTMPack = null;
+            if ("function" != typeof TM.useBlocks || TM.hasBlocks())
+                return;
+            try {
+                const x = new XMLHttpRequest;
+                x.open("GET", p.url, !1),
+                x.responseType = "arraybuffer",
+                x.send(null);
+                const data = new Uint8Array(x.response);
+                if (data.length !== p.runs.reduce(( (n, [a, e]) => n + e - a), 0))
+                    throw new Error("wrong length");
+                const file = new Uint8Array(p.bytes);
+                let o = 0;
+                for (const [a, e] of p.runs)
+                    file.set(data.subarray(o, o += e - a), a);
+                TM.useBlocks(file.buffer, p.parts)
+            } catch (e) {
+                // prepareCar then downloads the file itself.
+                console.warn("Couldn't take the page's Better Editor blocks:", e)
+            }
+        }
         function __nswsModesMessage(t) {
             "string" == typeof t?.data?.nswsTMQuery && /^(\?p=\d{1,6})?$/.test(t.data.nswsTMQuery) && (__nswsTMQuery = t.data.nswsTMQuery);
             "string" == typeof t?.data?.nswsTMBase && /^https?:\/\/[^\s]+\/$/.test(t.data.nswsTMBase) && (__nswsTMBase = t.data.nswsTMBase,
@@ -13108,6 +13136,8 @@
             // The page's own copy of the block file. Without it tm_runtime.js downloads the file again here, and the car
             // stays frozen at the start until that is done.
             "string" == typeof t?.data?.nswsTMBin && t.data.nswsTMBin.startsWith("blob:") && (self.TM_BIN_URL = t.data.nswsTMBin);
+            const pack = t?.data?.nswsTMBlocks;
+            "string" == typeof pack?.url && pack.url.startsWith("blob:") && Array.isArray(pack.runs) && Array.isArray(pack.parts) && (__nswsTMPack = pack);
             const m = t?.data?.nswsModes;
             if (null == m || "object" != typeof m)
                 return !1;
@@ -13280,6 +13310,7 @@
                         }),
                         __rocketFree(l),
                         __tmActive.delete(l),
+                        __tmFree(l),
                         t.ccall("deleteCarModel", "void", ["number"], [l]),
                         __det.delete(l),
                         n.dispose()
@@ -13365,6 +13396,7 @@
                                 s.controls.dispose(),
                                 __rocketFree(r),
                                 __tmActive.delete(r),
+                                __tmFree(r),
                                 t.ccall("deleteCarModel", "void", ["number"], [r]),
                                 __det.delete(r),
                                 e.splice(i, 1);
@@ -13451,8 +13483,8 @@
             const queued = jo.splice(0);
             // Restarts. Building a car rebuilds the whole track's collision world (on a big Better Editor track a second or
             // more, while the car can't move). The physics' state is all in its heap (one mutable global, the stack
-            // pointer) plus Better Editor's per-car record (fxSave). So the realtime worker copies both right after
-            // building the only car it has; deleting that car parks it instead, and the next car on the same track puts
+            // pointer) plus Better Editor's per-car record (fxSave). So the realtime worker copies both (the heap less what
+            // __parkCopy can leave out) right after building the only car it has; deleting that car parks it instead, and the next car on the same track puts
             // the copy back and drives the parked model under its page id. Anything else drops the copy.
             let __park = null
               , __parkOn = !1;
@@ -13462,24 +13494,97 @@
             function __parkKeep(id, save, version, hill, hillAt) {
                 if (!__parkOn || null != __park)
                     return;
-                const H = t.HEAPU8
-                  , mem = self.navigator?.deviceMemory;
-                // The copy is as big as the heap (never more than an eighth of the device's memory), and with other cars
-                // here it would bring theirs back too. Without one, the car is still handed on until it has driven a frame.
-                let copy = 0 == e.length && H.length <= ("number" == typeof mem ? mem : 8) * 134217728
+                const mem = self.navigator?.deviceMemory;
+                // The copy is never more than an eighth of the device's memory, and with other cars here it would bring
+                // theirs back too. Without one, the car is still handed on until it has driven a frame.
+                let copy = 0 == e.length
                   , tm = null;
                 __tmActive.has(id) && ("function" == typeof self.TM?.fxSave && "function" == typeof self.TM.fxLoad ? copy && (tm = self.TM.fxSave(id)) : copy = !1);
-                __park = { wid: id, save, version, hill: __parkHill(hill, hillAt), heap: copy ? H.slice() : null, tm, parked: !1, stepped: !1 }
+                const heap = copy ? __parkCopy(("number" == typeof mem ? mem : 8) * 134217728) : null;
+                __park = { wid: id, save, version, hill: __parkHill(hill, hillAt), heap, tm: null == heap ? null : tm, parked: !1, stepped: !1 }
+            }
+            // A big track's heap is hundreds of MB, nearly all of which driving can't change or doesn't care about, so the
+            // copy leaves out two kinds of malloc (dlmalloc) block:
+            // - free blocks of 1 MB up, but for their bookkeeping: what is in free memory doesn't matter;
+            // - blocks in use of 8 MB up that hold no detector list: the collision world's triangles and its tree, only
+            //   written while a car is built. One word a KB of these is kept, and if any differs the car is built again.
+            // dlmalloc's top block is at [19068], its size at [19056], the first block at [19060].
+            function __parkCopy(limit) {
+                const H = t.HEAPU8
+                  , U = new Uint32Array(H.buffer, 0, H.length >> 2)
+                  , top = U[19068 >> 2]
+                  , topEnd = top + U[19056 >> 2]
+                  , lists = []
+                  , skip = []
+                  , fixed = [];
+                for (const d of __det.values())
+                    for (const L of d.lists)
+                        lists.push(L.b);
+                let p = U[19060 >> 2];
+                // p stays 0 unless the walk over every block lands exactly on the top one.
+                for (; p > 0 && p < top && 0 == (7 & p); ) {
+                    const head = U[p + 4 >> 2]
+                      , size = (-8 & head) >>> 0
+                      , end = p + size;
+                    if (size < 16 || end > top) {
+                        p = 0;
+                        break
+                    }
+                    if (2 & head)
+                        size >= 8388608 && !lists.some((b => b >= p && b < end)) && (skip.push([p + 64, end - 16]), fixed.push([p + 64, end - 16]));
+                    else
+                        size >= 1048576 && skip.push([p + 64, end - 16]);
+                    p = end
+                }
+                if (p > 0 && p == top && topEnd <= H.length) {
+                    topEnd - top >= 1048576 && skip.push([top + 64, topEnd - 16]);
+                    H.length - topEnd >= 1048576 && skip.push([topEnd + 4096, H.length])
+                } else
+                    skip.length = fixed.length = 0;
+                let size = H.length;
+                for (const [a, b] of skip)
+                    size -= b - a;
+                if (size > limit)
+                    return null;
+                const spans = [];
+                let at = 0;
+                for (const [a, b] of skip)
+                    spans.push({ at, bytes: H.slice(at, a) }),
+                    at = b;
+                at < H.length && spans.push({ at, bytes: H.slice(at) });
+                return {
+                    spans,
+                    fixed: fixed.map((([a, b]) => {
+                        const sample = new Uint32Array(Math.ceil((b - a) / 1024));
+                        for (let k = 0; k < sample.length; k++)
+                            sample[k] = U[a + 1024 * k >> 2];
+                        return { at: a, sample }
+                    }))
+                }
+            }
+            function __parkIntact(copy) {
+                const H = t.HEAPU8
+                  , U = new Uint32Array(H.buffer, 0, H.length >> 2);
+                for (const {at, sample} of copy.fixed)
+                    for (let k = 0; k < sample.length; k++)
+                        if (U[at + 1024 * k >> 2] !== sample[k])
+                            return !1;
+                return !0
+            }
+            function __parkRestore(copy) {
+                const H = t.HEAPU8;
+                for (const {at, bytes} of copy.spans)
+                    H.set(bytes, at)
             }
             function __parkTake(id, save, version, track, hill, hillAt) {
                 const p = __park;
                 if (null == p)
                     return null;
                 const h = __parkHill(hill, hillAt);
-                if (!p.parked || p.stepped && (null == p.heap || 0 != e.length) || p.save !== save || p.version !== version || __rocketCars.has(p.wid) != __rocketTracks.has(track.getId()) || h.o.some((x, k) => x !== p.hill.o[k]) || h.v.length !== p.hill.v.length || h.v.some((x, k) => x !== p.hill.v[k] && !(x !== x && p.hill.v[k] !== p.hill.v[k])))
+                if (!p.parked || p.stepped && (null == p.heap || 0 != e.length || !__parkIntact(p.heap)) || p.save !== save || p.version !== version || __rocketCars.has(p.wid) != __rocketTracks.has(track.getId()) || h.o.some((x, k) => x !== p.hill.o[k]) || h.v.length !== p.hill.v.length || h.v.some((x, k) => x !== p.hill.v[k] && !(x !== x && p.hill.v[k] !== p.hill.v[k])))
                     return __parkDrop(),
                     null;
-                p.stepped && (t.HEAPU8.set(p.heap),
+                p.stepped && (__parkRestore(p.heap),
                 null != p.tm && self.TM.fxLoad(p.wid, p.tm)),
                 p.stepped = !1,
                 __royaleInit(p.wid, track),
@@ -13497,6 +13602,7 @@
                 __royaleCars.delete(p.wid),
                 __collide.delete(p.wid),
                 __det.delete(p.wid),
+                __tmFree(p.wid),
                 t.ccall("deleteCarModel", "void", ["number"], [p.wid]))
             }
             // Checkpoint and finish detectors. Every frame the physics tests the car against each detector in a list
@@ -13611,8 +13717,18 @@
                 null != car.pageId && new DataView(u8.buffer,u8.byteOffset,4).setUint32(0, car.pageId, !0);
                 return u8
             }
+            // tm_runtime.js keeps every car's track tables by car id and never drops one (240 MB a car on week 13's map 5).
+            // Preparing the id again with an empty track puts empty tables in their place, on any Better Editor version.
+            function __tmFree(id) {
+                try {
+                    self.TM?.prepareCar?.(id, new Float32Array(0), { x: 0, y: 0, z: 0 }, { forEachPart() {} }, ( () => ({ forEach() {} })))
+                } catch (err) {
+                    console.warn("Couldn't free a car's Better Editor tables:", err)
+                }
+            }
             function r(e, i, r, s, n, rocketVersion) {
                 const tmCar = null == self.TM ? null : (__tmAddProxies(),
+                __nswsTMBlocksTake(),
                 self.TM.prepareCar(e, i, r, s, ( (t, e, i) => Ao(t).tiles.rotated(e, i))));
                 null != tmCar && tmCar.vertices !== i ? (__tmActive.add(e),
                 i = tmCar.vertices) : __tmActive.delete(e);
