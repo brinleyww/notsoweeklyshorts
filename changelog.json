@@ -1,5 +1,11 @@
 [
     {
+        "version": "v12.43",
+        "changes": [
+            "Changelog opens just as fast however long it gets, older updates load as you scroll"
+        ]
+    },
+    {
         "version": "v12.42",
         "changes": [
             "Better Editor updates in the Changelog show their version",

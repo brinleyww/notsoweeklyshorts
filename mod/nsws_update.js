@@ -69,13 +69,14 @@
     // Every version from the live one back to (not including) the one this page is running.
     async function changesSince(latest) {
         try {
-            const res = await fetch(new URL("changelog.json", location.href), { cache: "no-store" });
-            if (!res.ok) return [];
-            const log = (await res.json()).filter(e => e && typeof e.version === "string" && Array.isArray(e.changes));
+            if (!window.__nswsChangelog) return [];
+            const { log, complete } = await window.__nswsChangelog.newest();
             const from = log.findIndex(e => e.version === latest);
             if (from < 0) return [];
             const loadedName = await window.__nswsLoadedVersion;
-            const loaded = log.findIndex(e => e.version === loadedName);
+            let loaded = log.findIndex(e => e.version === loadedName);
+            // Only the top of the file is read, so a much older version isn't in it.
+            if (loaded < 0 && loadedName && !complete) loaded = log.length;
             return log.slice(from, loaded > from ? Math.min(loaded, from + 5) : from + 1);
         } catch (e) {
             return [];
