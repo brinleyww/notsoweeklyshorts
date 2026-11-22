@@ -413,12 +413,13 @@ export class TrackHub extends DurableObject {
         const { club, me, error } = this.clubFor(userId, clubId);
         if (error) return error;
         if (me.role === "owner") return fail(409, "The owner can't leave. Hand the club to another member or delete it.");
+        let tagsChanged = false;
         this.ctx.storage.transactionSync(() => {
             this.sql.exec("DELETE FROM members WHERE club_id = ? AND user_id = ?", club.id, userId);
             this.sql.exec("UPDATE clubs SET member_count = MAX(0, member_count - 1) WHERE id = ?", club.id);
-            this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", userId, club.id);
+            tagsChanged = this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", userId, club.id).rowsWritten > 0;
         });
-        return { ok: true };
+        return { ok: true, tagsChanged };
     }
 
     wornClub(userId) {
@@ -442,14 +443,15 @@ export class TrackHub extends DurableObject {
         if (this.overLimit(keys, WEARS_PER_DAY)) return fail(429, "You've changed your club tag a lot today. Try again tomorrow.");
         this.countHit(keys);
         if (clubId == null) {
-            this.sql.exec("DELETE FROM worn_tags WHERE user_id = ?", userId);
-            return { wearing: null, tag: null };
+            const tagsChanged = this.sql.exec("DELETE FROM worn_tags WHERE user_id = ?", userId).rowsWritten > 0;
+            return { wearing: null, tag: null, tagsChanged };
         }
         const { club, error } = this.clubFor(userId, clubId);
         if (error) return error;
         if (!club.tag) return fail(409, "This club has no tag yet. Its owner can add one in Settings.");
+        const tagsChanged = this.wornClub(userId)?.tag !== club.tag;
         this.sql.exec("INSERT OR REPLACE INTO worn_tags (user_id, club_id, at) VALUES (?, ?, ?)", userId, club.id, Date.now());
-        return { wearing: club.id, tag: club.tag };
+        return { wearing: club.id, tag: club.tag, tagsChanged };
     }
 
     // Every worn tag with the full account id, for the Worker to put current names on; never sent to a page as is.
@@ -474,15 +476,17 @@ export class TrackHub extends DurableObject {
             club.name = moderate(name, MAX_CLUB_NAME);
             if (!club.name) return fail(400, "Give the club a name.");
         }
+        let tagsChanged = false;
         if (tag !== undefined) {
             const cleaned = cleanTag(tag);
             if (cleaned.error) return cleaned;
+            tagsChanged = club.tag !== cleaned.tag && !!this.first("SELECT 1 FROM worn_tags WHERE club_id = ? LIMIT 1", club.id);
             club.tag = cleaned.tag;
         }
         if (description !== undefined) club.description = cleanLines(description, MAX_DESCRIPTION);
         if (newCode === true) club.code = this.freshId("clubs", "code", 6, CODE_ALPHABET);
         this.sql.exec("UPDATE clubs SET name = ?, tag = ?, description = ?, code = ? WHERE id = ?", club.name, club.tag, club.description, club.code, club.id);
-        return { club: this.clubView(club, "owner") };
+        return { club: this.clubView(club, "owner"), tagsChanged };
     }
 
     setRole({ userId, clubId, member, role }) {
@@ -497,11 +501,12 @@ export class TrackHub extends DurableObject {
         if (found.length !== 1) return fail(404, "That player isn't in the club any more.");
         const target = found[0];
         if (target.user_id === userId) return fail(400, "You can't change your own role.");
+        let tagsChanged = false;
         if (role === "kick") {
             this.ctx.storage.transactionSync(() => {
                 this.sql.exec("DELETE FROM members WHERE club_id = ? AND user_id = ?", club.id, target.user_id);
                 this.sql.exec("UPDATE clubs SET member_count = MAX(0, member_count - 1) WHERE id = ?", club.id);
-                this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", target.user_id, club.id);
+                tagsChanged = this.sql.exec("DELETE FROM worn_tags WHERE user_id = ? AND club_id = ?", target.user_id, club.id).rowsWritten > 0;
             });
         } else if (role === "owner") {
             if (this.memberships(target.user_id).owned >= OWNED_MAX) return fail(409, `${target.name} already owns ${OWNED_MAX} clubs.`);
@@ -513,20 +518,21 @@ export class TrackHub extends DurableObject {
         } else {
             this.sql.exec("UPDATE members SET role = ? WHERE club_id = ? AND user_id = ?", role, club.id, target.user_id);
         }
-        return { ok: true };
+        return { ok: true, tagsChanged };
     }
 
     deleteClub({ userId, clubId }) {
         const { club, error } = this.clubFor(userId, clubId, ["owner"], "Only the club's owner can delete it.");
         if (error) return error;
+        let tagsChanged = false;
         this.ctx.storage.transactionSync(() => {
             this.sql.exec("DELETE FROM campaign_tracks WHERE campaign_id IN (SELECT id FROM campaigns WHERE club_id = ?)", club.id);
             this.sql.exec("DELETE FROM campaigns WHERE club_id = ?", club.id);
             this.sql.exec("DELETE FROM members WHERE club_id = ?", club.id);
-            this.sql.exec("DELETE FROM worn_tags WHERE club_id = ?", club.id);
+            tagsChanged = this.sql.exec("DELETE FROM worn_tags WHERE club_id = ?", club.id).rowsWritten > 0;
             this.sql.exec("DELETE FROM clubs WHERE id = ?", club.id);
         });
-        return { ok: true };
+        return { ok: true, tagsChanged };
     }
 
     // ---- campaigns ----

@@ -4,6 +4,7 @@
     const CACHE_KEY = "nswsClubTags";
     const MINE_KEY = "nswsClubTagMine";
     const CACHE_MS = 10 * 60_000;
+    const CHECK_MS = 60_000;
     // The Worker's list is cached for 2 minutes, so the player's own change wins until it has surely caught up.
     const MINE_MS = 10 * 60_000;
     const IGNORED = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
@@ -13,6 +14,9 @@
     let version = 1;
     let loading = null;
     let loadedAt = 0;
+    // The list's version held here, and the newest one the beat or the chat has named.
+    let held = 0;
+    let wanted = 0;
 
     const key = (nick) => String(nick ?? "").normalize("NFKC").toLowerCase().replace(IGNORED, "");
     // __getPlayerNickname only exists once a race screen has been made.
@@ -78,23 +82,32 @@
 
     async function load(force) {
         if (loading) return loading;
-        if (!force && Date.now() - loadedAt < CACHE_MS) return;
+        if (!force && wanted <= held && Date.now() - loadedAt < CACHE_MS) return;
         const base = window.__nswsApiBase;
         if (!base) return;
+        const v = Math.max(held, wanted);
         loading = (async () => {
             try {
-                const r = await fetch(base + "nsws/tracks/club/tags", { method: "GET" });
+                const r = await fetch(base + "nsws/tracks/club/tags" + (v ? "?v=" + v : ""), { method: "GET" });
                 const j = r.ok ? await r.json() : null;
                 if (j && j.tags && typeof j.tags === "object") {
                     loadedAt = Date.now();
-                    write(CACHE_KEY, { at: loadedAt, tags: j.tags });
+                    held = v;
+                    write(CACHE_KEY, { at: loadedAt, tags: j.tags, v });
                     setList(j.tags);
                 }
             } catch {} finally {
                 loading = null;
+                if (wanted > v) load();
             }
         })();
         return loading;
+    }
+
+    function heard(v) {
+        if (!Number.isSafeInteger(v) || v <= held) return;
+        wanted = Math.max(wanted, v);
+        load();
     }
 
     // tag null: the player took their tag off.
@@ -243,20 +256,31 @@
 
     window.__nswsClubTag = {
         get version() { return version; },
-        of, label, name, load, setMine, mine: mineTag, car, drop: dropDecal
+        of, label, name, load, heard, setMine, mine: mineTag, car, drop: dropDecal
     };
 
     const cached = read(CACHE_KEY);
     if (cached?.tags) {
         setList(cached.tags);
+        if (Number.isSafeInteger(cached.v)) held = cached.v;
         if (Date.now() - (cached.at || 0) < CACHE_MS) loadedAt = cached.at;
     }
     const m = read(MINE_KEY);
     if (m && typeof m.nick === "string" && Date.now() - (m.at || 0) < MINE_MS) mine = m;
 
+    // Another tab's change, which would otherwise lose to this tab's older one.
+    window.addEventListener("storage", (e) => {
+        if (e.key !== MINE_KEY) return;
+        mine = read(MINE_KEY);
+        changed();
+    });
+
     const start = () => {
+        heard(window.__nswsClubTagsAt);
         load();
-        setInterval(() => { if (document.visibilityState === "visible") load(); }, CACHE_MS);
+        const check = () => { if (document.visibilityState === "visible") load(); };
+        setInterval(check, CHECK_MS);
+        document.addEventListener("visibilitychange", check);
     };
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
     else start();

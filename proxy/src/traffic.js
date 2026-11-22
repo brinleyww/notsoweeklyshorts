@@ -178,6 +178,7 @@ export class TrafficStats extends DurableObject {
             // A new announcement stops the one before it, so only the newest row can be live.
             const newest = this.sql.exec("SELECT * FROM announcements ORDER BY id DESC LIMIT 1").toArray()[0];
             this.ann = newest && newest.stopped == null && newest.until > Date.now() ? newest : null;
+            this.clubTagsAt = Number(this.sql.exec("SELECT v FROM meta WHERE k = 'club_tags_at'").toArray()[0]?.v) || 0;
         });
     }
 
@@ -550,7 +551,15 @@ export class TrafficStats extends DurableObject {
         return {
             online: counts?.people ?? null, away: counts?.away ?? null,
             ann: this.liveAnnouncement(), pv: b.pl ? this.pollState(b.pl) : null, nv: this.visibleGap(counts),
+            ct: this.clubTagsAt,
         };
+    }
+
+    // The club tag list's version, which every beat reply carries.
+    clubTagsChanged() {
+        this.clubTagsAt = Math.max(Date.now(), this.clubTagsAt + 1);
+        this.sql.exec("INSERT OR REPLACE INTO meta (k, v) VALUES ('club_tags_at', ?)", String(this.clubTagsAt));
+        return this.clubTagsAt;
     }
 
     // Seconds between a shown tab's beats. Away tabs send nothing, so only active ones are budgeted.

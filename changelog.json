@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.4",
+        "changes": [
+            "Club tags show up for other players without refreshing"
+        ]
+    },
+    {
         "version": "v13.3",
         "changes": [
             "Cuppa controls work on phones, tap Cup to hide other cars, restart, retire and more",

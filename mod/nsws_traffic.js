@@ -167,6 +167,11 @@
                     }
                     if (data && "ann" in data) window.__nswsAnnounce?.receive(data.ann, asked);
                     if (data?.pv) window.__nswsAnnounce?.pollUpdate?.(data.pv);
+                    if (data?.ct) {
+                        // The first reply can come before mod/nsws_clubtag.js has run, which reads this when it starts.
+                        window.__nswsClubTagsAt = data.ct;
+                        window.__nswsClubTag?.heard(data.ct);
+                    }
                     if (Number.isSafeInteger(data?.nv) && data.nv >= BEAT_VISIBLE_S) visibleGap = Math.min(data.nv, MAX_GAP_S);
                     if (!Number.isSafeInteger(data?.online)) return;
                     window.__nswsPlayersOnline = data.online;

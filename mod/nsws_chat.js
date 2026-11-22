@@ -2548,6 +2548,9 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             window.__nswsAnnounce?.receive(data.a);
         } else if (data.t === "ann-stop") {
             window.__nswsAnnounce?.stop(data.id);
+        } else if (data.t === "ctags") {
+            // Spread out, so the first page to ask fills the Worker's cache for the rest.
+            setTimeout(() => window.__nswsClubTag?.heard(data.v), Math.random() * 2000);
         } else if (data.t === "err") {
             // A refused whisper goes back in the box, still to the same name, so it can't slip out to everyone.
             if (data.wfail && lastWhisper && input) {

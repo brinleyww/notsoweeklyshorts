@@ -1569,7 +1569,7 @@ async function handleTraffic(request, url, env, cfg, origin, ctx) {
                 console.error("traffic beat failed:", err && err.message);
             }
         }
-        if (reply) return json({ online: reply.online ?? null, away: reply.away ?? null, ann: reply.ann ?? null, pv: reply.pv ?? null, nv: reply.nv ?? null }, origin);
+        if (reply) return json({ online: reply.online ?? null, away: reply.away ?? null, ann: reply.ann ?? null, pv: reply.pv ?? null, nv: reply.nv ?? null, ct: reply.ct ?? null }, origin);
         // Nothing was stored, so the page keeps this beat's counts for the next one, and leaves any
         // announcement or poll it is showing alone.
         return json(doLimited() ? { busy: true, nv: DO_LIMIT_RETRY_S, until: limitLiftsAt() } : { busy: true, nv: null }, origin);
@@ -2287,11 +2287,26 @@ function keepPack(key, value) {
 }
 
 const CLUB_TAGS_CACHE_S = 120;
-const clubTagsKey = new Request("https://nsws-club-tags.invalid/v1");
+const clubTagsKey = (version) => new Request("https://nsws-club-tags.invalid/v1" + (version ? "/" + version : ""));
+
+// Called once a change is stored, so a list read for the new version can't be from before it.
+async function clubTagsChanged(env) {
+    if (!env.TRAFFIC) return;
+    try {
+        const v = await env.TRAFFIC.get(env.TRAFFIC.idFromName("global")).clubTagsChanged();
+        await chatBroadcast(env, { t: "ctags", v });
+    } catch (err) {
+        noteDoError(err);
+        console.error("club tag notice failed:", err && err.message);
+    }
+}
 
 // Nickname -> worn club tag, with the names read from Accounts now, so a rename carries the tag and nobody can put one on another name.
-async function clubTags(env, cfg, hub, ctx, origin) {
-    const hit = await cacheMatch(clubTagsKey);
+async function clubTags(url, env, cfg, hub, ctx, origin) {
+    const v = Number(url.searchParams.get("v"));
+    // A version from the future would get a list cached from before the change it stands for.
+    const key = clubTagsKey(Number.isSafeInteger(v) && v > 0 && v <= Date.now() + 5000 ? v : 0);
+    const hit = await cacheMatch(key);
     if (hit) return withCors(hit, origin);
     const worn = await hub.wornTags();
     const stub = accounts(env);
@@ -2303,7 +2318,7 @@ async function clubTags(env, cfg, hub, ctx, origin) {
         tags[nickname] = tagOf.get(userId);
     }
     const response = cachedJson({ tags }, CLUB_TAGS_CACHE_S);
-    ctx.waitUntil(caches.default.put(clubTagsKey, response.clone()).catch(() => {}));
+    ctx.waitUntil(caches.default.put(key, response.clone()).catch(() => {}));
     return withCors(response, origin);
 }
 
@@ -2324,6 +2339,10 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
         if (result == null) return json({ error: missing }, origin, 404);
         if (result.error) return json({ error: result.error }, origin, result.status || 400);
         return json(result, origin);
+    };
+    const replyTags = ({ tagsChanged, ...result }) => {
+        if (tagsChanged) ctx.waitUntil(clubTagsChanged(env));
+        return reply(result);
     };
 
     let body = {};
@@ -2377,7 +2396,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
         if (path === "clip-track") {
             return reply(await hub.clipTrackGet({ trackId: url.searchParams.get("trackId"), skip: url.searchParams.get("skip") }), "That clip's track isn't kept on the server.");
         }
-        if (path === "club/tags") return clubTags(env, cfg, hub, ctx, origin);
+        if (path === "club/tags") return clubTags(url, env, cfg, hub, ctx, origin);
         if ((m = /^club\/([0-9A-Za-z]{6}|[0-9A-Za-z]{12})$/.exec(path))) {
             const club = await hub.getClub(m[1]);
             return reply(club && { club }, "No club has that code.");
@@ -2422,13 +2441,13 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
             return reply(club && { club }, "No club has that code.");
         }
         case "club/join": return reply(await hub.joinClub({ userId, ipKey, nickname, code: body.code }));
-        case "club/leave": return reply(await hub.leaveClub({ userId, clubId }));
-        case "club/wear": return reply(await hub.wearTag({ userId, clubId: body.clubId ?? null }));
+        case "club/leave": return replyTags(await hub.leaveClub({ userId, clubId }));
+        case "club/wear": return replyTags(await hub.wearTag({ userId, clubId: body.clubId ?? null }));
         case "club/mine": return reply(await hub.myClubs({ userId }));
         case "club/members": return reply(await hub.members({ userId, clubId }));
-        case "club/update": return reply(await hub.updateClub({ userId, clubId, name: body.name, tag: body.tag, description: body.description, newCode: body.newCode === true }));
-        case "club/role": return reply(await hub.setRole({ userId, clubId, member: body.member, role: body.role }));
-        case "club/delete": return reply(await hub.deleteClub({ userId, clubId }));
+        case "club/update": return replyTags(await hub.updateClub({ userId, clubId, name: body.name, tag: body.tag, description: body.description, newCode: body.newCode === true }));
+        case "club/role": return replyTags(await hub.setRole({ userId, clubId, member: body.member, role: body.role }));
+        case "club/delete": return replyTags(await hub.deleteClub({ userId, clubId }));
         case "campaign/save": return reply(await hub.saveCampaign({ userId, ipKey, clubId, campaignId: body.campaignId ?? null, name: body.name, tracks: body.tracks }));
         case "campaign/delete": return reply(await hub.deleteCampaign({ userId, clubId, campaignId: body.campaignId }));
         case "submit": return reply(await hub.submit({

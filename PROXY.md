@@ -524,6 +524,10 @@ chat font), stays for 6–30 s and fades out. `mod/nsws_announce.js` draws it.
   player gets it within a minute. Players with the chat open get it at once: the Worker also
   broadcasts `{t:"ann"}` / `{t:"ann-stop"}` through the `ChatRoom`. "Who gets it" sets how long
   it stays live for people who open the site later (5 minutes, an hour or a day).
+- **Club tag changes use the same two routes:** a wear, leave, kick, delete or tag edit that changes
+  a worn tag bumps `club_tags_at` in `TrafficStats`' `meta`. Beat replies carry it as `ct` and the
+  chat broadcasts `{t:"ctags", v}`; a page holding an older list reads `club/tags?v=`, which the
+  edge caches per version.
 - **Once per browser:** the page remembers ids it has shown (`nsws_ann_seen`) and holds one back
   while the tab is hidden. The next beat reports it as seen (`an`), which the "Seen by" count
   sums once per session. A null in a beat reply ends the one on screen, which is how Stop
