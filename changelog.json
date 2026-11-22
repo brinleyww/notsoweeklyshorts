@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.0",
+        "changes": [
+            "Week 13 is out: Circuit, dirty tires, wood go brr, tech-nique, THIS IS ART",
+            "Week 12 is over, everyone's times on it show now"
+        ]
+    },
+    {
         "version": "v12.44",
         "changes": [
             "Open 3 crates at a time for 140 Bolts",

@@ -59451,6 +59451,15 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             tracks: [{ id: "0a2bf0951b1b6a9beb7b1036d830d18a185ccdd991b771c8b023ae4410894880", name: "1 - Summer 1 Retextured", short: "S1Re", author: "Kodub", env: "Summer", thumb: "tracks/community/thumbnails/week12_1.png" }, { id: "8fa80b47833c3d28cfd32682071bc12abc2430a7faacf66324ced57a827e32e8", name: "2 - Technical stadium", short: "TStad", author: "Schemzboi", env: "Summer", thumb: "tracks/community/thumbnails/week12_2.png" }, { id: "75daa5f5afea15106549e1752dec82ca1b64343958094fb0753a00f365fd7d9e", name: "3 - Secret Tunnel", short: "Tunl", author: "🐭Simo_900 (1nd)😫", env: "Summer", thumb: "tracks/community/thumbnails/week12_3.png" }, { id: "69c659490aca789231d6ebff499fa9735c2c4558815cd5be1d73b4d1ae15779e", name: "4 - Icy Precision", short: "Icy", author: "person", env: "Winter", thumb: "tracks/community/thumbnails/week12_4.png" }, { id: "03b6cf96283eb894e12dc65140c390fd30d181718c9c06c585b7986a6437fe69", name: "5 - MEGA EASY OBBY ROBLOX", short: "Obby", author: "Herny", env: "Summer", thumb: "tracks/community/thumbnails/week12_5.png" }]
         },
         {
+            week: 13,
+            chunks: ["78bf68c3b30037f5", "2a2e127b41eed5d5", "66c36ef63acf083f", "22b44955dcd00640"],
+            masks: ["3e9dbd4d6ed1739e", "7cbcae0d76a37079", "db8887a80718f5b8", "1582237d3b704f69"],
+            file: "tracks/community/week13.track",
+            // Pinned as in week 12. Track 4 has only stock parts, so the pin doesn't touch it.
+            be: { physics: 34, commit: "b60ce7137b178ebc2f993309390255bfb096f67b", bin: !0 },
+            tracks: [{ id: "0ff024cf6c4f9de003266857ea785b712d6f581de8a297490971fb5f11896d84", name: "1 - Circuit", short: "Circ", author: "S|owest【Woiz】🦥", env: "Summer", thumb: "tracks/community/thumbnails/week13_1.png", modified: 1795309546000 }, { id: "873c5683edeebd9f075a521d96e8c93bfd99463c5a47b19a616c9c2132eef8a0", name: "2 - dirty tires", short: "Dirty", author: "Cookedbyapringle", env: "Summer", thumb: "tracks/community/thumbnails/week13_2.png", modified: 1795300113000 }, { id: "34a1dfe7fd722355453cc99dbc4a6139e4a5131ebe74db9e7d8b1a1ab31d15ef", name: "3 - wood go brr", short: "Wood", author: "Schemzboi", env: "Summer", thumb: "tracks/community/thumbnails/week13_3.png", modified: 1795309536000 }, { id: "a5709abce5764517ae67d0f90e49c6352a2b01b82ae4cc13bb15ef691a740def", name: "4 - tech-nique", short: "Tech", author: "Lime_syrup?", env: "Summer", thumb: "tracks/community/thumbnails/week13_4.png", modified: 1795309432000 }, { id: "c79f471a506861d8090b73ae93fd62fd39b1545e316294aca6f0ea9697723a77", name: "5 - THIS IS ART", short: "Art", author: "My5t3ry(discord name ck09cobo alt)", env: "Winter", thumb: "tracks/community/thumbnails/week13_5.png", modified: 1795309578000 }]
+        },
+        {
             week: 1031,
             label: "Halloween",
             event: { from: Date.UTC(2026, 9, 31, 0, 0), until: Date.UTC(2026, 10, 5, 5, 41) },
@@ -59461,8 +59470,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
         }
         ];
         window.__nswsWeeks = __nswsWeeks;
-        // Week 12's thumbnails are pictures, not pixel maps: never pixel-sharp scaling, on any screen.
-        document.head.appendChild(Object.assign(document.createElement("style"), { textContent: 'img[src*="thumbnails/week12_"] { image-rendering: auto !important; }' }));
+        // Week 12 and 13's thumbnails are pictures, not pixel maps: never pixel-sharp scaling, on any screen.
+        document.head.appendChild(Object.assign(document.createElement("style"), { textContent: 'img[src*="thumbnails/week12_"], img[src*="thumbnails/week13_"] { image-rendering: auto !important; }' }));
 
         const __nswsWeekKey = (chunks, masks) => {
             const _x = (h1, h2) => {
@@ -59613,7 +59622,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     entries.push({
                         id: t.id,
                         group: groupLabel,
-                        trackMetadata: { name: t.name, author: t.author, lastModified: null },
+                        trackMetadata: { name: t.name, author: t.author, lastModified: t.modified ? new Date(t.modified) : null },
                         environment: TrackEnvironment[t.env],
                         trackUrl: null,
                         weekRef: { file: p.file, id: t.contentId ?? t.id },
