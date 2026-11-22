@@ -40797,7 +40797,9 @@ window.__nswsAutoGhostNote = function(trackId) {
                         return new Promise((t => {
                             function n() {
                                 i.forEach((function(e) {
-                                    me.get(e).currentProgram.isReady() && i.delete(e)
+                                    // No program: the material was disposed while compiling (e.g. the race was left).
+                                    const program = me.get(e).currentProgram;
+                                    (void 0 === program || program.isReady()) && i.delete(e)
                                 }
                                 )),
                                 0 !== i.size ? setTimeout(n, 10) : t(e)

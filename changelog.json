@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.2",
+        "changes": [
+            "Leaving a race while it's still loading doesn't crash the game anymore"
+        ]
+    },
+    {
         "version": "v13.1",
         "changes": [
             "Better Editor updates that don't change physics count up after the dot, like v34.1 and v34.2"
