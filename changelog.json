@@ -1,5 +1,12 @@
 [
     {
+        "version": "v12.42",
+        "changes": [
+            "Better Editor updates in the Changelog show their version",
+            "Fixed Better Editor updates dropping to the bottom of the Changelog"
+        ]
+    },
+    {
         "version": "v12.41",
         "changes": [
             "Better Editor updates show up in the Changelog too, as soon as they come out"

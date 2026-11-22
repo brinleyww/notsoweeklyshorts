@@ -11,6 +11,7 @@
     ];
     const REPO = (SITES.find(s => s.host === location.hostname) || SITES[0]).repo;
     const BE_REPO = "brinleyww/Better-Editor-PT";
+    const BE_DEPLOYS_KEY = "_nswsChangelogBEDeploys";
     const BE_SITE = "https://brinleyww.github.io/Better-Editor-PT/";
     const BE_MIRROR = "https://pt-leaderboard-proxy.bringleyw.workers.dev/be/";
     // Better Editor deploys from before its changelog started.
@@ -27,10 +28,10 @@
 #nsws-changelog .top>h1{margin:0 auto 0 0;font-size:32px;font-weight:normal;color:#b3c1ff;text-shadow:0 2px 0 #112052;}
 #nsws-changelog .top>.button{margin:0;font-size:20px;padding:6px 14px;}
 #nsws-changelog .body{overflow-y:auto;padding:12px 20px 18px;}
-#nsws-changelog .ver{margin:14px 0 4px;font-size:24px;color:#ffc94a;}
+#nsws-changelog .ver{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;margin:14px 0 4px;font-size:24px;color:#ffc94a;}
 #nsws-changelog .ver.be{color:#8fd8ff;}
 #nsws-changelog .ver:first-child{margin-top:0;}
-#nsws-changelog .ver>span{margin-left:10px;font-size:15px;color:var(--text-color);opacity:.55;white-space:nowrap;}
+#nsws-changelog .ver>span{font-size:15px;color:var(--text-color);opacity:.55;white-space:nowrap;}
 #nsws-changelog ul{margin:0;padding-left:24px;font-size:19px;}
 #nsws-changelog li{margin:3px 0;overflow-wrap:anywhere;}
 #nsws-changelog .msg{font-size:19px;opacity:.7;}
@@ -128,23 +129,23 @@
         return 0;
     }
 
-    function cachedTimes(repo) {
+    function cached(key) {
         try {
-            return JSON.parse(localStorage.getItem(TIMES_KEY + repo)) || {};
+            return JSON.parse(localStorage.getItem(key)) || {};
         } catch (e) {
             return {};
         }
     }
 
-    // Successful Pages deploys of main, newest first, a page of 100 at a time. onPage returns true to stop.
+    // Pages deploys of main, newest first, a page of 100 at a time. onPage returns true to stop.
     // Resolves true when it saw every deploy it needed.
-    async function deploys(repo, onPage) {
-        const api = "https://api.github.com/repos/" + repo + "/actions/runs?branch=main&status=success&per_page=100&page=";
+    async function deploys(repo, query, onPage) {
+        const api = "https://api.github.com/repos/" + repo + "/actions/runs?branch=main" + query + "&per_page=100&page=";
         for (let page = 1; page <= MAX_PAGES; page++) {
             const res = await fetch(api + page);
             if (!res.ok) return false;
             const runs = (await res.json()).workflow_runs || [];
-            const list = runs.map(r => ({ sha: r.head_sha || "", msg: r.head_commit?.message || r.display_title, at: Date.parse(r.updated_at) })).filter(r => r.at > 0);
+            const list = runs.map(r => ({ sha: r.head_sha || "", ok: r.conclusion === "success", msg: r.head_commit?.message || r.display_title, at: Date.parse(r.updated_at) })).filter(r => r.at > 0);
             if (onPage(list) || runs.length < 100) return true;
         }
         return false;
@@ -153,13 +154,13 @@
     // A version went live with the first deploy of it or anything newer (one fork sync can carry several versions).
     // A time is only final once an older deploy has been seen, so only final times are kept.
     async function releaseTimes(log) {
-        const times = cachedTimes(REPO);
+        const times = cached(TIMES_KEY + REPO);
         const want = log.map(e => ({ v: e.version, key: versionKey(e.version) })).filter(w => w.key && !(w.v in times));
         if (!want.length) return times;
         const oldest = want.reduce((a, w) => (compare(w.key, a) < 0 ? w.key : a), want[0].key);
         const found = {};
         const final = new Set();
-        await deploys(REPO, runs => {
+        await deploys(REPO, "&status=success", runs => {
             let done = false;
             for (const run of runs) {
                 const key = versionKey(run.msg);
@@ -178,66 +179,91 @@
     }
 
     // A Better Editor entry went live with the first deploy whose changelog.json has its id (ids only go up).
-    // Entries written after the fact name the commit whose deploy carried them instead.
-    async function beReleaseTimes(be) {
-        const times = cachedTimes(BE_REPO);
-        const want = be.filter(e => !(e.id in times));
-        if (!want.length) return times;
-        const runs = [];
-        const complete = await deploys(BE_REPO, list => {
-            runs.push(...list);
+    // Entries written after the fact name their commit instead; a deploy cancelled by the next push went live with that one.
+    // The version shown is physics.json's as of that deploy.
+    async function beReleases(be) {
+        const kept = cached(BE_DEPLOYS_KEY);
+        const want = be.filter(e => !(e.id in kept));
+        if (!want.length) return kept;
+        const all = [];
+        const complete = await deploys(BE_REPO, "", list => {
+            all.push(...list);
             return !list.length || list[list.length - 1].at < BE_LOG_START;
         });
-        const maxIds = new Map();
-        const maxId = i => {
-            const sha = runs[i].sha;
-            if (!maxIds.has(sha))
-                maxIds.set(sha, fetch("https://raw.githubusercontent.com/" + BE_REPO + "/" + sha + "/changelog.json").then(async res => {
-                    if (res.status === 404) return 0;
-                    if (!res.ok) throw new Error("changelog at " + sha + " " + res.status);
-                    const log = await res.json();
-                    return Array.isArray(log) ? log.reduce((m, e) => Math.max(m, Number.isSafeInteger(e?.id) ? e.id : 0), 0) : 0;
+        const runs = all.filter(r => r.ok);
+        if (!runs.length) return kept;
+        const files = new Map();
+        const fileAt = (sha, name) => {
+            const path = sha + "/" + name;
+            if (!files.has(path))
+                files.set(path, fetch("https://raw.githubusercontent.com/" + BE_REPO + "/" + path).then(res => {
+                    if (res.status === 404) return null;
+                    if (!res.ok) throw new Error(path + " " + res.status);
+                    return res.json();
                 }));
-            return maxIds.get(sha);
+            return files.get(path);
+        };
+        const maxId = async i => {
+            const log = await fileAt(runs[i].sha, "changelog.json");
+            return Array.isArray(log) ? log.reduce((m, e) => Math.max(m, Number.isSafeInteger(e?.id) ? e.id : 0), 0) : 0;
         };
         const found = {};
-        for (const e of want) {
-            if (typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit)) {
-                const run = runs.find(r => r.sha.startsWith(e.commit));
-                if (run) times[e.id] = run.at;
-                continue;
-            }
-            if (!runs.length || (await maxId(0)) < e.id) continue;
-            // Runs are newest first, so the oldest deploy that has the id is the last index that has it.
-            let lo = 0;
-            let hi = runs.length - 1;
-            while (lo < hi) {
-                const mid = (lo + hi + 1) >> 1;
-                if ((await maxId(mid)) >= e.id) lo = mid;
-                else hi = mid - 1;
-            }
-            if (lo < runs.length - 1 || complete) times[e.id] = runs[lo].at;
-            else found[e.id] = runs[lo].at;
-        }
-        setItem(TIMES_KEY + BE_REPO, JSON.stringify(times));
-        return Object.assign(found, times);
+        await Promise.all(want.map(async e => {
+            try {
+                let run = null;
+                let final = true;
+                const named = typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit) ? all.findIndex(r => r.sha.startsWith(e.commit)) : -1;
+                if (named >= 0) {
+                    run = all.slice(0, named + 1).reverse().find(r => r.ok);
+                    if (!run) return;
+                } else {
+                    if ((await maxId(0)) < e.id) return;
+                    // Runs are newest first, so the oldest deploy that has the id is the last index that has it.
+                    let lo = 0;
+                    let hi = runs.length - 1;
+                    while (lo < hi) {
+                        const mid = (lo + hi + 1) >> 1;
+                        if ((await maxId(mid)) >= e.id) lo = mid;
+                        else hi = mid - 1;
+                    }
+                    run = runs[lo];
+                    final = lo < runs.length - 1 || complete;
+                }
+                found[e.id] = { at: run.at };
+                const version = (await fileAt(run.sha, "physics.json"))?.version;
+                if (!Number.isSafeInteger(version)) return;
+                found[e.id].version = version;
+                if (final) kept[e.id] = found[e.id];
+            } catch (err) {}
+        }));
+        setItem(BE_DEPLOYS_KEY, JSON.stringify(kept));
+        return Object.assign(found, kept);
     }
 
-    // Both lists are newest first; an entry without a time keeps its place in its own list.
-    function merge(log, be, times, beTimes) {
+    function beTitle(release) {
+        return release?.version ? "Better Editor v" + release.version : "Better Editor";
+    }
+
+    // Both lists are newest first. An entry without a time keeps its place in its own list by going in with the next
+    // older one that has a time.
+    function merge(log, be, times, releases) {
         const out = [];
+        const timeFrom = (list, from, timeOf) => {
+            for (let k = from; k < list.length; k++) if (timeOf(list[k])) return timeOf(list[k]);
+            return 0;
+        };
         let i = 0;
         let j = 0;
         while (i < log.length || j < be.length) {
             const a = log[i];
             const b = be[j];
-            const ta = a && times[a.version];
-            const tb = b && beTimes[b.id];
+            const ta = timeFrom(log, i, e => times[e.version]);
+            const tb = timeFrom(be, j, e => releases[e.id]?.at);
             if (!b || (a && (!ta || !tb || ta >= tb))) {
-                out.push({ title: a.version, changes: a.changes, at: ta, key: "v" + a.version });
+                out.push({ title: a.version, changes: a.changes, at: times[a.version], key: "v" + a.version });
                 i++;
             } else {
-                out.push({ title: "Better Editor", be: true, changes: b.changes, at: tb, key: "b" + b.id });
+                out.push({ title: beTitle(releases[b.id]), be: true, changes: b.changes, at: releases[b.id]?.at, key: "b" + b.id });
                 j++;
             }
         }
@@ -291,16 +317,20 @@
         const view = overlay;
         load().then(async ({ log, be }) => {
             // The order between the two lists needs the times, so wait for them a little (they're cached once final).
-            const timed = Promise.all([releaseTimes(log).catch(() => ({})), beReleaseTimes(be).catch(() => ({}))]);
+            const timed = Promise.all([releaseTimes(log).catch(() => ({})), beReleases(be).catch(() => cached(BE_DEPLOYS_KEY))]);
             const first = await Promise.race([timed, new Promise(ok => setTimeout(ok, WAIT_FOR_TIMES_MS, null))]);
             if (overlay !== view) return;
-            const [times, beTimes] = first || [{}, {}];
+            const [times, releases] = first || [cached(TIMES_KEY + REPO), cached(BE_DEPLOYS_KEY)];
             body.textContent = "";
-            const entries = merge(log, be, times, beTimes);
+            const entries = merge(log, be, times, releases);
             if (!entries.length) body.appendChild(el("div", "msg", "Nothing here yet."));
             const stamps = new Map();
+            const titles = new Map();
             for (const entry of entries) {
-                const ver = el("div", entry.be ? "ver be" : "ver", entry.title);
+                const ver = el("div", entry.be ? "ver be" : "ver");
+                const title = document.createTextNode(entry.title);
+                ver.appendChild(title);
+                titles.set(entry.key, title);
                 const stamp = el("span", null, entry.at ? STAMP.format(new Date(entry.at)) : "");
                 ver.appendChild(stamp);
                 stamps.set(entry.key, stamp);
@@ -317,7 +347,10 @@
                     if (span && at && !span.textContent) span.textContent = STAMP.format(new Date(at));
                 };
                 for (const e of log) fill("v" + e.version, late[e.version]);
-                for (const e of be) fill("b" + e.id, beLate[e.id]);
+                for (const e of be) {
+                    fill("b" + e.id, beLate[e.id]?.at);
+                    titles.get("b" + e.id).data = beTitle(beLate[e.id]);
+                }
             });
         }).catch(() => {
             if (overlay !== view) return;
