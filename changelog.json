@@ -1,5 +1,15 @@
 [
     {
+        "version": "v12.40",
+        "changes": [
+            "Load in Better Editor now shows your My Tracks, in the same order as your Custom Tracks sort",
+            "Tracks can have the same name now",
+            "Saving in the editor only changes the track you opened, it never asks to overwrite another one",
+            "Saves, deletes and mode changes in the editor show up in My Tracks right away",
+            "Tracks that were only saved in the editor get moved into My Tracks once"
+        ]
+    },
+    {
         "version": "v12.39",
         "changes": [
             "My Tracks: every track has a drag handle now, in any sort, so you can move your tracks around straight away",

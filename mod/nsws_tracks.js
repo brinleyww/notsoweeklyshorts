@@ -885,7 +885,8 @@
         if (!info.ok) throw new Error(info.error);
         const tracks = await loadAll();
         const hash = await sha256(info.code);
-        const existing = findExisting(tracks, info, hash);
+        // fresh: a new track saved in the editor is its own entry, even with the same name and blocks as another.
+        const existing = opts.fresh ? null : findExisting(tracks, info, hash);
         let thumb = null;
         if (info.kind === "stock") {
             const loaded = stockParse(info.code);
@@ -945,6 +946,28 @@
     const hasOrder = (t) => Number.isFinite(t.order);
     function byOrder(tracks) {
         return [...tracks].sort((a, b) => (hasOrder(a) ? 1 : 0) - (hasOrder(b) ? 1 : 0) || (hasOrder(a) ? a.order - b.order : (b.added || 0) - (a.added || 0)) || String(a.id).localeCompare(String(b.id)));
+    }
+
+    // The sort picked in My Tracks; the editor's Load list uses it too. "recent" is list()'s own order.
+    const SORT_KEY = "nswsTracksSort";
+    const SORTS = ["recent", "custom", "name", "author"];
+    function sortChoice() {
+        try {
+            const s = localStorage.getItem(SORT_KEY);
+            return SORTS.includes(s) ? s : "recent";
+        } catch {
+            return "recent";
+        }
+    }
+    function sortTracks(tracks, sort) {
+        if (sort === "custom") return byOrder(tracks);
+        if (sort === "name") return [...tracks].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+        if (sort === "author") return [...tracks].sort((a, b) => (a.author || "").localeCompare(b.author || "") || (a.name || "").localeCompare(b.name || ""));
+        return [...tracks];
+    }
+    // My Tracks in the order its list shows them, without its search or filter.
+    async function listShown() {
+        return sortTracks(await list(), sortChoice());
     }
 
     // Puts `id` just before place.before or just after place.after (neither = at the end). Only the moved track changes
@@ -2576,13 +2599,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
     }
 
     function renderMyTracks(pane) {
-        const SORT_KEY = "nswsTracksSort";
-        let savedSort = "recent";
-        try {
-            savedSort = localStorage.getItem(SORT_KEY) || "recent";
-        } catch {}
-        if (!["recent", "custom", "name", "author"].includes(savedSort)) savedSort = "recent";
-        const state = { q: "", sort: savedSort, filter: "all", selecting: false, selected: new Set(), tracks: [], loaded: false };
+        const state = { q: "", sort: sortChoice(), filter: "all", selecting: false, selected: new Set(), tracks: [], loaded: false };
         const toolbar = el("div", "nt-toolbar");
         const listEl = el("div");
         const foot = el("div", "nt-foot");
@@ -2646,10 +2663,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
                 if (state.filter !== "all") return normMode(t.mode) === state.filter;
                 return true;
             });
-            if (state.sort === "custom") out = byOrder(out);
-            else if (state.sort === "name") out = out.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-            else if (state.sort === "author") out = out.sort((a, b) => (a.author || "").localeCompare(b.author || "") || (a.name || "").localeCompare(b.name || ""));
-            return out;
+            return sortTracks(out, state.sort);
         }
 
         // Drag handle on every row. The row moves live while dragging; a search or filter only moves it among what's shown.
@@ -3366,6 +3380,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         parse,
         parseAsync,
         list,
+        listShown,
         get,
         findByTrackId,
         keepClipTrack,

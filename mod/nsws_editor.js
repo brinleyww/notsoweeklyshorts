@@ -24,6 +24,10 @@
     const MANUAL = "\u0000pasted";
     const NEW = "\u0000new";
     const LAST_KEY = "nswsEditorLast";
+    // Library mode: the My Tracks id of the track last open in the editor.
+    const LAST_ID_KEY = "nswsEditorLastId";
+    // Library mode: editor stores ("store:account") whose own saved tracks went into My Tracks once.
+    const MOVED_KEY = "nswsEditorMoved";
     // Set when github.io didn't load here, so the editor comes through the NSWS Worker for a week.
     const MIRROR_KEY = "nswsEditorMirror";
     const MIRROR_FOR_MS = 7 * 86400000;
@@ -255,6 +259,29 @@
         } catch {}
     }
 
+    // Library mode: a track's mode is on its My Tracks entry; a new track's waits in newMode until its first save.
+    let newMode = "normal";
+    const isId = (k) => typeof k === "string" && !!k && !k.startsWith("tmp:");
+    const validMode = (m) => (MODES.some((x) => x.id === m) ? m : "normal");
+    function modeFor(t) {
+        if (!t) return "normal";
+        if (!libMode || t === manual) return modeOf(t.name);
+        if (!isId(t.key)) return newMode;
+        return validMode(libTracks.find((x) => x.id === t.key)?.mode);
+    }
+
+    function setModeFor(t, mode) {
+        if (!t) return;
+        if (!libMode || t === manual) return setMode(t.name, mode);
+        if (!isId(t.key)) {
+            newMode = mode;
+            return;
+        }
+        // Copies: libTracks holds the library's own objects.
+        libTracks = libTracks.map((x) => (x.id === t.key ? { ...x, mode } : x));
+        lib()?.update(t.key, { mode }).catch((e) => note(e?.message || "Couldn't save the mode.", "bad"));
+    }
+
     function autosaveOn() {
         try {
             return localStorage.getItem(AUTOSAVE_KEY) === "1";
@@ -323,9 +350,15 @@
             return current();
         }
         const t = reply?.track;
-        live = t && typeof t.code === "string" ? { name: t.name || "Unnamed Track", named: !!t.name, author: t.author || "", code: t.code } : null;
+        live = t && typeof t.code === "string" ? { name: t.name || "Unnamed Track", named: !!t.name, author: t.author || "", code: t.code, key: typeof reply.key === "string" ? reply.key : null } : null;
         // A new track saved or loaded inside the editor is the one to reopen after a reload.
-        if (live?.named) {
+        if (libMode) {
+            if (isId(live?.key)) {
+                try {
+                    if (localStorage.getItem(LAST_ID_KEY) !== live.key) localStorage.setItem(LAST_ID_KEY, live.key);
+                } catch {}
+            }
+        } else if (live?.named) {
             try {
                 if (localStorage.getItem(LAST_KEY) !== live.name) localStorage.setItem(LAST_KEY, live.name);
             } catch {}
@@ -338,7 +371,7 @@
     // The editor's own Test runs in NSWS when Rocket League or Royale is picked, so it needs to know the mode.
     function syncMode() {
         const t = current();
-        post({ type: "mode", mode: t ? modeOf(t.name) : "normal" });
+        post({ type: "mode", mode: modeFor(t) });
     }
 
     let testing = false;
@@ -373,6 +406,7 @@
 
     // The mode picked up here goes to the track's My Tracks entry at once, when it has one.
     function pushMode(name, mode) {
+        if (libMode) return;
         const T = lib();
         let id = null;
         try {
@@ -431,7 +465,7 @@
                     note(ready ? "Open a track in the editor first." : "The editor isn't connected yet.", "bad");
                     return;
                 }
-                setMode(t.name, m.id);
+                setModeFor(t, m.id);
                 renderMode();
                 syncMode();
                 pushMode(t.name, m.id);
@@ -572,7 +606,7 @@
     function renderMode() {
         if (!ui) return;
         const t = current();
-        const mode = t ? modeOf(t.name) : "normal";
+        const mode = modeFor(t);
         for (const b of ui.seg.children) b.classList.toggle("on", b.dataset.mode === mode);
         ui.help.textContent = MODES.find((m) => m.id === mode).help + (mode === "normal" ? "" : " The editor's Test button tests in this mode.");
         ui.help.classList.toggle("special", mode !== "normal");
@@ -629,6 +663,14 @@
             assetRequest(m);
             return;
         }
+        if (m.type === "save" && !m.reqId && libMode) {
+            saveChain = saveChain.then(() => saveFromEditor(m)).catch((e) => console.warn("[Editor save]", e));
+            return;
+        }
+        if (m.type === "delete" && !m.reqId && libMode) {
+            deleteFromEditor(m);
+            return;
+        }
         if (m.reqId && pending.has(m.reqId)) {
             const p = pending.get(m.reqId);
             pending.delete(m.reqId);
@@ -636,7 +678,8 @@
             p.resolve(m);
             return;
         }
-        if (m.type === "changed")
+        if (m.type === "changed" && libMode) refreshLive();
+        else if (m.type === "changed")
             refreshList(true).then(() => {
                 refreshLive();
                 copyLibrary();
@@ -728,6 +771,9 @@
         ready = false;
         tracks = [];
         newestSave = 0;
+        libMode = false;
+        libSent.clear();
+        tmpIds.clear();
         loaded();
     }
 
@@ -758,6 +804,18 @@
         clearTimeout(fallbackTimer);
         helloTimer = fallbackTimer = null;
         ui?.fallback.classList.add("hidden");
+        if (!libWatch && lib()?.onChange) libWatch = lib().onChange(() => copyLibrary());
+        if (bridgeVersion >= 9 && lib()) {
+            startLibrary().then(() => {
+                if (!ready) return;
+                if (pendingImport) runImport();
+                else if (wantFresh) {
+                    wantFresh = false;
+                    editTrack(null, { fresh: true, quiet: true });
+                } else if (!editorOpen) openLast();
+            });
+            return;
+        }
         refreshList(false).then(() => {
             if (pendingImport) runImport();
             else if (wantFresh) {
@@ -779,16 +837,181 @@
             }
             copyLibrary();
         });
-        if (!libWatch && lib()?.onChange) libWatch = lib().onChange(() => copyLibrary());
     }
 
     let bridgeVersion = 0;
     let bridgeStore = null;
     let libWatch = null;
     let copying = null;
+
+    // Bridge 9+ (library mode): the editor's custom tracks, its Load list, are My Tracks itself, in the order My Tracks
+    // shows them. The editor keeps no tracks of its own; its Save and delete come here by My Tracks id.
+    let libMode = false;
+    // id -> hash of the code this frame has; the code is sent again only when it changed.
+    const libSent = new Map();
+    let libTracks = [];
+    let libTimer = null;
+    let libChain = Promise.resolve();
+    let saveChain = Promise.resolve();
+    // "tmp:n" (the editor's name for a new track until it has an id) -> My Tracks id.
+    const tmpIds = new Map();
+
+    async function startLibrary() {
+        libMode = true;
+        await pushLibrary().catch((e) => console.warn("[Editor library]", e));
+        // In the background: it may wait on the server, and what it adds reaches the editor with the next push.
+        moveEditorTracks().catch((e) => console.warn("[Editor library]", e));
+    }
+
+    function schedulePush(ms = 80) {
+        if (!libMode) return;
+        clearTimeout(libTimer);
+        libTimer = setTimeout(() => pushLibrary().catch((e) => console.warn("[Editor library]", e)), ms);
+    }
+
+    function pushLibrary() {
+        const p = libChain.then(pushOnce);
+        libChain = p.catch(() => {});
+        return p;
+    }
+
+    async function pushOnce(attempt = 0) {
+        const T = lib();
+        if (!libMode || !ready || !T) return;
+        const all = await (T.listShown ? T.listShown() : T.list());
+        const items = [];
+        for (const t of all) {
+            if (typeof t.code !== "string" || !t.code) continue;
+            const item = { key: t.id, hash: t.hash || String(t.updated || 0), saveTime: t.updated || 0 };
+            if (libSent.get(t.id) !== item.hash) item.code = t.code;
+            items.push(item);
+        }
+        const r = await request("library", { tracks: items }, 60000);
+        if (!r?.ok) throw new Error("The editor didn't take My Tracks.");
+        libTracks = all;
+        const need = new Set(Array.isArray(r.need) ? r.need : []);
+        libSent.clear();
+        for (const it of items) if (!need.has(it.key)) libSent.set(it.key, it.hash);
+        renderMode();
+        if (need.size && attempt < 2) return pushOnce(attempt + 1);
+    }
+
+    // The editor's Save, autosave or import: {key: My Tracks id or null, tmp: "tmp:n" for a new track, code, name, imported}.
+    async function saveFromEditor(m) {
+        const T = lib();
+        if (!T || typeof m.code !== "string") return;
+        const tmp = typeof m.tmp === "string" ? m.tmp : null;
+        const key = (typeof m.key === "string" && m.key) || (tmp && tmpIds.get(tmp)) || null;
+        let t = null;
+        let old = null;
+        let error = null;
+        try {
+            old = key ? await T.get(key) : null;
+            // An import that My Tracks already has keeps that entry's mode.
+            t = old ? await T.replaceCode(key, m.code) : await T.add(m.code, { mode: m.imported ? undefined : newMode, source: m.imported ? "import" : "editor", fresh: !m.imported });
+        } catch (e) {
+            error = e?.message || null;
+        }
+        if (t && tmp) tmpIds.set(tmp, t.id);
+        if (t) libSent.set(t.id, t.hash);
+        post({ type: "saved", tmp, key: typeof m.key === "string" ? m.key : null, id: t?.id || null, hash: t?.hash || null, ok: !!t });
+        if (t && !m.imported) {
+            try {
+                localStorage.setItem(LAST_ID_KEY, t.id);
+            } catch {}
+        }
+        const name = t?.name || m.name || "Unnamed Track";
+        if (!t) tellSaved({ saved: [], failed: [{ name, error }] });
+        else if (!old || old.hash !== t.hash) tellSaved({ saved: [name], failed: [] });
+        schedulePush();
+        refreshLive();
+    }
+
+    // The trash button in the editor's Load list.
+    async function deleteFromEditor(m) {
+        if (!isId(m.key)) return;
+        const T = lib();
+        const t = await T?.get(m.key).catch(() => null);
+        if (!t) return schedulePush();
+        try {
+            await T.remove(m.key);
+            if (host && !host.classList.contains("hidden")) note('Deleted "' + (t.name || "Unnamed Track") + '" from My Tracks.');
+        } catch (e) {
+            note(e?.message || "Couldn't delete that track from My Tracks.", "bad");
+            schedulePush(0);
+        }
+    }
+
+    // The editor's own saved tracks (from before library mode) go into My Tracks once per editor store and account, when
+    // My Tracks doesn't have them already. Tracks the old two-way sync linked are in My Tracks, or were deleted there.
+    async function moveEditorTracks() {
+        const T = lib();
+        const synced = (await T.whenSynced?.()) !== false;
+        const token = T.user?.().token || "";
+        const acct = token ? (await digest("nsws-editor:" + token)).slice(0, 12) : "";
+        let moved = {};
+        try {
+            moved = JSON.parse(localStorage.getItem(MOVED_KEY)) || {};
+        } catch {}
+        const tag = (bridgeStore || "?") + ":" + acct;
+        if (moved[tag] || !synced) return;
+        const reply = await request("list");
+        if (!reply?.loaded || !Array.isArray(reply.tracks)) return;
+        let links = {};
+        try {
+            links = JSON.parse(localStorage.getItem(LINKS_KEY))?.[bridgeStore] || {};
+        } catch {}
+        const all = await T.list();
+        const byId = new Map(all.map((t) => [t.id, t]));
+        const nameFits = (en, tn) => en === tn || (en.startsWith(tn + " (") && /^ \(\d+\)$/.test(en.slice(tn.length)));
+        const failed = [];
+        for (const e of reply.tracks) {
+            if (!e || typeof e.name !== "string" || typeof e.code !== "string") continue;
+            const l = links[e.name];
+            if (l && l.a !== acct) continue;
+            if (l?.id) {
+                const t = byId.get(l.id);
+                // Saved in the editor after the last sync and not changed in My Tracks since: that save goes over.
+                if (t && l.e && t.hash === l.h && (await digest(e.code)) !== l.e) await T.replaceCode(t.id, e.code).catch((err) => failed.push({ name: e.name, error: err?.message }));
+                continue;
+            }
+            const flat = await digest(e.code.replace(/\s+/g, ""));
+            if (all.some((t) => (t.hash || "").startsWith(flat) || (e.id && t.trackId === e.id && nameFits(e.name, t.name)))) continue;
+            try {
+                await T.add(e.code, { mode: modeOf(e.name), source: "editor" });
+            } catch (err) {
+                failed.push({ name: e.name, error: err?.message });
+            }
+        }
+        if (failed.length) {
+            tellSaved({ saved: [], failed });
+            return;
+        }
+        moved[tag] = Date.now();
+        try {
+            localStorage.setItem(MOVED_KEY, JSON.stringify(moved));
+        } catch {}
+    }
+
+    // After a reload: the track last open, or a new one.
+    function openLast() {
+        let lastId = null;
+        let lastName = null;
+        try {
+            lastId = localStorage.getItem(LAST_ID_KEY);
+            lastName = localStorage.getItem(LAST_KEY);
+        } catch {}
+        const t = libTracks.find((x) => x.id === lastId) || (lastId == null && lastName != null ? libTracks.find((x) => x.name === lastName) : null);
+        try {
+            localStorage.removeItem(LAST_KEY);
+        } catch {}
+        editTrack(null, t ? { key: t.id, label: t.name, quiet: true } : { fresh: true, quiet: true });
+    }
+
     const mark = (t) => t.hash || String(t.updated || t.code.length);
     // Keeps My Tracks and the editor's own Custom tracks (its Load list) the same, both ways.
     function copyLibrary() {
+        if (libMode) return schedulePush();
         if (!ready || bridgeVersion < 3 || !lib()) return;
         if (copying) {
             copying.again = true;
@@ -1060,11 +1283,12 @@
     }
 
     let editorOpen = false;
-    // Opens a saved track (or a new one when name is null) straight in the block editor.
+    // Opens a saved track (or a new one when name is null) straight in the block editor. Library mode: opts.key opens that
+    // My Tracks entry, opts.code a track that isn't in My Tracks yet (Save adds it); opts.label names either in the bar.
     async function editTrack(name, opts = {}, attempt = 0) {
         let reply;
         try {
-            reply = await request("edit", { name, force: !!opts.force, fresh: !!opts.fresh }, EDIT_TIMEOUT_MS);
+            reply = await request("edit", { name, key: opts.key, code: opts.code, force: !!opts.force, fresh: !!opts.fresh }, EDIT_TIMEOUT_MS);
         } catch (err) {
             loaded();
             note(err.message, "bad");
@@ -1072,6 +1296,11 @@
         }
         if (!reply.ok && /loading/i.test(reply.error || "") && attempt < 40) {
             await new Promise((r) => setTimeout(r, 1000));
+            return editTrack(name, opts, attempt + 1);
+        }
+        // Added to My Tracks a moment ago: the editor gets the list first.
+        if (!reply.ok && reply.gone && opts.key && attempt < 2) {
+            await pushLibrary().catch(() => {});
             return editTrack(name, opts, attempt + 1);
         }
         if (reply.dirty) {
@@ -1108,10 +1337,14 @@
         editorOpen = true;
         loaded();
         try {
-            name ? localStorage.setItem(LAST_KEY, name) : localStorage.removeItem(LAST_KEY);
+            if (opts.key) localStorage.setItem(LAST_ID_KEY, opts.key);
+            else if (libMode) localStorage.removeItem(LAST_ID_KEY);
+            else name ? localStorage.setItem(LAST_KEY, name) : localStorage.removeItem(LAST_KEY);
         } catch {}
+        if (libMode && !opts.key) newMode = opts.code ? validMode(opts.mode) : "normal";
         refreshLive();
-        if (!opts.quiet) note(name ? 'Editing "' + name + '".' : "New track. Press Save in the editor to give it a name.", "good");
+        const label = name ?? opts.label ?? null;
+        if (!opts.quiet) note(label ? 'Editing "' + label + '".' : "New track. Press Save in the editor to give it a name.", "good");
         return true;
     }
 
@@ -1142,6 +1375,7 @@
     async function runImport(attempt = 0) {
         const job = pendingImport;
         if (!job || !ready) return;
+        if (libMode) return openFromLibrary(job);
         let reply;
         try {
             reply = await request("import", { code: job.code });
@@ -1169,6 +1403,24 @@
         renderPicker();
         renderMode();
         if (await editTrack(reply.name, { before, quiet: true })) note('Editing "' + reply.name + '".', "good");
+    }
+
+    // Library mode: a My Tracks entry opens as itself. A code from elsewhere (Race Control) opens its My Tracks entry when
+    // there is one, else as a new track that the editor's Save adds.
+    async function openFromLibrary(job) {
+        const T = lib();
+        const all = await T.list().catch(() => []);
+        let t = job.key ? all.find((x) => x.id === job.key) : null;
+        let info = null;
+        if (!t) {
+            info = await T.parseAsync(job.code).catch(() => null);
+            if (info?.ok) t = all.find((x) => x.code === info.code) || (info.trackId ? all.find((x) => x.trackId === info.trackId && x.name === info.name) : null);
+        }
+        if (pendingImport !== job) return;
+        pendingImport = null;
+        const label = t?.name || info?.name || job.name || "Unnamed Track";
+        const ok = await editTrack(null, t ? { key: t.id, label, quiet: true } : { code: job.code, mode: job.mode, label, quiet: true });
+        if (ok) note('Editing "' + label + '".' + (t ? "" : " Save it to put it in My Tracks."), "good");
     }
 
     async function usePasted() {
@@ -1266,7 +1518,7 @@
             note(info?.error || "That track code can't be read.", "bad");
             return;
         }
-        let mode = modeOf(t.name);
+        let mode = modeFor(t);
         const seg = el("div", "nse-seg");
         for (const m of MODES) {
             const b = el("button", m.id === mode ? "on" : null, m.label);
@@ -1329,7 +1581,7 @@
                     status.textContent = err?.message || "Couldn't send the track.";
                     return;
                 }
-                setMode(t.name, mode);
+                setModeFor(t, mode);
                 renderMode();
                 T.markSubmitted?.(t.code, { id: answer?.id || "", at: Date.now() }).catch(() => {});
                 status.className = "good";
@@ -1424,7 +1676,8 @@
         note(wasLoaded ? "" : "The editor's Save keeps your track and puts it in My Tracks. Unsaved work is lost when you close or reload this page" + (autosaveOn() ? "; autosave is on." : "; Autosave can save for you."));
         const code = typeof track === "string" ? track : track?.code;
         if (typeof code !== "string" || !code) return;
-        pendingImport = { code, mode: typeof track === "object" ? track.mode : null };
+        const obj = typeof track === "object" ? track : {};
+        pendingImport = { code, mode: obj.mode || null, key: typeof obj.id === "string" && obj.id ? obj.id : null, name: obj.name || null };
         if (ready) runImport();
         else {
             note("Sending the track to the editor...");
@@ -1520,7 +1773,7 @@
     // The editor's open track, saved or not, with its mode.
     async function currentTrack() {
         const t = await refreshLive();
-        return t ? { name: t.name, code: t.code, mode: modeOf(t.name) } : null;
+        return t ? { name: t.name, code: t.code, mode: modeFor(t) } : null;
     }
 
     // A new, empty track in the block editor (once the editor has loaded).
