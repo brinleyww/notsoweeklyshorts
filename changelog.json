@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.11",
+        "changes": [
+            "Replays load fully before they start playing, and the time bar can't be moved until then"
+        ]
+    },
+    {
         "version": "v13.10",
         "changes": [
             "Fixed the \"memory access out of bounds\" crash when watching replays or racing ghosts on huge Better Editor tracks like week 13's map 5"

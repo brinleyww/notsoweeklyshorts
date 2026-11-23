@@ -42926,6 +42926,7 @@ window.__nswsAutoGhostNote = function(trackId) {
 body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
 .time-bar-ui > .button.nsws-freecam-button.on { background-color: var(--button-hover-color); }
 .time-bar-ui > .button.nsws-freecam-button.on::after { width: 100%; }
+.time-bar-ui > .bar.nsws-replay-locked { cursor: progress; opacity: 0.6; }
 `;
         const attachSpectatorTouch = (spectator, canvas) => {
             if (!document.getElementById("nsws-freecam-css")) {
@@ -62705,7 +62706,9 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, Xu, "f").disabled = !0) : (C.get(this, Ju, "f").disabled = 0 == C.get(this, ip, "f").numberOfFrames,
             C.get(this, Xu, "f").disabled = !1) : (C.get(this, Ju, "f").disabled = !0,
             C.get(this, Xu, "f").disabled = !0),
-            C.get(this, rp, "f") ? C.get(this, Yu, "f").innerHTML = '<img src="images/reset.svg">' : C.get(this, np, "f") ? C.get(this, Yu, "f").innerHTML = '<img src="images/play.svg">' : C.get(this, Yu, "f").innerHTML = '<img src="images/pause.svg">'
+            C.get(this, rp, "f") ? C.get(this, Yu, "f").innerHTML = '<img src="images/reset.svg">' : C.get(this, np, "f") ? C.get(this, Yu, "f").innerHTML = '<img src="images/play.svg">' : C.get(this, Yu, "f").innerHTML = '<img src="images/pause.svg">';
+            C.get(this, Yu, "f").disabled = !!this.nswsLocked;
+            this.nswsLocked && (C.get(this, Ju, "f").disabled = !0, C.get(this, Xu, "f").disabled = !0)
         }
         ,
         bp = function() {
@@ -62768,7 +62771,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Ju, "f").className = "button",
                 C.get(this, Ju, "f").innerHTML = '<img src="images/step_back.svg">',
                 C.get(this, Ju, "f").addEventListener("pointerdown", (e => {
-                    if (0 == e.button) {
+                    if (0 == e.button && !this.nswsLocked) {
                         t.playUIClick(),
                         C.get(this, ju, "m", fp).call(this);
                         const e = t => {
@@ -62785,7 +62788,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.get(this, Xu, "f").className = "button",
                 C.get(this, Xu, "f").innerHTML = '<img src="images/step_forward.svg">',
                 C.get(this, Xu, "f").addEventListener("pointerdown", (e => {
-                    if (0 == e.button) {
+                    if (0 == e.button && !this.nswsLocked) {
                         t.playUIClick(),
                         C.get(this, ju, "m", mp).call(this);
                         const e = t => {
@@ -62801,6 +62804,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Yu, document.createElement("button"), "f"),
                 C.get(this, Yu, "f").className = "button",
                 C.get(this, Yu, "f").addEventListener("click", ( () => {
+                    if (this.nswsLocked) return;
                     t.playUIClick(),
                     C.get(this, rp, "f") ? (C.get(this, qu, "f").call(this, new yt.A(0)),
                     this.isPaused = !1) : this.isPaused = !this.isPaused
@@ -62811,6 +62815,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 C.set(this, Zu, document.createElement("div"), "f"),
                 C.get(this, Zu, "f").className = "bar",
                 C.get(this, Zu, "f").addEventListener("pointerdown", (e => {
+                    if (this.nswsLocked) return;
                     C.set(this, op, !0, "f"),
                     C.get(this, ju, "m", vp).call(this, e)
                 }
@@ -62838,7 +62843,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 o.appendChild(C.get(this, tp, "f")),
                 C.get(this, ju, "m", bp).call(this),
                 window.addEventListener("keydown", C.set(this, up, (e => {
-                    e.repeat || (n.checkKeyBinding(e, KeyBind.PreviewStepForward) ? C.get(this, ju, "m", mp).call(this) : n.checkKeyBinding(e, KeyBind.PreviewStepBack) && C.get(this, ju, "m", fp).call(this))
+                    e.repeat || this.nswsLocked || (n.checkKeyBinding(e, KeyBind.PreviewStepForward) ? C.get(this, ju, "m", mp).call(this) : n.checkKeyBinding(e, KeyBind.PreviewStepBack) && C.get(this, ju, "m", fp).call(this))
                 }
                 ), "f")),
                 window.addEventListener("keyup", C.set(this, pp, (e => {
@@ -62855,6 +62860,13 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             }
             get isDragging() {
                 return C.get(this, op, "f")
+            }
+            set locked(e) {
+                if (this.nswsLocked === e) return;
+                this.nswsLocked = e;
+                if (e) C.set(this, op, !1, "f"), C.get(this, ju, "m", gp).call(this), C.get(this, ju, "m", Ap).call(this);
+                C.get(this, Zu, "f").classList.toggle("nsws-replay-locked", e);
+                C.get(this, ju, "m", yp).call(this)
             }
             get isPaused() {
                 return C.get(this, np, "f")
@@ -63553,6 +63565,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     }
                     ,
                     totalTime: () => C.get(this, gf, "f"),
+                    loadProgress: () => this.loadProgress(),
                     step: e => this.update(e, !0),
                     audio: l,
                     getControls: () => this.getDisplayedControls(),
@@ -63595,7 +63608,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         C.get(this, mf, "f").toggle(),
                         e.preventDefault()
                     }
-                    "Space" == e.code && (C.set(this, pf, !C.get(this, pf, "f"), "f"),
+                    "Space" == e.code && !this.nswsLoading && (C.set(this, pf, !C.get(this, pf, "f"), "f"),
                     C.get(this, vf, "f").isPaused = C.get(this, pf, "f"),
                     e.preventDefault())
                 }
@@ -63630,6 +63643,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     const seek = freecamBar.querySelector(":scope > .bar");
                     seek ? freecamBar.insertBefore(button, seek) : freecamBar.appendChild(button)
                 }
+                this.nswsLoading = this.loadProgress() < 1,
+                C.get(this, vf, "f").locked = this.nswsLoading;
                 watchSession = this;
                 window.__nswsTraffic?.event("replays");
             }
@@ -63663,6 +63678,22 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     controls: n
                 };
                 return n
+            }
+            // Playback and the time bar stay locked until every run is loaded to the longest finish; 30 s with no progress plays what there is.
+            loadProgress() {
+                if (this.nswsLoaded) return 1;
+                const runs = C.get(this, uf, "f")
+                  , need = this.nswsLoadNeed ??= Math.max(1, ...runs.map((e => e.settings.time.numberOfFrames)))
+                  , now = performance.now();
+                let sum = 0, min = 1 / 0;
+                for (const e of runs) {
+                    const f = Math.min(need, e.replay.getLastFrame().numberOfFrames);
+                    sum += f, min = Math.min(min, f)
+                }
+                const st = this.nswsLoadState ??= { sum: -1, since: now };
+                sum !== st.sum && (st.sum = sum, st.since = now);
+                if (min >= need || now - st.since > 3e4) return this.nswsLoaded = !0, 1;
+                return Math.min(.99, sum / (need * runs.length))
             }
             dispose() {
                 if (watchSession === this) watchSession = null;
@@ -63698,8 +63729,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 for (const e of C.get(this, uf, "f"))
                     t = Math.min(t, e.replay.getLastFrame().numberOfFrames);
                 const n = new yt.A(t);
+                this.nswsLoading = !exportStep && this.loadProgress() < 1;
+                C.get(this, vf, "f").locked = this.nswsLoading;
                 let i;
-                if (C.get(this, pf, "f") || C.get(this, vf, "f").isDragging || this.cinematic?.holding) {
+                if (C.get(this, pf, "f") || C.get(this, vf, "f").isDragging || this.cinematic?.holding || this.nswsLoading) {
                     i = 0;
                     for (const e of C.get(this, uf, "f"))
                         e.car.audioVolume = 0

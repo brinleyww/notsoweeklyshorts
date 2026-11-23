@@ -4286,9 +4286,9 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
             return clamp(0.5 * clamp(loaded / Math.max(1, need), 0, 1) + 0.5 * clamp(planner.plannedTo / end, 0, 1), 0, 0.99);
         }
 
-        // Unlimited watch cars (window.__nswsWatchUnlimited): playback waits until every replay has loaded to its end.
-        // 0..1, 1 once loaded; 30 s with no replay moving on plays what there is.
+        // 0..1, 1 once every replay has loaded; 30 s with no replay moving on plays what there is.
         loadAll(runs) {
+            if (this.o.loadProgress) return this.o.loadProgress();
             if (this.allLoaded || !window.__nswsWatchUnlimited?.()) return 1;
             const now = performance.now();
             const need = Math.round((this.o.totalTime?.() ?? 0) * 1000) - 1;
