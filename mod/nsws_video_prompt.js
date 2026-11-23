@@ -22,7 +22,7 @@
 .nsws-vid .name{font-size:24px;line-height:1.05;overflow-wrap:break-word;}
 .nsws-vid .count{margin-top:6px;font-size:18px;opacity:.75;}
 .nsws-vid p{margin:0 0 10px 0;padding:10px;background-color:var(--surface-secondary-color,#212b58);font-size:26px;line-height:1.05;color:var(--text-color,#fff);overflow-wrap:break-word;}
-.nsws-vid .row{display:flex;justify-content:center;gap:10px;}
+.nsws-vid .row{display:flex;justify-content:space-between;gap:10px;}
 .nsws-vid .button{min-width:140px;margin:0;text-decoration:none;}
 @media (max-width:420px){.nsws-vid .card img{width:112px;height:63px;}}
 `;
@@ -117,8 +117,9 @@
         box.appendChild(el("p", null, "The first official NSWS video is out! Go watch it on YouTube."));
 
         const row = el("div", "row");
+        const later = el("button", "button", "No thanks");
         const watch = link("button", "Watch video");
-        row.append(watch);
+        row.append(later, watch);
         box.appendChild(row);
 
         let answer = "closed";
@@ -127,6 +128,11 @@
             if (dialog.open) dialog.close();
             dialog.remove();
         };
+        later.addEventListener("click", () => {
+            window.__nswsUIClick?.();
+            answer = "no";
+            close();
+        });
         for (const a of [card, watch]) {
             a.addEventListener("click", () => {
                 window.__nswsUIClick?.();
