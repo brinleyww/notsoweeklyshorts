@@ -101,7 +101,7 @@
 `;
 
     let panel = null, renderManager = null, gl = null, timerExt = null, gpuName = "", version = "";
-    let open = false, car = null;
+    let open = false, car = null, settleUntil = 0;
     const frames = { t: new Ring(2048), dt: new Ring(2048), cpu: new Ring(2048) };
     const gpu = new Ring(256);
     const sparks = {};
@@ -557,6 +557,9 @@
     function placePanel(force) {
         if (!panel?.isConnected) return;
         const vw = innerWidth, vh = innerHeight, w0 = panel.offsetWidth, h0 = panel.offsetHeight;
+        const same = place && place.vw === vw && place.vh === vh && place.h === h0 && place.w === w0;
+        // While driving it stays put once the race HUD has settled; only a size change moves it.
+        if (!force && same && car && performance.now() > settleUntil) return;
         const fit = Math.min(1, (vh - 2 * MARGIN) / h0, (vw - 2 * MARGIN) / w0);
         const blocks = obstacles();
         // Covering UI costs its area in pixels; shrinking the panel is charged too, so it only shrinks to get clear of something.
@@ -585,7 +588,7 @@
             for (const x of [maxX, MARGIN]) slide(MARGIN, maxY, 16, y => consider(x, y, s));
             for (const y of [MARGIN, maxY]) slide(MARGIN, maxX, 24, x => consider(x, y, s));
         }
-        if (!force && place && place.vw === vw && place.vh === vh && place.h === h0 && place.w === w0) {
+        if (!force && same) {
             const now = cost(place.x, place.y, place.s);
             if (now - best.c < Math.max(1500, now * .25)) return;
         }
@@ -595,6 +598,7 @@
 
     function newCar(c) {
         car = c;
+        settleUntil = performance.now() + 1500;
         const dispose = c.dispose;
         c.dispose = function () {
             car === c && (car = null);

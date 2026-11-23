@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.14",
+        "changes": [
+            "The debug info stays in one place while you drive instead of moving around"
+        ]
+    },
+    {
         "version": "v13.13",
         "changes": [
             "Press F3 for debug info: FPS, a frame time graph, CPU and GPU time, draw calls, triangles, memory, car and network stats",
