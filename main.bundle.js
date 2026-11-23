@@ -32745,6 +32745,369 @@ window.__nswsAutoGhostNote = function(trackId) {
                 });
                 return void 0 !== now && (null == now ? failed() : c.chunks = now), c
             }
+            // Parts stacked in one plane (week 13 map 5: thousands of 40 x 20 gate plates one step apart, up to 32 deep)
+            // z-fight, and every hidden layer is still shaded. A face that is one solid axis-aligned rectangle keeps only
+            // what no later part's rectangle in the same plane covers (later wins, as with equal depths), so each pixel
+            // is drawn once. Only parts with such an overlap leave their instanced meshes.
+            const solidPlanes = new WeakMap
+              , coplanarMerges = new WeakMap;
+            function solidRectPlanes(g) {
+                let r = solidPlanes.get(g);
+                if (void 0 !== r)
+                    return r;
+                r = {planes: [], triPlane: null};
+                const pos = g.attributes.position
+                  , ix = g.index
+                  , n = (null != ix ? ix.count : pos.count) / 3 | 0
+                  , P = new Map
+                  , triPlane = new Int32Array(n).fill(-1)
+                  , p = [0, 0, 0];
+                for (let t = 0; t < n; t++) {
+                    const a = null != ix ? ix.getX(3 * t) : 3 * t
+                      , b = null != ix ? ix.getX(3 * t + 1) : 3 * t + 1
+                      , c = null != ix ? ix.getX(3 * t + 2) : 3 * t + 2
+                      , ax = pos.getX(a), ay = pos.getY(a), az = pos.getZ(a)
+                      , ux = pos.getX(b) - ax, uy = pos.getY(b) - ay, uz = pos.getZ(b) - az
+                      , vx = pos.getX(c) - ax, vy = pos.getY(c) - ay, vz = pos.getZ(c) - az
+                      , N = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx]
+                      , l = Math.hypot(N[0], N[1], N[2]);
+                    if (l < 1e-9)
+                        continue;
+                    let k = -1;
+                    for (let q = 0; q < 3; q++)
+                        Math.abs(N[q]) > .9999 * l && (k = q);
+                    if (k < 0)
+                        continue;
+                    const d = N[k] > 0 ? 1 : -1
+                      , cpos = [ax, ay, az][k]
+                      , key = 2 * k + (d > 0 ? 1 : 0) + "|" + Math.round(1e4 * cpos);
+                    let e = P.get(key);
+                    null == e && P.set(key, e = {a: k, d, c: cpos, tris: [], area: 0, u0: 1 / 0, u1: -1 / 0, v0: 1 / 0, v1: -1 / 0});
+                    e.tris.push(t), e.area += l / 2;
+                    const ua = (k + 1) % 3, va = (k + 2) % 3;
+                    for (const i of [a, b, c])
+                        p[0] = pos.getX(i), p[1] = pos.getY(i), p[2] = pos.getZ(i),
+                        e.u0 = Math.min(e.u0, p[ua]), e.u1 = Math.max(e.u1, p[ua]), e.v0 = Math.min(e.v0, p[va]), e.v1 = Math.max(e.v1, p[va])
+                }
+                for (const e of P.values()) {
+                    const A = (e.u1 - e.u0) * (e.v1 - e.v0);
+                    if (A > 1e-6 && Math.abs(e.area - A) < 1e-3 * A) {
+                        for (const t of e.tris)
+                            triPlane[t] = r.planes.length;
+                        r.planes.push(e)
+                    }
+                }
+                return r.planes.length > 0 && (r.triPlane = triPlane), solidPlanes.set(g, r), r
+            }
+            // The part's mesh without its solid-plane triangles (those come from the merged meshes), attributes shared.
+            function restOfMesh(mesh) {
+                const S = solidRectPlanes(mesh.geometry);
+                if (void 0 !== S.rest)
+                    return S.rest;
+                const g = mesh.geometry
+                  , ix = null != g.index ? g.index.array : null
+                  , keep = [];
+                for (let t = 0; t < S.triPlane.length; t++)
+                    S.triPlane[t] < 0 && keep.push(ix ? ix[3 * t] : 3 * t, ix ? ix[3 * t + 1] : 3 * t + 1, ix ? ix[3 * t + 2] : 3 * t + 2);
+                if (0 == keep.length)
+                    return S.rest = null;
+                const a = new THREE.BufferGeometry;
+                for (const n in g.attributes)
+                    a.setAttribute(n, g.attributes[n]);
+                return a.setIndex(new THREE.BufferAttribute(g.attributes.position.count > 65535 ? new Uint32Array(keep) : new Uint16Array(keep),1)),
+                a.computeBoundingBox(),
+                a.computeBoundingSphere(),
+                S.rest = {geometry: a, material: mesh.material, userData: {}}
+            }
+            // ordered: [part, mesh] in draw order. Returns {involved: Set of parts, buckets: [{material, attrs, count}]} or null.
+            function coplanarMergeOf(ordered, span) {
+                const groups = new Map
+                  , q = [0, 0, 0]
+                  , w = [0, 0, 0]
+                  , xf = (m, x, y, z, o) => {
+                    o[0] = m[0] * x + m[4] * y + m[8] * z + m[12], o[1] = m[1] * x + m[5] * y + m[9] * z + m[13], o[2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+                };
+                for (let i = 0; i < ordered.length; i++) {
+                    const [part, mesh] = ordered[i]
+                      , S = solidRectPlanes(mesh.geometry);
+                    if (0 == S.planes.length)
+                        continue;
+                    const m = part.matrix.elements;
+                    for (let j = 0; j < S.planes.length; j++) {
+                        const e = S.planes[j]
+                          , ua = (e.a + 1) % 3
+                          , va = (e.a + 2) % 3;
+                        q[e.a] = e.c, q[ua] = e.u0, q[va] = e.v0, xf(m, q[0], q[1], q[2], w);
+                        const A = [w[0], w[1], w[2]];
+                        q[ua] = e.u1, q[va] = e.v1, xf(m, q[0], q[1], q[2], w);
+                        const n = [0, 0, 0];
+                        n[e.a] = e.d;
+                        const N = [m[0] * n[0] + m[4] * n[1] + m[8] * n[2], m[1] * n[0] + m[5] * n[1] + m[9] * n[2], m[2] * n[0] + m[6] * n[1] + m[10] * n[2]];
+                        let K = -1;
+                        for (let t = 0; t < 3; t++)
+                            Math.abs(N[t]) > .9999 && (K = t);
+                        if (K < 0)
+                            continue;
+                        const KU = (K + 1) % 3
+                          , KV = (K + 2) % 3
+                          , r = {i, j, K, D: N[K] > 0 ? 1 : -1, C: A[K], u0: Math.min(A[KU], w[KU]), u1: Math.max(A[KU], w[KU]), v0: Math.min(A[KV], w[KV]), v1: Math.max(A[KV], w[KV]), comp: -1, owned: null}
+                          , key = 2 * K + (r.D > 0 ? 1 : 0) + "|" + Math.round(1e3 * r.C)
+                          , g = groups.get(key);
+                        null == g ? groups.set(key, [r]) : g.push(r)
+                    }
+                }
+                const E = 1e-3
+                  , involved = new Set
+                  , clipped = new Map;
+                let stackedArea = 0
+                  , hiddenArea = 0;
+                for (const g of groups.values()) {
+                    if (g.length < 2)
+                        continue;
+                    // Overlapping pairs by a sweep along u; components by union-find.
+                    g.sort((a, b) => a.u0 - b.u0);
+                    const up = g.map((e, t) => t)
+                      , find = e => {
+                        for (; up[e] != e; )
+                            e = up[e] = up[up[e]];
+                        return e
+                    }
+                      , active = [];
+                    let any = !1;
+                    for (let t = 0; t < g.length; t++) {
+                        const a = g[t];
+                        for (let k = active.length; k-- > 0; ) {
+                            const b = g[active[k]];
+                            if (b.u1 <= a.u0 + E) {
+                                active[k] = active[active.length - 1], active.pop();
+                                continue
+                            }
+                            Math.min(a.v1, b.v1) - Math.max(a.v0, b.v0) > E && (up[find(t)] = find(active[k]), any = !0)
+                        }
+                        active.push(t)
+                    }
+                    if (!any)
+                        continue;
+                    const comps = new Map;
+                    for (let t = 0; t < g.length; t++) {
+                        const k = find(t)
+                          , c = comps.get(k);
+                        null == c ? comps.set(k, [g[t]]) : c.push(g[t])
+                    }
+                    for (const c of comps.values()) {
+                        if (c.length < 2)
+                            continue;
+                        const R = e => Math.round(e / E) * E
+                          , Us = [...new Set(c.flatMap(e => [R(e.u0), R(e.u1)]))].sort((a, b) => a - b)
+                          , Vs = [...new Set(c.flatMap(e => [R(e.v0), R(e.v1)]))].sort((a, b) => a - b)
+                          , nu = Us.length - 1
+                          , nv = Vs.length - 1;
+                        if (nu * nv > 4e6)
+                            continue;
+                        const iu = new Map(Us.map((e, t) => [e, t]))
+                          , iv = new Map(Vs.map((e, t) => [e, t]))
+                          , owner = new Int32Array(nu * nv).fill(-1);
+                        c.sort((a, b) => a.i - b.i);
+                        for (let t = 0; t < c.length; t++) {
+                            const e = c[t]
+                              , a0 = iu.get(R(e.u0)), a1 = iu.get(R(e.u1)), b0 = iv.get(R(e.v0)), b1 = iv.get(R(e.v1));
+                            e.cell = [a0, a1, b0, b1];
+                            for (let x = a0; x < a1; x++)
+                                owner.fill(t, x * nv + b0, x * nv + b1)
+                        }
+                        // Only worth it where the stack hides real area: seams between neighbours stay instanced.
+                        let sum = 0
+                          , union = 0;
+                        for (const e of c)
+                            sum += (e.u1 - e.u0) * (e.v1 - e.v0);
+                        for (let x = 0; x < nu; x++)
+                            for (let y = 0; y < nv; y++)
+                                owner[x * nv + y] >= 0 && (union += (Us[x + 1] - Us[x]) * (Vs[y + 1] - Vs[y]));
+                        if (sum < 1.5 * union)
+                            continue;
+                        stackedArea += sum,
+                        hiddenArea += sum - union;
+                        for (let t = 0; t < c.length; t++) {
+                            const e = c[t]
+                              , [a0,a1,b0,b1] = e.cell
+                              , out = []
+                              , open = new Map;
+                            for (let x = a0; x <= a1; x++) {
+                                const runs = new Map;
+                                if (x < a1)
+                                    for (let y = b0; y < b1; ) {
+                                        if (owner[x * nv + y] != t) {
+                                            y++;
+                                            continue
+                                        }
+                                        let z = y;
+                                        for (; z < b1 && owner[x * nv + z] == t; )
+                                            z++;
+                                        runs.set(y + "|" + z, [y, z]), y = z
+                                    }
+                                for (const [k,o] of open)
+                                    runs.has(k) ? runs.delete(k) : (out.push([Us[o.x], Us[x], Vs[o.y], Vs[o.z]]), open.delete(k));
+                                for (const [k,[y,z]] of runs)
+                                    open.set(k, {x, y, z})
+                            }
+                            e.owned = out, involved.add(e.i);
+                            let s = clipped.get(e.i);
+                            null == s && clipped.set(e.i, s = new Map), s.set(e.j, e)
+                        }
+                    }
+                }
+                // Worth it only when most of the stacked area is hidden copies (week 13 map 5's floor hides ~90%): where
+                // stacks mostly hide walls inside other blocks (map 3, ~50%), the extra meshes cost more than they save.
+                if (0 == involved.size || hiddenArea < .7 * stackedArea)
+                    return null;
+                // The involved parts' solid-plane triangles, world-space, per material and attribute layout and area; the rest
+                // of each part stays instanced (restOfMesh).
+                const list = [...involved].map(e => ({i: e, x: ordered[e][0].x, y: ordered[e][0].y, z: ordered[e][0].z}))
+                  , buckets = new Map
+                  , parts = new Set
+                  , put = (b, n, v) => {
+                    let a = b.arr[n];
+                    b.len[n] == a.length && (a = new Float32Array(2 * a.length), a.set(b.arr[n]), b.arr[n] = a),
+                    a[b.len[n]++] = v
+                }
+                  , putIndex = (b, v) => {
+                    b.ilen == b.idx.length && (b.idx = (e => (e.set(b.idx), e))(new Uint32Array(2 * b.idx.length))),
+                    b.idx[b.ilen++] = v
+                };
+                for (const chunk of splitTrackParts(list, 256, span))
+                    for (const it of chunk) {
+                        const [part, mesh] = ordered[it.i]
+                          , g = mesh.geometry
+                          , names = Object.keys(g.attributes).sort()
+                          , key = mesh.material.uuid + "|" + names.map(e => e + g.attributes[e].itemSize).join() + "|" + chunk[0].i;
+                        parts.add(part);
+                        let b = buckets.get(key);
+                        null == b && buckets.set(key, b = {material: mesh.material, names, sizes: names.map(e => g.attributes[e].itemSize), arr: names.map(e => new Float32Array(3072 * g.attributes[e].itemSize)), len: names.map(() => 0), idx: new Uint32Array(6144), ilen: 0, count: 0});
+                        const m = part.matrix.elements
+                          , S = solidRectPlanes(g)
+                          , own = clipped.get(it.i)
+                          , ix = null != g.index ? g.index.array : null
+                          , nv = g.attributes.position.count
+                          , nt = S.triPlane.length
+                          , src = names.map(e => g.attributes[e].array)
+                          , pk = names.indexOf("position")
+                          , nk = names.indexOf("normal")
+                          , width = b.sizes.reduce((a, e) => a + e, 0)
+                          , po = b.sizes.slice(0, pk).reduce((a, e) => a + e, 0)
+                          , vmap = new Int32Array(nv).fill(-1)
+                          , wp = new Float64Array(3 * nv)
+                          , wn = nk >= 0 ? new Float64Array(3 * nv) : null;
+                        for (let e = 0, P = src[pk]; e < nv; e++) {
+                            const x = P[3 * e], y = P[3 * e + 1], z = P[3 * e + 2];
+                            wp[3 * e] = m[0] * x + m[4] * y + m[8] * z + m[12], wp[3 * e + 1] = m[1] * x + m[5] * y + m[9] * z + m[13], wp[3 * e + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]
+                        }
+                        if (null != wn)
+                            for (let e = 0, P = src[nk]; e < nv; e++) {
+                                const x = P[3 * e], y = P[3 * e + 1], z = P[3 * e + 2];
+                                wn[3 * e] = m[0] * x + m[4] * y + m[8] * z, wn[3 * e + 1] = m[1] * x + m[5] * y + m[9] * z, wn[3 * e + 2] = m[2] * x + m[6] * y + m[10] * z
+                            }
+                        const pushVert = e => {
+                            if (vmap[e] >= 0)
+                                return putIndex(b, vmap[e]);
+                            for (let n = 0; n < names.length; n++) {
+                                const s = b.sizes[n]
+                                  , A = n == pk ? wp : n == nk ? wn : src[n];
+                                for (let a = 0; a < s; a++)
+                                    put(b, n, A[e * s + a])
+                            }
+                            putIndex(b, vmap[e] = b.count++)
+                        }
+                          , vert = e => {
+                            const o = new Array(width);
+                            let k = 0;
+                            for (let n = 0; n < names.length; n++) {
+                                const s = b.sizes[n]
+                                  , A = n == pk ? wp : n == nk ? wn : src[n];
+                                for (let a = 0; a < s; a++)
+                                    o[k++] = A[e * s + a]
+                            }
+                            return o
+                        }
+                          , emit = poly => {
+                            const first = b.count;
+                            for (const v of poly) {
+                                let k = 0;
+                                for (let n = 0; n < names.length; n++)
+                                    for (let a = 0; a < b.sizes[n]; a++)
+                                        put(b, n, v[k++]);
+                                b.count++
+                            }
+                            for (let t = 1; t + 1 < poly.length; t++)
+                                putIndex(b, first), putIndex(b, first + t), putIndex(b, first + t + 1)
+                        }
+                          , clipTo = (poly, ax, lim, keepBelow) => {
+                            const out = [];
+                            for (let t = 0; t < poly.length; t++) {
+                                const A = poly[t]
+                                  , B = poly[(t + 1) % poly.length]
+                                  , da = keepBelow ? lim - A[po + ax] : A[po + ax] - lim
+                                  , db = keepBelow ? lim - B[po + ax] : B[po + ax] - lim;
+                                if (da >= 0 && out.push(A), da >= 0 != db >= 0) {
+                                    const s = da / (da - db)
+                                      , o = new Array(A.length);
+                                    for (let n = 0; n < A.length; n++)
+                                        o[n] = A[n] + (B[n] - A[n]) * s;
+                                    out.push(o)
+                                }
+                            }
+                            return out
+                        };
+                        for (let t = 0; t < nt; t++) {
+                            const pl = S.triPlane[t];
+                            if (pl < 0)
+                                continue;
+                            const a = null != ix ? ix[3 * t] : 3 * t
+                              , c = null != ix ? ix[3 * t + 1] : 3 * t + 1
+                              , d = null != ix ? ix[3 * t + 2] : 3 * t + 2
+                              , r = null != own ? own.get(pl) : null;
+                            if (null == r) {
+                                pushVert(a), pushVert(c), pushVert(d);
+                                continue
+                            }
+                            const KU = (r.K + 1) % 3
+                              , KV = (r.K + 2) % 3
+                              , lo = Math.min(wp[3 * a + KU], wp[3 * c + KU], wp[3 * d + KU])
+                              , hi = Math.max(wp[3 * a + KU], wp[3 * c + KU], wp[3 * d + KU])
+                              , lv = Math.min(wp[3 * a + KV], wp[3 * c + KV], wp[3 * d + KV])
+                              , hv = Math.max(wp[3 * a + KV], wp[3 * c + KV], wp[3 * d + KV]);
+                            let tri = null;
+                            for (const [u0,u1,v0,v1] of r.owned) {
+                                if (u0 >= hi || u1 <= lo || v0 >= hv || v1 <= lv)
+                                    continue;
+                                if (u0 <= lo && u1 >= hi && v0 <= lv && v1 >= hv) {
+                                    pushVert(a), pushVert(c), pushVert(d);
+                                    break
+                                }
+                                let p = tri ?? (tri = [vert(a), vert(c), vert(d)]);
+                                if (u0 > lo && (p = clipTo(p, KU, u0, !1)), p.length > 2 && u1 < hi && (p = clipTo(p, KU, u1, !0)), p.length > 2 && v0 > lv && (p = clipTo(p, KV, v0, !1)), p.length > 2 && v1 < hv && (p = clipTo(p, KV, v1, !0)), p.length > 2)
+                                    emit(p)
+                            }
+                        }
+                    }
+                return {
+                    involved: parts,
+                    buckets: [...buckets.values()].filter(e => e.ilen > 0).map(e => ({material: e.material, attrs: e.names.map((t, n) => [t, e.arr[n].slice(0, e.len[n]), e.sizes[n]]), index: e.count > 65535 ? e.idx.slice(0, e.ilen) : Uint16Array.from(e.idx.subarray(0, e.ilen)), count: e.ilen / 3}))
+                }
+            }
+            // Cached per track until a part changes, like the Block merge.
+            function coplanarMerge(track, ordered, span, color) {
+                const key = span + "|" + color;
+                let c = coplanarMerges.get(track);
+                if (null != c && c.key == key)
+                    return c.result;
+                let result = null;
+                try {
+                    result = coplanarMergeOf(ordered, span)
+                } catch (e) {
+                    console.error(e)
+                }
+                return coplanarMerges.set(track, {key, result}), result
+            }
             // Chunk width in 5 m tiles (5/3 of the cull distance), so far chunks drop out instead of staying drawn for one close part.
             function trackChunkSpan(e) {
                 return (e.getTrackCullDistance?.() ?? 1 / 0) / 3
@@ -32880,7 +33243,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     m.set(this, o, e.clone(), "f")
                 }
                 clear() {
-                    blockMerges.delete(this),
+                    blockMerges.delete(this), coplanarMerges.delete(this),
                     m.get(this, l, "f").length = 0,
                     m.get(this, c, "f").clear(),
                     m.get(this, h, "f").clear(),
@@ -32928,7 +33291,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                       , g = new THREE.Vector3(e * M.partSize,t * M.partSize,n * M.partSize)
                       , v = (new THREE.Matrix4).compose(g, f, new THREE.Vector3(1,1,1))
                       , y = new T(e,t,n,r,a,o,p,v,d,u);
-                    if (blockMerges.delete(this),
+                    if (blockMerges.delete(this), coplanarMerges.delete(this),
                     m.get(this, l, "f").push(y),
                     t + lowestTileY(p.configuration.tiles, r, a) < 0)
                         throw new Error("Track part below ground");
@@ -33141,15 +33504,48 @@ window.__nswsAutoGhostNote = function(trackId) {
                         }
                     }
                     ;
+                    // Stacked coplanar faces: the parts involved are drawn from merged meshes instead (coplanarMerge).
+                    const ordered = [];
+                    for (const e of m.get(this, s, "f").getAllParts())
+                        if (e != blockType)
+                            for (const t of e.colors.keys()) {
+                                const i = y.get(e)?.get(t)
+                                  , n = null != i ? e.colors.get(t) : null;
+                                if (null != n &&!Array.isArray(n.material) && !n.material.transparent && !(n.userData?.tufts?.geometry?.attributes?.position?.count > 0) && 3 == n.geometry?.attributes?.position?.itemSize && Object.values(n.geometry.attributes).every(e => !e.isInterleavedBufferAttribute && !e.normalized && null != e.array) && (null == n.geometry.attributes.normal || 3 == n.geometry.attributes.normal.itemSize))
+                                    for (const p of i)
+                                        ordered.push([p, n])
+                            }
+                    const coplanar = ordered.length > 1 ? coplanarMerge(this, ordered, A ? span : 1 / 0, n) : null;
                     for (const e of m.get(this, s, "f").getAllParts())
                         for (const t of e.colors.keys()) {
-                            const i = y.get(e)?.get(t);
+                            let i = y.get(e)?.get(t);
                             if (null == i)
                                 continue;
                             const n = e.colors.get(t);
                             if (null == n)
                                 throw new Error("Mesh is not loaded");
+                            if (null != coplanar && i.some(e => coplanar.involved.has(e))) {
+                                const rest = restOfMesh(n);
+                                null != rest && addInstanced(rest, i.filter(e => coplanar.involved.has(e)), null),
+                                i = i.filter(e => !coplanar.involved.has(e));
+                                if (0 == i.length)
+                                    continue
+                            }
                             addInstanced(n, i, e == blockType ? v.blockMeshes : null)
+                        }
+                    if (null != coplanar)
+                        for (const e of coplanar.buckets) {
+                            const a = new THREE.BufferGeometry;
+                            for (const [t,n,i] of e.attrs)
+                                a.setAttribute(t, new THREE.BufferAttribute(n,i));
+                            a.setIndex(new THREE.BufferAttribute(e.index,1)),
+                            a.name = "coplanar",
+                            a.computeBoundingBox(),
+                            a.computeBoundingSphere(),
+                            v.ownGeometries.push(a);
+                            const t = new THREE.InstancedMesh(a,e.material,1);
+                            t.setMatrixAt(0, identity[0]),
+                            addMesh(a, t, identity, null)
                         }
                     null != merged?.chunks ? addMerged(merged.chunks, v.blockMeshes) : null != merged && (v.blockSwap = chunks => {
                         v.blockSwap = null;
@@ -33336,7 +33732,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e < 0 || e >= m.get(this, l, "f").length)
                     throw new Error("Track part index out of bounds");
                 const t = m.get(this, l, "f")[e];
-                blockMerges.delete(this),
+                blockMerges.delete(this), coplanarMerges.delete(this),
                 m.get(this, l, "f").splice(e, 1);
                 t.type.configuration.tiles.rotated(t.rotation, t.rotationAxis).forEach(( (e, n, i) => {
                     const r = (t.x + e).toString() + "|" + (t.y + n).toString() + "|" + (t.z + i).toString()

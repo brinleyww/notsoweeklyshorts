@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.12",
+        "changes": [
+            "Week 13 map 5 lags far less: its floor art was thousands of gates stacked up to 32 deep, and now each spot is drawn once",
+            "Parts stacked flat on top of each other don't flicker (z-fight) anymore"
+        ]
+    },
+    {
         "version": "v13.11",
         "changes": [
             "Replays load fully before they start playing, and the time bar can't be moved until then"
