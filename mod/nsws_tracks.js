@@ -44,7 +44,8 @@
         // Where the worker loads Better Editor's blocks from, when a track with them arrives. A worker of its own (older
         // physics) loads a fixed commit; the others tag the files with the page's physics version, and read the block
         // file from the page's copy (nswsTMBin, or nswsTMBlocks while it holds only some parts) once the page has it.
-        const message = { nswsModes, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
+        // nswsOverflow: this page takes back the cars a worker has no room for (see NswsWorker).
+        const message = { nswsModes, nswsOverflow: 1, nswsTMBase: worker?.nswsTMBase || window.__nswsTM?.base, nswsTMQuery: worker?.nswsTMBase ? "" : window.__nswsTM?.query || "" };
         if (!worker?.nswsTMBase || worker.nswsTMSameBin) {
             const pack = window.__nswsTM?.blocksPack?.();
             const bin = pack ? null : window.__nswsTM?.blocksUrl?.();
@@ -55,12 +56,21 @@
     }
     const sentKey = (message) => message.nswsTMBase + message.nswsTMQuery + (message.nswsTMBin || message.nswsTMBlocks?.url || "");
 
+    // A physics worker's heap stops at 2 GB and every car builds its own collision world in it (~350 MB on week 13's
+    // map 5), so a worker hands back (messageType 16) a car it has no room for, and every later message for that car.
+    // They go on, in the order the worker handed them back, to a second worker of the same kind, whose messages reach
+    // the game as this worker's; that one can hand cars on the same way. It goes 20 s after its last car.
+    const OVERFLOW_IDLE_MS = 20000;
     const NativeWorker = window.Worker;
     if (typeof NativeWorker === "function") {
         class NswsWorker extends NativeWorker {
             constructor(url, options) {
                 super(url, options);
                 if (/simulation_worker/.test(String(url))) {
+                    this.__ov = { url, options, init: null, next: null, cars: new Map(), idle: 0 };
+                    this.addEventListener("message", (e) => {
+                        if (e.data?.messageType === 16) this.__ovHandOn(e.data.message);
+                    });
                     this.nswsTMBase = window.__nswsSimBase || null;
                     this.nswsTMSameBin = !!(this.nswsTMBase && window.__nswsSimBin);
                     simWorkers.add(this);
@@ -71,8 +81,67 @@
                     } catch {}
                 }
             }
+            postMessage(message, transfer) {
+                const ov = this.__ov;
+                if (ov && message && typeof message === "object") {
+                    if (message.messageType === 0) ov.init = message;
+                    if (message.messageType === 0 || message.messageType == null) ov.next?.postMessage(message);
+                }
+                return arguments.length > 1 ? super.postMessage(message, transfer) : super.postMessage(message);
+            }
+            __ovHandOn(message) {
+                const ov = this.__ov;
+                const id = message?.carId;
+                if (id == null) return;
+                let next = ov.cars.get(id);
+                if (!next) ov.cars.set(id, (next = this.__ovNext()));
+                clearTimeout(ov.idle);
+                next.postMessage(message);
+                if (message.messageType === 4) this.__ovGone(id);
+            }
+            __ovNext() {
+                const ov = this.__ov;
+                if (ov.next) return ov.next;
+                // Same physics as this one: its own Better Editor base, or the page's.
+                const base = window.__nswsSimBase;
+                const bin = window.__nswsSimBin;
+                window.__nswsSimBase = this.nswsTMBase;
+                window.__nswsSimBin = this.nswsTMSameBin;
+                let next;
+                try {
+                    next = new NswsWorker(ov.url, ov.options);
+                } finally {
+                    window.__nswsSimBase = base;
+                    window.__nswsSimBin = bin;
+                }
+                if (ov.init) next.postMessage(ov.init);
+                next.addEventListener("message", (e) => {
+                    const data = e.data;
+                    if (data?.messageType === 16) return;
+                    if (data?.messageType === 8) this.__ovGone(data.carId);
+                    this.dispatchEvent(new MessageEvent("message", { data }));
+                });
+                return (ov.next = next);
+            }
+            __ovGone(id) {
+                const ov = this.__ov;
+                ov.cars.delete(id);
+                const next = ov.next;
+                if (!next || ov.cars.size) return;
+                clearTimeout(ov.idle);
+                ov.idle = setTimeout(() => {
+                    if (ov.next !== next || ov.cars.size) return;
+                    ov.next = null;
+                    next.terminate();
+                }, OVERFLOW_IDLE_MS);
+            }
             terminate() {
                 simWorkers.delete(this);
+                if (this.__ov) {
+                    clearTimeout(this.__ov.idle);
+                    this.__ov.next?.terminate();
+                    this.__ov.next = null;
+                }
                 return super.terminate();
             }
         }

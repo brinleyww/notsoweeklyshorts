@@ -13149,7 +13149,13 @@
             __nswsModeSink?.();
             return !0
         }
+        // Set once the page (mod/nsws_tracks.js) says it takes back cars this worker has no room for (__ovRoute).
+        let __ovPage = !1;
+        function __ovSetupNote(t) {
+            1 === t?.data?.nswsOverflow && (__ovPage = !0)
+        }
         onmessage = t => {
+            __ovSetupNote(t);
             __nswsModesMessage(t) || jo.push(t)
         }
         ,
@@ -13225,6 +13231,8 @@
             }
             function i(i) {
                 const s = i.data;
+                if (__ovRoute(s))
+                    return;
                 s.messageType != Ki.Verify && s.messageType != Ki.TestDeterminism && s.messageType != Ki.Init || __parkDrop();
                 if (null != s.carId && __parkAlias.has(s.carId)) {
                     const pid = s.carId;
@@ -13717,6 +13725,83 @@
                 null != car.pageId && new DataView(u8.buffer,u8.byteOffset,4).setUint32(0, car.pageId, !0);
                 return u8
             }
+            // Memory. The physics' heap can't grow past 2 GB (polytrack_physics.wasm's maximum) and every car builds its own
+            // collision world in it: on week 13's map 5 ~350 MB a car, ~690 MB while it is built. A malloc past the end
+            // returns 0, the physics writes through it, and from then on every malloc throws "memory access out of bounds"
+            // (a fifth map 5 car in one worker: Watch, ghosts, a run check). So a non-realtime worker builds a car only
+            // while the heap has room for what a car of that track took here before. One that might not fit goes back to
+            // the page (messageType 16), and so does every later message for it: mod/nsws_tracks.js passes them, in
+            // order, to another worker of this file. (A worker can't start one itself: nested workers fail in Electron.)
+            const __OV_LIMIT = 2048 * 1048576 - 64 * 1048576
+              , __ovNeed = new Map
+              , __ovOut = new Set;
+            let __ovOn = !1
+              , __ovKey = null;
+            // Bytes in use: all below dlmalloc's first block and its blocks in use (see __parkCopy), or the heap's whole
+            // size when the walk doesn't come out on the top block.
+            function __ovUsed() {
+                const H = t.HEAPU8
+                  , U = new Uint32Array(H.buffer, 0, H.length >> 2)
+                  , top = U[19068 >> 2];
+                let p = U[19060 >> 2]
+                  , used = p;
+                for (; p > 0 && p < top && 0 == (7 & p); ) {
+                    const head = U[p + 4 >> 2]
+                      , size = (-8 & head) >>> 0;
+                    if (size < 16)
+                        break;
+                    2 & head && (used += size),
+                    p += size
+                }
+                return top > 0 && p == top ? used : H.length
+            }
+            function __ovMeasure() {
+                const key = __ovKey;
+                __ovKey = null;
+                return __ovOn && null != key ? { key, used: __ovUsed(), size: t.HEAPU8.length } : null
+            }
+            // What building a car of that track took. When the heap had to grow for it, the peak is within what it grew
+            // to (emscripten grows at most 96 MB past a request); otherwise, until there is such a figure, twice what it kept.
+            function __ovMeasured(m) {
+                if (null == m)
+                    return;
+                const size = t.HEAPU8.length
+                  , was = __ovNeed.get(m.key);
+                if (size > m.size) {
+                    const need = size - m.used;
+                    (null == was || !was.tight || need < was.need) && __ovNeed.set(m.key, { need, tight: !0 })
+                } else
+                    null == was && __ovNeed.set(m.key, { need: 2 * Math.max(0, __ovUsed() - m.used), tight: !1 })
+            }
+            // A track not built here yet is built here while the heap is under half full.
+            function __ovFits(key) {
+                const used = __ovUsed()
+                  , n = __ovNeed.get(key);
+                return null == n ? used < __OV_LIMIT / 2 : used + n.need <= __OV_LIMIT
+            }
+            function __ovRoute(s) {
+                const ty = s?.messageType
+                  , id = s?.carId;
+                if (ty == Ki.Init)
+                    return __ovOn = !s.isRealtime && "nsws-cuppa-bots" !== self.name,
+                    !1;
+                if (!__ovOn || !__ovPage)
+                    return !1;
+                if (null != id && __ovOut.has(id))
+                    return postMessage({ messageType: 16, message: s }),
+                    ty == Ki.DeleteCar && __ovOut.delete(id),
+                    !0;
+                if (ty != Ki.CreateCar && ty != Ki.Verify)
+                    return !1;
+                const key = "string" == typeof s.trackData ? s.trackData : null;
+                if (null == key || null == id || 0 == e.length || __ovFits(key))
+                    return __ovKey = key,
+                    !1;
+                // A run check is the one message for its car; its answer comes from the other worker.
+                ty == Ki.CreateCar && __ovOut.add(id),
+                postMessage({ messageType: 16, message: s });
+                return !0
+            }
             // tm_runtime.js keeps every car's track tables by car id and never drops one (240 MB a car on week 13's map 5).
             // Preparing the id again with an empty track puts empty tables in their place, on any Better Editor version.
             function __tmFree(id) {
@@ -13727,6 +13812,11 @@
                 }
             }
             function r(e, i, r, s, n, rocketVersion) {
+                const ovAt = __ovMeasure();
+                __ovBuild(e, i, r, s, n, rocketVersion),
+                __ovMeasured(ovAt)
+            }
+            function __ovBuild(e, i, r, s, n, rocketVersion) {
                 const tmCar = null == self.TM ? null : (__tmAddProxies(),
                 __nswsTMBlocksTake(),
                 self.TM.prepareCar(e, i, r, s, ( (t, e, i) => Ao(t).tiles.rotated(e, i))));
@@ -14456,6 +14546,7 @@
             }),
             __nswsModeSink(),
             onmessage = e => {
+                __ovSetupNote(e);
                 __nswsModesMessage(e) || i(e)
             };
             // 227 bytes of car state from the physics, then the Rocket League mode's 9 (see __rocketStep).

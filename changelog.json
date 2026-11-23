@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.10",
+        "changes": [
+            "Fixed the \"memory access out of bounds\" crash when watching replays or racing ghosts on huge Better Editor tracks like week 13's map 5"
+        ]
+    },
+    {
         "version": "v13.9",
         "changes": [
             "Better Editor tracks don't use up more memory every time you race or watch a replay",
