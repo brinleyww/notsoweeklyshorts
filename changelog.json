@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.15",
+        "changes": [
+            "The first official NSWS video is out, and the menu tells you about it once"
+        ]
+    },
+    {
         "version": "v13.14",
         "changes": [
             "The debug info stays in one place while you drive instead of moving around"

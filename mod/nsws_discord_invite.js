@@ -167,6 +167,8 @@
             if (!asked()) markAsked("in-server");
             return;
         }
+        if (window.__nswsMenuPromptShown) return;
+        window.__nswsMenuPromptShown = true;
         show(invite);
     }
 
