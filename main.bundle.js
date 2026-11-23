@@ -304,7 +304,7 @@ window.__nswsAutoGhostNote = function(trackId) {
         return modifiers.map(m => KEY_MODIFIER_LABELS[m] ?? m).concat(formatKey(code)).join(" + ");
     }
     function isKeyBindingInUse(binding) {
-        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)), window.__nswsRocket?.allKeys() ?? [], window.__nswsAto?.key());
+        const all = (keyBindSettings?.getAllKeyBindings() ?? []).concat(getClipKeyBind(), getVisualFxKeyBind(), getGhostsKeyBind(), getCupChatKeyBind(), CUP_KEYS.map(k => k.get()), POLYFX_KEYBINDS.map(([storageKey, defaultCode]) => getPolyFxKeyBind(storageKey, defaultCode)), window.__nswsRocket?.allKeys() ?? [], window.__nswsAto?.key(), window.__nswsDebug?.key());
         return all.some(b => null != b && sameKeyBinding(b, binding));
     }
     // What each key last went down as, so its release matches the same bindings
@@ -46114,6 +46114,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             // Bolts pay for this car's race clock (mod/nsws_crates.js); test drives have records off and earn nothing.
             window.__nswsCrates?.newCar(s, C.get(this, jr, "f"));
             window.__nswsNR?.newCar(s, C.get(this, ea, "f")?.element);
+            window.__nswsDebug?.newCar(s);
             return s.notificationAudioEnabled = !0,
             s.addResetCallback(( () => {
                 window.__nswsGrind?.respawn(s),
@@ -54287,6 +54288,23 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Hide UI"), KeyBind.ToggleUI),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Pause"), KeyBind.Pause),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle FPS counter"), KeyBind.ToggleFpsCounter),
+            // mod/nsws_debug.js; saved at once, like the other mod keys.
+            window.__nswsDebug && ( () => {
+                const _row = document.createElement("div");
+                _row.className = "setting key-binding";
+                const _label = document.createElement("p");
+                _label.textContent = "Toggle debug info";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _keyBtn = document.createElement("button");
+                _keyBtn.className = "button";
+                bindKeyBindingButton(_keyBtn, window.__nswsDebug.key, window.__nswsDebug.setKey);
+                _wrap.appendChild(_keyBtn);
+                _row.appendChild(_wrap);
+                C.get(this, ks, "f").appendChild(_row);
+            }
+            )(),
             C.get(this, ms, "m", Os).call(this, gs.getFromLanguage(C.get(this, Cs, "f"), "Toggle spectator camera"), KeyBind.ToggleSpectatorCamera),
             C.get(this, ms, "m", Os).call(this, "Lock cursor", KeyBind.ToggleCursorLock),
             C.get(this, ms, "m", Ds).call(this, "Chat"),
@@ -65328,11 +65346,18 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 window.__nswsFirstLaunchStart = null;
                 window.__nswsTutorial?.firstLaunch(__nswsStartFirstTrack) || __nswsStartFirstTrack();
             } : null;
+            window.__nswsDebug?.attach(h);
             h.setAnimationLoop((function(e) {
                 const t = Math.max(e - J, 0) / 1e3;
-                J = e,
-                Q.update(t),
-                k.update(t)
+                J = e;
+                const debug = window.__nswsDebug;
+                debug?.frameStart(e);
+                try {
+                    Q.update(t),
+                    k.update(t)
+                } finally {
+                    debug?.frameEnd()
+                }
             }
             )),
             window.addEventListener("keyup", (e => {

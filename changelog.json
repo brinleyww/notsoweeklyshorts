@@ -1,5 +1,13 @@
 [
     {
+        "version": "v13.13",
+        "changes": [
+            "Press F3 for debug info: FPS, a frame time graph, CPU and GPU time, draw calls, triangles, memory, car and network stats",
+            "The debug info key can be changed in Settings under Controls",
+            "The debug info moves itself so it doesn't cover the HUD or menus"
+        ]
+    },
+    {
         "version": "v13.12",
         "changes": [
             "Week 13 map 5 lags far less: its floor art was thousands of gates stacked up to 32 deep, and now each spot is drawn once",
