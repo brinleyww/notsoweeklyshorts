@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.17",
+        "changes": [
+            "The menu tells you once about each new NSWS video or short on YouTube",
+            "New shorts play right in the menu"
+        ]
+    },
+    {
         "version": "v13.16",
         "changes": [
             "The video popup has a No thanks button again"

@@ -927,6 +927,40 @@ async function cacheMatch(key) {
     }
 }
 
+const YT_FEED = "https://www.youtube.com/feeds/videos.xml?channel_id=UCrY9nxsPlYHFjLAIGbA363g";
+const YT_LATEST_MS = 10 * 60 * 1000;
+const YT_FAILED_MS = 60 * 1000;
+let ytLatest = { at: 0, ms: 0, data: null };
+
+// Newest upload (video or short) on the NSWS channel. The feed has no CORS headers, so the page asks here.
+// Kept in memory per isolate: the Cache API does nothing on workers.dev.
+async function handleLatestVideo(origin) {
+    if (Date.now() - ytLatest.at > ytLatest.ms) {
+        let latest = null;
+        try {
+            const res = await fetch(YT_FEED, { headers: { "User-Agent": "Mozilla/5.0" } });
+            if (res.ok) latest = latestUpload(await res.text());
+        } catch {}
+        ytLatest = latest || !ytLatest.data
+            ? { at: Date.now(), ms: latest ? YT_LATEST_MS : YT_FAILED_MS, data: latest }
+            : { ...ytLatest, at: Date.now(), ms: YT_FAILED_MS };
+    }
+    return new Response(JSON.stringify({ latest: ytLatest.data }), {
+        headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=300", ...corsHeaders(origin) },
+    });
+}
+
+function latestUpload(xml) {
+    let best = null;
+    for (const [, entry] of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)) {
+        const id = /<yt:videoId>([\w-]{11})<\/yt:videoId>/.exec(entry)?.[1];
+        const published = Date.parse(/<published>([^<]+)<\/published>/.exec(entry)?.[1] ?? "");
+        if (!id || !Number.isFinite(published) || (best && best.published >= published)) continue;
+        best = { id, short: entry.includes("youtube.com/shorts/" + id), published };
+    }
+    return best;
+}
+
 function cachedJson(data, seconds) {
     return new Response(JSON.stringify(data), {
         headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=" + seconds },
@@ -2726,6 +2760,10 @@ export default {
         if (url.pathname.startsWith(TRAFFIC_PREFIX)) {
             const requestOrigin = request.headers.get("Origin");
             const fromSite = !isNavigation(request) && isAllowedOrigin(requestOrigin, cfg);
+            if (url.pathname === TRAFFIC_PREFIX + "youtube/latest" && request.method === "GET") {
+                if (!fromSite) return forbidden();
+                return handleLatestVideo(requestOrigin);
+            }
             if (url.pathname === TRAFFIC_PREFIX + "chat" || url.pathname.startsWith(TRAFFIC_PREFIX + "chat/")) {
                 return handleChat(request, url, env, fromSite, requestOrigin);
             }
