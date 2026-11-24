@@ -64886,6 +64886,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                         window.__nswsSimBin = !1
                     }
                     s.p.__nswsTMBase = s.f.__nswsTMBase = be.base,
+                    s.p.__nswsTMBin = s.f.__nswsTMBin = be.bin,
                     pinnedSims.set(be.base, s)
                 }
                 return s
@@ -64908,18 +64909,22 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     return base;
                 const sims = [base]
                   , cars = new Map
-                  , tmBase = base.__nswsTMBase ?? null;
+                  , tmBase = base.__nswsTMBase ?? null
+                  , tmBin = !!tmBase && !!base.__nswsTMBin;
                 let made = 0
                   , next = 0
                   , track = null
                   , save = null;
                 const simAt = j => {
                     for (; sims.length <= j; ) {
+                        // A pinned week's extra workers read the page's blocks too, or each downloads the whole file.
                         window.__nswsSimBase = tmBase;
+                        window.__nswsSimBin = tmBin;
                         try {
                             sims.push(new Lu.A(!1,d,t))
                         } finally {
-                            window.__nswsSimBase = null
+                            window.__nswsSimBase = null;
+                            window.__nswsSimBin = !1
                         }
                     }
                     return sims[j]

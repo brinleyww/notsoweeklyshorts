@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.19",
+        "changes": [
+            "Watching several week 13 replays only downloads that track's blocks, not all of Better Editor's"
+        ]
+    },
+    {
         "version": "v13.18",
         "changes": [
             "The short popup has a Watch on YouTube button next to Close"
