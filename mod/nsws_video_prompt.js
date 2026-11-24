@@ -25,9 +25,9 @@
 .nsws-vid p{margin:0 0 10px 0;padding:10px;background-color:var(--surface-secondary-color,#212b58);font-size:26px;line-height:1.05;color:var(--text-color,#fff);overflow-wrap:break-word;}
 .nsws-vid .row{display:flex;justify-content:space-between;gap:10px;}
 .nsws-vid .button{min-width:140px;margin:0;text-decoration:none;}
-.nsws-vid.short>div{top:50%;transform:translate(-50%,-50%);width:360px;max-height:calc(100% - 20px);overflow-y:auto;}
+.nsws-vid.short .row a.button{flex:1;}
+.nsws-vid.short>div{top:50%;transform:translate(-50%,-50%);width:520px;max-height:calc(100% - 20px);overflow-y:auto;}
 .nsws-vid .embed{display:block;margin:0 auto 10px auto;height:min(62vh,560px);aspect-ratio:9/16;max-width:100%;border:0;background:#000;}
-.nsws-vid.short .row{justify-content:center;}
 @media (max-width:420px){.nsws-vid .card img{width:112px;height:63px;}}
 `;
 
@@ -144,7 +144,13 @@
                 window.__nswsUIClick?.();
                 close();
             });
-            row.append(done);
+            const open = link("button", "Watch on YouTube");
+            open.addEventListener("click", () => {
+                window.__nswsUIClick?.();
+                answer = "watched";
+                setTimeout(close, 0);
+            });
+            row.append(done, open);
             box.appendChild(row);
             document.body.appendChild(dialog);
             dialog.showModal();

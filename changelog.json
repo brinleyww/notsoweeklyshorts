@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.18",
+        "changes": [
+            "The short popup has a Watch on YouTube button next to Close"
+        ]
+    },
+    {
         "version": "v13.17",
         "changes": [
             "The menu tells you once about each new NSWS video or short on YouTube",
