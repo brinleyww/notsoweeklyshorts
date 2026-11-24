@@ -7,7 +7,7 @@ import { botLevel } from '../bots/roster.ts';
 import { site } from '../game.ts';
 import { isFinalist, player, standings, type CupState, type Player } from '../state.ts';
 import { isTouch } from './touch.ts';
-import { btn, click, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
+import { btn, fmtClock, fmtGap, fmtTime, flag, h, icon, ordinal, setText, show, toggle, fill } from './dom.ts';
 
 const BOARD_FULL = 10;
 
@@ -47,11 +47,8 @@ export class Hud {
   #shownNotes = new Set<number>();
   #lastTick = -1;
   onOpenPanel: () => void = () => {};
-  onChatSubmit: (text: string) => Promise<void> = async () => {};
-  onChatPanel: () => void = () => {};
   // A card in the middle (vote, results) covers the feed's corner; set by the layer.
   feedBlocked = false;
-  chatOpen = false;
   // Height the right column has (layer units), set by the layer from what the game draws there.
   boardRoom = Infinity;
 
@@ -920,123 +917,19 @@ export class Hud {
     this.app.native.sound('checkpoint');
   }
 
-  // ---- Chat feed ----
+  // ---- Key hint ----
 
-  #feedInput: HTMLInputElement | null = null;
-  #feedLines = h('div', { style: 'display:flex;flex-direction:column;align-items:flex-start;gap:4px' });
-  #feedBottom = h('div');
-  #lineEls = new Map<string, HTMLElement>();
-  #feedOpen: boolean | null = null;
-  #feedTarget = '';
-  // Lines are kept by message (so their fade isn't restarted) and the box survives new messages.
-  // Messages from everyone online (the main chat) are tagged.
+  // The chat itself is the main chat window's Cup channel (mod/nsws_chat.js); touch has the Chat
+  // button (touchmenu.ts) instead of this hint.
+  #hint = '';
   #renderFeed() {
-    const app = this.app,
-      chat = app.chat;
-    show(this.feed, !app.panelOpen && app.state?.phase !== 'podium' && (!this.feedBlocked || this.chatOpen));
-    if (!this.feed.firstChild) fill(this.feed, this.#feedLines, this.#feedBottom);
-    const last = chat.lines(5);
-    const keys = new Set(last.map((l) => l.key));
-    for (const [k, el] of this.#lineEls)
-      if (!keys.has(k)) {
-        el.remove();
-        this.#lineEls.delete(k);
-      }
-    for (const { key, m } of last) {
-      if (this.#lineEls.has(key)) continue;
-      const el = h('div', { class: 'line' }, h('b', { style: `color:${nameColor(m.uid)}` }, m.nick), m.text);
-      this.#lineEls.set(key, el);
-      this.#feedLines.append(el);
-    }
-    toggle(this.feed, 'open', this.chatOpen);
-    const target = chat.target + chat.mainOn + isTouch();
-    if (this.#feedOpen === this.chatOpen && this.#feedTarget === target) return;
-    this.#feedOpen = this.chatOpen;
-    this.#feedTarget = target;
-    if (this.chatOpen) {
-      const touch = isTouch();
-      const to = chat.target === 'all' ? 'Message everyone online' : 'Message the cup';
-      const input = h('input', { class: 'text', maxlength: 200, enterkeyhint: 'send', autocomplete: 'off', placeholder: touch ? to : `${to}… (Enter to send, Esc to close)` }) as HTMLInputElement;
-      input.value = this.#draft;
-      this.#feedInput = input;
-      let sending = false;
-      input.addEventListener('input', () => (this.#draft = input.value));
-      input.addEventListener('keydown', (e) => {
-        e.stopPropagation();
-        if (e.key === 'Escape') this.closeChat();
-      });
-      input.addEventListener('keyup', (e) => e.stopPropagation());
-      // Clicking or tapping anywhere else closes the box; what was typed stays for next time.
-      input.addEventListener('blur', () =>
-        setTimeout(() => {
-          if (this.chatOpen && this.#feedInput === input && document.hasFocus() && (this.feed.getRootNode() as ShadowRoot).activeElement !== input) this.closeChat();
-        }, 0),
-      );
-      // Buttons beside the box don't take its focus.
-      const keep = (e: Event) => e.preventDefault();
-      const toggleTarget =
-        chat.mainOn || chat.target === 'all'
-          ? h('button', { class: 'btn small', type: 'button', title: 'Switch between the cup chat and everyone online', onmousedown: keep, onclick: click(() => chat.setTarget(chat.target === 'all' ? 'cup' : 'all')) }, chat.target === 'all' ? 'Everyone' : 'Cup')
-          : null;
-      const form = h(
-        'form',
-        {
-          class: 'box',
-          onsubmit: (e: Event) => {
-            e.preventDefault();
-            const text = input.value;
-            if (!text.trim()) return this.closeChat();
-            if (sending) return;
-            sending = true;
-            this.onChatSubmit(text)
-              .then(() => {
-                if (this.#draft === text) this.#draft = '';
-                // Only the box that sent it, and only if nothing more was typed meanwhile.
-                if (this.#feedInput === input && input.value === text) {
-                  input.value = '';
-                  this.closeChat();
-                }
-              })
-              .catch((err) => app.notify(err instanceof Error ? err.message : String(err), 'bad'))
-              .finally(() => (sending = false));
-          },
-        },
-        toggleTarget,
-        input,
-        touch ? h('button', { class: 'btn small', type: 'submit', onmousedown: keep }, 'Send') : null,
-      );
-      const hadFocus = (this.feed.getRootNode() as ShadowRoot).activeElement?.closest?.('.feed') != null;
-      fill(this.#feedBottom, form);
-      if (hadFocus) input.focus();
-    } else {
-      this.#feedInput = null;
-      // Touch has the Chat button (touchmenu.ts) instead.
-      fill(this.#feedBottom, isTouch() ? null : h('div', { class: 'hint', onclick: () => this.openChat() }, `${app.keyNames().chat} chat · ${app.keyNames().panel} cup`));
-    }
+    const app = this.app;
+    show(this.feed, !isTouch() && !app.panelOpen && app.state?.phase !== 'podium' && !this.feedBlocked);
+    const k = app.keyNames();
+    const hint = `${k.chat} chat · ${k.panel} cup`;
+    if (hint === this.#hint) return;
+    this.#hint = hint;
+    fill(this.feed, h('div', { class: 'hint', onclick: () => app.chat.open() }, hint));
   }
-
-  #draft = '';
-  openChat() {
-    if (this.feedBlocked) return this.onChatPanel();
-    this.chatOpen = true;
-    this.app.driver.clearInput();
-    this.#renderFeed();
-    // Focused inside the click or key press itself: phones only raise the keyboard for that.
-    this.#feedInput?.focus();
-    this.app.changed();
-  }
-  closeChat() {
-    this.chatOpen = false;
-    const input = this.#feedInput;
-    this.#feedInput = null;
-    input?.blur();
-    this.app.changed();
-  }
-}
-
-export function nameColor(uid: string) {
-  let hash = 0;
-  for (const c of uid) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
-  return `hsl(${hash % 360} 85% 72%)`;
 }
 

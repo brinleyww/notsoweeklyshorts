@@ -66,11 +66,10 @@ export class Layer {
       this.panel.tab = 'cup';
       this.panel.setOpen(true);
     };
-    this.hud.onChatPanel = () => this.panel.openChat();
     this.touchMenu = new TouchMenu(
       app,
       () => this.panel.setOpen(true),
-      () => this.hud.openChat(),
+      () => app.chat.open(),
     );
     this.hud.addControls(this.touchMenu.menu, this.touchMenu.dock);
     tapWithOtherFingers(this.host);
@@ -78,7 +77,6 @@ export class Layer {
       this.render();
       this.#layout();
     });
-    this.hud.onChatSubmit = (text) => app.chat.post(text);
     this.panel.onKeys = this.hub.onKeys = () => this.keys.open();
     this.hub.onJoined = () => setTimeout(() => app.isHost && this.panel.setOpen(true), 1500);
     onUiError((error) => app.fail(error));
@@ -102,6 +100,7 @@ export class Layer {
     this.root.addEventListener('focusin', (e) => {
       if (e.target instanceof HTMLInputElement && e.target.type === 'text') app.driver.clearInput();
     });
+    document.addEventListener('focusin', () => app.chat.typing && app.driver.clearInput());
     window.addEventListener('resize', () => this.#layout());
     // Phone keyboards cover the bottom of the page without resizing it (Android Chrome, iOS Safari),
     // which is where both chat boxes are. While a box here has focus the layer shrinks to what is
@@ -168,8 +167,8 @@ export class Layer {
     this.#renderToolbar();
     this.keyMenu.sync();
     const menu = this.touchMenu;
-    menu.render(this.panel.open || this.hub.isOpen || this.hud.chatOpen || !!this.#keyboard);
-    const shown = JSON.stringify([menu.dock.hidden, menu.menu.hidden, menu.menu.childElementCount, this.hud.spec.hidden, this.hud.spec.childElementCount, this.hud.warm.hidden, this.hud.chatOpen]);
+    menu.render(this.panel.open || this.hub.isOpen || this.app.chatTyping || !!this.#keyboard);
+    const shown = JSON.stringify([menu.dock.hidden, menu.menu.hidden, menu.menu.childElementCount, this.hud.spec.hidden, this.hud.spec.childElementCount, this.hud.warm.hidden]);
     if (shown !== this.#shownKey) {
       this.#shownKey = shown;
       relayout = true;
@@ -307,7 +306,7 @@ export class Layer {
 
     const placed = this.#placeTouch(obstacles, u, H, set);
 
-    // Chat feed: bottom left, beside the touch pedals when there are any, and above anything low on
+    // Chat key hint: bottom left, beside the touch pedals when there are any, and above anything low on
     // its side (the checkpoint count, the warm-up and spectator bars).
     let fx0 = 12 * u;
     for (const { r, touch } of obstacles) if (touch && r.bottom > H * 0.5 && r.left < W / 2) fx0 = Math.max(fx0, r.right + 10 * u);
@@ -326,7 +325,7 @@ export class Layer {
       if (el && !el.hidden) low.push(el.getBoundingClientRect());
     }
     for (const r of low) if (r.width && across(r, fx0, fx1) && r.top > H * 0.55) feedBottom = Math.max(feedBottom, H - r.top + 8 * u);
-    // A card in the middle (votes, results) wins over the feed's corner; the panel has the chat then.
+    // A card in the middle (votes, results) wins over the hint's corner.
     const card = this.root.querySelector<HTMLElement>('.center');
     const cr = card && !card.hidden ? card.getBoundingClientRect() : null;
     const blocked = !!cr?.width && across(cr, fx0, fx1) && cr.bottom > H - feedBottom - 160 * u;
@@ -492,11 +491,10 @@ export class Layer {
       this.touchMenu.setOpen(false);
       return;
     }
-    if (e.key === 'Escape' && (this.panel.open || this.hud.chatOpen)) {
+    if (e.key === 'Escape' && this.panel.open) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (this.hud.chatOpen) this.hud.closeChat();
-      else this.panel.setOpen(false);
+      this.panel.setOpen(false);
       return;
     }
     if (match(keys.scoreboard())) {
@@ -508,9 +506,7 @@ export class Layer {
     if (match(keys.chat())) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      if (e.repeat) return;
-      if (this.panel.open) this.panel.openChat();
-      else this.hud.openChat();
+      if (!e.repeat) app.chat.open();
       return;
     }
     if (match(keys.ghosts()) && !app.state.rules.collisions) {

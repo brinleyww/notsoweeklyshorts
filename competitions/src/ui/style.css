@@ -231,14 +231,9 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .keys4 i:nth-child(3) { grid-column: 2; grid-row: 2; }
 .keys4 i:nth-child(4) { grid-column: 3; grid-row: 2; }
 
-/* ---------- Chat feed in the race ---------- */
+/* ---------- Chat key hint in the race ---------- */
 .feed { position: absolute; left: var(--feed-left, 12px); bottom: var(--feed-bottom, 16px); width: var(--feed-w, 380px); display: flex; flex-direction: column; gap: 4px; }
-.feed .line { max-width: 100%; padding: 5px 10px; background: var(--overlay); font-size: 15px; line-height: 1.25; animation: fade 12s ease both; overflow-wrap: anywhere; }
-.feed.open .line { animation: none; }
-.feed .line b { font-weight: 400; margin-right: 6px; }
 @keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
-.feed .box { pointer-events: auto; display: flex; margin-top: 4px; }
-.feed .box input { flex: 1; font-size: 16px; }
 .feed .hint { display: inline-block; font-size: 13px; padding: 4px 9px; background: var(--overlay); color: var(--dim); margin-top: 4px; }
 
 /* ---------- Podium ---------- */
@@ -267,7 +262,7 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 /* ---------- Panel and Competitions screen (shared frame) ---------- */
 .scrim { position: absolute; inset: 0; background: rgba(10, 14, 32, .55); pointer-events: auto; }
 .panel, .hub { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: auto; background: var(--s2); border-top: 4px solid var(--accent); box-shadow: 0 10px 40px rgba(0, 0, 0, .45); }
-.panel { width: min(1060px, calc(100% - 40px)); height: min(720px, calc(100% - 40px)); display: grid; grid-template-columns: 1fr 288px; grid-template-rows: auto 1fr; }
+.panel { width: min(800px, calc(100% - 40px)); height: min(720px, calc(100% - 40px)); display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
 .panel > header, .hub > header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; background: var(--s1); }
 .panel > header { grid-column: 1 / -1; }
 .panel > header .titles, .hub > header .titles { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
@@ -284,9 +279,8 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .tab.on { color: var(--text); background: var(--btn-hover); box-shadow: inset 0 -3px 0 var(--accent-lit); }
 .tab .count { font-size: 13px; color: var(--dim); }
 .content { flex: 1; overflow-y: auto; padding: 16px 20px 22px; min-height: 0; }
-.content::-webkit-scrollbar, .scroll::-webkit-scrollbar, .msgs::-webkit-scrollbar, .hub .body::-webkit-scrollbar, .cups::-webkit-scrollbar { width: 10px; background-color: var(--s4); }
-.content::-webkit-scrollbar-thumb, .scroll::-webkit-scrollbar-thumb, .msgs::-webkit-scrollbar-thumb, .hub .body::-webkit-scrollbar-thumb, .cups::-webkit-scrollbar-thumb { background-color: var(--accent); border: 2px solid var(--s4); }
-.panel .side { grid-row: 2; grid-column: 2; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--line); }
+.content::-webkit-scrollbar, .scroll::-webkit-scrollbar, .hub .body::-webkit-scrollbar, .cups::-webkit-scrollbar { width: 10px; background-color: var(--s4); }
+.content::-webkit-scrollbar-thumb, .scroll::-webkit-scrollbar-thumb, .hub .body::-webkit-scrollbar-thumb, .cups::-webkit-scrollbar-thumb { background-color: var(--accent); border: 2px solid var(--s4); }
 .panel .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; background: var(--s1); }
 .announce { display: flex; align-items: center; gap: 3px; }
 .sect { margin: 0 0 24px; }
@@ -367,15 +361,6 @@ input[type=range]:disabled { cursor: default; --done: #4b5589; --knob: #a3abc9; 
 .matrix th { font-weight: 400; color: var(--dim); font-size: 13px; }
 .matrix td.n { text-align: left; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .matrix td.w { color: var(--gold); }
-.chat { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.chat .ctabs { display: flex; gap: 2px; padding: 12px 12px 0; }
-.chat .ctabs .tab { font-size: 16px; padding: 9px 12px; }
-.msgs { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; -webkit-user-select: text; user-select: text; pointer-events: auto; }
-.msg { font-size: 15px; line-height: 1.3; overflow-wrap: anywhere; }
-.msg b { font-weight: 400; display: block; font-size: 14px; margin-bottom: 2px; }
-.msg .mute { pointer-events: auto; float: right; background: none; border: none; color: var(--faint); cursor: pointer; font-size: 12px; }
-.chat form { display: flex; gap: 6px; padding: 10px; background: var(--s1); }
-.chat form input { flex: 1; font-size: 16px; }
 
 /* ---------- Competitions screen ---------- */
 .hub { width: min(1100px, calc(100% - 40px)); max-height: calc(100% - 40px); display: flex; flex-direction: column; }
@@ -481,12 +466,7 @@ input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-bu
 .poolline { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; padding: 8px 10px; background: var(--s3); font-size: 16px; }
 .poolline .grow { flex: 1; min-width: 0; }
 
-.feed .box .btn { margin-right: 4px; }
 
-/* Chat text uses the font picked in Settings > Chat (mod/nsws_chat.js sets these on the page). */
-.chat .msgs, .chat form input, .feed .line, .feed .box input { font-family: 'NSWS Flags', var(--nsws-chat-text, ForcedSquare, Arial), var(--nsws-chat-emoji, sans-serif), sans-serif; font-style: var(--nsws-chat-font-style, italic); }
-.msg b, .feed .line b { font-weight: var(--nsws-chat-name-weight, 400); }
-.feed .box .btn:last-child { margin: 0 0 0 4px; }
 
 /* The racer's keys, opened from the Keys button on the speedometer (keymenu.ts): two columns when they fit. */
 .keymenu { position: absolute; width: 340px; overflow-y: auto; pointer-events: auto; padding: 2px 12px 12px; background: var(--s1); clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%); }
@@ -532,9 +512,8 @@ input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-bu
 .root.touch .spec .who .name { max-width: 100%; font-size: 19px; }
 .root.touch .spec .who .stats { gap: 10px; font-size: 13px; white-space: nowrap; }
 .root.touch .spec .modes .btn { min-height: calc(40px / var(--cs)); }
-.root.touch .feed .box .btn, .root.touch .feed .box input { height: max(36px, 40px / var(--cs)); }
 
-/* A phone's panel is one column: the chat is a tab and the header is one line. */
+/* A phone's panel has a one-line header. */
 .root.phone .keysbtn { display: none; }
 .panel.phone { width: calc(100% - 16px); height: calc(100% - 16px); grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 .panel.phone > header { padding: 6px 10px; gap: 8px; }
@@ -544,22 +523,15 @@ input.text.num::-webkit-inner-spin-button, input.text.num::-webkit-outer-spin-bu
 .panel.phone > header .meta { flex: none; }
 .panel.phone > header .code .c { font-size: 20px; letter-spacing: 2px; }
 .panel.phone > .main { grid-column: 1; grid-row: 2; }
-.panel.phone .side { display: none; }
-.panel.phone.chatting { grid-template-rows: auto auto minmax(0, 1fr); }
-.panel.phone.chatting .side { display: flex; grid-column: 1; grid-row: 3; border: none; }
 .panel.phone .tabs { padding: 6px 8px 0; }
 .panel.phone .tab { min-width: 0; font-size: 16px; padding: 12px 4px; gap: 4px; }
 .panel.phone .content { padding: 12px 12px 18px; overscroll-behavior: contain; }
 .panel.phone .content > .ctl { margin: 0 0 16px; padding: 10px; }
 .panel.phone .content > .ctl:last-child { margin: 16px 0 0; }
 .panel.phone .formats { grid-template-columns: repeat(2, 1fr); }
-.panel.phone .chat .ctabs { padding: 6px 8px 0; }
-.panel.phone .msg .mute { padding: 10px 14px; font-size: 15px; }
 .panel.phone .chip .del { padding: 8px 4px 8px 12px; }
-.root.kb .panel.phone > header, .root.kb .panel.phone .tabs, .root.kb .panel.phone .ctabs { display: none; }
-.root.kb .panel.phone, .root.kb .panel.phone.chatting { grid-template-rows: auto minmax(0, 1fr); }
-.root.kb .panel.phone.chatting > .main { display: none; }
-.root.kb .panel.phone.chatting .side { grid-row: 1 / -1; }
+.root.kb .panel.phone > header, .root.kb .panel.phone .tabs { display: none; }
+.root.kb .panel.phone { grid-template-rows: auto minmax(0, 1fr); }
 
 .root.phone .center { width: max-content; max-width: calc(100% - 16px); }
 .root.phone .card { max-width: 100%; }

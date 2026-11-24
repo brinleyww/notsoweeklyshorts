@@ -240,7 +240,19 @@
 #nsws-chat>.emoji-panel>.preview>.big{font-family:var(--nsws-chat-emoji),sans-serif;font-size:24px;}
 #nsws-chat-toast{position:fixed;z-index:91;max-width:320px;padding:8px 12px 8px 10px;border-left:3px solid #f0b232;background:var(--surface-color,#28346a);color:var(--text-color,#fff);font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.45);pointer-events:none;overflow-wrap:anywhere;transition:opacity .6s;}
 #nsws-chat-toast.out{opacity:0;}
-#nsws-chat.tucked,#nsws-chat-feed.tucked{display:none!important;}
+#nsws-chat>.chans{display:none;flex-shrink:0;background:var(--button-color,#112052);}
+#nsws-chat.incup>.chans{display:flex;}
+#nsws-chat>.chans>button{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 8px;border:0;border-bottom:2px solid transparent;background:transparent;color:inherit;font:inherit;font-size:15px;opacity:.65;cursor:pointer;}
+#nsws-chat>.chans>button:hover{background:var(--button-hover-color,#334b77);opacity:1;}
+#nsws-chat>.chans>button.on{border-bottom-color:var(--text-color,#fff);opacity:1;}
+#nsws-chat>.chans>button>.count:not(:empty){min-width:18px;padding:0 5px;border-radius:9px;background:#e0464b;font-size:12px;line-height:18px;}
+#nsws-chat>.log>.off{display:flex;flex-direction:column;align-items:center;gap:8px;padding:18px 14px;font-size:.9em;text-align:center;}
+#nsws-chat>.log>.off>button{border:0;background:var(--button-color,#112052);color:inherit;font:inherit;font-size:14px;padding:5px 12px;cursor:pointer;}
+#nsws-chat>.log>.off>button:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat .m>.meta>.muted{font-size:.7em;color:#ff9a9a;}
+body.nsws-incup #nsws-chat{z-index:100060;}
+body.nsws-incup #nsws-chat-feed,body.nsws-incup #nsws-chat-toast{z-index:100061;}
+body.nsws-incup #nsws-chat-lightbox,body.nsws-incup #nsws-profile{z-index:100070;}
 body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:not(.hidden)) #nsws-chat-toast{z-index:10001;}
 #nsws-chat-feed{position:fixed;z-index:89;display:flex;flex-direction:column;gap:4px;width:min(380px,calc(100vw - 24px));font-family:'NSWS Flags',var(--nsws-chat-text),var(--nsws-chat-emoji),sans-serif;font-style:var(--nsws-chat-font-style);font-size:15px;line-height:1.25;color:var(--text-color,#fff);pointer-events:none;}
 #nsws-chat-feed .line{align-self:flex-start;max-width:100%;padding:5px 10px;background:rgba(25,32,66,.9);overflow-wrap:anywhere;animation:nsws-feed-fade 12s ease both;}
@@ -430,9 +442,18 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     let root = null;
-    // Set while Cuppa shows this chat inside its own UI (a cup), which then hides the window.
-    let tucked = false;
-    const feedListeners = new Set();
+    // In a cup (Cuppa calls setCup) the window has two channels: "cup", the cup's own room, and "all".
+    // `ctx` is the channel whose messages the variables below hold; the other's wait in `store`. It is
+    // the shown `channel` except while inChannel() updates the hidden one, with `log` null meanwhile.
+    let channel = "all";
+    let ctx = "all";
+    const store = {};
+    const unseen = { all: 0, cup: 0 };
+    const statusText = { all: "", cup: "" };
+    let cup = null;
+    let logEl = null;
+    let titleEl = null;
+    let chanTabs = null;
     let feed = null;
     let feedInput = null;
     let log = null;
@@ -1811,7 +1832,235 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     function setStatus(text) {
-        if (statusLine) statusLine.textContent = text;
+        statusText[ctx] = text;
+        if (statusLine && ctx === channel) statusLine.textContent = text;
+    }
+
+    function mainStatus(text) {
+        inChannel("all", () => setStatus(text));
+    }
+
+    // ---- Channels ----
+
+    function channelState() {
+        return { items, oldestId, deletedIds, me, readyAt, timedOut, users, usersAt };
+    }
+
+    function useState(s) {
+        ({ items, oldestId, deletedIds, me, readyAt, timedOut, users, usersAt } = s);
+    }
+
+    function freshState() {
+        return { items: [], oldestId: null, deletedIds: new Set(), me: null, readyAt: 0, timedOut: false, users: [], usersAt: 0 };
+    }
+
+    function stateOf(id) {
+        return id === ctx ? channelState() : store[id];
+    }
+
+    function mainMe() {
+        return stateOf("all")?.me ?? null;
+    }
+
+    function mainConnected() {
+        return !!mainMe() && (socket?.readyState === WebSocket.OPEN || !!http);
+    }
+
+    function inChannel(id, fn) {
+        if (id === ctx) return fn();
+        if (!store[id]) return;
+        const was = ctx;
+        store[was] = channelState();
+        useState(store[id]);
+        delete store[id];
+        ctx = id;
+        log = ctx === channel ? logEl : null;
+        try {
+            return fn();
+        } finally {
+            store[id] = channelState();
+            useState(store[was]);
+            delete store[was];
+            ctx = was;
+            log = ctx === channel ? logEl : null;
+        }
+    }
+
+    function showChannel(id) {
+        if (id === channel || ctx !== channel || !store[id]) return;
+        if (editing) stopEdit(true);
+        cancelReply();
+        closeConfirm();
+        closeTools();
+        hideSuggest();
+        closePanel();
+        closeGifPanel();
+        closeQuick();
+        store[channel] = channelState();
+        useState(store[id]);
+        delete store[id];
+        channel = ctx = id;
+        unseen[id] = 0;
+        updateChannel();
+        renderLog();
+        scrollToEnd(true);
+    }
+
+    function updateChannel() {
+        if (!root) return;
+        const inCup = !!cup;
+        root.classList.toggle("incup", inCup);
+        document.body.classList.toggle("nsws-incup", inCup);
+        if (titleEl) titleEl.textContent = inCup && channel === "cup" ? "Cup chat" : "Chat";
+        if (statusLine) statusLine.textContent = statusText[channel];
+        for (const b of chanTabs?.children ?? []) {
+            const id = b.dataset.chan;
+            b.classList.toggle("on", id === channel);
+            b.querySelector(".count").textContent = id !== channel && unseen[id] ? String(Math.min(unseen[id], 99)) : "";
+        }
+        setWhisper(whisperTo);
+    }
+
+    function cupMuted() {
+        return channel === "cup" && !!me && !!cup?.mutes.has(me.uid);
+    }
+
+    function placeholder() {
+        if (whisperTo) return "Whisper to " + whisperTo + "...";
+        if (!cup) return "Say something...";
+        if (channel === "cup") return cupMuted() ? "The organizer muted you for this cup" : "Message the cup...";
+        return "Message everyone...";
+    }
+
+    // Cuppa's call: the room of the cup the player is in ({ code, secret }), or null after leaving.
+    function setCup(room) {
+        const code = typeof room?.code === "string" && room.code ? room.code : null;
+        if (cup && code === cup.code) {
+            cup.secret = room.secret || null;
+            return;
+        }
+        if (cup) leaveCup();
+        if (!code) return;
+        if (!root) enable(true);
+        cup = { code, secret: room.secret || null, ws: null, timer: 0, keepAlive: 0, fails: 0, heard: 0, pinged: 0, mutes: new Set(), host: false };
+        store.cup = freshState();
+        statusText.cup = "Connecting...";
+        unseen.cup = 0;
+        showChannel("cup");
+        updateChannel();
+        cupConnect();
+    }
+
+    function leaveCup() {
+        const c = cup;
+        if (channel === "cup") showChannel("all");
+        cup = null;
+        delete store.cup;
+        clearTimeout(c.timer);
+        clearInterval(c.keepAlive);
+        const ws = c.ws;
+        c.ws = null;
+        try {
+            ws?.close();
+        } catch {}
+        updateChannel();
+        if (!isEnabled()) disable();
+    }
+
+    function cupRetry(c) {
+        clearTimeout(c.timer);
+        c.timer = setTimeout(() => cupConnect(), Math.min(30000, 3000 * 2 ** c.fails++));
+    }
+
+    // The cup's room on the same chat server; the HTTPS fallback (mod/nsws_socket.js) when this
+    // network blocks WebSockets. A hidden tab waits to reconnect until it is looked at again.
+    function cupConnect() {
+        const c = cup;
+        if (!c || c.ws || !root) return;
+        if (document.visibilityState === "hidden") return;
+        let ws;
+        try {
+            ws = new (window.__nswsSocket || WebSocket)(WS_URL + "?cup=" + encodeURIComponent(c.code));
+        } catch {
+            return cupRetry(c);
+        }
+        c.ws = ws;
+        ws.addEventListener("open", async () => {
+            const hello = { t: "hello", v: visitorId(), nick: readNickname() };
+            const key = await ownerKey();
+            if (key) hello.key = key;
+            if (c.secret) hello.host = c.secret;
+            if (c.ws !== ws) return;
+            ws.send(JSON.stringify(hello));
+            c.heard = Date.now();
+            c.pinged = 0;
+            clearInterval(c.keepAlive);
+            c.keepAlive = setInterval(() => {
+                if (ws.readyState !== WebSocket.OPEN) return;
+                if (document.visibilityState === "hidden") return void (c.pinged = 0);
+                // The room answers pings itself, so an unanswered one means a firewall is holding this
+                // socket's traffic; stale() also moves the next socket to HTTPS.
+                if (c.pinged && c.heard < c.pinged && ws.transport !== "https") {
+                    if (!ws.stale?.()) ws.close();
+                    return;
+                }
+                c.pinged = Date.now();
+                ws.send("ping");
+            }, KEEPALIVE_MS);
+        });
+        ws.addEventListener("message", (e) => {
+            if (c.ws !== ws) return;
+            c.heard = Date.now();
+            if (e.data === "pong") return;
+            let data;
+            try {
+                data = JSON.parse(e.data);
+            } catch {
+                return;
+            }
+            if (!data || typeof data !== "object") return;
+            if (data.t === "init") {
+                c.fails = 0;
+                c.host = !!data.you?.host;
+                c.mutes = new Set(Array.isArray(data.mutes) ? data.mutes : []);
+            } else if (data.t === "mutes") {
+                c.mutes = new Set(Array.isArray(data.uids) ? data.uids : []);
+                if (channel === "cup") {
+                    setWhisper(whisperTo);
+                    renderLog();
+                }
+                return;
+            }
+            inChannel("cup", () => onServer(data));
+        });
+        ws.addEventListener("close", () => {
+            if (c.ws !== ws) return;
+            c.ws = null;
+            clearInterval(c.keepAlive);
+            if (cup !== c) return;
+            inChannel("cup", () => {
+                me = null;
+                setStatus("Cup chat is offline. Reconnecting...");
+            });
+            cupRetry(c);
+        });
+    }
+
+    function cupMute(uid, on) {
+        if (cup?.ws?.readyState === WebSocket.OPEN) cup.ws.send(JSON.stringify({ t: "cupmute", uid, on }));
+    }
+
+    // The chat key in a cup, and Cuppa's Chat button: the quick line over a race while the window is
+    // minimized (keys only), otherwise the window's own box.
+    function openChat() {
+        if (!root) return false;
+        if (previewing() && !matchMedia("(pointer: coarse)").matches) {
+            openQuick();
+            return true;
+        }
+        if (layout.min) setMinimized(false);
+        input?.focus();
+        return true;
     }
 
     function nearBottom() {
@@ -1841,6 +2090,17 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             });
             tools.appendChild(b);
         };
+        if (ctx === "cup" && cup && !m.to && m.uid !== me?.uid) {
+            const muted = cup.mutes.has(m.uid);
+            const b = document.createElement("button");
+            b.textContent = muted ? "Unmute in this cup" : "Mute in this cup";
+            b.addEventListener("click", () => {
+                cupMute(m.uid, !muted);
+                closeTools();
+            });
+            tools.appendChild(b);
+            if (!me?.owner) return void el.after(tools);
+        }
         // A whisper (m.to) has no public message to delete; bans find it by its whisper id.
         const whisper = !!m.to;
         if (!whisper) add("Delete", { t: "del", id: m.id });
@@ -1935,7 +2195,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             del.classList.add("danger");
             bar.appendChild(del);
         }
-        if (me?.owner) {
+        if (me?.owner || (ctx === "cup" && cup?.host && !own)) {
             const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
             more.classList.add("more");
             bar.appendChild(more);
@@ -2035,7 +2295,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             whisperChip.firstChild.textContent = whisperTo ? "To " + whisperTo : "";
             whisperChip.title = whisperTo ? "Only " + whisperTo + " sees these. Backspace in the empty box goes back to everyone." : "";
         }
-        if (input) input.placeholder = whisperTo ? "Whisper to " + whisperTo + "..." : "Say something...";
+        if (input) input.placeholder = placeholder();
     }
 
     // "/w name text" or "/r text" at the start: { to, text }, or null for a public message. "@name" is always a ping.
@@ -2076,11 +2336,6 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         hideSuggest();
     }
 
-    // Cuppa's Everyone tab shows whispers too, marked, since the main window is tucked away there.
-    function whisperLine(m) {
-        return { ...m, id: "w" + m.id, nick: m.uid === me?.uid ? "To " + m.to.nick : "From " + m.nick, pings: [] };
-    }
-
     function addWhisper(m, live) {
         if (!m || typeof m.text !== "string" || typeof m.nick !== "string" || !m.to || whisperIds.has(m.id)) return;
         whisperIds.add(m.id);
@@ -2089,12 +2344,6 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (!mine) whisperFrom = m.nick;
         if (!live) return;
         addItem({ kind: "whisper", m });
-        const line = whisperLine(m);
-        for (const fn of feedListeners) {
-            try {
-                fn(line);
-            } catch {}
-        }
         if (mine) return;
         if (layout.min) {
             unread++;
@@ -2191,6 +2440,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             }
             const tag = m.tag ? window.__nswsTags?.chip(m.tag) : null;
             if (tag) meta.appendChild(tag);
+            if (ctx === "cup" && cup?.mutes.has(m.uid)) {
+                const muted = document.createElement("span");
+                muted.className = "muted";
+                muted.textContent = "muted";
+                muted.title = "The organizer muted them for this cup";
+                meta.appendChild(muted);
+            }
             const time = document.createElement("span");
             time.className = "time";
             time.textContent = headerTime(m.at);
@@ -2428,7 +2684,21 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const stick = nearBottom();
         log.textContent = "";
         items.forEach((item, i) => log.appendChild(itemElement(item, items[i - 1])));
+        if (ctx === "all" && cup && !isEnabled()) log.appendChild(offNotice());
         scrollToEnd(stick);
+    }
+
+    function offNotice() {
+        const el = document.createElement("div");
+        el.className = "off";
+        const text = document.createElement("div");
+        text.textContent = "The main chat is off. Turn it on to talk to everyone online.";
+        const on = document.createElement("button");
+        on.type = "button";
+        on.textContent = "Turn it on";
+        on.addEventListener("click", () => window.__nswsChat.setEnabled(true));
+        el.append(text, on);
+        return el;
     }
 
     function addItem(item) {
@@ -2449,21 +2719,30 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     function connected() {
-        return !!me && (socket?.readyState === WebSocket.OPEN || !!http);
+        if (ctx === "cup") return !!me && cup?.ws?.readyState === WebSocket.OPEN;
+        return mainConnected();
     }
 
+    // Whispers always go through the main room, which is the only one that delivers them.
     function send(data) {
-        if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
-        else if (http && me) httpSend(data);
-        else return;
+        if (ctx === "cup" && data.t !== "whisper") {
+            if (cup?.ws?.readyState !== WebSocket.OPEN) return;
+            cup.ws.send(JSON.stringify(data));
+        } else if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data));
+        else if (http && mainMe()) httpSend(data);
+        else {
+            if (data.t === "whisper") addSystem(isEnabled() ? "Whispers need the main chat. It is still connecting." : "Whispers need the main chat. Turn it on to whisper.");
+            return;
+        }
         if (data.t === "msg") window.dispatchEvent(new CustomEvent("nsws-activity", { detail: { kind: "chat" } }));
     }
 
     function saveLog() {
         clearTimeout(logTimer);
         logTimer = setTimeout(() => {
-            if (!me) return;
-            const messages = items.filter((item) => item.kind === "msg").slice(-LOG_KEEP).map((item) => item.m);
+            const main = stateOf("all");
+            if (!main?.me) return;
+            const messages = main.items.filter((item) => item.kind === "msg").slice(-LOG_KEEP).map((item) => item.m);
             storageSet(LOG_KEY, JSON.stringify({ at: Date.now(), messages }));
         }, 2000);
     }
@@ -2488,62 +2767,74 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         clearTimeout(retryTimer);
         if (!root) return;
         const busy = window.__nswsBusy;
-        setStatus("Chat is paused until " + (busy?.label() ?? "later") + ". The server hit its free daily limit.");
-        showSavedLog();
+        inChannel("all", () => {
+            setStatus("Chat is paused until " + (busy?.label() ?? "later") + ". The server hit its free daily limit.");
+            showSavedLog();
+        });
         const left = (busy?.until() || 0) - Date.now();
         retryTimer = setTimeout(() => connect(true), Math.max(30000, Math.min(left, BUSY_CHECK_MS)));
     }
 
+    // Whispers and the refusals of one go to the channel on screen, since they are sent from either.
+    function fromMain(data) {
+        if (data?.t === "whisper" || (data?.t === "err" && data.wfail)) onServer(data);
+        else inChannel("all", () => onServer(data));
+    }
+
     function onServer(data) {
         if (!data || typeof data !== "object") return;
-        saveLog();
+        // Replies, edits and the box belong to the channel on screen; message ids are per room.
+        const shown = ctx === channel;
+        if (ctx === "all") saveLog();
         if (data.t === "init") {
-            window.__nswsBusy?.clear();
+            if (ctx === "all") window.__nswsBusy?.clear();
             me = data.you;
             items = data.messages.map((m) => ({ kind: "msg", m }));
             oldestId = data.messages[0]?.id ?? null;
             deletedIds = new Set();
-            whisperIds = new Set();
+            if (Array.isArray(data.whispers)) whisperIds = new Set();
             for (const w of Array.isArray(data.whispers) ? data.whispers : []) {
                 if (whisperIds.has(w?.id)) continue;
                 addWhisper(w, false);
                 if (whisperIds.has(w?.id)) items.push({ kind: "whisper", m: w });
             }
             items.sort((a, b) => a.m.at - b.m.at);
-            items.push({ kind: "sys", text: "Connected. Be nice - slurs are filtered." });
+            items.push({ kind: "sys", text: ctx === "cup" ? "Cup chat: only people in this cup see it." : "Connected. Be nice - slurs are filtered." });
+            setStatus("");
             renderLog();
             scrollToEnd(true);
         } else if (data.t === "msg") {
             addItem({ kind: "msg", m: data.m });
-            for (const fn of feedListeners) {
-                try {
-                    fn(data.m);
-                } catch {}
-            }
             previewMessage(data.m);
-            if (layout.min && data.m.uid !== me?.uid) {
-                unread++;
-                updateUnread();
+            if (data.m.uid !== me?.uid) {
+                if (layout.min) {
+                    unread++;
+                    updateUnread();
+                }
+                if (!shown) {
+                    unseen[ctx]++;
+                    updateChannel();
+                }
             }
             if (pingsMe(data.m)) notifyPing(data.m);
         } else if (data.t === "whisper") {
             addWhisper(data.m, true);
         } else if (data.t === "who") {
             users = Array.isArray(data.users) ? data.users : [];
-            if (suggest.kind === "mention" || document.activeElement === input) updateSuggest();
+            if (shown && (suggest.kind === "mention" || document.activeElement === input)) updateSuggest();
         } else if (data.t === "edit") {
             applyEdit(data);
         } else if (data.t === "del") {
             deletedIds.add(data.id);
-            if (replyTo?.id === data.id) cancelReply();
-            if (editing?.id === data.id) editing = null;
+            if (shown && replyTo?.id === data.id) cancelReply();
+            if (shown && editing?.id === data.id) editing = null;
             items = items.filter((item) => item.kind !== "msg" || item.m.id !== data.id);
             renderLog();
         } else if (data.t === "react") {
             applyReaction(data);
         } else if (data.t === "clear") {
             for (const item of items) if (item.kind === "msg" && item.m.uid === data.uid) deletedIds.add(item.m.id);
-            if (replyTo?.uid === data.uid) cancelReply();
+            if (shown && replyTo?.uid === data.uid) cancelReply();
             items = items.filter((item) => item.kind !== "msg" || item.m.uid !== data.uid);
             for (const item of items) {
                 if (item.kind !== "msg" || !item.m.reactions) continue;
@@ -2560,13 +2851,18 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             setTimeout(() => window.__nswsClubTag?.heard(data.v), Math.random() * 2000);
         } else if (data.t === "err") {
             // A refused whisper goes back in the box, still to the same name, so it can't slip out to everyone.
-            if (data.wfail && lastWhisper && input) {
+            if (data.wfail && lastWhisper && input && shown) {
                 if (!input.value) input.value = lastText;
                 if (!whisperTo) setWhisper(lastWhisper);
                 lastWhisper = null;
             }
             addSystem(data.text);
         } else if (data.t === "slow" || data.t === "timeout") {
+            if (!shown || !input) {
+                readyAt = Math.max(readyAt, Date.now() + Number(data.ms || SLOW_MS));
+                if (data.t === "timeout") addSystem(data.text);
+                return;
+            }
             // The server refused the last message, so it goes back in the box.
             if (!input.value) {
                 input.value = lastText;
@@ -2620,7 +2916,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             probeWebSocket();
             return connectHttp();
         }
-        setStatus("Connecting...");
+        mainStatus("Connecting...");
         let ws;
         try {
             ws = new WebSocket(WS_URL);
@@ -2636,7 +2932,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         let upSince = 0;
         ws.addEventListener("open", async () => {
             clearTimeout(openTimer);
-            setStatus("");
+            mainStatus("");
             const hello = { t: "hello", v: visitorId(), nick: readNickname() };
             const key = await ownerKey();
             if (key) hello.key = key;
@@ -2653,7 +2949,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             } catch {
                 return;
             }
-            onServer(data);
+            fromMain(data);
             if (data?.t === "init") {
                 ready = true;
                 upSince = Date.now();
@@ -2691,8 +2987,10 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
 
     function retry() {
         if (!root) return;
-        setStatus("Chat is offline. Reconnecting...");
-        showSavedLog();
+        inChannel("all", () => {
+            setStatus("Chat is offline. Reconnecting...");
+            showSavedLog();
+        });
         retryTimer = setTimeout(connect, retryDelay);
         retryDelay = Math.min(retryDelay * 2, 30000);
     }
@@ -2725,7 +3023,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         if (!root || http) return;
         const session = { epoch: null, seq: 0, key: null, controllers: new Set(), offline: false };
         http = session;
-        setStatus("Connecting...");
+        mainStatus("Connecting...");
         session.key = await ownerKey();
         pollLoop(session);
     }
@@ -2768,15 +3066,15 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 session.epoch = data.epoch;
                 session.seq = data.seq;
                 if (data.init) {
-                    onServer({ t: "init", ...data.init });
+                    fromMain({ t: "init", ...data.init });
                     storageSet(TRANSPORT_KEY, String(Date.now()));
                 }
                 if (data.init || session.offline) {
                     session.offline = false;
-                    setStatus("");
+                    mainStatus("");
                 }
-                for (const event of data.events || []) onServer(event);
-                for (const m of data.whispers || []) onServer({ t: "whisper", m });
+                for (const event of data.events || []) fromMain(event);
+                for (const m of data.whispers || []) fromMain({ t: "whisper", m });
                 if (data.gap > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(data.gap, MAX_POLL_GAP_MS)));
             } catch (err) {
                 if (http !== session) return;
@@ -2788,8 +3086,10 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                     return pauseForBusy();
                 }
                 session.offline = true;
-                setStatus("Chat is offline. Reconnecting...");
-                showSavedLog();
+                inChannel("all", () => {
+                    setStatus("Chat is offline. Reconnecting...");
+                    showSavedLog();
+                });
                 const wait = err?.retry > 0 ? Math.min(err.retry * 1000, MAX_BUSY_MS) : delay;
                 await new Promise((resolve) => setTimeout(resolve, wait));
                 delay = Math.min(delay * 2, 30000);
@@ -2801,7 +3101,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const session = http;
         try {
             const reply = await httpPost(session, "send", { msg: data }, SEND_ABORT_MS);
-            if (http === session) for (const r of reply.replies || []) onServer(r);
+            if (http === session) for (const r of reply.replies || []) fromMain(r);
         } catch (err) {
             if (http !== session || data.t !== "msg") return;
             if (input && !input.value) input.value = data.text;
@@ -2820,7 +3120,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         socket = null;
         const session = http;
         http = null;
-        me = null;
+        inChannel("all", () => (me = null));
         wsFails = 0;
         retryDelay = 2000;
         try {
@@ -2851,6 +3151,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             return;
         }
         if (to) {
+            if (!mainConnected()) return addSystem(isEnabled() ? "Whispers need the main chat. It is still connecting." : "Whispers need the main chat. Turn it on to whisper.");
             const wait = me.owner ? 0 : readyAt - Date.now();
             if (wait > 0) {
                 if (!timedOut) sendTimer = setTimeout(trySend, wait);
@@ -2906,7 +3207,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     function previewing() {
-        return !!root && !tucked && layout.min && inRace();
+        return !!root && layout.min && inRace();
     }
 
     // The feed sits just above the minimized chat bar (below it when there is no room).
@@ -2929,7 +3230,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     }
 
     function previewMessage(m) {
-        if (!previewing() || !m || typeof m.text !== "string") return;
+        if (ctx !== channel || !previewing() || !m || typeof m.text !== "string") return;
         const el = ensureFeed();
         if (m.id != null && el.querySelector('.line[data-id="' + m.id + '"]')) return;
         const line = document.createElement("div");
@@ -2963,7 +3264,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const form = document.createElement("form");
         feedInput = document.createElement("input");
         feedInput.maxLength = MAX_TEXT;
-        feedInput.placeholder = "Message everyone (Enter to send, Esc to close)";
+        feedInput.placeholder = (channel === "cup" ? "Message the cup" : "Message everyone") + " (Enter to send, Esc to close)";
         feedInput.autocomplete = "off";
         feedInput.addEventListener("keydown", (e) => {
             if (e.key === "Escape") closeQuick();
@@ -2999,6 +3300,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const typed = typedWhisper(text);
         if (typed && !typed.to) return Promise.reject(new Error("Nobody has whispered you yet."));
         if (typed && !typed.text) return Promise.reject(new Error("Write the whisper after the name: /w name your message"));
+        if (typed && !mainConnected()) return Promise.reject(new Error("Whispers need the main chat."));
         lastText = typed ? typed.text : text;
         lastReply = null;
         lastWhisper = typed ? typed.to : null;
@@ -3006,13 +3308,6 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         else send({ t: "msg", text, nick: readNickname() });
         readyAt = Date.now() + SLOW_MS;
         return Promise.resolve();
-    }
-
-    function setTucked(on) {
-        tucked = !!on;
-        root?.classList.toggle("tucked", tucked);
-        feed?.classList.toggle("tucked", tucked);
-        if (tucked) closeQuick();
     }
 
     function submit(e) {
@@ -3065,7 +3360,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
 
         const bar = document.createElement("div");
         bar.className = "bar";
-        const title = document.createElement("span");
+        const title = titleEl = document.createElement("span");
         title.className = "title";
         title.textContent = "Chat";
         onlineLabel = document.createElement("span");
@@ -3086,7 +3381,24 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         for (const button of [minButton, fullButton, bellButton]) button.addEventListener("mousedown", (e) => e.preventDefault());
         bar.append(title, onlineLabel, unreadBadge, bellButton, fullButton, minButton);
 
-        log = document.createElement("div");
+        chanTabs = document.createElement("div");
+        chanTabs.className = "chans";
+        for (const [id, label, tip] of [["cup", "Cup", "Only people in this cup"], ["all", "Everyone", "Everyone online"]]) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.dataset.chan = id;
+            b.title = tip;
+            const count = document.createElement("span");
+            count.className = "count";
+            b.append(label, count);
+            b.addEventListener("mousedown", (e) => e.preventDefault());
+            b.addEventListener("click", () => {
+                showChannel(id);
+                if (lastPointer !== "touch") input?.focus();
+            });
+            chanTabs.appendChild(b);
+        }
+        log = logEl = document.createElement("div");
         log.className = "log";
         log.addEventListener("pointerdown", (e) => {
             lastPointer = e.pointerType;
@@ -3098,7 +3410,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         input = document.createElement("input");
         input.type = "text";
         input.maxLength = MAX_TEXT * 2;
-        input.placeholder = "Say something...";
+        input.placeholder = placeholder();
         input.autocomplete = "off";
         input.spellcheck = false;
         emojiButton = document.createElement("button");
@@ -3194,7 +3506,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         grip.className = "grip";
         suggestBox = document.createElement("div");
         suggestBox.className = "suggest";
-        root.append(bar, log, statusLine, suggestBox, attachBar, replyBar, form, grip);
+        root.append(bar, chanTabs, log, statusLine, suggestBox, attachBar, replyBar, form, grip);
 
         // The game listens for keys and clicks on window; none of the chat's should reach it.
         for (const type of ["keydown", "keyup", "keypress"]) root.addEventListener(type, stop);
@@ -3259,6 +3571,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
 
         document.body.appendChild(root);
         applyLayout();
+        updateChannel();
         updateOnline();
         window.__nswsTraffic?.refreshOnline?.();
         renderLog();
@@ -3275,7 +3588,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     // Works wherever the focus is while the window is open, except in another text box or the editor,
     // which pastes parts on the same key.
     function onPaste(e) {
-        if (!root || layout.min || tucked || document.querySelector(".editor-ui")) return;
+        if (!root || layout.min || document.querySelector(".editor-ui")) return;
         const file = e.clipboardData?.files?.[0];
         if (!file) return;
         if (e.composedPath().some((t) => t !== input && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) return;
@@ -3283,20 +3596,38 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         attachFile(file);
     }
 
-    function enable() {
-        if (root) return;
+    // cupOnly: a cup needs the window while the main chat is off, so it opens without joining.
+    function enable(cupOnly) {
+        if (root) {
+            if (cupOnly === true) return;
+            if (channel === "all") renderLog();
+            if (document.visibilityState === "hidden") dropped = true;
+            else connect();
+            return;
+        }
         build();
         document.addEventListener("paste", onPaste);
         window.addEventListener("keydown", onKey, true);
         window.addEventListener("keydown", quickKey, true);
         window.addEventListener("resize", applyLayout);
-        root.classList.toggle("tucked", tucked);
-        if (document.visibilityState === "hidden") dropped = true;
+        if (cupOnly === true) {
+        } else if (document.visibilityState === "hidden") dropped = true;
         else connect();
         setTimeout(loadEmoji, 2000);
     }
 
     function disable() {
+        // The cup's channel stays; only the main chat leaves.
+        if (cup && root) {
+            disconnect();
+            inChannel("all", () => {
+                items = [];
+                oldestId = null;
+                setStatus("");
+            });
+            if (channel === "all") renderLog();
+            return;
+        }
         disconnect();
         closePanel();
         closeGifPanel();
@@ -3313,7 +3644,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         feed = null;
         root?.remove();
         toast?.remove();
-        root = log = input = statusLine = onlineLabel = unreadBadge = replyBar = null;
+        document.body.classList.remove("nsws-incup");
+        root = log = logEl = titleEl = chanTabs = input = statusLine = onlineLabel = unreadBadge = replyBar = null;
         replyTo = lastReply = null;
         editing = confirmBox = null;
         minButton = fullButton = bellButton = emojiButton = suggestBox = panel = toast = null;
@@ -3335,7 +3667,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     let dropped = false;
 
     function dropIfHidden() {
-        if (!root || feedListeners.size || document.visibilityState !== "hidden") return;
+        if (!root || cup || document.visibilityState !== "hidden") return;
         dropped = true;
         disconnect();
     }
@@ -3344,9 +3676,12 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         clearTimeout(dropTimer);
         if (document.visibilityState === "hidden") {
             dropTimer = setTimeout(dropIfHidden, HIDDEN_DROP_MS);
-        } else if (dropped) {
-            dropped = false;
-            if (root) connect();
+        } else {
+            if (dropped) {
+                dropped = false;
+                if (root) connect();
+            }
+            if (cup && !cup.ws) cupConnect();
         }
     });
 
@@ -3394,25 +3729,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             storageSet(ENABLED_KEY, on ? "true" : "false");
             on ? enable() : disable();
         },
-        // For Cuppa: one chat stream in a cup, over this connection (no second socket).
-        feed: {
-            active: () => !!root,
-            uid: () => me?.uid ?? null,
-            recent: () => items.filter((item) => item.kind === "msg" || item.kind === "whisper").slice(-40)
-                .map((item) => item.kind === "whisper" ? whisperLine(item.m) : item.m.media ? { ...item.m, text: lineText(item.m) } : item.m),
-            subscribe(fn) {
-                const listener = (m) => fn(m.media ? { ...m, text: lineText(m) } : m);
-                feedListeners.add(listener);
-                if (dropped && root) {
-                    dropped = false;
-                    connect();
-                }
-                return () => feedListeners.delete(listener);
-            },
-            post: postText,
-            color: nickColor,
+        // For Cuppa: the cup's room as the window's second channel, and its chat key.
+        setCup,
+        open: openChat,
+        typing: () => {
+            const el = document.activeElement;
+            return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && !!el.closest("#nsws-chat, #nsws-chat-feed");
         },
-        setTucked,
     };
 
     if (isEnabled()) {

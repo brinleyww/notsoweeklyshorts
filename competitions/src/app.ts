@@ -139,7 +139,6 @@ export class App {
     this.build = new BuildDesk(this);
     this.chat = new CupChat({
       context: () => (this.state && this.me != null ? { cupId: this.state.id, host: this.isHost } : null),
-      changed: () => this.changed(),
     });
     this.native.onFrame((g, dt) => {
       try {
@@ -521,9 +520,10 @@ export class App {
     this.report({ k: 'act', a: 'watch', v: want }, false);
   }
 
-  // Typing in one of the layer's text boxes holds the car (keys go to the box, not the game).
+  // Typing in one of the layer's text boxes or the chat window holds the car (keys go to the box, not the game).
   get chatTyping() {
     const host = document.activeElement;
+    if (this.chat.typing) return true;
     if (host?.id !== 'nsws-cuppa') return false;
     const el = host.shadowRoot?.activeElement;
     return el instanceof HTMLInputElement && el.type === 'text' && el.getClientRects().length > 0;

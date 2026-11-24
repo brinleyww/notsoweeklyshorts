@@ -99,27 +99,27 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
     gaps and splits, at no network cost.
 - `ui/`: everything is in one shadow root over the game, scaled by the game's `--ui-scale-factor`.
   `hud.ts` (round bar, countdown, live board, split popup, spectator bar, results, votes, warm-up,
-  chat feed, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules, chat;
+  chat key hint, notices, podium), `panel.ts` (Tab: cup, standings, rounds, players, tracks, rules;
   the Tracks tab lists the cup's whole map pool to everyone, and only the organizer gets Play next),
   `hub.ts` (the Competitions screen), `layer.ts` (mounting, keys, the game toolbar buttons, layout),
   `keymenu.ts` (a Keys button joined to the speedometer that lists a racer's keys), `touchmenu.ts`
   and `touch.ts` (the same controls on touch screens).
 - Layout (`layer.ts`): four times a second the layer measures what the game draws (timer, speedometer,
   checkpoint count, touch buttons, other mods' counters) and places the round bar, the right column
-  (watchers and the live board, with as many rows as fit) and the chat feed in the room left over. A
-  card in the middle (vote, results) over the feed's corner hides the feed; chat then opens in the panel.
+  (watchers and the live board, with as many rows as fit) and the chat key hint in the room left over. A
+  card in the middle (vote, results) over the hint's corner hides the hint.
 - Touch: the game's touch steering cancels every touch on `window` that isn't on a `<button>`, and a
   touch inside the shadow root looks like one on its host `<div>`, so the layer stops touch events at
   its host. The car is held only while a text box of the layer really has focus; a click outside the
   box ends the typing. Phone keyboards cover the page without resizing it, so while a box of the layer
-  has focus the layer shrinks to `visualViewport` (`#fitKeyboard`) and the chat boxes sit above the
+  has focus the layer shrinks to `visualViewport` (`#fitKeyboard`) and its text boxes sit above the
   keyboard.
 - Touch controls: touch screens have no keys, so every key has a button. A dock with Cup and Chat
   sits in the gap between the pedals and the steering (`#placeTouch` in `layer.ts`, which also places
   the warm-up and spectator bars). Cup opens a menu with the cup panel, hide other cars, hide HUD,
   restart, retire, skip vote, the camera modes and the organizer's quick round buttons; anything that
   can't be undone asks for a second tap. A new key needs an item there too. On a phone
-  (`pointer: coarse`) the panel is one column with the chat as a tab.
+  (`pointer: coarse`) the panel is one column, and Chat opens the chat window.
 - Touch traps:
   - Browsers make a click only from the first finger down, so `tapWithOtherFingers` clicks a button
     tapped while a thumb holds accelerate.
@@ -133,12 +133,14 @@ Kodub's matchmaking and WebRTC (`proxy/src/lobby.js`, PROXY.md "Competitions").
   `h()` attaches handlers with `addEventListener`, where the return value doesn't matter.
 - Spectators tell the organizer whose car they follow (`act` `watch`, once the choice has held 0.8 s),
   and the racer sees "N watching" top right.
-- `chat.ts`: two chat tabs in a cup, "Cup chat" (the cup's own room, `/nsws/chat?cup=CODE`) and
-  "Everyone" (the main chat's messages and connection, `window.__nswsChat.feed`, when the player has
-  it on), each with an unread count. The race overlay shows the open tab. The main chat window tucks
-  away inside a cup. Outside a cup,
-  the main chat shows the same fading previews over a race while its window is minimized, and the
-  chat key opens a quick message line (`mod/nsws_chat.js`).
+- `chat.ts`: the cup chat is the main chat window (`mod/nsws_chat.js`) with two channels in a cup,
+  "Cup" (the cup's own room, `/nsws/chat?cup=CODE`) and "Everyone", each with an unread count.
+  `chat.ts` only hands the window the cup's room (`__nswsChat.setCup`); joining switches the window
+  to Cup. Everything the main chat has works in both: emoji, GIFs, uploads, replies, reactions,
+  edits, pings, profiles, the race previews while minimized and the chat key's quick line.
+  Whispers go through the main room from either channel. The organizer mutes from a message's
+  moderate menu. In a cup the window sits above the cup layer (and the Build Off editor), and it
+  still opens with the main chat off, which then shows a "Turn it on" button under Everyone.
 
 Game access is `window.__nswsCup` in `main.bundle.js` (`cupNative`, types in `game.ts`). The race
 session calls the cup once a frame before drawing (`cupFrameHook`), and just before it moves the other

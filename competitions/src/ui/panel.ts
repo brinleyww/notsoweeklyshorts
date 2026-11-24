@@ -1,20 +1,18 @@
-// The cup panel (Tab): overview and setup, standings, rounds, players, tracks and rules,
-// with the cup chat alongside.
+// The cup panel (Tab): overview and setup, standings, rounds, players, tracks and rules. The cup chat
+// is the main chat window's Cup channel (mod/nsws_chat.js), which stays usable over the panel.
 import type { App } from '../app.ts';
 import { canRace, humanRacers, leaderPoints, racers } from '../engine.ts';
 import { cleanRules, deletePreset, fmtDuration, FORMATS, formatById, MAX_BOTS, MAX_RACERS, parsePresetText, pointsCurve, presetText, PRODUCT, rulesSummary, savedPresets, savePreset, type PointsCurve, type Rules } from '../rules.ts';
 import { player, standings, type Category, type CupState, type CustomTrack, type Player, type TrackMode, type TrackRef, isFinalist } from '../state.ts';
 import { btn, click, confirmBtn, range, flag, fmtClock, fmtTime, h, icon, ordinal, fill, toggle } from './dom.ts';
 import { poolLabel, type MapPool } from './hub.ts';
-import { nameColor } from './hud.ts';
 import { isPhone, isTouch } from './touch.ts';
 import { beReady, ensureBE, isBE, site } from '../game.ts';
 import { UPLOAD_CHUNK } from '../protocol.ts';
 
 const MODE_LABEL: Record<TrackMode, string> = { normal: '', rocket: 'Rocket League', royale: 'Royale' };
 
-// chat: only on a phone, where the panel is one column.
-type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks' | 'chat';
+type Tab = 'cup' | 'standings' | 'rounds' | 'players' | 'tracks';
 
 const botTag = (p: Player | undefined) => (p?.bot ? h('span', { class: 'badge', style: 'color:var(--dim)', title: `Computer racer · skill ${p.bot.s}` }, 'BOT') : null);
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
@@ -43,9 +41,6 @@ export class Panel {
   el = h('div', { class: 'panel-wrap', hidden: true });
   tab: Tab = 'cup';
   #key = '';
-  #chatKey = '';
-  #side = h('aside', { class: 'side' });
-  // Built once: only the header and the main column are rebuilt, so the chat keeps its focus.
   #head = h('header');
   #main = h('div', { class: 'main' });
   #frame = h('div', { class: 'panel' });
@@ -76,20 +71,11 @@ export class Panel {
     return !this.el.hidden;
   }
 
-  openChat() {
-    this.setOpen(true);
-    if (isPhone()) this.tab = 'chat';
-    this.render(true);
-    this.#chatUi?.input.focus();
-  }
-
   setOpen(open: boolean) {
     if (open === this.open) return;
-    if (open && this.tab === 'chat') this.tab = 'cup';
     this.el.hidden = !open;
     this.app.panelOpen = open;
     this.#key = '';
-    this.#chatKey = '';
     const active = (this.el.getRootNode() as ShadowRoot).activeElement;
     if (!open && active instanceof HTMLElement && this.el.contains(active)) active.blur();
     this.app.changed();
@@ -104,17 +90,11 @@ export class Panel {
     }
     // Never rebuild under someone typing (or dragging a slider) in the main column.
     const active = (this.el.getRootNode() as ShadowRoot).activeElement;
-    if (!force && active && this.#main.contains(active) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) {
-      this.#renderChat();
-      return;
-    }
-    const phone = isPhone();
-    if (!phone && this.tab === 'chat') this.tab = 'cup';
+    if (!force && active && this.#main.contains(active) && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
     const key = JSON.stringify([
       this.tab,
-      phone,
+      isPhone(),
       isTouch(),
-      phone && this.tab !== 'chat' ? app.chat.cup.unread + app.chat.unreadAll : 0,
       s.seq,
       s.phase,
       app.history.length,
@@ -133,7 +113,6 @@ export class Panel {
       this.#key = key;
       this.#build(s);
     }
-    this.#renderChat();
   }
 
   #build(s: CupState) {
@@ -173,8 +152,6 @@ export class Panel {
     ];
     tabs.push(['tracks', 'Tracks', 'search', null]);
     const phone = isPhone();
-    if (phone) tabs.push(['chat', 'Chat', 'chat', this.tab === 'chat' ? null : app.chat.cup.unread + app.chat.unreadAll || null]);
-    const chatting = phone && this.tab === 'chat';
     // On a phone only the Start button stays pinned; the other controls scroll with the Cup tab.
     const pinned = !phone || (app.isHost && s.phase === 'lobby');
     const controls = pinned || this.tab === 'cup' ? this.#controls(s) : null;
@@ -186,27 +163,19 @@ export class Panel {
       ),
     );
     const inline = pinned ? null : controls;
-    const content = h('div', { class: 'content' }, app.isHost ? inline : null, chatting ? null : this.#content(s), app.isHost ? null : inline);
+    const content = h('div', { class: 'content' }, app.isHost ? inline : null, this.#content(s), app.isHost ? null : inline);
     if (!this.#mounted) {
       this.#mounted = true;
       fill(this.el, h('div', { class: 'scrim', onclick: () => this.setOpen(false) }), this.#frame);
-      fill(this.#frame, this.#head, this.#main, this.#side);
+      fill(this.#frame, this.#head, this.#main);
     }
-    const wasChatting = this.#frame.classList.contains('chatting');
     toggle(this.#frame, 'phone', phone);
-    toggle(this.#frame, 'chatting', chatting);
     fill(this.#head, ...header);
-    fill(this.#main, tabBar, chatting ? null : content, !chatting && pinned ? controls : null);
+    fill(this.#main, tabBar, content, pinned ? controls : null);
     content.scrollTop = this.tab === this.#builtTab ? scroll : 0;
     this.#builtTab = this.tab;
-    // The chat couldn't scroll while it was hidden behind another tab.
-    if (chatting && !wasChatting) {
-      this.#chatKey = '';
-      this.#chatToEnd = true;
-    }
   }
   #builtTab: Tab = 'cup';
-  #chatToEnd = false;
 
   #content(s: CupState) {
     switch (this.tab) {
@@ -220,8 +189,6 @@ export class Panel {
         return this.#playersTab(s);
       case 'tracks':
         return this.#tracksTab(s);
-      case 'chat':
-        return null;
     }
   }
 
@@ -1293,97 +1260,6 @@ export class Panel {
       items.push(btn([icon('exit'), 'Leave cup'], () => app.onLeave(''), 'small danger'));
     }
     return h('div', { class: 'ctl' }, items);
-  }
-
-  // ---- Chat ----
-
-  // Two tabs: the cup's own chat and everyone online. The box and its buttons are built once, so
-  // typing (and a phone's keyboard) survives new messages.
-  #renderChat() {
-    const app = this.app,
-      chat = app.chat,
-      cup = chat.cup;
-    const ui = (this.#chatUi ??= this.#buildChat());
-    if (ui.box.parentElement !== this.#side) fill(this.#side, ui.box);
-    const onCup = chat.target === 'cup';
-    // What's on screen counts as read.
-    if (!isPhone() || this.tab === 'chat') {
-      if (onCup) cup.unread = 0;
-      else chat.unreadAll = 0;
-    }
-    const off = !onCup && !chat.mainOn;
-    const muted = onCup && cup.muted;
-    ui.input.disabled = muted || off;
-    ui.input.placeholder = muted ? 'The organizer muted you' : off ? 'The main chat is off' : onCup ? 'Message the cup' : 'Message everyone online';
-    const lines = chat.lines();
-    const key = JSON.stringify([chat.target, chat.mainOn, chat.isHost, cup.status, lines.length, lines.at(-1)?.key, [...cup.mutes], cup.unread, chat.unreadAll]);
-    if (key === this.#chatKey) return;
-    this.#chatKey = key;
-    const tab = (el: HTMLElement, label: string, on: boolean, unread: number) => {
-      toggle(el, 'on', on);
-      fill(el, label, unread && !on ? h('span', { class: 'count' }, String(unread)) : null);
-    };
-    tab(ui.cupTab, 'Cup chat', onCup, cup.unread);
-    tab(ui.allTab, 'Everyone', !onCup, chat.unreadAll);
-    const msgs = ui.msgs;
-    const atBottom = this.#chatToEnd || msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 40;
-    this.#chatToEnd = false;
-    fill(
-      msgs,
-      off
-        ? h('div', { class: 'empty' }, h('p', null, 'The main chat is off. Turn it on to talk to everyone online.'), btn('Turn it on', () => chat.turnMainOn(), 'small'))
-        : lines.length
-          ? lines.map(({ m }) =>
-              h(
-                'div',
-                { class: 'msg' },
-                onCup && chat.isHost && m.uid !== cup.uid
-                  ? h('button', { class: 'mute', onclick: click(() => cup.mute(m.uid, !cup.mutes.has(m.uid))) }, cup.mutes.has(m.uid) ? 'unmute' : 'mute')
-                  : null,
-                h('b', { style: `color:${nameColor(m.uid)}` }, m.nick, onCup && cup.mutes.has(m.uid) ? ' (muted)' : ''),
-                m.text,
-              ),
-            )
-          : h('div', { class: 'empty' }, !onCup || cup.status === 'on' ? 'No messages yet. Say hi!' : 'Connecting to chat…'),
-    );
-    if (atBottom) msgs.scrollTop = msgs.scrollHeight;
-  }
-
-  #chatUi: { box: HTMLElement; msgs: HTMLElement; input: HTMLInputElement; cupTab: HTMLButtonElement; allTab: HTMLButtonElement } | null = null;
-  #buildChat() {
-    const app = this.app,
-      chat = app.chat;
-    const msgs = h('div', { class: 'msgs' });
-    const input = h('input', { class: 'text', maxlength: 200, enterkeyhint: 'send', autocomplete: 'off' }) as HTMLInputElement;
-    input.addEventListener('keydown', (e) => e.stopPropagation());
-    input.addEventListener('keyup', (e) => e.stopPropagation());
-    // Buttons beside the box don't take its focus.
-    const keep = (e: Event) => e.preventDefault();
-    let sending = false;
-    const form = h(
-      'form',
-      {
-        onsubmit: (e: Event) => {
-          e.preventDefault();
-          const text = input.value;
-          if (!text.trim() || sending) return;
-          sending = true;
-          chat
-            .post(text)
-            .then(() => {
-              if (input.value === text) input.value = '';
-            })
-            .catch((err) => app.notify(err instanceof Error ? err.message : String(err), 'bad'))
-            .finally(() => (sending = false));
-        },
-      },
-      input,
-      h('button', { class: 'btn small', type: 'submit', onmousedown: keep }, 'Send'),
-    );
-    const cupTab = h('button', { class: 'tab', type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('cup')) }) as HTMLButtonElement;
-    const allTab = h('button', { class: 'tab', type: 'button', onmousedown: keep, onclick: click(() => chat.setTarget('all')) }) as HTMLButtonElement;
-    const box = h('div', { class: 'chat' }, h('div', { class: 'ctabs' }, cupTab, allTab), msgs, form);
-    return { box, msgs, input, cupTab, allTab };
   }
 
   #link() {

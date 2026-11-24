@@ -1,5 +1,15 @@
 [
     {
+        "version": "v13.20",
+        "changes": [
+            "Chat works in the Build Off editor",
+            "Cup chat is now the normal chat window, with Cup and Everyone tabs",
+            "Joining a cup switches the chat to Cup",
+            "Emoji, GIFs, images, files, replies, reactions and edits work in cup chat",
+            "Organizers mute players from a message's ... menu"
+        ]
+    },
+    {
         "version": "v13.19",
         "changes": [
             "Watching several week 13 replays only downloads that track's blocks, not all of Better Editor's"

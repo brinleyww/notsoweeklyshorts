@@ -84,8 +84,9 @@ const WHISPER_PEOPLE_MS = 10 * 60_000;
 const WHISPER_NAME_MS = 5 * 60_000;
 const WHISPER_UIDS = 20;
 
-// Uploaded images, GIFs and other files (main room only). A file is kept while a message shows it,
-// and for PENDING_MS after its upload so the message can follow. Stored in parts because a SQLite
+// Uploaded images, GIFs and other files (stored in the main room only; cup rooms ask it through
+// cupMedia). A file is kept while a message shows it, and for PENDING_MS after its upload so the
+// message can follow. Stored in parts because a SQLite
 // value can be at most 2 MB. Only images are checked by the model; other files are served as
 // downloads (video and audio as themselves, so the chat can play them).
 const MAX_UPLOAD = 10 * 1024 * 1024;
@@ -623,6 +624,14 @@ export class ChatRoom extends DurableObject {
         return { g: { url: g.url, prev: g.prev, slug: g.slug, w: g.w, h: g.h, title: censor(cleanText(g.title, 100)) } };
     }
 
+    // For a cup room: the main room checks the attachment against its uploads and banned GIFs, and
+    // keeps an upload a cup shows for as long as a cup room lasts.
+    cupMedia(media) {
+        const checked = this.mediaFor(media);
+        if (checked?.f) this.sql.exec("UPDATE files SET at = MAX(at, ?) WHERE id = ?", Date.now() + CUP_KEEP_MS - PENDING_MS, checked.f.id);
+        return checked;
+    }
+
     history() {
         const messages = this.sql.exec("SELECT id, at, uid, nick, owner, text, pings, reply_to, edited, tag, media FROM messages ORDER BY id DESC LIMIT ?", HISTORY)
             .toArray().reverse().map(({ reply_to, media, ...m }) => ({
@@ -840,7 +849,7 @@ export class ChatRoom extends DurableObject {
             }
             Object.assign(me, { joined: true, ...who });
             ws.serializeAttachment(me);
-            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner }, messages: this.history(), ...(me.cup ? { mutes: this.cupMutes() } : { whispers: this.whispersFor(me.uid, 0) }) });
+            this.send(ws, { t: "init", you: { uid: me.uid, owner: me.owner, ...(me.cup ? { host: !!me.cupHost } : {}) }, messages: this.history(), ...(me.cup ? { mutes: this.cupMutes() } : { whispers: this.whispersFor(me.uid, 0) }) });
             return;
         }
         if (!me.joined) return;
@@ -980,8 +989,15 @@ export class ChatRoom extends DurableObject {
 
         if (msg?.t === "msg") {
             const text = cleanText(msg.text, MAX_TEXT);
-            if (msg.media != null && me.cup) return reply({ t: "err", text: "Files, images and GIFs only go in the main chat." });
-            const media = this.mediaFor(msg.media);
+            let media;
+            if (msg.media != null && me.cup) {
+                try {
+                    media = await this.env.CHAT.get(this.env.CHAT.idFromName("global")).cupMedia(msg.media);
+                } catch (err) {
+                    console.error("cup media check failed:", err && err.message);
+                    return reply({ t: "err", text: "Couldn't attach that. Try again in a moment." });
+                }
+            } else media = this.mediaFor(msg.media);
             if (typeof media === "string") return reply({ t: "err", text: media });
             if (!text && !media) return;
             const banned = this.bannedText(me.uid);

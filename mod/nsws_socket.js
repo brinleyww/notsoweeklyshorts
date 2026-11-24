@@ -3,7 +3,7 @@
 // WebSocket whenever one can open. If one can't (refused, or not open within WS_OPEN_TIMEOUT_MS), the
 // same socket carries on over HTTPS through the proxy's SocketBridge (proxy/src/bridge.js), and the
 // page using it can't tell the difference. Cups use it for the matchmaking sockets (main.bundle.js),
-// the relay (competitions/src/transport.js) and the cup chat (competitions/src/chat.ts).
+// the relay (competitions/src/transport.js) and the cup chat (mod/nsws_chat.js).
 //
 // Kept cheap on Cloudflare's free plan (PROXY.md "HTTPS fallback for sockets"):
 // - Only sockets that can't open use HTTPS. A network that blocked one is remembered for

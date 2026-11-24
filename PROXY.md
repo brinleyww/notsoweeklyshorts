@@ -473,8 +473,9 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   themselves; everything else as `application/octet-stream` with `Content-Disposition: attachment`.
   All uploads keep `nosniff` and a sandbox CSP. Non-images are not checked by the model, so they
   rely on the owner's delete and ban. Limits: 10 MB per file, 4 MB still images (the page's WebP
-  is far smaller), 5 uploads a minute and 40 a day per player, 200 a day per network. Cup chats
-  take no uploads.
+  is far smaller), 5 uploads a minute and 40 a day per player, 200 a day per network. Uploads
+  live in the main room; a cup chat room asks it to check an attachment (`cupMedia` over RPC), which
+  also keeps that upload for a day.
 - **Checking uploads** (`proxy/src/chatmedia.js`, Workers AI binding `AI`): Clef-flash rates
   nudity/sexual content, hate symbols and gore, and Moondream reads out any text, which goes
   through the chat's slur filter (Clef doesn't flag slurs written in an image). A GIF is decoded
@@ -768,8 +769,9 @@ there is no Kodub matchmaking and nothing peer to peer. `competitions/README.md`
   `/nsws/chat?cup=CODE` (WebSocket only) is the Durable Object named `cup:CODE`. Same filter, slow
   mode, spam timeouts and tags as the main chat. The organizer's hello carries the chat secret, which
   the room checks with `LobbyRoom.isHost`; only that socket (or the owner) can send `cupmute`, which
-  mutes a player for the cup and broadcasts `{t: "mutes", uids}`. A cup chat room wipes itself a day
-  after the last player joined it.
+  mutes a player for the cup and broadcasts `{t: "mutes", uids}`; `init` tells that socket
+  `you.host`. Whispers only go through the main room. A cup chat room wipes itself a day after the
+  last player joined it.
 - **The room** (`LobbyRoom` in `proxy/src/lobby.js`, one Durable Object per code) answers the same
   JSON handshake the game speaks to Kodub (`createInvite`, `joinInvite`, `acceptJoin`,
   `declineJoin`, `iceCandidate`, `joinDisconnect`), censoring nicknames and cup names. It then
