@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.21",
+        "changes": [
+            "The new short popup shows the thumbnail and sends you to YouTube to watch it"
+        ]
+    },
+    {
         "version": "v13.20",
         "changes": [
             "Chat works in the Build Off editor",

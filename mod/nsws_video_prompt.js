@@ -27,7 +27,8 @@
 .nsws-vid .button{min-width:140px;margin:0;text-decoration:none;}
 .nsws-vid.short .row a.button{flex:1;}
 .nsws-vid.short>div{top:50%;transform:translate(-50%,-50%);width:520px;max-height:calc(100% - 20px);overflow-y:auto;}
-.nsws-vid .embed{display:block;margin:0 auto 10px auto;height:min(62vh,560px);aspect-ratio:9/16;max-width:100%;border:0;background:#000;}
+.nsws-vid .poster{display:block;margin:0 auto 10px auto;height:min(62vh,560px);aspect-ratio:9/16;max-width:100%;background:#000;}
+.nsws-vid .poster img{display:block;width:100%;height:100%;object-fit:cover;}
 @media (max-width:420px){.nsws-vid .card img{width:112px;height:63px;}}
 `;
 
@@ -130,14 +131,23 @@
 
         if (upload.short) {
             dialog.classList.add("short");
-            box.appendChild(el("p", null, "There's a new NSWS short!"));
-            const frame = el("iframe", "embed");
-            frame.src = "https://www.youtube.com/embed/" + upload.id + "?rel=0&playsinline=1";
-            frame.title = info.title;
-            frame.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
-            frame.referrerPolicy = "strict-origin-when-cross-origin";
-            frame.allowFullscreen = true;
-            box.appendChild(frame);
+            box.appendChild(el("p", null, "There's a new NSWS short! Go watch it on YouTube."));
+            const poster = link("poster");
+            poster.title = info.title;
+            const img = el("img");
+            img.alt = info.title;
+            // oardefault is the full vertical frame; older uploads may only have the 4:3 one.
+            img.addEventListener("error", () => {
+                if (!img.src.endsWith("/hqdefault.jpg")) img.src = "https://i.ytimg.com/vi/" + upload.id + "/hqdefault.jpg";
+            });
+            img.src = "https://i.ytimg.com/vi/" + upload.id + "/oardefault.jpg";
+            poster.appendChild(img);
+            poster.addEventListener("click", () => {
+                window.__nswsUIClick?.();
+                answer = "watched";
+                setTimeout(close, 0);
+            });
+            box.appendChild(poster);
             const row = el("div", "row");
             const done = el("button", "button", "Close");
             done.addEventListener("click", () => {
