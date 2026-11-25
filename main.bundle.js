@@ -33094,12 +33094,106 @@ window.__nswsAutoGhostNote = function(trackId) {
                     buckets: [...buckets.values()].filter(e => e.ilen > 0).map(e => ({material: e.material, attrs: e.names.map((t, n) => [t, e.arr[n].slice(0, e.len[n]), e.sizes[n]]), index: e.count > 65535 ? e.idx.slice(0, e.ilen) : Uint16Array.from(e.idx.subarray(0, e.ilen)), count: e.ilen / 3}))
                 }
             }
-            // Cached per track until a part changes, like the Block merge.
+            // A big track's merge (week 13 map 5: seconds on a phone) runs in a worker: done on the page, it froze the race
+            // screen right after the loading screen had gone, which looked like a gray screen that never loaded. The worker
+            // runs these same functions on copies of the parts' matrices and the meshes' arrays, so the result is the same.
+            const COPLANAR_ASYNC_PARTS = 2000;
+            let coplanarWorker, coplanarJobId = 0;
+            const coplanarJobs = new Map;
+            function coplanarMergeNow(ordered, span) {
+                try {
+                    return coplanarMergeOf(ordered, span)
+                } catch (e) {
+                    return console.error(e), null
+                }
+            }
+            // Calls done(result) later and returns undefined, or returns the result at once when no worker runs.
+            function runCoplanarMerge(ordered, span, done) {
+                if (void 0 === coplanarWorker)
+                    try {
+                        const e = [selectTrackPart, splitTrackParts, solidRectPlanes, coplanarMergeOf].join("\n") + "\nconst solidPlanes = new WeakMap;\n" + "onmessage = e => { const d = e.data; let out = null; try { const at = (a, n) => ({ array: a, itemSize: n, count: a.length / n, getX: i => a[i * n], getY: i => a[i * n + 1], getZ: i => a[i * n + 2] }); const geoms = d.geoms.map(g => { if (null == g) { const f = {}; return solidPlanes.set(f, { planes: [], triPlane: null }), f } const attributes = {}; for (const [n, a, k] of g.attrs) attributes[n] = at(a, k); return { attributes, index: null == g.index ? null : at(g.index, 1) } }); const mats = []; const meshes = d.meshes.map(([g, m]) => ({ geometry: geoms[g], material: mats[m] ?? (mats[m] = { uuid: 'm' + m, i: m }) })); const ordered = []; for (let i = 0; i < d.partMesh.length; i++) ordered.push([{ i, x: d.pos[3 * i], y: d.pos[3 * i + 1], z: d.pos[3 * i + 2], matrix: { elements: d.matrices.subarray(16 * i, 16 * i + 16) } }, meshes[d.partMesh[i]]]); const r = coplanarMergeOf(ordered, d.span); out = null == r ? null : { involved: [...r.involved].map(p => p.i), buckets: r.buckets.map(b => ({ material: b.material.i, attrs: b.attrs, index: b.index, count: b.count })) } } catch (err) { out = { error: String(err && err.stack || err) } } postMessage({ id: d.id, out }, null == out || null == out.buckets ? [] : out.buckets.flatMap(b => [b.index.buffer, ...b.attrs.map(a => a[1].buffer)])) }";
+                        coplanarWorker = new Worker(URL.createObjectURL(new Blob([e],{
+                            type: "text/javascript"
+                        }))),
+                        coplanarWorker.onmessage = e => {
+                            const t = coplanarJobs.get(e.data.id);
+                            if (coplanarJobs.delete(e.data.id), null == t)
+                                return;
+                            const o = e.data.out;
+                            null != o?.error && console.error("Coplanar merge:", o.error),
+                            t.done(null == o?.buckets ? null : {
+                                involved: new Set(o.involved.map(i => t.ordered[i][0])),
+                                buckets: o.buckets.map(b => ({material: t.mats[b.material], attrs: b.attrs, index: b.index, count: b.count}))
+                            })
+                        },
+                        coplanarWorker.onerror = () => {
+                            coplanarWorker = null;
+                            const e = [...coplanarJobs.values()];
+                            coplanarJobs.clear();
+                            for (const t of e)
+                                t.done(coplanarMergeNow(t.ordered, t.span))
+                        }
+                    } catch {
+                        coplanarWorker = null
+                    }
+                if (null == coplanarWorker)
+                    return coplanarMergeNow(ordered, span);
+                // The worker gets each mesh's arrays once (only meshes with solid planes; the rest can't take part) and
+                // every part's matrix and position.
+                const n = ordered.length
+                  , geomAt = new Map
+                  , matAt = new Map
+                  , meshAt = new Map
+                  , geoms = []
+                  , mats = []
+                  , meshes = []
+                  , partMesh = new Int32Array(n)
+                  , matrices = new Float64Array(16 * n)
+                  , pos = new Float64Array(3 * n);
+                for (let i = 0; i < n; i++) {
+                    const [part, mesh] = ordered[i];
+                    let k = meshAt.get(mesh);
+                    if (null == k) {
+                        const g = mesh.geometry;
+                        let gi = geomAt.get(g);
+                        null == gi && (geomAt.set(g, gi = geoms.length), geoms.push(solidRectPlanes(g).planes.length > 0 ? {
+                            attrs: Object.keys(g.attributes).map(e => [e, g.attributes[e].array, g.attributes[e].itemSize]),
+                            index: null != g.index ? g.index.array : null
+                        } : null));
+                        let mi = matAt.get(mesh.material.uuid);
+                        null == mi && (matAt.set(mesh.material.uuid, mi = mats.length), mats.push(mesh.material)),
+                        meshAt.set(mesh, k = meshes.length),
+                        meshes.push([gi, mi])
+                    }
+                    partMesh[i] = k,
+                    matrices.set(part.matrix.elements, 16 * i),
+                    pos[3 * i] = part.x,
+                    pos[3 * i + 1] = part.y,
+                    pos[3 * i + 2] = part.z
+                }
+                const id = ++coplanarJobId;
+                coplanarJobs.set(id, {ordered, span, mats, done});
+                try {
+                    coplanarWorker.postMessage({id, span, geoms, meshes, partMesh, matrices, pos}, [partMesh.buffer, matrices.buffer, pos.buffer])
+                } catch (e) {
+                    return coplanarJobs.delete(id), console.error(e), coplanarMergeNow(ordered, span)
+                }
+            }
+            // Cached per track until a part changes, like the Block merge. While a worker has it, pending is true and
+            // the track is drawn unmerged; trackRenderStates' coplanarSwap rebuilds it when the result is in.
             function coplanarMerge(track, ordered, span, color) {
                 const key = span + "|" + color;
                 let c = coplanarMerges.get(track);
                 if (null != c && c.key == key)
                     return c.result;
+                if (ordered.length >= COPLANAR_ASYNC_PARTS) {
+                    const job = {key, result: null, pending: !0};
+                    coplanarMerges.set(track, job);
+                    const now = runCoplanarMerge(ordered, span, r => {
+                        coplanarMerges.get(track) === job && (job.result = r, job.pending = !1, null != r && trackRenderStates.get(track)?.coplanarSwap?.())
+                    });
+                    return void 0 === now ? null : (job.pending = !1, job.result = now)
+                }
                 let result = null;
                 try {
                     result = coplanarMergeOf(ordered, span)
@@ -33128,6 +33222,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                     ownGeometries: [],
                     blockMeshes: [],
                     blockSwap: null,
+                    coplanarSwap: null,
                     flatMaterial: null,
                     cull: null,
                     distanceCulled: !1,
@@ -33516,6 +33611,10 @@ window.__nswsAutoGhostNote = function(trackId) {
                                         ordered.push([p, n])
                             }
                     const coplanar = ordered.length > 1 ? coplanarMerge(this, ordered, A ? span : 1 / 0, n) : null;
+                    v.coplanarSwap = null == coplanar && coplanarMerges.get(this)?.pending ? () => {
+                        v.coplanarSwap = null,
+                        list.length > 0 && this.generateMeshes()
+                    } : null;
                     for (const e of m.get(this, s, "f").getAllParts())
                         for (const t of e.colors.keys()) {
                             let i = y.get(e)?.get(t);
@@ -33722,6 +33821,7 @@ window.__nswsAutoGhostNote = function(trackId) {
                 e.ownGeometries = [],
                 e.blockMeshes = [],
                 e.blockSwap = null,
+                e.coplanarSwap = null,
                 e.meshes = [],
                 e.distanceCulled = !1,
                 m.get(this, r, "f").trackCullers?.delete(e.cull))

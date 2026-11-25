@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.22",
+        "changes": [
+            "Week 13 map 5 no longer sits on a gray screen after loading on phones and slower computers"
+        ]
+    },
+    {
         "version": "v13.21",
         "changes": [
             "The new short popup shows the thumbnail and sends you to YouTube to watch it"
