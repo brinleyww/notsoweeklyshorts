@@ -1,5 +1,16 @@
 [
     {
+        "version": "v13.25",
+        "changes": [
+            "Cinematic Watch on Ultra graphics now looks like an offline render",
+            "Soft sun shadows that are sharp where they touch and soften further away, with a lower afternoon sun",
+            "Warm light bounced from the ground fills in shadows",
+            "Distant scenery fades into a bright hazy horizon under a clear sky with a glowing sun",
+            "Motion blur on the road and scenery while the cars stay sharp",
+            "Softer highlights that fade to white instead of clipping"
+        ]
+    },
+    {
         "version": "v13.24",
         "changes": [
             "New Water quality setting in Graphics. Low draws Better Editor water flat and in one piece, for more fps on tracks with water",

@@ -18928,6 +18928,24 @@ uniform float polyfxGlowIntensity;`
     if (cfg.grade) out.grade = { ...cfg.grade, contrast: 1 + (cfg.grade.contrast - 1) * 0.7, saturation: 1 + (cfg.grade.saturation - 1) * 0.5, vibrance: (cfg.grade.vibrance ?? 0) * 0.7, split: (cfg.grade.split ?? 0) * 0.5 };
     return out;
   }
+  // The render look replaces the stock highlight roll-off (RenderLookPostShader does its own) and
+  // keeps bloom to the sun and the hottest highlights.
+  function renderLookCfg(cfg) {
+    if (!cfg.composer) return cfg;
+    return {
+      ...cfg,
+      bloom: { strength: 0.22, radius: 0.85, threshold: 2 },
+      godrays: cfg.godrays ? { ...cfg.godrays, intensity: cfg.godrays.intensity * 0.5 } : null,
+      grade: { contrast: 1, saturation: 1, vibrance: 0.04, vignette: 0.12, split: 0, shoulder: 0 },
+      finish: { sharpness: 0.2 }
+    };
+  }
+  var LOOK_SUN = { r: 1, g: 0.95, b: 0.86 };
+  var LOOK_BOUNCE = { r: 0.78, g: 0.68, b: 0.56 };
+  // How wide a sun shadow's soft edge gets per metre between caster and receiver.
+  // Must match TAN in pfxSoftShadow (main.bundle.js).
+  var LOOK_SHADOW_TAN = 0.06;
+  var LOOK_SUN_Y = Math.sin(28 * Math.PI / 180);
   function hourLabel(hour) {
     if (hour == null) return "Default";
     const h = Math.floor(hour);
@@ -19041,12 +19059,15 @@ uniform float polyfxGlowIntensity;`
       strength: { value: 0 },
       speed: { value: 0 },
       exposure: { value: 1 },
-      time: { value: 0 }
+      time: { value: 0 },
+      fringe: { value: 1 },
+      grain: { value: 1 },
+      warmth: { value: 1 }
     },
     vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `
     varying vec2 vUv; uniform sampler2D tDiffuse;
-    uniform vec2 focus, texel; uniform float aspect, strength, speed, exposure, time;
+    uniform vec2 focus, texel; uniform float aspect, strength, speed, exposure, time, fringe, grain, warmth;
     float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     void main(){
       vec4 base = texture2D(tDiffuse, vUv);
@@ -19070,13 +19091,151 @@ uniform float polyfxGlowIntensity;`
       vec3 col = sum / n;
       vec2 c = vUv - 0.5;
       float edge = dot(c, c);
-      vec2 ca = c * edge * 0.012;
+      vec2 ca = c * edge * 0.012 * fringe;
       col.r += texture2D(tDiffuse, vUv + ca).r - base.r;
       col.b += texture2D(tDiffuse, vUv - ca).b - base.b;
-      col *= exposure * vec3(1.035, 1.0, 0.955);
+      col *= exposure * mix(vec3(1.0), vec3(1.035, 1.0, 0.955), warmth);
       col *= clamp(1.0 - edge * 0.7, 0.0, 1.0);
-      col += (hash(vUv * 1024.0 + fract(time) * 37.0) - 0.5) * 0.014;
+      col += (hash(vUv * 1024.0 + fract(time) * 37.0) - 0.5) * 0.014 * grain;
       gl_FragColor = vec4(max(col, 0.0), base.a);
+    }`
+  };
+  // Render look (cinematic watch on Photoreal/Ultra), modelled on an offline Blender render of a
+  // run: distance haze that fades into a bright horizon, a soft clear sky with a glowing sun.
+  var RenderLookAtmosShader = {
+    uniforms: {
+      tDiffuse: { value: null },
+      tDepth: { value: null },
+      projInv: { value: new Matrix4() },
+      camWorld: { value: new Matrix4() },
+      cameraFar: { value: 1e4 },
+      sunDir: { value: new Vector3(0, 1, 0) },
+      sunColor: { value: new Color(1, 0.96, 0.9) },
+      zenith: { value: new Color(0.4, 0.55, 0.72) },
+      horizon: { value: new Color(0.9, 0.89, 0.87) },
+      hazeStart: { value: 60 },
+      hazeDist: { value: 1100 },
+      hazeMax: { value: 0.8 },
+      skyMix: { value: 1 }
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+    varying vec2 vUv; uniform sampler2D tDiffuse, tDepth;
+    uniform mat4 projInv, camWorld; uniform float cameraFar, hazeStart, hazeDist, hazeMax, skyMix;
+    uniform vec3 sunDir, sunColor, zenith, horizon;
+    const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+    void main(){
+      vec4 base = texture2D(tDiffuse, vUv);
+      float depth = texture2D(tDepth, vUv).x;
+      vec4 v = projInv * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+      vec3 view = v.xyz / v.w;
+      vec3 dir = normalize(mat3(camWorld) * view);
+      float dist = length(view);
+      float el = dir.y;
+      vec3 sky = mix(horizon, zenith, 1.0 - exp(-max(el, 0.0) * 4.5));
+      sky = mix(sky, horizon * 0.93, clamp(-el * 4.0, 0.0, 1.0));
+      float cs = max(dot(dir, sunDir), 0.0);
+      vec3 glow = sunColor * (0.16 * pow(cs, 6.0) + 0.24 * pow(cs, 90.0) + 0.3 * pow(cs, 1400.0));
+      vec3 col;
+      bool isSky = depth >= 0.999999 || dist > cameraFar * 0.45;
+      // Water draws without depth: below the horizon, take the distance to the ground plane instead.
+      if (isSky && el < 0.0) {
+        isSky = false;
+        dist = min(max(camWorld[3].y, 1.0) / -el, cameraFar);
+      }
+      if (isSky) {
+        float keep = mix(0.12, 0.42, smoothstep(0.02, 0.7, el));
+        vec3 orig = mix(vec3(dot(base.rgb, LUMA)), base.rgb, 0.6);
+        col = mix(sky, orig * (dot(sky, LUMA) / max(dot(orig, LUMA), 0.05)), keep * skyMix);
+        col += glow + sunColor * 3.0 * smoothstep(0.99989, 0.99995, cs);
+      } else {
+        float f = (1.0 - exp(-max(dist - hazeStart, 0.0) / hazeDist)) * hazeMax;
+        f *= 1.0 - 0.55 * smoothstep(0.05, 0.6, el);
+        col = mix(base.rgb, sky, f) + glow * f * 0.8;
+      }
+      gl_FragColor = vec4(col, base.a);
+    }`
+  };
+  // Camera motion blur rebuilt from depth and last frame's camera, with each car's own movement
+  // taken out inside a capsule around it, so the followed car stays sharp while the road streaks.
+  // Then a Filmic-style curve: highlights roll off and lose colour instead of clipping.
+  var RENDER_LOOK_CARS = 10;
+  var RenderLookPostShader = {
+    uniforms: {
+      tDiffuse: { value: null },
+      tDepth: { value: null },
+      projInv: { value: new Matrix4() },
+      camWorld: { value: new Matrix4() },
+      prevViewProj: { value: new Matrix4() },
+      blur: { value: 0 },
+      carA: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector4()) },
+      carB: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector4()) },
+      carV: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector3()) },
+      carCount: { value: 0 }
+    },
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+    fragmentShader: `
+    #define CARS ${RENDER_LOOK_CARS}
+    varying vec2 vUv; uniform sampler2D tDiffuse, tDepth;
+    uniform mat4 projInv, camWorld, prevViewProj; uniform float blur;
+    uniform vec4 carA[CARS], carB[CARS]; uniform vec3 carV[CARS]; uniform int carCount;
+    const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+    vec3 worldAt(vec2 uv, out float viewDist){
+      float depth = texture2D(tDepth, uv).x;
+      vec4 v = projInv * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+      vec3 view = v.xyz / v.w;
+      viewDist = length(view);
+      return (camWorld * vec4(view, 1.0)).xyz;
+    }
+    // Weight of the nearest car capsule at p (0 outside), and that car's movement since last frame.
+    float carAt(vec3 p, out vec3 move){
+      float best = 0.0; move = vec3(0.0);
+      for (int i = 0; i < CARS; i++) {
+        if (i >= carCount) break;
+        vec3 a = carA[i].xyz, ab = carB[i].xyz - a;
+        float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+        float r = carA[i].w;
+        float w = 1.0 - smoothstep(r * 0.8, r * 1.3, length(p - a - ab * h));
+        if (w > best) { best = w; move = carV[i]; }
+      }
+      return best;
+    }
+    vec3 filmic(vec3 c){
+      c = max(c, 0.0);
+      float L = dot(c, LUMA);
+      const float K = 0.62;
+      float Lc = L < K ? L : K + (1.0 - K) * (1.0 - exp(-(L - K) / (1.0 - K)));
+      vec3 o = c * (Lc / max(L, 1e-5));
+      float top = max(max(o.r, o.g), o.b);
+      if (top > 1.0) o = mix(o / top, vec3(1.0), clamp((top - 1.0) * 0.7, 0.0, 1.0));
+      o = mix(vec3(Lc), o, 0.95 - 0.25 * smoothstep(0.7, 1.0, Lc) - 0.7 * smoothstep(1.2, 3.0, L));
+      return clamp(o, 0.0, 1.0);
+    }
+    void main(){
+      vec4 base = texture2D(tDiffuse, vUv);
+      vec3 col = base.rgb;
+      if (blur > 0.0) {
+        float d0;
+        vec3 p = worldAt(vUv, d0);
+        vec3 move;
+        float onCar = carAt(p, move);
+        vec4 prev = prevViewProj * vec4(p - move * onCar, 1.0);
+        vec2 vel = (vUv - (prev.xy / prev.w * 0.5 + 0.5)) * blur;
+        float len = length(vel);
+        if (prev.w > 0.0 && len > 0.0008) {
+          vel *= min(len, 0.05) / len;
+          vec3 sum = col; float n = 1.0;
+          for (int i = 0; i < 12; i++) {
+            vec2 uv = vUv + vel * (float(i) / 11.0 - 0.5);
+            float ds; vec3 m;
+            float sc = carAt(worldAt(uv, ds), m);
+            float w = (sc > 0.5 && onCar < 0.5 && ds < d0) ? 0.0 : 1.0;
+            sum += texture2D(tDiffuse, uv).rgb * w; n += w;
+          }
+          col = sum / n;
+        }
+      }
+      gl_FragColor = vec4(filmic(col), base.a);
     }`
   };
   var GodRaysShader = {
@@ -19390,6 +19549,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (this.carLights) this.carLights.disableAll();
         if (this.underglow) this.underglow.setEnabled(false);
+        this._updateLook(false);
         renderer.render(scene, camera);
         return;
       }
@@ -19419,6 +19579,7 @@ uniform float polyfxGlowIntensity;`
         }
         if (this.carLights) this.carLights.disableAll();
         if (this.underglow) this.underglow.setEnabled(false);
+        this._updateLook(false);
         if (this.panel && this.panel.visible) this.panel.toggle();
         renderer.render(scene, camera);
         return;
@@ -19429,9 +19590,12 @@ uniform float polyfxGlowIntensity;`
         const presetChanged = preset !== this.preset;
         const photoChanged = photoActive !== this.photoWasActive;
         const colorCorrect = this.colorCorrect || !!this.cinematic?.correct;
-        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel || colorCorrect !== this._appliedColorCorrect) {
-          this._apply(colorCorrect ? correctedCfg(cfg) : cfg, renderer, scene, camera, guardLevel);
+        const look = !!this.cinematic && preset === PRESET.PHOTO_REAL && !photoActive;
+        if (presetChanged || photoChanged || guardLevel !== this._lastAppliedGuardLevel || colorCorrect !== this._appliedColorCorrect || look !== !!this._appliedLook) {
+          const applied = colorCorrect ? correctedCfg(cfg) : cfg;
+          this._apply(look ? renderLookCfg(applied) : applied, renderer, scene, camera, guardLevel);
           this._appliedColorCorrect = colorCorrect;
+          this._appliedLook = look;
           if (presetChanged || photoChanged) this.perfGuard.hold();
           this.preset = preset;
           this.photoWasActive = photoActive;
@@ -19585,11 +19749,16 @@ uniform float polyfxGlowIntensity;`
           u.focus.value.set(f[0], f[1]);
           u.texel.value.set(1 / Math.max(1, this.size.x), 1 / Math.max(1, this.size.y));
           u.aspect.value = this.size.x / Math.max(1, this.size.y);
-          u.strength.value = this.cinematic.strength;
-          u.speed.value = this.cinematic.speed;
+          const lk = !!this._appliedLook;
+          u.strength.value = this.cinematic.strength * (lk ? 0.15 : 1);
+          u.speed.value = lk ? 0 : this.cinematic.speed;
           u.exposure.value = this.cinematic.exposure ?? 1;
           u.time.value = performance.now() / 1e3 % 1e3;
+          u.fringe.value = lk ? 0.25 : 1;
+          u.grain.value = lk ? 0.45 : 1;
+          u.warmth.value = lk ? 0.4 : 1;
         }
+        this._updateLook(!!this._appliedLook, activeCamera, sunDir);
         this.composer.render();
         this._prewarmLightVariants(renderer, scene, activeCamera);
         if (this.photo) this.photo.capture(renderer);
@@ -19663,14 +19832,20 @@ uniform float polyfxGlowIntensity;`
       this.grade.enabled = false;
       this.cineLens = new FullscreenShaderPass(CineLensShader);
       this.cineLens.enabled = false;
+      this.lookAtmos = new FullscreenShaderPass(RenderLookAtmosShader);
+      this.lookAtmos.enabled = false;
+      this.lookPost = new FullscreenShaderPass(RenderLookPostShader);
+      this.lookPost.enabled = false;
       this.output = new OutputPass();
       this.smaa = new SMAAPass();
       this.finish = new FullscreenShaderPass(FinishShader);
       this.composer.addPass(this.renderPass);
       this.composer.addPass(this.n8ao);
+      this.composer.addPass(this.lookAtmos);
       this.composer.addPass(this.bloom);
       this.composer.addPass(this.godrays);
       this.composer.addPass(this.rainLens);
+      this.composer.addPass(this.lookPost);
       this.composer.addPass(this.grade);
       this.composer.addPass(this.cineLens);
       this.composer.addPass(this.output);
@@ -19820,6 +19995,128 @@ uniform float polyfxGlowIntensity;`
       const ssrOwnsRender = !!(this.ssr && this.ssr.enabled);
       this.renderPass.enabled = !(aoOwnsRender || ssrOwnsRender);
     }
+    _updateLook(on, camera, sunDir) {
+      this._lookLights(on);
+      const depth = on && this.n8ao && this.n8ao.enabled ? this.n8ao.beautyRenderTarget.depthTexture : null;
+      if (this.lookAtmos) this.lookAtmos.enabled = !!depth;
+      if (this.lookPost) this.lookPost.enabled = on;
+      if (!on || !camera) {
+        this._lookPrev = null;
+        return;
+      }
+      const s = this._lookScratch ??= { vp: new Matrix4(), f: new Vector3(), carPrev: new WeakMap() };
+      camera.updateMatrixWorld();
+      const a = this.lookAtmos.material.uniforms;
+      const p = this.lookPost.material.uniforms;
+      for (const u of [a, p]) {
+        u.tDepth.value = depth;
+        u.projInv.value.copy(camera.projectionMatrixInverse);
+        u.camWorld.value.copy(camera.matrixWorld);
+      }
+      a.cameraFar.value = camera.far;
+      const sun = this.sky && this.skyActive && !this.envOnly ? this.sky.sunDir : sunDir;
+      if (sun) a.sunDir.value.set(sun.x, sun.y, sun.z).normalize();
+      const pal = this._lookPalette;
+      if (pal) {
+        a.zenith.value.setRGB(pal.zenith.r, pal.zenith.g, pal.zenith.b);
+        a.horizon.value.setRGB(pal.horizon.r, pal.horizon.g, pal.horizon.b);
+        a.sunColor.value.setRGB(pal.sun.r, pal.sun.g, pal.sun.b);
+      }
+      s.vp.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      const pos = camera.getWorldPosition(new Vector3());
+      const quat = camera.getWorldQuaternion(new Quaternion());
+      const clock = this.cinematic?.clock ?? performance.now() / 1e3;
+      const shot = this.cinematic?.shot;
+      const prev = this._lookPrev;
+      let blur = 0;
+      if (prev && depth) {
+        const dt = clock - prev.clock;
+        const moved = pos.distanceTo(prev.pos), turned = quat.angleTo(prev.quat);
+        const cut = moved > Math.max(6, 160 * dt) || turned > 0.6 || shot !== prev.shot && (moved > 2 || turned > 0.15);
+        if (dt > 1e-4 && !cut) blur = 0.5 * (1 / 60) / Math.min(Math.max(dt, 1 / 240), 0.1);
+      }
+      p.blur.value = blur;
+      if (prev) p.prevViewProj.value.copy(prev.vp);
+      const cars = (this.cinematic?.cars || []).filter((c) => c && c.getPosition);
+      const near = cars.map((c) => ({ c, p: c.getPosition() })).sort((x, y) => x.p.distanceToSquared(pos) - y.p.distanceToSquared(pos)).slice(0, RENDER_LOOK_CARS);
+      near.forEach(({ c, p: cp }, i) => {
+        const q = c.getQuaternion?.();
+        s.f.set(0, 0, 1);
+        if (q) s.f.applyQuaternion(q);
+        p.carA.value[i].set(cp.x + s.f.x * 1.3, cp.y + s.f.y * 1.3, cp.z + s.f.z * 1.3, 1.35);
+        p.carB.value[i].set(cp.x - s.f.x * 1.3, cp.y - s.f.y * 1.3, cp.z - s.f.z * 1.3, 0);
+        const last = s.carPrev.get(c);
+        const move = p.carV.value[i];
+        if (last) move.set(cp.x - last.x, cp.y - last.y, cp.z - last.z);
+        else move.set(0, 0, 0);
+        if (move.length() > 10) move.set(0, 0, 0);
+        s.carPrev.set(c, { x: cp.x, y: cp.y, z: cp.z });
+      });
+      p.carCount.value = near.length;
+      this._lookPrev = { clock, pos, quat, shot, vp: (prev?.vp ?? new Matrix4()).copy(s.vp) };
+    }
+    // Warmer sun with soft shadows, a lighter sky fill and warm light bounced up from the ground.
+    // Each frame's change is made over the light's own value, so the game (or the time-of-day sky)
+    // can keep changing it, and turning the look off puts back whatever was there.
+    _lookLights(on) {
+      const state = this._lookState ??= new Map();
+      const same = (l, w) => l.color.equals(w.color) && l.intensity === w.intensity && (!w.ground || l.groundColor.equals(w.ground));
+      if (!on) {
+        for (const [l, s] of state) {
+          if (!s.wrote || !same(l, s.wrote)) continue;
+          l.color.copy(s.base.color);
+          l.intensity = s.base.intensity;
+          if (s.base.ground) l.groundColor.copy(s.base.ground);
+          if (l.shadow && s.base.radius != null) l.shadow.radius = s.base.radius;
+        }
+        state.clear();
+        this._lookPalette = null;
+        return;
+      }
+      const lights = this._scanLights;
+      if (!lights) return;
+      const begin = (l) => {
+        let s = state.get(l);
+        if (!s || !s.wrote || !same(l, s.wrote)) {
+          s = { base: { color: l.color.clone(), intensity: l.intensity, ground: l.isHemisphereLight ? l.groundColor.clone() : null, radius: l.shadow ? (s?.base.radius ?? l.shadow.radius) : null } };
+          state.set(l, s);
+        }
+        return s;
+      };
+      const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+      let sunI = 0, skyBase = null;
+      for (const l of lights.dir) {
+        const s = begin(l);
+        l.color.copy(s.base.color).multiply(LOOK_SUN);
+        l.intensity = s.base.intensity * 1.35;
+        sunI = Math.max(sunI, s.base.intensity);
+        if (l.castShadow && l.shadow && l.shadow.camera) {
+          const c = l.shadow.camera;
+          const texel = (c.right - c.left) / Math.max(1, l.shadow.mapSize.x);
+          if (texel > 0 && c.far > c.near) l.shadow.radius = Math.max(5, (c.far - c.near) * LOOK_SHADOW_TAN / texel);
+        }
+        s.wrote = { color: l.color.clone(), intensity: l.intensity };
+      }
+      for (const l of lights.hemi) {
+        const s = begin(l);
+        const b = s.base.color, L = lum(b);
+        skyBase ??= b;
+        l.color.setRGB((b.r + (L - b.r) * 0.3) * 1.3, (b.g + (L - b.g) * 0.3) * 1.3, (b.b + (L - b.b) * 0.3) * 1.3);
+        const g = s.base.ground;
+        l.groundColor.setRGB(g.r + (LOOK_BOUNCE.r - g.r) * 0.65, g.g + (LOOK_BOUNCE.g - g.g) * 0.65, g.b + (LOOK_BOUNCE.b - g.b) * 0.65);
+        l.intensity = s.base.intensity * 1.1;
+        s.wrote = { color: l.color.clone(), intensity: l.intensity, ground: l.groundColor.clone() };
+      }
+      // The haze and sky colours follow the track's own sky light, so dark or tinted skies stay so.
+      const k = MathUtils.clamp(sunI / 4.7, 0, 1);
+      const sky = skyBase ?? { r: 0.231, g: 0.38, b: 0.553 };
+      const L = lum(sky);
+      const zen = (c) => Math.min(1, (c + (L - c) * 0.25) * 1.55);
+      const zenith = { r: zen(sky.r), g: zen(sky.g), b: zen(sky.b) };
+      const sun = { r: LOOK_SUN.r * k, g: (LOOK_SUN.g + 0.005) * k, b: (LOOK_SUN.b + 0.02) * k };
+      const mixH = (z, s2) => z + (s2 - z) * 0.78 * Math.max(k, 0.25);
+      this._lookPalette = { zenith, sun, horizon: { r: mixH(zenith.r, sun.r), g: mixH(zenith.g, sun.g), b: mixH(zenith.b, sun.b) } };
+    }
     _sharedScan(scene, force) {
       const now = performance.now();
       if (!force && now - this._scanT < 1e3) return;
@@ -19867,6 +20164,7 @@ uniform float polyfxGlowIntensity;`
         }
       });
       if (this.carLights) this.carLights.ingestRoots(carRoots);
+      this._scanLights = { dir: dirLights, hemi: hemiLights };
       if (this.sky) this.sky.ingestLights(dirLights, hemiLights, this._scanIsFirst);
       if (this.glowTargets) {
         if (glowMat && !glowMatStillUsed) this.glowTargets.material = null;
@@ -20317,7 +20615,18 @@ uniform float polyfxGlowIntensity;`
       };
     }
     overrideSun(vec) {
-      if (!this.sky || !this.skyActive || this.envOnly) return;
+      if (!this.sky || !this.skyActive || this.envOnly) {
+        // The render look wants a late-afternoon sun for long soft shadows; a picked time of day wins.
+        if (this._appliedLook && this.lookPost?.enabled) {
+          const len = vec.length() || 20;
+          const h = Math.hypot(vec.x, vec.z);
+          if (vec.y / len > LOOK_SUN_Y && h > 1e-6) {
+            const k = Math.sqrt(1 - LOOK_SUN_Y * LOOK_SUN_Y) * len / h;
+            vec.set(vec.x * k, LOOK_SUN_Y * len, vec.z * k);
+          }
+        }
+        return;
+      }
       const len = vec.length() || 20;
       vec.copy(this.sky.getSunDir()).multiplyScalar(len);
     }

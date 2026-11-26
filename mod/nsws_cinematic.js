@@ -4248,7 +4248,10 @@ body.nsws-cine-on .timer-ui, body.nsws-cine-on .speedometer-ui, body.nsws-cine-o
                 strength: o.isSpectator() ? 0.25 : view.lens,
                 speed: clamp(speed / 450, 0, 1),
                 exposure: this.exposure,
-                correct: this.correct
+                correct: this.correct,
+                cars: runs.map((r) => r.car),
+                clock: this.clock(),
+                shot: i
             });
 
             ghostLod(runs.map((r) => r.car), car, viewCam, this.clock());
