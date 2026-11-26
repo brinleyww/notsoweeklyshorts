@@ -901,6 +901,18 @@ export class ChatRoom extends DurableObject {
         if (target.uids.includes(me.uid)) return reply({ t: "err", text: "That's you.", wfail: true });
         const to = target.uids.slice(0, WHISPER_UIDS);
         if (!to.length) return reply({ t: "err", text: target.nickname + " hasn't used the chat yet, so they can't get whispers.", wfail: true });
+        // Not cached, so a block counts from the next whisper. Ignored whispers still arrive; the page hides them.
+        // A failed lookup lets it through: the recipient's page hides blocked whispers anyway.
+        if (!me.owner && this.env.ACCOUNTS) {
+            let block = null;
+            try {
+                block = await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).whisperBlock(me.uid, target.nickname);
+            } catch (err) {
+                console.error("whisper block lookup failed:", err && err.message);
+            }
+            if (block === "mine") return reply({ t: "err", text: "You blocked " + target.nickname + ". Unblock them to whisper.", wfail: true, unblock: target.nickname });
+            if (block === "blocked") return reply({ t: "err", text: "Your whisper to " + target.nickname + " couldn't be delivered.", wfail: true });
+        }
         if (!me.owner) {
             const s = this.activity(me.uid, now);
             const key = target.nickname.toLowerCase();

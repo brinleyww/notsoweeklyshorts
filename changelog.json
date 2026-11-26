@@ -1,5 +1,15 @@
 [
     {
+        "version": "v13.23",
+        "changes": [
+            "You can block or ignore players from the ... on their chat message or from their profile",
+            "Messages from people you blocked or ignored are folded away, click Show to read them",
+            "No pings or whisper alerts from people you blocked or ignored",
+            "People you blocked can't whisper you",
+            "See and undo your blocks in Settings, Chat, Blocked and ignored players"
+        ]
+    },
+    {
         "version": "v13.22",
         "changes": [
             "Week 13 map 5 no longer sits on a gray screen after loading on phones and slower computers"

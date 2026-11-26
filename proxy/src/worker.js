@@ -1448,7 +1448,8 @@ async function handleUserUpdate(request, url, env, cfg, origin) {
 
 const ACCOUNT_PATHS = new Set(["names/check", "names/claim", "clips/list", "clips/get", "clips/add", "clips/view",
     "clips/rename", "clips/delete", "clips/share", "share/get", "refer/me", "refer/redeem", "tags/buy", "tags/equip", "bingo/mark", "bingo/reset", "grind/sync",
-    "presets/list", "presets/save", "presets/rename", "presets/delete", "presets/share", "presets/get", "presets/accept"]);
+    "presets/list", "presets/save", "presets/rename", "presets/delete", "presets/share", "presets/get", "presets/accept",
+    "blocks/list", "blocks/set"]);
 const HEX32 = /^[0-9a-f]{32}$/;
 
 // The chat only learns about a tag change here, so its players' next messages show the new tag.
@@ -1506,12 +1507,12 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
         case "refer/me": {
             // The chat's uid for this browser, derived the same way the ChatRoom does.
             const uid = HEX32.test(body.v ?? "") ? (await sha256Hex("nsws-chat:" + body.v)).slice(0, 16) : null;
-            const { state, linked } = await stub.refState(userId, uid);
+            const { state, linked, blocks } = await stub.refState(userId, uid);
             await chatRetag(env, linked);
             const accountBan = await accountBanOf(userId, env);
             if (accountBan && linked) await env.CHAT?.get(env.CHAT.idFromName("global")).blockUser(userId, linked.uids, accountBan.until, accountBan.chat, accountBan.reason);
             const ban = accountBan && !accountBan.chat ? accountBan : ipBan ?? accountBan;
-            result = ban ? { ...state, ban: { until: ban.until, chat: ban.chat, reason: ban.reason, ip: !!ban.ip } } : state;
+            result = ban ? { ...state, blocks, ban: { until: ban.until, chat: ban.chat, reason: ban.reason, ip: !!ban.ip } } : { ...state, blocks };
             break;
         }
         case "refer/redeem": {
@@ -1534,6 +1535,8 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
         case "presets/delete": result = await stub.deletePreset(userId, body.kind, body.slot); break;
         case "presets/share": result = await stub.sharePreset(userId, body.kind, body.slot); break;
         case "presets/accept": result = await stub.acceptPreset(userId, body.code, body.slot); break;
+        case "blocks/list": result = { blocks: await stub.listBlocks(userId) }; break;
+        case "blocks/set": result = await stub.setBlock(userId, { ref: body.ref, uid: body.uid, nick: body.nick, kind: body.kind ?? null }); break;
         case "tags/buy":
         case "tags/equip": {
             const changed = path === "tags/buy" ? await stub.buyTag(userId, body.tag) : await stub.equipTag(userId, body.tag ?? null);
@@ -1548,7 +1551,7 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
     }
     if (result == null) return plain(404, "Not found", origin);
     if (result.error === "code" || result.error === "expired" || result.error === "self" || result.error === "already" || result.error === "mutual"
-        || result.error === "points" || result.error === "locked" || result.error === "closed") {
+        || result.error === "points" || result.error === "locked" || result.error === "closed" || result.error === "missing" || result.error === "blocks") {
         return json({ error: result.error }, origin, 409);
     }
     if (result.error === "bad") return plain(400, "Bad request", origin);
@@ -2841,7 +2844,7 @@ export default {
                     return doLimited() ? busy(origin) : json({ error: "Something went wrong on the server. Try again in a moment." }, origin, 500);
                 }
             }
-            if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind|presets)\//.test(url.pathname)) {
+            if (/^\/nsws\/(names|clips|share|refer|tags|bingo|grind|presets|blocks)\//.test(url.pathname)) {
                 if (fromSite && doLimited() && request.method !== "OPTIONS") return busy(requestOrigin);
                 try {
                     return await handleAccounts(request, url, env, fromSite, requestOrigin, cfg.ipBan ?? null);

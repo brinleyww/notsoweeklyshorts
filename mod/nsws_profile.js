@@ -102,6 +102,9 @@
 #nsws-profile .bottom{display:flex;justify-content:space-between;gap:10px;padding:10px 20px;background:var(--surface-secondary-color);}
 #nsws-profile .bottom>.button{margin:0;font-size:20px;padding:7px 18px;}
 #nsws-profile .bottom>.button:disabled{opacity:.35;}
+#nsws-profile .bottom>.right{display:flex;gap:10px;}
+#nsws-profile .bottom>.right>.button{margin:0;font-size:20px;padding:7px 18px;}
+#nsws-profile .bottom>.right>.button:disabled{opacity:.35;}
 .nsws-profile-link{cursor:pointer;}
 .nsws-profile-link:hover{text-decoration:underline;}
 @media (max-width:640px){#nsws-profile .head{flex-direction:column;align-items:center;}#nsws-profile .tiles{width:100%;grid-template-columns:repeat(2,1fr);}#nsws-profile .wide{display:none;}#nsws-profile table{font-size:14px;}#nsws-profile td.name{max-width:150px;}#nsws-profile th,#nsws-profile td{padding:5px 4px;}#nsws-profile .top{flex-wrap:wrap;row-gap:6px;}#nsws-profile .top>h1{flex-shrink:0;max-width:calc(100% - 50px);font-size:24px;}#nsws-profile .top>.nsws-tag{font-size:14px;}#nsws-profile .top>.sub{display:none;}}
@@ -780,8 +783,34 @@
         const left = v.loadedAt ? Math.ceil((v.loadedAt + REFRESH_GAP_MS - Date.now()) / 1000) : 0;
         const refresh = button(left > 0 ? "Refresh (" + left + ")" : "Refresh", () => load(v, true));
         refresh.disabled = !v.result || left > 0;
-        v.bottom.append(button("Back", close), refresh);
+        const right = el("div", "right");
+        right.append(...blockButtons(v), refresh);
+        v.bottom.append(button("Back", close), right);
         if (left > 0) v.tick = setTimeout(() => bottomBar(v), 1000);
+    }
+
+    // Block / Ignore, or the way back, like a Discord profile. Not on your own profile.
+    function blockButtons(v) {
+        const blocks = window.__nswsBlocks;
+        if (!blocks || nameKey(v.nick) === nameKey(selfNick())) return [];
+        const target = { uid: v.hint.chatUid, nick: v.nick };
+        const kind = blocks.relation(target.uid, target.nick);
+        const undo = (k) => {
+            const b = button(blocks.words[k].undo, async () => {
+                b.disabled = true;
+                try {
+                    await blocks.set({ ref: blocks.entryFor(target.uid, target.nick)?.ref, ...target }, null);
+                } catch {
+                    b.disabled = false;
+                    b.textContent = "Try again";
+                }
+            });
+            return b;
+        };
+        const ask = (k) => button(blocks.words[k].verb, () => blocks.ask(target, k));
+        if (kind === "block") return [undo("block")];
+        if (kind === "ignore") return [undo("ignore"), ask("block")];
+        return [ask("ignore"), ask("block")];
     }
 
     function render(v) {
@@ -822,6 +851,10 @@
         e.stopImmediatePropagation();
         close();
     }, true);
+
+    window.__nswsBlocks?.onChange(() => {
+        if (view && !view.closed) bottomBar(view);
+    });
 
     window.__nswsProfile = { open, close };
 })();

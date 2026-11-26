@@ -156,10 +156,18 @@
 #nsws-chat .m:hover .reaction.add,#nsws-chat .m.open .reaction.add{display:inline-flex;}
 #nsws-chat svg{display:block;pointer-events:none;}
 #nsws-chat>.log>.sys{padding:6px 14px 2px;font-size:.8em;font-style:italic;text-align:center;opacity:.6;}
-#nsws-chat>.log>.tools{display:flex;flex-wrap:wrap;gap:4px;padding:3px 10px 6px 24px;}
-#nsws-chat>.log>.tools>button,#nsws-chat>form>button{border:0;background:var(--button-color,#112052);color:inherit;font:inherit;font-size:14px;padding:3px 8px;cursor:pointer;}
-#nsws-chat>.log>.tools>button:hover,#nsws-chat>form>button:hover{background:var(--button-hover-color,#334b77);}
-#nsws-chat>.log>.tools>input{flex:1 0 100%;min-width:0;box-sizing:border-box;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;font-size:14px;padding:3px 8px;user-select:text;}
+#nsws-chat>.log>.sys>button{margin-left:6px;padding:0;border:0;background:none;color:#00a8fc;font:inherit;font-style:normal;cursor:pointer;}
+#nsws-chat>.log>.sys>button:hover{text-decoration:underline;}
+#nsws-chat .folded>.fold-bar{display:flex;align-items:center;gap:8px;margin:2px 0;padding:3px 14px;font-size:.85em;}
+#nsws-chat .folded>.fold-bar>span{opacity:.6;}
+#nsws-chat .folded>.fold-bar>button{padding:0;border:0;background:none;color:#00a8fc;font:inherit;cursor:pointer;}
+#nsws-chat .folded>.fold-bar>button:hover{text-decoration:underline;}
+#nsws-chat .folded>.fold-body{display:none;}
+#nsws-chat .folded.open>.fold-body{display:block;}
+#nsws-chat .log .tools{display:flex;flex-wrap:wrap;gap:4px;padding:3px 10px 6px 24px;}
+#nsws-chat .log .tools>button,#nsws-chat>form>button{border:0;background:var(--button-color,#112052);color:inherit;font:inherit;font-size:14px;padding:3px 8px;cursor:pointer;}
+#nsws-chat .log .tools>button:hover,#nsws-chat>form>button:hover{background:var(--button-hover-color,#334b77);}
+#nsws-chat .log .tools>input{flex:1 0 100%;min-width:0;box-sizing:border-box;border:0;outline:0;background:var(--surface-tertiary-color,#192042);color:inherit;font:inherit;font-size:14px;padding:3px 8px;user-select:text;}
 #nsws-chat>.status{flex-shrink:0;padding:3px 10px;font-size:14px;background:var(--surface-tertiary-color,#192042);opacity:.8;}
 #nsws-chat>.status:empty{display:none;}
 #nsws-chat .m.reply::before{top:22px;}
@@ -510,6 +518,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     // Deleted message ids, and the oldest id the history went back to, so a reply can tell a
     // deleted original from one that is only too old to be shown.
     let deletedIds = new Set();
+    const revealedRuns = new Set();
     let oldestId = null;
     let sendTimer = null;
     let waitTimer = null;
@@ -2075,12 +2084,51 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         log?.querySelector(".tools")?.remove();
     }
 
+    // Whether a message or whisper is from someone this player blocked or ignored. The owner is never hidden.
+    function hiddenKind(m) {
+        if (!m || m.owner || (me && m.uid === me.uid)) return null;
+        return window.__nswsBlocks?.relation(m.uid, m.nick) ?? null;
+    }
+
+    function unblockAction(nick) {
+        const blocks = window.__nswsBlocks;
+        return {
+            label: "Unblock",
+            run: () => blocks?.set({ ref: blocks.entryFor(null, nick)?.ref, nick }, null)
+                .then(() => addSystem("Unblocked " + nick + "."))
+                .catch(() => addSystem("Couldn't unblock " + nick + ". Try again in a moment.")),
+        };
+    }
+
+    function blockTools(tools, m) {
+        const blocks = window.__nswsBlocks;
+        if (!blocks || !me || m.uid === me.uid || m.owner) return;
+        const target = { uid: m.uid, nick: m.nick };
+        const kind = blocks.relation(m.uid, m.nick);
+        const add = (label, run) => {
+            const b = document.createElement("button");
+            b.textContent = label;
+            b.addEventListener("click", () => {
+                closeTools();
+                run();
+            });
+            tools.appendChild(b);
+        };
+        const undo = (k) => add(blocks.words[k].undo, () => blocks.set({ ref: blocks.entryFor(m.uid, m.nick)?.ref, ...target }, null)
+            .catch(() => addSystem("Couldn't " + blocks.words[k].undo.toLowerCase() + " " + m.nick + ". Try again in a moment.")));
+        if (kind === "block") return undo("block");
+        if (kind === "ignore") undo("ignore");
+        else add("Ignore", () => blocks.ask(target, "ignore"));
+        add("Block", () => blocks.ask(target, "block"));
+    }
+
     function ownerTools(el, m) {
         const open = el.nextElementSibling?.classList.contains("tools");
         closeTools();
         if (open) return;
         const tools = document.createElement("div");
         tools.className = "tools";
+        if (!me?.owner) blockTools(tools, m);
         const add = (label, data) => {
             const b = document.createElement("button");
             b.textContent = label;
@@ -2090,7 +2138,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             });
             tools.appendChild(b);
         };
-        if (ctx === "cup" && cup && !m.to && m.uid !== me?.uid) {
+        if (ctx === "cup" && cup && (cup.host || me?.owner) && !m.to && m.uid !== me?.uid) {
             const muted = cup.mutes.has(m.uid);
             const b = document.createElement("button");
             b.textContent = muted ? "Unmute in this cup" : "Mute in this cup";
@@ -2099,8 +2147,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 closeTools();
             });
             tools.appendChild(b);
-            if (!me?.owner) return void el.after(tools);
         }
+        if (!me?.owner) return void el.after(tools);
         // A whisper (m.to) has no public message to delete; bans find it by its whisper id.
         const whisper = !!m.to;
         if (!whisper) add("Delete", { t: "del", id: m.id });
@@ -2199,6 +2247,10 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
             more.classList.add("more");
             bar.appendChild(more);
+        } else if (!own && !m.owner && window.__nswsBlocks) {
+            const more = actionButton(icon(0x22ef), "More", () => ownerTools(el, m));
+            more.classList.add("more");
+            bar.appendChild(more);
         }
         return bar;
     }
@@ -2218,9 +2270,13 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         who.textContent = (r.ping ? "@" : "") + r.nick;
         const quote = document.createElement("span");
         quote.className = "quote";
+        const hidden = !r.owner && window.__nswsBlocks?.relation(r.uid, r.nick);
         if (isDeleted(r.id)) {
             quote.classList.add("gone");
             quote.textContent = "Original message was deleted";
+        } else if (hidden && r.uid !== me?.uid) {
+            quote.classList.add("gone");
+            quote.textContent = hidden === "block" ? "Blocked message" : "Ignored message";
         } else {
             // The original's current text when it is still here, so edits show in the quote.
             const live = items.find((item) => item.kind === "msg" && item.m.id === r.id)?.m;
@@ -2246,6 +2302,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             }, 2500);
             return;
         }
+        const run = el.closest(".folded");
+        if (run && !run.classList.contains("open")) run.querySelector(".fold-bar>button")?.click();
         el.scrollIntoView({ block: "center", behavior: "smooth" });
         el.classList.remove("flash");
         void el.offsetWidth;
@@ -2341,10 +2399,11 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         whisperIds.add(m.id);
         whisperSeen = Math.max(whisperSeen, Number(m.id) || 0);
         const mine = m.uid === me?.uid;
-        if (!mine) whisperFrom = m.nick;
+        const hidden = hiddenKind(m);
+        if (!mine && !hidden) whisperFrom = m.nick;
         if (!live) return;
         addItem({ kind: "whisper", m });
-        if (mine) return;
+        if (mine || hidden) return;
         if (layout.min) {
             unread++;
             updateUnread();
@@ -2395,8 +2454,8 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             setWhisper(other.nick);
             input.focus();
         }, true));
-        if (me?.owner && !mine) {
-            const more = actionButton(icon(0x22ef), "Moderate", () => ownerTools(el, m));
+        if (!mine && (me?.owner || (!m.owner && window.__nswsBlocks))) {
+            const more = actionButton(icon(0x22ef), me?.owner ? "Moderate" : "More", () => ownerTools(el, m));
             more.classList.add("more");
             bar.appendChild(more);
         }
@@ -2428,7 +2487,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 nick.title = "View profile";
                 nick.addEventListener("click", (e) => {
                     e.stopPropagation();
-                    window.__nswsProfile.open(m.nick);
+                    window.__nswsProfile.open(m.nick, { chatUid: m.uid });
                 });
             }
             meta.appendChild(nick);
@@ -2676,14 +2735,71 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const el = document.createElement("div");
         el.className = "sys";
         el.textContent = item.text;
+        if (item.action) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = item.action.label;
+            b.addEventListener("click", () => {
+                b.remove();
+                item.action.run();
+                item.action = null;
+            });
+            el.appendChild(b);
+        }
         return el;
+    }
+
+    // Messages from people this player blocked or ignored sit in folded runs, like Discord's
+    // "3 blocked messages - Show". An opened run stays open through redraws.
+    function placeItem(item, prev) {
+        const el = itemElement(item, prev);
+        const kind = item.kind === "msg" || item.kind === "whisper" ? hiddenKind(item.m) : null;
+        if (!kind) return void log.appendChild(el);
+        let run = log.lastElementChild;
+        if (!run?.classList.contains("folded") || run.dataset.kind !== kind) {
+            run = foldedRun(kind, (item.kind === "whisper" ? "w" : "") + item.m.id);
+            log.appendChild(run);
+        }
+        run.lastElementChild.appendChild(el);
+        countRun(run);
+    }
+
+    function foldedRun(kind, key) {
+        const run = document.createElement("div");
+        run.className = revealedRuns.has(key) ? "folded open" : "folded";
+        run.dataset.kind = kind;
+        const bar = document.createElement("div");
+        bar.className = "fold-bar";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.addEventListener("click", () => {
+            const stick = nearBottom();
+            const open = run.classList.toggle("open");
+            if (open) revealedRuns.add(key);
+            else revealedRuns.delete(key);
+            countRun(run);
+            if (!open) closeTools();
+            scrollToEnd(stick);
+        });
+        const body = document.createElement("div");
+        body.className = "fold-body";
+        bar.append(document.createElement("span"), toggle);
+        run.append(bar, body);
+        return run;
+    }
+
+    function countRun(run) {
+        const n = run.lastElementChild.querySelectorAll(":scope>.m").length;
+        const [label, toggle] = run.firstElementChild.children;
+        label.textContent = n + (run.dataset.kind === "block" ? " blocked message" : " ignored message") + (n === 1 ? "" : "s");
+        toggle.textContent = run.classList.contains("open") ? "Hide" : "Show";
     }
 
     function renderLog() {
         if (!log) return;
         const stick = nearBottom();
         log.textContent = "";
-        items.forEach((item, i) => log.appendChild(itemElement(item, items[i - 1])));
+        items.forEach((item, i) => placeItem(item, items[i - 1]));
         if (ctx === "all" && cup && !isEnabled()) log.appendChild(offNotice());
         scrollToEnd(stick);
     }
@@ -2710,12 +2826,12 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         }
         if (!log) return;
         const stick = nearBottom();
-        log.appendChild(itemElement(item, items[items.length - 2]));
+        placeItem(item, items[items.length - 2]);
         scrollToEnd(stick);
     }
 
-    function addSystem(text) {
-        addItem({ kind: "sys", text });
+    function addSystem(text, action) {
+        addItem({ kind: "sys", text, action: action ?? null });
     }
 
     function connected() {
@@ -2805,6 +2921,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
             scrollToEnd(true);
         } else if (data.t === "msg") {
             addItem({ kind: "msg", m: data.m });
+            if (hiddenKind(data.m)) return;
             previewMessage(data.m);
             if (data.m.uid !== me?.uid) {
                 if (layout.min) {
@@ -2856,7 +2973,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
                 if (!whisperTo) setWhisper(lastWhisper);
                 lastWhisper = null;
             }
-            addSystem(data.text);
+            addSystem(data.text, typeof data.unblock === "string" ? unblockAction(data.unblock) : null);
         } else if (data.t === "slow" || data.t === "timeout") {
             if (!shown || !input) {
                 readyAt = Math.max(readyAt, Date.now() + Number(data.ms || SLOW_MS));
@@ -3152,6 +3269,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         }
         if (to) {
             if (!mainConnected()) return addSystem(isEnabled() ? "Whispers need the main chat. It is still connecting." : "Whispers need the main chat. Turn it on to whisper.");
+            if (window.__nswsBlocks?.relation(null, to) === "block") return addSystem("You blocked " + to + ". Unblock them to whisper.", unblockAction(to));
             const wait = me.owner ? 0 : readyAt - Date.now();
             if (wait > 0) {
                 if (!timedOut) sendTimer = setTimeout(trySend, wait);
@@ -3260,7 +3378,7 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
         const el = ensureFeed();
         if (feedInput) return feedInput.focus();
         el.classList.add("typing");
-        for (const item of items.slice(-5)) if (item.kind === "msg") previewMessage(item.m);
+        for (const item of items.slice(-5)) if (item.kind === "msg" && !hiddenKind(item.m)) previewMessage(item.m);
         const form = document.createElement("form");
         feedInput = document.createElement("input");
         feedInput.maxLength = MAX_TEXT;
@@ -3700,6 +3818,12 @@ body:has(#nsws-editor:not(.hidden)) #nsws-chat:not(.full),body:has(#nsws-editor:
     fontStyle.textContent = FONT_CSS;
     document.head.appendChild(fontStyle);
     applyFont();
+
+    window.__nswsBlocks?.onChange(() => {
+        if (!log) return;
+        closeTools();
+        renderLog();
+    });
 
     window.__nswsChat = {
         isEnabled,

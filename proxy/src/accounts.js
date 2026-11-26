@@ -32,6 +32,9 @@ const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
 const RECENT_REFERRALS = 5;
 const CHAT_UID = /^[0-9a-f]{16}$/;
+const BLOCK_KINDS = { block: 1, ignore: 2 };
+const MAX_BLOCKS = 500;
+const BLOCK_REF = /^[0-9a-z]{12}$/;
 const VISITOR = /^[0-9a-f]{32}$/;
 // The weekly bingo card is 5x5 with a free centre. The card itself is made on the page
 // (mod/nsws_bingo.js); the Worker only keeps which squares are marked, as a bitmask.
@@ -345,6 +348,11 @@ export class Accounts extends DurableObject {
             user_id TEXT PRIMARY KEY, discord_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, in_guild INTEGER NOT NULL,
             at INTEGER NOT NULL, checked INTEGER NOT NULL, access TEXT, refresh TEXT, expires INTEGER) WITHOUT ROWID`);
         this.sql.exec("CREATE TABLE IF NOT EXISTS discord_states (state TEXT PRIMARY KEY, user_id TEXT NOT NULL, back TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID");
+        // Chat blocks and ignores. target is the other account's userId, or "c:" + a chat id with no account.
+        // ref names the row to the page, which never sees the userId.
+        this.sql.exec(`CREATE TABLE IF NOT EXISTS chat_blocks (
+            user_id TEXT NOT NULL, target TEXT NOT NULL, kind INTEGER NOT NULL, nick TEXT NOT NULL, ref TEXT NOT NULL,
+            at INTEGER NOT NULL, PRIMARY KEY (user_id, target)) WITHOUT ROWID`);
         this.top = null;
         this.wrs = null;
         this.king = null;
@@ -841,7 +849,70 @@ export class Accounts extends DurableObject {
             }
         }
         const state = this.tagState(userId);
-        return { state, linked: linked ? { uids: [uid], tag: this.chatTagOf(userId) } : null };
+        return { state, linked: linked ? { uids: [uid], tag: this.chatTagOf(userId) } : null, blocks: this.listBlocks(userId) };
+    }
+
+    // The people this account blocked or ignored, with the chat ids and name the chat knows them by now.
+    listBlocks(userId) {
+        return this.sql.exec("SELECT target, kind, nick, ref, at FROM chat_blocks WHERE user_id = ? ORDER BY at DESC", userId).toArray().map((r) => {
+            const guest = r.target.startsWith("c:");
+            return {
+                ref: r.ref,
+                kind: r.kind === BLOCK_KINDS.block ? "block" : "ignore",
+                nick: (guest ? null : this.nicknameOf(r.target)) || r.nick,
+                uids: guest ? [r.target.slice(2)] : this.chatUids(r.target),
+                at: r.at,
+            };
+        });
+    }
+
+    // Who a block points at: the account behind the chat id, else the account holding the name, else the bare chat id.
+    blockTarget(uid, nick) {
+        const byChat = CHAT_UID.test(uid ?? "") ? this.chatUser(uid) : null;
+        if (byChat) return byChat;
+        const key = nameKey(text(nick, MAX_NICK));
+        const byName = SHARED_NAMES.has(key) ? null : this.holder(key);
+        if (byName) return byName;
+        return CHAT_UID.test(uid ?? "") ? "c:" + uid : null;
+    }
+
+    // kind "block", "ignore", or null to undo. A row is found again by ref, or by uid / nick.
+    setBlock(userId, { ref, uid, nick, kind }) {
+        let target = null;
+        if (BLOCK_REF.test(ref ?? "")) target = this.sql.exec("SELECT target FROM chat_blocks WHERE user_id = ? AND ref = ?", userId, ref).toArray()[0]?.target ?? null;
+        target ??= this.blockTarget(uid, nick);
+        if (!target) return { error: "missing" };
+        if (target === userId) return { error: "self" };
+        if (kind == null) {
+            this.sql.exec("DELETE FROM chat_blocks WHERE user_id = ? AND target = ?", userId, target);
+            return { blocks: this.listBlocks(userId) };
+        }
+        const code = BLOCK_KINDS[kind];
+        if (!code) return { error: "bad" };
+        const row = this.sql.exec("SELECT kind, ref FROM chat_blocks WHERE user_id = ? AND target = ?", userId, target).toArray()[0];
+        if (row?.kind === code) return { blocks: this.listBlocks(userId) };
+        if (!row && this.sql.exec("SELECT COUNT(*) AS n FROM chat_blocks WHERE user_id = ?", userId).one().n >= MAX_BLOCKS) return { error: "blocks" };
+        const name = (target.startsWith("c:") ? null : this.nicknameOf(target)) || text(nick, MAX_NICK).trim() || "Guest";
+        this.sql.exec(`INSERT INTO chat_blocks (user_id, target, kind, nick, ref, at) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, target) DO UPDATE SET kind = excluded.kind, nick = excluded.nick, at = excluded.at`,
+            userId, target, code, name, row?.ref ?? randomId(12, "0123456789abcdefghijklmnopqrstuvwxyz"), Date.now());
+        return { blocks: this.listBlocks(userId) };
+    }
+
+    // For a whisper: "blocked" if the recipient blocked the sender, "ignored" if they ignored them,
+    // "mine" if the sender blocked the recipient, otherwise null.
+    whisperBlock(senderUid, nickname) {
+        const key = nameKey(text(nickname, MAX_NICK));
+        const to = SHARED_NAMES.has(key) ? null : this.holder(key);
+        if (!to || !CHAT_UID.test(senderUid ?? "")) return null;
+        const from = this.chatUser(senderUid);
+        if (from) {
+            const mine = this.sql.exec("SELECT kind FROM chat_blocks WHERE user_id = ? AND target = ?", from, to).toArray()[0];
+            if (mine?.kind === BLOCK_KINDS.block) return "mine";
+        }
+        const theirs = this.sql.exec("SELECT kind FROM chat_blocks WHERE user_id = ? AND target IN (?, ?)", to, from ?? "", "c:" + senderUid).toArray();
+        if (theirs.some((r) => r.kind === BLOCK_KINDS.block)) return "blocked";
+        return theirs.length ? "ignored" : null;
     }
 
     redeem(userId, code, ipHash) {

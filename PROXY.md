@@ -512,6 +512,16 @@ uses WebSocket hibernation, so idle players cost nothing, and it keeps the last 
   and spam timeouts as messages, plus at most 8 different names per 10 min. Refusals carry
   `wfail` so the page puts the text back with the whisper still set. The owner can mute or ban from
   a whisper they got (`wid` instead of `id` on `ipban`/`userban`).
+- **Block and ignore** (like Discord): the ⋯ on someone's message, their profile window, or Settings →
+  Chat → "Blocked and ignored players" (`mod/nsws_blocks.js`). The list lives on the account in Accounts
+  `chat_blocks` (one row per pair, `kind` 1 block / 2 ignore, target = the other userId, or `c:` + a chat id
+  with no account; the page only sees a random `ref`, the name and the chat ids). `blocks/list`, `blocks/set`
+  and every `refer/me` reply carry it; the page keeps a copy in `_nswsChatBlocks`. Both fold that player's
+  messages and whispers into "N blocked/ignored messages - Show" and drop their pings, unread counts and
+  whisper alerts (matched by chat id, then by name). Blocks are also checked by the room on every whisper
+  (Accounts `whisperBlock`, not cached): a blocked sender gets "couldn't be delivered", and whispering
+  someone you blocked asks you to unblock. Ignored whispers still arrive, so the sender can't tell. The
+  owner's messages are never hidden and the owner's whispers skip the check. Cap 500 per account.
 
 ## Announcements
 

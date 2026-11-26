@@ -54524,6 +54524,31 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 _container.appendChild(_row);
             }
             )(),
+            ( () => {
+                const _blocks = window.__nswsBlocks;
+                if (!_blocks) return;
+                const _container = C.get(this, ks, "f");
+                const _row = document.createElement("div");
+                _row.className = "setting";
+                const _label = document.createElement("p");
+                _label.textContent = "Blocked and ignored players";
+                _row.appendChild(_label);
+                const _wrap = document.createElement("div");
+                _wrap.className = "button-wrapper";
+                const _btn = document.createElement("button");
+                _btn.className = "button";
+                const _count = _blocks.count();
+                _btn.textContent = _count ? "Manage (" + _count + ")" : "Manage";
+                _btn.addEventListener("click", ( () => {
+                    C.get(this, vs, "f").playUIClick();
+                    _blocks.openManager();
+                }
+                ));
+                _wrap.appendChild(_btn);
+                _row.appendChild(_wrap);
+                _container.appendChild(_row);
+            }
+            )(),
             C.get(this, ms, "m", Ds).call(this, "Clips"),
             ( () => {
                 const _container = C.get(this, ks, "f");
