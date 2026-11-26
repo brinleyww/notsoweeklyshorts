@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.26",
+        "changes": [
+            "Tall cars like trucks stay sharp from wheels to roof in cinematic Watch on Ultra"
+        ]
+    },
+    {
         "version": "v13.25",
         "changes": [
             "Cinematic Watch on Ultra graphics now looks like an offline render",

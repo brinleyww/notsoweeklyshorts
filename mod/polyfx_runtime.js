@@ -19157,9 +19157,10 @@ uniform float polyfxGlowIntensity;`
     }`
   };
   // Camera motion blur rebuilt from depth and last frame's camera, with each car's own movement
-  // taken out inside a capsule around it, so the followed car stays sharp while the road streaks.
+  // taken out inside a box fitted to its model, so the followed car stays sharp while the road streaks.
   // Then a Filmic-style curve: highlights roll off and lose colour instead of clipping.
   var RENDER_LOOK_CARS = 10;
+  var lookVec4s = () => ({ value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector4()) });
   var RenderLookPostShader = {
     uniforms: {
       tDiffuse: { value: null },
@@ -19168,8 +19169,10 @@ uniform float polyfxGlowIntensity;`
       camWorld: { value: new Matrix4() },
       prevViewProj: { value: new Matrix4() },
       blur: { value: 0 },
-      carA: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector4()) },
-      carB: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector4()) },
+      carC: lookVec4s(),
+      carX: lookVec4s(),
+      carY: lookVec4s(),
+      carZ: lookVec4s(),
       carV: { value: Array.from({ length: RENDER_LOOK_CARS }, () => new Vector3()) },
       carCount: { value: 0 }
     },
@@ -19178,7 +19181,7 @@ uniform float polyfxGlowIntensity;`
     #define CARS ${RENDER_LOOK_CARS}
     varying vec2 vUv; uniform sampler2D tDiffuse, tDepth;
     uniform mat4 projInv, camWorld, prevViewProj; uniform float blur;
-    uniform vec4 carA[CARS], carB[CARS]; uniform vec3 carV[CARS]; uniform int carCount;
+    uniform vec4 carC[CARS], carX[CARS], carY[CARS], carZ[CARS]; uniform vec3 carV[CARS]; uniform int carCount;
     const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
     vec3 worldAt(vec2 uv, out float viewDist){
       float depth = texture2D(tDepth, uv).x;
@@ -19187,15 +19190,15 @@ uniform float polyfxGlowIntensity;`
       viewDist = length(view);
       return (camWorld * vec4(view, 1.0)).xyz;
     }
-    // Weight of the nearest car capsule at p (0 outside), and that car's movement since last frame.
+    // Weight of the car box at p (1 inside, fading out over half a metre), and that car's movement
+    // since last frame. The axes are unit vectors with the box's half size in w.
     float carAt(vec3 p, out vec3 move){
       float best = 0.0; move = vec3(0.0);
       for (int i = 0; i < CARS; i++) {
         if (i >= carCount) break;
-        vec3 a = carA[i].xyz, ab = carB[i].xyz - a;
-        float h = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
-        float r = carA[i].w;
-        float w = 1.0 - smoothstep(r * 0.8, r * 1.3, length(p - a - ab * h));
+        vec3 d = p - carC[i].xyz;
+        vec3 q = abs(vec3(dot(d, carX[i].xyz), dot(d, carY[i].xyz), dot(d, carZ[i].xyz))) - vec3(carX[i].w, carY[i].w, carZ[i].w);
+        float w = 1.0 - smoothstep(0.1, 0.6, length(max(q, 0.0)));
         if (w > best) { best = w; move = carV[i]; }
       }
       return best;
@@ -20039,21 +20042,63 @@ uniform float polyfxGlowIntensity;`
       if (prev) p.prevViewProj.value.copy(prev.vp);
       const cars = (this.cinematic?.cars || []).filter((c) => c && c.getPosition);
       const near = cars.map((c) => ({ c, p: c.getPosition() })).sort((x, y) => x.p.distanceToSquared(pos) - y.p.distanceToSquared(pos)).slice(0, RENDER_LOOK_CARS);
-      near.forEach(({ c, p: cp }, i) => {
-        const q = c.getQuaternion?.();
-        s.f.set(0, 0, 1);
-        if (q) s.f.applyQuaternion(q);
-        p.carA.value[i].set(cp.x + s.f.x * 1.3, cp.y + s.f.y * 1.3, cp.z + s.f.z * 1.3, 1.35);
-        p.carB.value[i].set(cp.x - s.f.x * 1.3, cp.y - s.f.y * 1.3, cp.z - s.f.z * 1.3, 0);
+      near.forEach(({ c }, i) => {
+        const fit = this._lookCarBox(c, clock);
+        const e = fit.world.elements, b = fit.box;
+        s.f.set((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2).applyMatrix4(fit.world);
+        const axes = [p.carX.value[i], p.carY.value[i], p.carZ.value[i]];
+        const half = [(b.max.x - b.min.x) / 2, (b.max.y - b.min.y) / 2, (b.max.z - b.min.z) / 2];
+        axes.forEach((ax, k) => {
+          const len = Math.hypot(e[k * 4], e[k * 4 + 1], e[k * 4 + 2]) || 1;
+          ax.set(e[k * 4] / len, e[k * 4 + 1] / len, e[k * 4 + 2] / len, Math.min(half[k] * len, 4));
+        });
+        p.carC.value[i].set(s.f.x, s.f.y, s.f.z, 0);
         const last = s.carPrev.get(c);
         const move = p.carV.value[i];
-        if (last) move.set(cp.x - last.x, cp.y - last.y, cp.z - last.z);
+        if (last) move.set(s.f.x - last.x, s.f.y - last.y, s.f.z - last.z);
         else move.set(0, 0, 0);
         if (move.length() > 10) move.set(0, 0, 0);
-        s.carPrev.set(c, { x: cp.x, y: cp.y, z: cp.z });
+        s.carPrev.set(c, { x: s.f.x, y: s.f.y, z: s.f.z });
       });
       p.carCount.value = near.length;
       this._lookPrev = { clock, pos, quat, shot, vp: (prev?.vp ?? new Matrix4()).copy(s.vp) };
+    }
+    // The car's model bounds in its own frame (bodies differ a lot: a truck's roof is twice as high
+    // as an F1's), refitted every 2 s for body swaps, plus the car's current world matrix. The parts
+    // carry world transforms under a root at the origin, so the frame is the car's position and turn.
+    _lookCarBox(car, clock) {
+      const cache = this._lookCarBoxes ??= new WeakMap();
+      let fit = cache.get(car);
+      if (!fit) cache.set(car, fit = { box: new Box3(), world: new Matrix4(), at: -Infinity });
+      const cp = car.getPosition(), q = car.getQuaternion?.();
+      fit.world.makeRotationFromQuaternion(q ?? new Quaternion()).setPosition(cp.x, cp.y, cp.z);
+      const root = car.object3D;
+      if (!root) {
+        fit.box.min.set(-1.1, -0.9, -2.4);
+        fit.box.max.set(1.1, 1.1, 2.4);
+        return fit;
+      }
+      if (Math.abs(clock - fit.at) > 2) {
+        fit.at = clock;
+        root.updateMatrixWorld();
+        const inv = new Matrix4().copy(fit.world).invert();
+        const rel = new Matrix4(), part = new Box3();
+        fit.box.makeEmpty();
+        root.traverse((m) => {
+          // Suspension is moved per vertex every frame, so its stored bounds are stale.
+          if (!m.isMesh || !m.visible || !m.geometry || /^Suspension/.test(m.name)) return;
+          if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+          const g = m.geometry.boundingBox;
+          part.min.set(g.min.x, g.min.y, g.min.z);
+          part.max.set(g.max.x, g.max.y, g.max.z);
+          fit.box.union(part.applyMatrix4(rel.multiplyMatrices(inv, m.matrixWorld)));
+        });
+        if (fit.box.isEmpty()) {
+          fit.box.min.set(-1.1, -0.9, -2.4);
+          fit.box.max.set(1.1, 1.1, 2.4);
+        }
+      }
+      return fit;
     }
     // Warmer sun with soft shadows, a lighter sky fill and warm light bounced up from the ground.
     // Each frame's change is made over the light's own value, so the game (or the time-of-day sky)
