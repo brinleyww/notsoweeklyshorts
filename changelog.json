@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.24",
+        "changes": [
+            "New Water quality setting in Graphics. Low draws Better Editor water flat and in one piece, for more fps on tracks with water",
+            "Low End Device and Low performance mode put water on Low"
+        ]
+    },
+    {
         "version": "v13.23",
         "changes": [
             "You can block or ignore players from the ... on their chat message or from their profile",
