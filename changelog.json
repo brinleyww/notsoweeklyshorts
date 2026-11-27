@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.29",
+        "changes": [
+            "Starting a track on a slow device shows a loading spinner until the track is drawn, not a blank dark screen"
+        ]
+    },
+    {
         "version": "v13.28",
         "changes": [
             "A mute or chat ban now also covers a new chat started from the same network for the next day",

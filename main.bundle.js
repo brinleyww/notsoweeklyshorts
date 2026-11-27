@@ -33926,7 +33926,7 @@ window.__nswsAutoGhostNote = function(trackId) {
               , r = __webpack_require__.n(i)
               , a = __webpack_require__(6314)
               , s = __webpack_require__.n(a)()(r());
-            s.push([e.id, "#transition-layer {\n\tposition: absolute;\n\tleft: 0;\n\ttop: 0;\n\tz-index: 100;\n\twidth: 100%;\n\theight: 100%;\n\tbackground-color: #000;\n\tpointer-events: none;\n\n\topacity: 0;\n\ttransition: 0.25s ease-in-out opacity;\n}\n", ""]);
+            s.push([e.id, "#transition-layer {\n\tposition: absolute;\n\tleft: 0;\n\ttop: 0;\n\tz-index: 100;\n\twidth: 100%;\n\theight: 100%;\n\tbackground-color: #000;\n\tpointer-events: none;\n\n\topacity: 0;\n\ttransition: 0.25s ease-in-out opacity;\n}\n#transition-layer > .loading-spinner-ui {\n\tposition: absolute;\n\tleft: calc(50% - 25px);\n\ttop: calc(50% - 25px);\n\topacity: 0;\n\tanimation: 1s linear infinite loading-spinner-spin, 0.3s ease-out 0.7s forwards nsws-transition-wait;\n}\n@keyframes nsws-transition-wait {\n\tto {\n\t\topacity: 1;\n\t}\n}\n", ""]);
             const o = s
         }
         ,
@@ -61042,7 +61042,33 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 const t = C.get(this, xd, "f");
                 if (null == t)
                     throw new Error("Failed to find transition layer");
-                null == C.get(this, Sd, "f") && (t.style.opacity = "1",
+                // The fade lifts only once the new screen has drawn two frames. A big track's first frame (shaders, buffers)
+                // takes seconds on a weak device, and with the fade already lifting that was a blank dark screen that
+                // looked stuck. The spinner shows after 0.7 s and keeps turning while the page is busy.
+                const drawn = () => new Promise((e => {
+                    let n = 0
+                      , fin = () => {
+                        fin = () => {}
+                        ,
+                        clearInterval(iv),
+                        e()
+                    }
+                    ;
+                    const iv = setInterval(( () => "hidden" == document.visibilityState && fin()), 500)
+                      , step = () => ++n >= 2 ? fin() : requestAnimationFrame(step);
+                    "hidden" == document.visibilityState ? fin() : requestAnimationFrame(step)
+                }
+                ))
+                  , lift = () => {
+                    t.style.opacity = "0",
+                    C.get(this, wd, "f").setInert(!1),
+                    C.set(this, Sd, null, "f")
+                }
+                ;
+                null == C.get(this, Sd, "f") && (t.replaceChildren(Object.assign(document.createElement("div"), {
+                    className: "loading-spinner-ui"
+                })),
+                t.style.opacity = "1",
                 C.get(this, wd, "f").setInert(!0),
                 setTimeout(( () => {
                     if (null != C.get(this, Sd, "f")) {
@@ -61051,19 +61077,10 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                             e = C.get(this, Sd, "f").call(this)
                         } catch (err) {
                             // A screen that fails to open must not leave the fade up and every later screen change waiting on it.
-                            t.style.opacity = "0",
-                            C.get(this, wd, "f").setInert(!1),
-                            C.set(this, Sd, null, "f");
+                            lift();
                             throw err
                         }
-                        null == e ? (t.style.opacity = "0",
-                        C.get(this, wd, "f").setInert(!1),
-                        C.set(this, Sd, null, "f")) : e.finally(( () => {
-                            t.style.opacity = "0",
-                            C.get(this, wd, "f").setInert(!1),
-                            C.set(this, Sd, null, "f")
-                        }
-                        ))
+                        null == e ? drawn().then(lift) : e.finally(( () => drawn().then(lift)))
                     }
                 }
                 ), 250)),
