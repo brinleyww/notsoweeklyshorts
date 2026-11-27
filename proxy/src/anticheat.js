@@ -9,7 +9,7 @@ import physicsModule from "./sim/physics.wasm";
 import mathModule from "./sim/math.wasm";
 import initData from "./sim/init.bin";
 import { Simulator, readInit } from "./sim/run-check.js";
-import { MACRO_LOCK_MS } from "./macro.js";
+import { MACRO_LOCK_MS, recordingProblem } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 
 const CHECK_BATCH = 8;
@@ -39,8 +39,8 @@ function hex(buffer) {
 export class RunChecker extends DurableObject {
     async check(track, recording, frames) {
         if (track?.trusted === "be") {
-            if (!Number.isSafeInteger(frames) || frames < 1) return { valid: false, reason: "bad-time" };
-            return typeof recording === "string" && recording ? { valid: true } : { valid: false, reason: "no-recording" };
+            const problem = await recordingProblem(recording, frames);
+            return problem ? { valid: false, reason: problem } : { valid: true };
         }
         this.simulator ??= new Simulator(physicsModule, mathModule, readInit(initData));
         return this.simulator.check(track, recording, frames);

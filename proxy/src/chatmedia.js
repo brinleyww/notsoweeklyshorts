@@ -145,7 +145,7 @@ function gifFrames(b) {
         i += size;
     }
     const frames = [];
-    let gce = { transparent: -1, disposal: 0 };
+    let gce = { transparent: -1, disposal: 0, delay: 0 };
     while (i < b.length) {
         const block = b[i++];
         if (block === 0x3b) break;
@@ -153,7 +153,7 @@ function gifFrames(b) {
             const label = b[i++];
             if (label === 0xf9 && b[i] >= 4) {
                 const p = b[i + 1];
-                gce = { transparent: p & 1 ? b[i + 4] : -1, disposal: (p >> 2) & 7 };
+                gce = { transparent: p & 1 ? b[i + 4] : -1, disposal: (p >> 2) & 7, delay: b[i + 2] | b[i + 3] << 8 };
             }
             i = skipSubBlocks(b, i);
             continue;
@@ -174,7 +174,7 @@ function gifFrames(b) {
         i = skipSubBlocks(b, i);
         frame.data = [start, i];
         frames.push(frame);
-        gce = { transparent: -1, disposal: 0 };
+        gce = { transparent: -1, disposal: 0, delay: 0 };
     }
     return { width, height, frames };
 }
@@ -300,7 +300,18 @@ export function gifSamples(bytes) {
     const count = Math.min(GIF_SAMPLES, frames.length);
     const wanted = new Set();
     for (let k = 0; k < count; k++) wanted.add(count === 1 ? 0 : Math.round(k * (frames.length - 1) / (count - 1)));
-    const readAt = [...wanted][Math.floor(wanted.size / 2)];
+    // A frame held far longer than the rest is what people actually see, so it is always one of the samples.
+    if (frames.length > count) {
+        const delays = frames.map((f) => f.delay || 0).sort((a, b) => a - b);
+        const usual = delays[delays.length >> 1];
+        const held = frames.map((f, at) => [f.delay || 0, at]).filter(([d, at]) => !wanted.has(at) && d >= 30 && d >= usual * 3).sort((a, b) => b[0] - a[0]).slice(0, 4);
+        for (const [, at] of held) {
+            const nearest = [...wanted].sort((a, b) => Math.abs(a - at) - Math.abs(b - at))[0];
+            wanted.delete(nearest);
+            wanted.add(at);
+        }
+    }
+    const readAt = [...wanted].sort((a, b) => a - b)[Math.floor(wanted.size / 2)];
     const readScale = Math.min(1, READ_SIDE / Math.max(width, height));
     const read = { w: Math.max(1, Math.round(width * readScale)), h: Math.max(1, Math.round(height * readScale)) };
     read.rgb = new Uint8Array(read.w * read.h * 3);

@@ -173,7 +173,8 @@ export async function handleDiscord(request, url, env, h) {
             redirect_uri: redirectUri(env, url),
             scope: SCOPES,
             state,
-            prompt: "none",
+            // Always ask: with "none", a sign-in link sent to someone else would pass straight through for them.
+            prompt: "consent",
         }).toString();
         return h.json({ url: link.toString() }, origin);
     }

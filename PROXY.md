@@ -1234,6 +1234,36 @@ Testing: copy `proxy/` next to the repo (not under %TEMP%), add a route that set
 and run `wrangler dev --test-scheduled` (`/__scheduled` runs the cron). `bad-day-test/` next to the
 repo has the scripts.
 
+## Abuse limits (v13.28)
+
+Checks added after a security pass. None of them is a setting; the numbers are constants next to the code.
+
+- **Trusted headers.** The rooms trust `X-Chat-*` and `X-Cup-*`, so `connectSocket` deletes any the client sent.
+  A main-chat socket with its own `X-Chat-Cup` used to count as a cup room: organizer mutes, and the alarm that
+  empties the room. The main room also ignores that alarm and `cupmute` whatever sets them.
+- **Chat ids are free**, so everything keyed on one has a second check by address:
+  - A mute or ban also covers chat ids first seen after it on the same address, for 24 hours (`inherited`,
+    `chat_ids`). Ids that were already chatting from that address (classmates) are left alone. After a day the
+    owner's IP ban is the tool.
+  - 40 messages per 20 s per address across ids (`ipFlood`), 100 different long-polling players per address,
+    40 model checks a day per address out of the 300.
+  - A name held by another account shows as `Guest` (`Accounts.chatWho`); the id has to be linked to the holder
+    (`refer/me`). Tags and the owner badge never came from the client.
+  - Cup rooms ask the main room for the account ban at hello, and an address may open 30 cup chats per 10 minutes.
+- **Uploads.** A non-owner's video is stored as a plain download (nothing here can look inside a video). A GIF frame
+  held three times longer than usual is always one of the 16 sampled.
+- **Runs.** An upload with a repeated form field is refused, so Kodub can never read a second `frames` or
+  `recording`. Better Editor runs can't be replayed here; `recordingProblem` (macro.js) only refuses what is
+  plainly not a run (unreadable, no inputs, under a second). A forged BE time with made-up inputs still passes.
+- **Accounts.** Referrals: 10 codes a day per address, 3 for the same player (`redeem`). Per-address write limits
+  per 10 minutes on the account routes (`ACCOUNT_WRITES_PER_10_MIN`, held per Worker instance), 3000 clip-view rows
+  per account, a new bingo card no sooner than 10 minutes after the last, 12 feedback sends a day per address.
+- **Cups.** A relay socket that never linked gives up its place when a room is full; a socket over 60 messages a
+  second in three different seconds is closed.
+- **Discord.** The sign-in link asks with `prompt=consent`. A link sent to someone else can still tie their Discord
+  to the sender's account if they press Authorize; closing that needs the callback bound to the browser that started.
+- **Not checked by the server:** bingo squares, Bolts and crate saves are whatever the page sends.
+
 ## Privacy note
 
 Leaderboard reads for Not So Weekly Shorts tracks, submissions and profile

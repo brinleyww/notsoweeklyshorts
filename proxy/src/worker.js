@@ -3,7 +3,7 @@
 
 import { TrafficStats, readBeat, readAnnouncement, readVote, readLike, describeClient, IP_BANS_KEY, IP_BAN_DAYS, TYPED_IP_BAN, readBanReason, ipBanEntry, userBanEntry } from "./traffic.js";
 import { AntiCheat, RunChecker, SNAPSHOT_KEY, REVERT_ID_BASE } from "./anticheat.js";
-import { macroReason, MACRO_REASONS } from "./macro.js";
+import { macroReason, MACRO_REASONS, recordingProblem } from "./macro.js";
 import { inputFlags } from "./inputflags.js";
 import { ChatRoom } from "./chat.js";
 import { Accounts, nameKey } from "./accounts.js";
@@ -1165,6 +1165,58 @@ function forgetBoards(...trackIds) {
     for (const id of trackIds) verdicts.delete(id);
 }
 
+// "address|what" -> { at, n }, per instance: a brake on scripts that make up a new account for every request, which
+// no per-account limit sees. The numbers leave room for a classroom on one address.
+const writeHits = new Map();
+
+function writeFlood(request, what, max, windowMs = 600_000) {
+    const ip = request.headers.get("CF-Connecting-IP");
+    if (!ip) return false;
+    const key = ipScope(ip) + "|" + what;
+    const now = Date.now();
+    if (writeHits.size > 20_000) writeHits.clear();
+    const hit = writeHits.get(key);
+    if (!hit || now - hit.at > windowMs) {
+        writeHits.set(key, { at: now, n: 1 });
+        return false;
+    }
+    return ++hit.n > max;
+}
+
+const ACCOUNT_WRITES_PER_10_MIN = {
+    "names/claim": 100, "clips/add": 200, "clips/share": 60, "clips/view": 600, "refer/redeem": 30, "presets/save": 200,
+    "presets/share": 60, "presets/accept": 200, "bingo/mark": 400, "bingo/reset": 60, "blocks/set": 300, "tags/buy": 100,
+};
+
+// Cup chat rooms one address may open in ten minutes; each new code is a Durable Object of its own.
+const CUP_CHATS_PER_IP = 30;
+const cupChatHits = new Map();
+
+function cupChatFlood(ip, code) {
+    if (!ip) return false;
+    const now = Date.now();
+    if (cupChatHits.size > 5000) cupChatHits.clear();
+    let hit = cupChatHits.get(ip);
+    if (!hit || now - hit.at > 600_000) cupChatHits.set(ip, hit = { at: now, codes: new Set() });
+    hit.codes.add(code);
+    return hit.codes.size > CUP_CHATS_PER_IP;
+}
+
+// ip -> { at, n }: a made-up token per report would otherwise write a row each time.
+const macroCallers = new Map();
+
+function macroFlood(ip) {
+    if (!ip) return false;
+    const now = Date.now();
+    if (macroCallers.size > 2000) macroCallers.clear();
+    const hit = macroCallers.get(ip);
+    if (!hit || now - hit.at > 600_000) {
+        macroCallers.set(ip, { at: now, n: 1 });
+        return false;
+    }
+    return ++hit.n > 20;
+}
+
 function macroLocked(left, reason, origin) {
     return json({ left, reason }, origin, 423);
 }
@@ -1175,7 +1227,8 @@ async function handleMacroReport(request, env, cfg, origin) {
     if (!HEX64.test(token) || !MACRO_REASONS.has(body?.reason)) return plain(400, "Bad request", origin);
     const anti = antiCheat(env);
     if (!anti || await isOwner(token, cfg)) return json({ left: 0 }, origin);
-    const nickname = typeof body.nickname === "string" ? body.nickname.slice(0, 64) : "";
+    if (macroFlood(request.headers.get("CF-Connecting-IP"))) return json({ left: 0 }, origin, 429);
+    const nickname = typeof body.nickname === "string" ? censor(body.nickname.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 64)) : "";
     return json(await anti.macroReport(await sha256Hex(token), nickname, body.reason), origin);
 }
 
@@ -1218,6 +1271,8 @@ async function handleSubmit(request, url, env, cfg, origin, ctx) {
     const trackId = form.get("trackId") ?? "";
     const token = form.get("userToken") ?? "";
     const frames = Number(form.get("frames"));
+    // The checks below read the first value of a field; Kodub must never be handed a second one to read instead.
+    if (["trackId", "userToken", "frames", "recording", "nickname", "carStyle"].some((name) => form.getAll(name).length > 1)) throw new BadRequest();
     // Not a submission this Worker understands: forward it as it came.
     if (!HEX64.test(trackId) || !HEX64.test(token) || !Number.isSafeInteger(frames)) {
         return withCors(await postUpstream(request, cfg, url.pathname, raw), origin);
@@ -1489,6 +1544,7 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
         return preset ? json(preset, origin) : plain(404, "Not found", origin);
     }
     if (!HEX64.test(body?.userToken ?? "")) return plain(400, "Bad request", origin);
+    if (ACCOUNT_WRITES_PER_10_MIN[path] && writeFlood(request, path, ACCOUNT_WRITES_PER_10_MIN[path])) return plain(429, "Too many requests", origin);
     const userId = await sha256Hex(body.userToken);
     let result;
     switch (path) {
@@ -1551,7 +1607,7 @@ async function handleAccounts(request, url, env, fromSite, origin, ipBan) {
     }
     if (result == null) return plain(404, "Not found", origin);
     if (result.error === "code" || result.error === "expired" || result.error === "self" || result.error === "already" || result.error === "mutual"
-        || result.error === "points" || result.error === "locked" || result.error === "closed" || result.error === "missing" || result.error === "blocks") {
+        || result.error === "points" || result.error === "locked" || result.error === "closed" || result.error === "missing" || result.error === "blocks" || result.error === "limit") {
         return json({ error: result.error }, origin, 409);
     }
     if (result.error === "bad") return plain(400, "Bad request", origin);
@@ -1860,6 +1916,7 @@ async function chatTarget(url, connectingIp) {
     // ?cup=CODE is that cup's own chat room (src/chat.js), used by the Competitions panel.
     const cup = String(url.searchParams.get("cup") || "").toUpperCase();
     if (cup && !LOBBY_CODE.test(cup)) return { refused: "BadRequest" };
+    if (cup && cupChatFlood(connectingIp, cup)) return { refused: "IpLimit" };
     const ip = await ipHash(connectingIp);
     const headers = { "X-Chat-Ip": ip };
     if (cup) headers["X-Chat-Cup"] = cup;
@@ -1887,6 +1944,9 @@ async function cupTarget(url, env, role, connectingIp) {
 
 function connectSocket(env, request, target) {
     const headers = new Headers(request.headers);
+    // The rooms trust these, so none may arrive from the client: a main-chat socket sent with its own
+    // X-Chat-Cup would be treated as a cup room (organizer mutes, and the alarm that empties the room).
+    for (const name of [...headers.keys()]) if (/^x-(chat|cup)-/i.test(name)) headers.delete(name);
     for (const [k, v] of Object.entries(target.headers)) headers.set(k, v);
     return env[target.ns].get(env[target.ns].idFromName(target.name)).fetch(new Request(request, { headers }));
 }
@@ -2001,6 +2061,7 @@ async function handleCup(request, url, env, fromSite, origin, cfg) {
         if (!env.LOBBY) return plain(503, "Competitions are off", origin);
         const code = String(url.searchParams.get("code") || "").trim().toUpperCase();
         if (!LOBBY_CODE.test(code)) return json({ cup: null }, origin);
+        if (cupLinkFlood(request.headers.get("CF-Connecting-IP"))) return json({ error: "slow down" }, origin, 429);
         return json({ cup: await env.LOBBY.get(env.LOBBY.idFromName(code)).info() }, origin);
     }
     const role = { "cup/host": "host", "cup/join": "join", "cup/mux": "mux" }[url.pathname.slice(TRAFFIC_PREFIX.length)];
@@ -2465,6 +2526,7 @@ async function handleTracks(request, url, env, cfg, fromSite, requestOrigin, ctx
             if (physics !== ph.version) ph = await bePhysics(true);
             if (physics < ph.version) return json({ error: "Better Editor's physics changed since this page loaded. Press Ctrl+F5, then drive again to set a time." }, origin, 409);
             if (physics > ph.version + 1) return json({ error: "Bad physics version." }, origin, 400);
+            if (await recordingProblem(body.recording, body.frames)) return json({ error: "That run couldn't be read, so it wasn't saved." }, origin, 400);
             return reply(await hub.beSubmit({ userId, ipKey, nickname, countryCode: body.countryCode, carStyle: body.carStyle, trackId: body.trackId, frames: body.frames, recording: body.recording, physics }));
         }
         case "played": return reply(await hub.played({ userId, ipKey, trackId: body.trackId }));
@@ -2823,6 +2885,7 @@ export default {
             }
             if (url.pathname.startsWith(CRATES_PREFIX)) {
                 const origin = requestOrigin || "*";
+                if (request.method === "POST" && writeFlood(request, "crates", 900)) return json({ error: "Too many requests. Try again in a few minutes." }, origin, 429);
                 try {
                     return await handleCrates(request, url, env, ctx, {
                         fromSite, origin: requestOrigin, forbidden, corsHeaders, json, withCors, cachedJson, doLimited, busy, readSmallBody, sha256Hex, HEX64,

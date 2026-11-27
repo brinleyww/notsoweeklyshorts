@@ -401,7 +401,9 @@
     async function fileUrl(owner, f) {
         if (inboxState.urls.has(f.fid)) return inboxState.urls.get(f.fid);
         const blob = await (await ownerPost(owner, "admin/file/" + f.fid, {})).blob();
-        const url = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: f.type }));
+        // The page opens this in a tab of its own, so it must never be a type that can run script there.
+        const type = /^(image\/(png|jpeg|gif|webp|avif|heic)|video\/(mp4|webm|quicktime))$/.test(blob.type || f.type) ? blob.type || f.type : "application/octet-stream";
+        const url = URL.createObjectURL(new Blob([blob], { type }));
         inboxState.urls.set(f.fid, url);
         return url;
     }

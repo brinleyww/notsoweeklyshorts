@@ -103,6 +103,21 @@ function judgeChannel(times) {
     return null;
 }
 
+// For tracks the physics can't replay here (Better Editor): what is plainly not a run. null if it could be one.
+const MIN_RUN_FRAMES = 1000;
+export async function recordingProblem(recording, frames) {
+    if (!Number.isSafeInteger(frames) || frames < MIN_RUN_FRAMES) return "bad-time";
+    if (typeof recording !== "string" || !recording) return "no-recording";
+    let channels = null;
+    try {
+        const buf = await inflate(recording);
+        channels = buf && drivingChannels(buf);
+    } catch {}
+    if (!channels || channels.length < 4) return "unreadable";
+    if (!channels.some((times) => times.length)) return "no-inputs";
+    return null;
+}
+
 // null: nothing wrong, or a recording this can't read (the physics check deals with those).
 export async function macroReason(recording) {
     try {

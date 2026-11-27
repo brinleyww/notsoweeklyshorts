@@ -28,6 +28,9 @@ const SLOW_SLACK_MS = 150;
 // with each repeat, until the player has gone STRIKE_RESET_MS since their last timeout ended.
 const SPAM_WINDOW_MS = 20_000;
 const SPAM_MAX = 10;
+// Messages one address may send in a window, whatever ids it sends them under (a classroom shares one address).
+const IP_SPAM_WINDOW_MS = 20_000;
+const IP_SPAM_MAX = 40;
 const TIMEOUT_S = 5;
 const TIMEOUT_MAX_S = 3600;
 const STRIKE_RESET_MS = 10 * 60_000;
@@ -72,6 +75,12 @@ const ONE_EMOJI = new RegExp("^\\p{RGI_Emoji}$", "v");
 // cup, and a room nobody has joined for CUP_KEEP_MS is wiped.
 const CUP_MUTE_MS = 24 * 3600_000;
 const CUP_KEEP_MS = 24 * 3600_000;
+// A mute or ban also covers new chat ids on the same address for this long after it is set (see inherited).
+const EVADE_MS = 24 * 3600_000;
+// Different players one address may have on the long-polling fallback at once.
+const POLLERS_PER_IP = 100;
+// Model checks one address may use up in a day, out of AI_CHECKS_PER_DAY for everyone.
+const AI_CHECKS_PER_IP_DAY = 40;
 
 // Whispers (main room only) go to the sender and the chat ids of the account holding the name, and
 // nowhere else: not the history, the events pollers share, "who" or any broadcast. They are kept
@@ -166,6 +175,8 @@ export class ChatRoom extends DurableObject {
         this.schema();
         // Per player (uid), not per socket, so several tabs share one limit. See recentActivity.
         this.spam = new Map();
+        this.ipSpam = new Map();
+        this.ids = new Map();
         // Long-polling state. It lives in memory only: the room can't hibernate while a poll is
         // waiting, and when it does restart the new epoch tells every poller to reload.
         this.epoch = crypto.randomUUID();
@@ -218,9 +229,22 @@ export class ChatRoom extends DurableObject {
         // One row per chat id that may see the whisper (the sender's and the recipient's).
         this.sql.exec("CREATE TABLE IF NOT EXISTS whispers (id INTEGER NOT NULL, uid TEXT NOT NULL, at INTEGER NOT NULL, data TEXT NOT NULL, ip TEXT, PRIMARY KEY (uid, id))");
         this.sql.exec("CREATE INDEX IF NOT EXISTS whispers_at ON whispers (at)");
+        for (const [table, column] of [["mutes", "ip TEXT"], ["mutes", "at INTEGER"], ["user_blocks", "ip TEXT"], ["user_blocks", "at INTEGER"], ["uploads", "checked INTEGER"]]) {
+            try {
+                this.sql.exec("ALTER TABLE " + table + " ADD COLUMN " + column);
+            } catch {
+                // Already there.
+            }
+        }
+        this.sql.exec("CREATE INDEX IF NOT EXISTS mutes_ip ON mutes (ip)");
+        this.sql.exec("CREATE INDEX IF NOT EXISTS user_blocks_ip ON user_blocks (ip)");
+        // When each chat id was first seen and the address it last came from.
+        this.sql.exec("CREATE TABLE IF NOT EXISTS chat_ids (uid TEXT PRIMARY KEY, first INTEGER NOT NULL, ip TEXT)");
     }
 
     async alarm() {
+        // Only cup rooms are emptied; the main chat never is, whatever set the alarm.
+        if (this.ctx.id.name === "global") return;
         await this.ctx.storage.deleteAll();
         this.schema();
     }
@@ -243,7 +267,10 @@ export class ChatRoom extends DurableObject {
         if (ipHash && open.length >= SOCKETS_PER_IP) return new Response("Too many chat windows", { status: 429 });
         const pair = new WebSocketPair();
         this.ctx.acceptWebSocket(pair[1]);
-        pair[1].serializeAttachment({ ip: ipHash, joined: false, cup: request.headers.get("X-Chat-Cup") || null });
+        const cup = request.headers.get("X-Chat-Cup") || null;
+        // Set here too, so a cup room nobody ever says hello in is still emptied.
+        if (cup && (await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + CUP_KEEP_MS);
+        pair[1].serializeAttachment({ ip: ipHash, joined: false, cup });
         return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
@@ -297,7 +324,10 @@ export class ChatRoom extends DurableObject {
     // Called by the Worker for a ban, and again when a banned account links another browser's chat.
     blockUser(userId, uids, until, chat, reason) {
         for (const uid of (uids ?? []).filter((u) => /^[0-9a-f]{16}$/.test(u))) {
-            this.sql.exec("INSERT OR REPLACE INTO user_blocks (uid, user_id, until, chat, reason) VALUES (?, ?, ?, ?, ?)", uid, userId, until, chat ? 1 : 0, reason ?? null);
+            this.sql.exec(`INSERT INTO user_blocks (uid, user_id, until, chat, reason, ip, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (uid) DO UPDATE SET user_id = excluded.user_id, until = excluded.until, chat = excluded.chat, reason = excluded.reason,
+                    ip = COALESCE(ip, excluded.ip), at = COALESCE(at, excluded.at)`,
+                uid, userId, until, chat ? 1 : 0, reason ?? null, this.ipOfUid(uid), Date.now());
         }
         this.sql.exec("DELETE FROM user_blocks WHERE until IS NOT NULL AND until <= ?", Date.now());
     }
@@ -307,11 +337,67 @@ export class ChatRoom extends DurableObject {
     }
 
     // What a banned account is told when it tries to post, or null.
-    bannedText(uid) {
-        const row = this.sql.exec("SELECT until, chat, reason FROM user_blocks WHERE uid = ?", uid).toArray()[0];
-        if (!row || (row.until != null && row.until <= Date.now())) return null;
+    bannedText(me) {
+        if (me.ban?.text) return me.ban.text;
+        let row = this.sql.exec("SELECT until, chat, reason FROM user_blocks WHERE uid = ?", me.uid).toArray()[0];
+        if (!row || (row.until != null && row.until <= Date.now())) row = this.inherited("user_blocks", me);
+        if (!row) return null;
         const text = (row.chat ? "You're banned from the chat" : "Your account is banned") + (row.until ? " for another " + banLeft(row.until - Date.now()) + "." : ".");
         return row.reason ? text + " " + row.reason : text;
+    }
+
+    // For a cup room, which keeps no account bans of its own.
+    chatBan(me) {
+        const text = this.bannedText({ uid: me?.uid, ip: me?.ip, owner: me?.owner === true });
+        return text ? { text } : null;
+    }
+
+    noteId(me) {
+        if (!me?.uid || !me.ip || this.ids.get(me.uid) === me.ip) return;
+        if (this.ids.size > 5000) this.ids.clear();
+        this.ids.set(me.uid, me.ip);
+        this.sql.exec("INSERT INTO chat_ids (uid, first, ip) VALUES (?, ?, ?) ON CONFLICT (uid) DO UPDATE SET ip = excluded.ip WHERE ip IS NOT excluded.ip", me.uid, Date.now(), me.ip);
+    }
+
+    ipOfUid(uid) {
+        const socket = this.ctx.getWebSockets().map((ws) => ws.deserializeAttachment()).find((a) => a?.uid === uid && a.ip);
+        return socket?.ip ?? this.sql.exec("SELECT ip FROM chat_ids WHERE uid = ?", uid).toArray()[0]?.ip
+            ?? this.sql.exec("SELECT ip FROM messages WHERE uid = ? AND ip IS NOT NULL ORDER BY id DESC LIMIT 1", uid).toArray()[0]?.ip ?? null;
+    }
+
+    // A muted or banned player coming back under a new chat id: for EVADE_MS after it was set, a mute or ban also
+    // covers ids first seen after it on the same address. Ids already chatting from that address are left alone.
+    inherited(table, me) {
+        if (!me?.ip || me.owner) return null;
+        const now = Date.now();
+        const rows = this.sql.exec("SELECT * FROM " + table + " WHERE ip = ? AND uid != ? AND at > ?", me.ip, me.uid, now - EVADE_MS).toArray()
+            .filter((r) => r.until == null || r.until > now);
+        if (!rows.length) return null;
+        const first = this.sql.exec("SELECT first FROM chat_ids WHERE uid = ?", me.uid).toArray()[0]?.first ?? now;
+        return rows.find((r) => first > r.at) ?? null;
+    }
+
+    // The tag a player's account wears and whether the name they send is another account's (src/accounts.js).
+    async whoIs(uid, nick) {
+        const hit = this.tags.get(uid);
+        if (hit && hit.nick === nick && Date.now() - hit.at < TAG_CACHE_MS) return hit;
+        let who;
+        try {
+            who = this.env.ACCOUNTS ? await this.env.ACCOUNTS.get(this.env.ACCOUNTS.idFromName("global")).chatWho(uid, nick) : { tag: null, taken: false };
+        } catch {
+            return { tag: hit?.tag ?? null, taken: false };
+        }
+        if (this.tags.size > 5000) this.tags.clear();
+        const kept = { tag: who?.tag ?? null, taken: who?.taken === true, nick, at: Date.now() };
+        this.tags.set(uid, kept);
+        return kept;
+    }
+
+    // Someone else's name shows as Guest; the owner's badge is checked by key, so the owner is left alone.
+    async settle(me) {
+        const who = await this.whoIs(me.uid, me.nick);
+        me.tag = who.tag;
+        if (who.taken && !me.owner) me.nick = "Guest";
     }
 
     // The tag a player's account wears (src/accounts.js), or null. Only new messages carry it.
@@ -398,16 +484,16 @@ export class ChatRoom extends DurableObject {
         if (!me) return jsonReply({ error: "Bad request" }, 400);
         me.ip = ipHash;
         const path = new URL(request.url).pathname;
+        if (!path.endsWith("/poll") && !path.endsWith("/send")) return jsonReply({ error: "Not found" }, 404);
+        await this.settle(me);
         if (path.endsWith("/poll")) return this.poll(me, body, ipHash);
-        if (path.endsWith("/send")) {
-            if (body?.msg?.t === "msg" || body?.msg?.t === "whisper") me.tag = await this.tagOf(me.uid);
-            return this.sendHttp(me, body);
-        }
+        if (path.endsWith("/send")) return this.sendHttp(me, body);
         return jsonReply({ error: "Not found" }, 404);
     }
 
     touch(me) {
-        this.pollers.set(me.uid, { nick: me.nick, seen: Date.now() });
+        this.pollers.set(me.uid, { nick: me.nick, seen: Date.now(), ip: me.ip });
+        this.noteId(me);
     }
 
     async poll(me, body, ipHash) {
@@ -418,6 +504,9 @@ export class ChatRoom extends DurableObject {
             if (ipHash && w.ip === ipHash) sameIp++;
         }
         if (mine >= POLLS_PER_UID || sameIp >= POLLS_PER_IP) return jsonReply({ error: "Too many chat windows" }, 429);
+        if (ipHash && !this.pollers.has(me.uid) && this.livePollers().length && [...this.pollers.values()].filter((p) => p.ip === ipHash).length >= POLLERS_PER_IP) {
+            return jsonReply({ error: "Too many chat windows" }, 429);
+        }
         this.touch(me);
         const ready = this.eventsAfter(body.epoch, body.after);
         const wafter = Number.isSafeInteger(body.wafter) ? body.wafter : 0;
@@ -514,12 +603,14 @@ export class ChatRoom extends DurableObject {
         }
         const me = await this.identify(header);
         if (!me) return jsonReply({ error: "Bad request" }, 400);
+        me.ip = ipHash;
+        this.noteId(me);
         const bytes = body.subarray(4 + headerLength);
         if (bytes.length > MAX_UPLOAD) return jsonReply({ error: "That file is too big (10 MB at most)." }, 413);
         const now = Date.now();
-        const banned = this.bannedText(me.uid);
+        const banned = this.bannedText(me);
         if (banned) return jsonReply({ error: banned });
-        const until = this.mutedUntil(me.uid);
+        const until = this.mutedUntil(me);
         if (until) return jsonReply({ error: "You're muted for " + duration(until - now) + "." });
         if (!me.owner) {
             const timeout = this.sql.exec("SELECT until FROM timeouts WHERE uid = ?", me.uid).toArray()[0];
@@ -533,7 +624,8 @@ export class ChatRoom extends DurableObject {
             if (typeof header.name !== "string") return jsonReply({ error: "That isn't an image the chat can show (GIF, PNG, JPEG or WebP)." });
             const checked = checkFile(bytes, censor(cleanText(header.name, MAX_FILE_NAME)));
             if (checked.error) return jsonReply({ error: checked.error });
-            info = { type: checked.type, w: 0, h: 0, name: checked.name };
+            // Nothing here can look inside a video, so only the owner's play in the chat; anyone else's is a download.
+            info = { type: !me.owner && checked.type.startsWith("video/") ? "application/octet-stream" : checked.type, w: 0, h: 0, name: checked.name };
         }
 
         this.sql.exec("DELETE FROM uploads WHERE at < ?", now - 86400_000);
@@ -543,7 +635,7 @@ export class ChatRoom extends DurableObject {
             if (count("uid = ? AND at > ?", me.uid, now - 86400_000) >= UPLOADS_PER_DAY) return jsonReply({ error: "That's all the uploads for today. GIF search still works." });
             if (ipHash && count("ip = ? AND at > ?", ipHash, now - 86400_000) >= UPLOADS_PER_IP_DAY) return jsonReply({ error: "Your network has hit today's upload limit." });
         }
-        this.sql.exec("INSERT INTO uploads (at, uid, ip) VALUES (?, ?, ?)", now, me.uid, ipHash);
+        const uploadRow = this.sql.exec("INSERT INTO uploads (at, uid, ip) VALUES (?, ?, ?) RETURNING rowid AS id", now, me.uid, ipHash).one().id;
 
         const hash = await sha256Hex(bytes);
         const id = hash.slice(0, 32);
@@ -555,6 +647,10 @@ export class ChatRoom extends DurableObject {
             const day = new Date(now).toISOString().slice(0, 10);
             const used = this.sql.exec("SELECT checks FROM ai_days WHERE day = ?", day).toArray()[0]?.checks ?? 0;
             if (used >= AI_CHECKS_PER_DAY || !this.env.AI) return jsonReply({ error: "Image uploads are paused for today. GIF search still works." });
+            if (ipHash && this.sql.exec("SELECT COUNT(*) AS n FROM uploads WHERE ip = ? AND checked = 1 AND at > ?", ipHash, now - 86400_000).one().n >= AI_CHECKS_PER_IP_DAY) {
+                return jsonReply({ error: "Your network has hit today's limit for new images. GIF search still works." });
+            }
+            this.sql.exec("UPDATE uploads SET checked = 1 WHERE rowid = ?", uploadRow);
             this.sql.exec("INSERT INTO ai_days (day, checks) VALUES (?, 1) ON CONFLICT (day) DO UPDATE SET checks = checks + 1", day);
             this.sql.exec("DELETE FROM ai_days WHERE day < ?", new Date(now - 7 * 86400_000).toISOString().slice(0, 10));
             let result;
@@ -676,9 +772,9 @@ export class ChatRoom extends DurableObject {
         const e = this.reactionEmoji(msg.e);
         if (!e || !Number.isSafeInteger(msg.id)) return;
         if (!this.sql.exec("SELECT 1 FROM messages WHERE id = ?", msg.id).toArray().length) return;
-        const banned = this.bannedText(me.uid);
+        const banned = this.bannedText(me);
         if (banned) return reply({ t: "err", text: banned });
-        const until = this.mutedUntil(me.uid);
+        const until = this.mutedUntil(me);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
         if (this.sql.exec("SELECT 1 FROM reactions WHERE msg = ? AND emoji = ? AND uid = ?", msg.id, e, me.uid).toArray().length) {
             this.sql.exec("DELETE FROM reactions WHERE msg = ? AND emoji = ? AND uid = ?", msg.id, e, me.uid);
@@ -753,9 +849,10 @@ export class ChatRoom extends DurableObject {
         return kept;
     }
 
-    mutedUntil(uid) {
-        const row = this.sql.exec("SELECT until FROM mutes WHERE uid = ?", uid).toArray()[0];
-        return row && row.until > Date.now() ? row.until : 0;
+    mutedUntil(me) {
+        const row = this.sql.exec("SELECT until FROM mutes WHERE uid = ?", me.uid).toArray()[0];
+        if (row && row.until > Date.now()) return row.until;
+        return this.inherited("mutes", me)?.until ?? 0;
     }
 
     // A player's spam and ping counters, rebuilt from the stored messages. The in-memory copy is
@@ -793,6 +890,20 @@ export class ChatRoom extends DurableObject {
             this.spam.set(uid, s = this.recentActivity(uid, now));
         }
         return s;
+    }
+
+    // A new chat id per message gets past every per-id limit, so the address has one of its own.
+    ipFlood(ip, now) {
+        if (!ip) return null;
+        if (this.ipSpam.size > 2000) this.ipSpam.clear();
+        const recent = (this.ipSpam.get(ip) ?? []).filter((at) => now - at < IP_SPAM_WINDOW_MS);
+        if (recent.length >= IP_SPAM_MAX) {
+            this.ipSpam.set(ip, recent);
+            return { t: "err", text: "Too many messages from your network. Wait a few seconds." };
+        }
+        recent.push(now);
+        this.ipSpam.set(ip, recent);
+        return null;
     }
 
     // Returns the reply that refuses this message, or null to let it through.
@@ -837,8 +948,14 @@ export class ChatRoom extends DurableObject {
             if (!who) return ws.close(1008, "Bad hello");
             const mine = this.ctx.getWebSockets().filter((other) => other !== ws && other.deserializeAttachment()?.uid === who.uid).length;
             if (mine >= SOCKETS_PER_UID) return ws.close(1008, "Too many chat windows");
-            who.tag = await this.tagOf(who.uid);
+            who.ip = me.ip;
+            await this.settle(who);
+            this.noteId(who);
             if (me.cup) {
+                // Account bans live in the main room.
+                try {
+                    who.ban = await this.env.CHAT.get(this.env.CHAT.idFromName("global")).chatBan({ uid: who.uid, ip: me.ip, owner: who.owner });
+                } catch {}
                 // The organizer proves it with the secret its page gave the cup room when it opened.
                 if (HEX32.test(msg.host ?? "") && this.env.LOBBY) {
                     try {
@@ -883,12 +1000,12 @@ export class ChatRoom extends DurableObject {
         const text = cleanText(msg.text, MAX_TEXT);
         const name = cleanText(msg.to, MAX_NICK).trim();
         if (!text || !name) return;
-        const banned = this.bannedText(me.uid);
+        const banned = this.bannedText(me);
         if (banned) return reply({ t: "err", text: banned, wfail: true });
-        const until = this.mutedUntil(me.uid);
+        const until = this.mutedUntil(me);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - Date.now()) + ".", wfail: true });
         const now = Date.now();
-        const refused = me.owner ? null : this.checkSpam(me.uid, "\u0001" + name.toLowerCase() + "\u0001" + text, now);
+        const refused = me.owner ? null : this.checkSpam(me.uid, "\u0001" + name.toLowerCase() + "\u0001" + text, now) ?? this.ipFlood(me.ip, now);
         if (refused) return reply(refused);
         let target;
         try {
@@ -922,7 +1039,8 @@ export class ChatRoom extends DurableObject {
             }
             s.whispers.push({ to: key, at: now });
         }
-        const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+        let nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+        if (!me.owner && nick !== "Guest" && (await this.whoIs(me.uid, nick)).taken) nick = "Guest";
         if (nick !== me.nick) {
             me.nick = nick;
             save();
@@ -966,9 +1084,9 @@ export class ChatRoom extends DurableObject {
         // A message with an image or GIF may lose its text; any other needs some.
         if (!row || row.uid !== me.uid || (!text && !row.media)) return;
         const now = Date.now();
-        const banned = this.bannedText(me.uid);
+        const banned = this.bannedText(me);
         if (banned) return reply({ t: "err", text: banned });
-        const until = this.mutedUntil(me.uid);
+        const until = this.mutedUntil(me);
         if (until) return reply({ t: "err", text: "You're muted for " + duration(until - now) + "." });
         if (!me.owner) {
             const s = this.activity(me.uid, now);
@@ -1012,17 +1130,18 @@ export class ChatRoom extends DurableObject {
             } else media = this.mediaFor(msg.media);
             if (typeof media === "string") return reply({ t: "err", text: media });
             if (!text && !media) return;
-            const banned = this.bannedText(me.uid);
+            const banned = this.bannedText(me);
             if (banned) return reply({ t: "err", text: banned });
-            const until = this.mutedUntil(me.uid);
+            const until = this.mutedUntil(me);
             if (until) return reply({ t: "err", text: me.cup ? "The organizer muted you for this cup." : "You're muted for " + duration(until - Date.now()) + "." });
             const now = Date.now();
             const file = media?.f?.id ?? null;
             const gif = media?.g?.slug ?? null;
-            const refused = me.owner ? null : this.checkSpam(me.uid, repeatKey(text, file, gif), now);
+            const refused = me.owner ? null : this.checkSpam(me.uid, repeatKey(text, file, gif), now) ?? this.ipFlood(me.ip, now);
             if (refused) return reply(refused);
 
-            const nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+            let nick = censor(cleanText(msg.nick, MAX_NICK)) || "Guest";
+            if (!me.owner && nick !== "Guest" && (await this.whoIs(me.uid, nick)).taken) nick = "Guest";
             if (nick !== me.nick) {
                 me.nick = nick;
                 save();
@@ -1050,15 +1169,15 @@ export class ChatRoom extends DurableObject {
             return;
         }
 
-        if (msg?.t === "cupmute" && me.cup && (me.cupHost || me.owner) && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && msg.uid !== me.uid) {
-            if (msg.on === true) this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + CUP_MUTE_MS);
+        if (msg?.t === "cupmute" && me.cup && this.ctx.id.name !== "global" && (me.cupHost || me.owner) && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && msg.uid !== me.uid) {
+            if (msg.on === true) this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until, ip, at) VALUES (?, ?, ?, ?)", msg.uid, Date.now() + CUP_MUTE_MS, this.ipOfUid(msg.uid), Date.now());
             else this.sql.exec("DELETE FROM mutes WHERE uid = ?", msg.uid);
             this.broadcast({ t: "mutes", uids: this.cupMutes() });
             return;
         }
         if (!me.owner) return;
         if (msg?.t === "mute" && /^[0-9a-f]{16}$/.test(msg.uid ?? "") && MUTE_MINUTES.includes(msg.minutes)) {
-            this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until) VALUES (?, ?)", msg.uid, Date.now() + msg.minutes * 60000);
+            this.sql.exec("INSERT OR REPLACE INTO mutes (uid, until, ip, at) VALUES (?, ?, ?, ?)", msg.uid, Date.now() + msg.minutes * 60000, this.ipOfUid(msg.uid), Date.now());
             this.sql.exec("DELETE FROM mutes WHERE until < ?", Date.now());
             reply({ t: "err", text: "Muted for " + msg.minutes + " minutes." });
         } else if (msg?.t === "clear") {

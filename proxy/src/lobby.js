@@ -28,6 +28,10 @@ const MAX_PAIRS_PER_SOCKET = 40;
 const PAIR_ID = /^[A-HJ-NP-Z2-9]{5}\.[0-9a-f]{16}$/;
 // A page flushes about 5 times a second; far more than this is a broken or hostile client.
 const FRAMES_PER_SEC = 60;
+// A socket over that rate in this many different seconds is closed, since every message it sends is billed.
+const FLOOD_STRIKES = 3;
+// A relay socket that never linked to anyone gives its place up after this long when the room is full.
+const IDLE_MUX_MS = 30_000;
 // A racer's car state with its car clock in front ([u32 link][f64 start]), from a page that opened
 // its mux socket with fan=1. The room passes it to the organizer and also straight to every other
 // page that asked for them, so other cars arrive without the organizer's page in between. The room
@@ -194,7 +198,7 @@ export class LobbyRoom extends DurableObject {
             return new Response(null, { status: 101, webSocket: pair[0] });
         };
         if (!LOBBY_CODE.test(code) || !["host", "join", "mux"].includes(role)) return refuse("BadRequest");
-        if (this.ctx.getWebSockets().length >= MAX_SOCKETS) return refuse("SessionFull");
+        if (this.ctx.getWebSockets().length >= MAX_SOCKETS && !this.evictIdle()) return refuse("SessionFull");
         if (role === "join" && !this.host()) return refuse("ExpiredInvite");
         if (role === "host" && this.sockets("host").length) return refuse("AlreadyHosted");
         if (role === "host" && reclaiming && !(await this.reclaimRecord())) return refuse("ExpiredInvite");
@@ -216,12 +220,27 @@ export class LobbyRoom extends DurableObject {
                     old.close(4002, "Replaced");
                 } catch {}
             }
-            server.serializeAttachment({ role, code, pairs: ok && parked ? parked.pairs : {}, token, fan: params.get("fan") === "1" });
+            server.serializeAttachment({ role, code, pairs: ok && parked ? parked.pairs : {}, token, fan: params.get("fan") === "1", at: Date.now() });
             if (ok && parked) this.unpark(token, server, parked);
             else if (parked) this.expire(token);
             text(server, { t: "resumed", ok, relink: ok });
-        } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming, fan: role === "mux" && params.get("fan") === "1" });
+        } else server.serializeAttachment({ role, code, pairs: {}, token, reclaiming, fan: role === "mux" && params.get("fan") === "1", at: Date.now() });
         return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    // Makes room in a full cup by closing relay sockets that never linked to anyone. True if any went.
+    evictIdle() {
+        const now = Date.now();
+        let freed = false;
+        for (const ws of this.sockets("mux")) {
+            const a = ws.deserializeAttachment();
+            if (!a.at || now - a.at < IDLE_MUX_MS || Object.values(a.pairs || {}).some((p) => p.link)) continue;
+            try {
+                ws.close(4003, "Idle");
+                freed = true;
+            } catch {}
+        }
+        return freed;
     }
 
     sockets(role) {
@@ -539,8 +558,18 @@ export class LobbyRoom extends DurableObject {
     allowFrame(ws) {
         const now = Date.now();
         let r = this.rate.get(ws);
-        if (!r || now - r.at >= 1000) this.rate.set(ws, r = { at: now, n: 0 });
-        return ++r.n <= FRAMES_PER_SEC;
+        if (!r) this.rate.set(ws, r = { at: now, n: 0, strikes: 0 });
+        else if (now - r.at >= 1000) {
+            r.at = now;
+            r.n = 0;
+        }
+        if (++r.n <= FRAMES_PER_SEC) return true;
+        if (r.n === FRAMES_PER_SEC + 1 && ++r.strikes >= FLOOD_STRIKES) {
+            try {
+                ws.close(1008, "Flood");
+            } catch {}
+        }
+        return false;
     }
 
     // A frame is records of [u32 link][u16 channel][u8 kind][u32 length][bytes]. Each record goes to
@@ -706,6 +735,7 @@ export class LobbyRoom extends DurableObject {
             return;
         }
         if (raw.length > MAX_SIGNAL) return ws.close(1009, "Too large");
+        if (!this.allowFrame(ws)) return;
         let m;
         try {
             m = JSON.parse(raw);

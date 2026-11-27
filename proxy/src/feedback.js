@@ -15,6 +15,8 @@ export const GAP_MS = 30 * 60_000;
 // A whole school can share one address, so it gets a few more than one account does.
 const PER_ADDRESS = 3;
 const PER_DAY = 300;
+// One address can't use up the whole day's box, or its file space.
+const PER_ADDRESS_DAY = 12;
 // SQLite refuses values over 2 MB.
 const PART = 1_000_000;
 // The free plan has 5 GB of Durable Object storage for everything.
@@ -177,6 +179,8 @@ export class Feedback extends DurableObject {
         if (wait) return fail(429, waitText(wait), { wait });
         const day = Math.floor(now / 86_400_000);
         if (this.meta("day:" + day) >= PER_DAY) return fail(429, "The feedback box is full for today. Try again tomorrow.");
+        const ipDay = "ipd:" + day + ":" + ip;
+        if (ip && !request.headers.get("X-Owner") && this.meta(ipDay) >= PER_ADDRESS_DAY) return fail(429, "That's a lot of feedback from your network today. Try again tomorrow.");
 
         const files = [];
         let size = 0;
@@ -204,6 +208,8 @@ export class Feedback extends DurableObject {
             if (size) this.bump("bytes", size);
             if (this.meta("day:" + day) === 0) this.sql.exec("DELETE FROM meta WHERE k LIKE 'day:%'");
             this.bump("day:" + day, 1);
+            if (ip) this.bump(ipDay, 1);
+            this.sql.exec("DELETE FROM meta WHERE k LIKE 'ipd:%' AND k NOT LIKE ?", "ipd:" + day + ":%");
             this.sql.exec("DELETE FROM senders WHERE at < ?", now - 86_400_000);
         });
         return { ok: true, next: now + GAP_MS };

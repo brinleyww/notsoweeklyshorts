@@ -13,6 +13,8 @@ const MAX_CLIPS = 1000;
 const SHARES_PER_HOUR = 30;
 // Watching the same clip again within this long doesn't count as another view.
 const VIEW_GAP_MS = 30_000;
+// Clips one account's views are counted on; past it, new clips' views aren't stored.
+const MAX_VIEW_ROWS = 3000;
 const SHARE_ID = /^[A-Za-z0-9]{10}$/;
 const CLIP_ID = /^[0-9a-f]{16}$/;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -30,6 +32,9 @@ const IGNORED_IN_NAMES = /[\p{Cc}\p{Cf}\p{Z}\s]/gu;
 const SHARED_NAMES = new Set(["", "anonymous"]);
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const REF_CODE = /^[A-HJ-NP-Z2-9]{8}$/;
+// Codes one address may use in a day, and how many of them for the same player (a school shares one address).
+const REF_IP_PER_DAY = 10;
+const REF_IP_SAME_PER_DAY = 3;
 const RECENT_REFERRALS = 5;
 const CHAT_UID = /^[0-9a-f]{16}$/;
 const BLOCK_KINDS = { block: 1, ignore: 2 };
@@ -63,6 +68,8 @@ const BINGO_LINES = (() => {
     return lines;
 })();
 const BINGO_HISTORY = 12;
+// A card takes real driving to fill, so a new one can't be asked for sooner than this after the last.
+const BINGO_ROUND_MIN_MS = 10 * 60_000;
 const MAX_BONUS = 10_000;
 const TOP_RECRUITERS = 5;
 const SEARCH_RESULTS = 12;
@@ -321,6 +328,7 @@ export class Accounts extends DurableObject {
                     bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, row.user_id, row.week);
             }
         }
+        if (!bingoColumns.includes("started")) this.sql.exec("ALTER TABLE bingo ADD COLUMN started INTEGER");
         // First place on each NSWS board, as the Worker last served it (noteWrs).
         this.sql.exec(`CREATE TABLE IF NOT EXISTS wrs (
             track TEXT PRIMARY KEY, week INTEGER NOT NULL, user_id TEXT NOT NULL, nickname TEXT NOT NULL,
@@ -539,7 +547,7 @@ export class Accounts extends DurableObject {
     }
 
     bingoRow(userId, week) {
-        return this.sql.exec("SELECT marks, round FROM bingo WHERE user_id = ? AND week = ?", userId, week).toArray()[0] ?? null;
+        return this.sql.exec("SELECT marks, round, started FROM bingo WHERE user_id = ? AND week = ?", userId, week).toArray()[0] ?? null;
     }
 
     bingoOpen(week) {
@@ -560,9 +568,9 @@ export class Accounts extends DurableObject {
             add |= 1 << i;
         }
         if (round === (this.bingoRow(userId, week)?.round ?? 0)) {
-            this.sql.exec(`INSERT INTO bingo (user_id, week, marks, at) VALUES (?, ?, ?, ?)
+            this.sql.exec(`INSERT INTO bingo (user_id, week, marks, at, started) VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, week) DO UPDATE SET marks = marks | excluded.marks, at = excluded.at`,
-                userId, week, add | BINGO_FREE, Date.now());
+                userId, week, add | BINGO_FREE, Date.now(), Date.now());
         }
         return this.changed(userId);
     }
@@ -573,9 +581,10 @@ export class Accounts extends DurableObject {
         if (!this.bingoOpen(week)) return { error: "closed" };
         const row = this.bingoRow(userId, week);
         if (!row || row.round !== round || bingoLines(row.marks) < 1) return { error: "locked" };
+        if (row.started && Date.now() - row.started < BINGO_ROUND_MIN_MS) return { error: "locked" };
         this.sql.exec(`UPDATE bingo SET banked = banked + ?, banked_full = banked_full + ?, marks = ?, round = round + 1, at = ?
-            WHERE user_id = ? AND week = ?`,
-            bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, Date.now(), userId, week);
+            , started = ? WHERE user_id = ? AND week = ?`,
+            bingoLines(row.marks), (row.marks | BINGO_FREE) === BINGO_FULL ? 1 : 0, BINGO_FREE, Date.now(), Date.now(), userId, week);
         return this.changed(userId);
     }
 
@@ -928,6 +937,12 @@ export class Accounts extends DurableObject {
         if (this.sql.exec("SELECT 1 FROM referrals WHERE referred = ? AND referrer = ?", referrer, userId).toArray().length) {
             return { error: "mutual" };
         }
+        if (ipHash) {
+            const since = Date.now() - 86_400_000;
+            const used = this.sql.exec("SELECT COUNT(*) AS n, COUNT(CASE WHEN referrer = ? THEN 1 END) AS same FROM referrals WHERE ip = ? AND at > ?",
+                referrer, ipHash, since).one();
+            if (used.n >= REF_IP_PER_DAY || used.same >= REF_IP_SAME_PER_DAY) return { error: "limit" };
+        }
         this.sql.exec("INSERT INTO referrals (referred, referrer, at, ip, confirmed) VALUES (?, ?, ?, ?, NULL)",
             userId, referrer, Date.now(), ipHash);
         return { ok: true, referrer: this.nicknameOf(referrer) || "a player", state: this.tagState(userId) };
@@ -1056,6 +1071,15 @@ export class Accounts extends DurableObject {
     }
 
     // The tag the chat shows next to this visitor's messages, or null.
+    // For the chat: the tag this chat id's account wears, and whether the name it sends is held by another account.
+    chatWho(uid, nickname) {
+        if (!CHAT_UID.test(uid ?? "")) return { tag: null, taken: false };
+        const userId = this.chatUser(uid);
+        const key = nameKey(text(nickname, MAX_NICK));
+        const holder = SHARED_NAMES.has(key) ? null : this.holder(key);
+        return { tag: userId ? this.chatTagOf(userId) : null, taken: holder != null && holder !== userId };
+    }
+
     chatTag(uid) {
         if (!CHAT_UID.test(uid ?? "")) return null;
         const userId = this.sql.exec("SELECT user_id FROM chat_links WHERE uid = ?", uid).toArray()[0]?.user_id;
@@ -1216,7 +1240,10 @@ export class Accounts extends DurableObject {
         if (!HEX64.test(String(key))) return { error: "bad" };
         const now = Date.now();
         const row = this.sql.exec("SELECT last FROM views WHERE key = ? AND user_id = ?", key, userId).toArray()[0];
-        if (!row) this.sql.exec("INSERT INTO views (key, user_id, count, last) VALUES (?, ?, 1, ?)", key, userId, now);
+        if (!row) {
+            if (this.sql.exec("SELECT COUNT(*) AS n FROM views WHERE user_id = ?", userId).one().n >= MAX_VIEW_ROWS) return { ok: true };
+            this.sql.exec("INSERT INTO views (key, user_id, count, last) VALUES (?, ?, 1, ?)", key, userId, now);
+        }
         else if (now - row.last >= VIEW_GAP_MS) this.sql.exec("UPDATE views SET count = count + 1, last = ? WHERE key = ? AND user_id = ?", now, key, userId);
         return { ok: true };
     }

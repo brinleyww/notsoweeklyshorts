@@ -844,7 +844,7 @@ export class TrackHub extends DurableObject {
     libraryPut({ userId, ipKey, tracks }) {
         if (!Array.isArray(tracks) || !tracks.length || tracks.length > LIB_BATCH) return fail(400, "Bad request.");
         const usage = this.first("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM library WHERE user_id = ?", userId);
-        let count = usage.n, bytes = usage.bytes;
+        let count = usage.n, bytes = usage.bytes, newMeta = 0;
         const rows = [];
         const missing = [];
         for (const t of tracks) {
@@ -859,14 +859,17 @@ export class TrackHub extends DurableObject {
             }
             const meta = JSON.stringify(t.meta && typeof t.meta === "object" ? t.meta : {});
             if (meta.length > LIB_META_MAX) return fail(400, "Bad request.");
-            if (!old) count++;
+            if (!old) {
+                count++;
+                newMeta += meta.length;
+            }
             if (code != null) bytes += code.length - (old?.size ?? 0);
             rows.push({ id: t.id, code, meta, size: code != null ? code.length : old.size, updated: Number.isSafeInteger(t.updated) ? t.updated : Date.now() });
         }
         if (count > LIB_TRACKS) return fail(409, `Your account holds ${LIB_TRACKS} tracks at most. Delete some first.`);
         if (bytes > LIB_BYTES) return fail(409, "Your account's track space is full (30 MB). Delete some tracks first.");
         // Only growth counts, so saving the same track again and again from the editor never runs out.
-        const fresh = Math.max(0, bytes - usage.bytes);
+        const fresh = Math.max(0, bytes - usage.bytes) + newMeta;
         if (fresh && this.overBytes(ipKey, fresh)) return fail(429, "That's a lot of tracks for one day. Try again tomorrow.");
         this.ctx.storage.transactionSync(() => {
             for (const r of rows) {

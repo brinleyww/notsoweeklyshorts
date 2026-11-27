@@ -1,5 +1,17 @@
 [
     {
+        "version": "v13.28",
+        "changes": [
+            "A mute or chat ban now also covers a new chat started from the same network for the next day",
+            "Chatting under a name that belongs to another account shows you as Guest",
+            "Videos posted in chat by players are downloads now and don't play in the chat",
+            "Connecting Discord always shows Discord's own permission screen",
+            "One network can use 10 referral codes a day, 3 for the same player",
+            "A new bingo card can be taken 10 minutes after the last one at the earliest",
+            "Security fixes for the chat, cups, uploads and accounts"
+        ]
+    },
+    {
         "version": "v13.27",
         "changes": [
             "Custom tracks in Rocket League or Royale have their own leaderboard, separate from Normal, even on the same track",
