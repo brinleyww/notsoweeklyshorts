@@ -170,7 +170,7 @@
     function registerModes(list) {
         let changed = false;
         for (const item of Array.isArray(list) ? list : [list]) {
-            const id = item?.trackId;
+            const id = baseOf(item?.trackId);
             if (typeof id !== "string" || !id || isKnown(id)) continue;
             const mode = normMode(item.mode);
             if (mode === "normal") {
@@ -198,7 +198,72 @@
     window.__nswsSimWorkersSync = () => registerModes([]);
 
     function modeOf(trackId) {
-        return modeRegistry.get(trackId) || "normal";
+        return modeRegistry.get(trackId) || modeIds.get(trackId)?.mode || "normal";
+    }
+
+    // Records, boards and uploads of a Rocket League or Royale play go under an id of its own, so they never mix with
+    // Normal's (or each other's) even though the track is the same. The physics still sees the track's own id.
+    const modeIds = new Map();
+    const modeIdOf = new Map();
+    function modeTrackId(trackId, mode) {
+        mode = normMode(mode);
+        if (mode === "normal") return trackId;
+        const key = mode + trackId;
+        let id = modeIdOf.get(key);
+        if (!id) {
+            if (!TRACK_ID.test(trackId || "") || modeIds.has(trackId) || isKnown(trackId)) return trackId;
+            id = sha256Sync("nsws-mode:" + mode + ":" + trackId);
+            modeIdOf.set(key, id);
+            modeIds.set(id, { trackId, mode });
+        }
+        return id;
+    }
+    // The id the game keeps records and boards under for a track, for the mode it is registered in right now.
+    const boardId = (trackId) => (modeRegistry.has(trackId) ? modeTrackId(trackId, modeRegistry.get(trackId)) : trackId);
+    const baseOf = (id) => modeIds.get(id)?.trackId ?? id;
+
+    const SHA_K = new Uint32Array(64).map((_, i) => {
+        let n = 2;
+        for (let found = -1; ; n++) {
+            let prime = true;
+            for (let d = 2; d * d <= n; d++) if (n % d === 0) prime = false;
+            if (prime && ++found === i) break;
+        }
+        return (Math.cbrt(n) % 1) * 2 ** 32;
+    });
+    function sha256Sync(text) {
+        const bytes = new TextEncoder().encode(text);
+        const len = Math.ceil((bytes.length + 9) / 64) * 64;
+        const msg = new Uint8Array(len);
+        msg.set(bytes);
+        msg[bytes.length] = 0x80;
+        new DataView(msg.buffer).setUint32(len - 4, bytes.length * 8);
+        const h = Uint32Array.of(0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19);
+        const w = new Uint32Array(64);
+        const view = new DataView(msg.buffer);
+        const ror = (x, n) => (x >>> n) | (x << (32 - n));
+        for (let off = 0; off < len; off += 64) {
+            for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4);
+            for (let i = 16; i < 64; i++) {
+                const a = w[i - 15], b = w[i - 2];
+                w[i] = w[i - 16] + (ror(a, 7) ^ ror(a, 18) ^ (a >>> 3)) + w[i - 7] + (ror(b, 17) ^ ror(b, 19) ^ (b >>> 10));
+            }
+            let [a, b, c, d, e, f, g, k] = h;
+            for (let i = 0; i < 64; i++) {
+                const t1 = (k + (ror(e, 6) ^ ror(e, 11) ^ ror(e, 25)) + ((e & f) ^ (~e & g)) + SHA_K[i] + w[i]) >>> 0;
+                const t2 = ((ror(a, 2) ^ ror(a, 13) ^ ror(a, 22)) + ((a & b) ^ (a & c) ^ (b & c))) >>> 0;
+                k = g;
+                g = f;
+                f = e;
+                e = (d + t1) >>> 0;
+                d = c;
+                c = b;
+                b = a;
+                a = (t1 + t2) >>> 0;
+            }
+            h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += k;
+        }
+        return [...h].map((x) => x.toString(16).padStart(8, "0")).join("");
     }
 
     // The game's Base62 (bit-packed, not positional). Used only if main.bundle.js has no hook.
@@ -1441,11 +1506,11 @@
             await ui.alert("This track has no start block yet. Open it in the editor and add one.", "Can't play this track");
             return false;
         }
+        // Its mode first: a Rocket League or Royale car is built differently, and its PB is kept under the mode's own id.
+        if (!isKnown(info.trackId)) registerModes([{ trackId: info.trackId, mode }]);
         const restoring = opts.watch || isKnown(info.trackId) ? null : restoreBest(info.trackId, 3000);
         // The physics builds the car while the launch card is up, and the card stays until it has (big tracks take seconds).
         const early = opts.intro && opts.start && !opts.watch && !isKnown(info.trackId) && !!window.__nswsPrewarm;
-        // Its mode first: a Rocket League or Royale car is built differently.
-        if (early) registerModes([{ trackId: info.trackId, mode }]);
         const built = early ? window.__nswsPrewarm(loaded.data) : null;
         if (built) window.__nswsPrewarmed = loaded.data;
         const intro = opts.intro && !isKnown(info.trackId) ? await launchCard(item, info, mode, loaded.data) : null;
@@ -1493,7 +1558,7 @@
         }
         intro?.finish(ok);
         if (ok && info.trackId) lastPlayed = { trackId: info.trackId, code: info.code, mode };
-        if (ok && !opts.watch) notePlayed(info.trackId);
+        if (ok && !opts.watch) notePlayed(boardId(info.trackId));
         if (!ok) await ui.alert("The game couldn't open that track. Go back to the main menu and try again.", "Can't play this track");
         return ok;
     }
@@ -1520,7 +1585,7 @@
         const next = await update(track.id, { favourite: on });
         const me = user();
         let stats = null;
-        if (me.token && TRACK_ID.test(track.trackId || "")) stats = await api("nsws/tracks/favourite", { token: me.token, trackId: track.trackId, on }).catch(() => null);
+        if (me.token && TRACK_ID.test(track.trackId || "")) stats = await api("nsws/tracks/favourite", { token: me.token, trackId: modeTrackId(track.trackId, track.mode), on }).catch(() => null);
         return { track: next, stats };
     }
 
@@ -2104,14 +2169,17 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         let online = false;
         let stats = null;
         let resent = false;
+        // The game reads records and boards under the id of the mode the track is registered in, so this page's mode is.
+        const syncMode = () => t.trackId && registerModes([{ trackId: t.trackId, mode: t.mode }]);
         // A Better Editor track gets its id once the blocks have loaded, so this can run again later.
         const goOnline = () => {
             if (online || !board || !t.trackId) return false;
             online = true;
             if (t.kind === "be") (window.__nswsBEBoardIds ??= new Set()).add(t.trackId);
+            syncMode();
             const me0 = user();
             if (me0.token && TRACK_ID.test(t.trackId || ""))
-                api("nsws/tracks/stats", { token: me0.token, trackId: t.trackId }).then((s) => {
+                api("nsws/tracks/stats", { token: me0.token, trackId: modeTrackId(t.trackId, t.mode) }).then((s) => {
                     stats = s;
                     if (!closed) drawHero();
                 }, () => {});
@@ -2394,6 +2462,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             boardError = null;
             drawBoard();
             let resend = false;
+            syncMode();
             try {
                 const landing = !more && pendingUploads.get(t.trackId);
                 if (landing) await Promise.race([landing, new Promise((res) => setTimeout(res, 8000))]);
@@ -2438,7 +2507,7 @@ select.nt-select{padding-right:10px;cursor:pointer;}
             try {
                 hash = board.profile()?.tokenHash || null;
             } catch {}
-            const q = "nsws/tracks/board?trackId=" + t.trackId + "&skip=" + skip + "&amount=" + BOARD_PAGE + (physicsView ? "&physics=" + physicsView : "") + (hash ? "&userTokenHash=" + encodeURIComponent(hash) : "");
+            const q = "nsws/tracks/board?trackId=" + modeTrackId(t.trackId, t.mode) + "&skip=" + skip + "&amount=" + BOARD_PAGE + (physicsView ? "&physics=" + physicsView : "") + (hash ? "&userTokenHash=" + encodeURIComponent(hash) : "");
             const d = await api(q);
             if (Number.isSafeInteger(d.current)) window.__nswsBEPhysicsNow = d.current;
             older = Array.isArray(d.older) ? d.older : [];
@@ -3471,6 +3540,9 @@ select.nt-select{padding-right:10px;cursor:pointer;}
         play,
         registerModes,
         modeOf,
+        modeTrackId,
+        boardId,
+        baseOf,
         isKnown,
         packCode,
         readPack,

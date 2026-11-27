@@ -737,6 +737,8 @@
         const save = window.__nswsTrackBoard?.saveRun;
         if (!save || typeof m.trackId !== "string" || !/^[0-9a-f]{64}$/.test(m.trackId) || !Number.isSafeInteger(m.frames) || m.frames <= 0 || typeof m.recording !== "string") return;
         if (m.be) (window.__nswsBEBoardIds ??= new Set()).add(m.trackId);
+        // Driven on the editor's own physics, so it is a Normal run and goes on Normal's board.
+        window.__nswsTracks?.registerModes?.([{ trackId: m.trackId, mode: "normal" }]);
         const toast = window.__nswsTracks?.ui?.toast;
         try {
             const r = await save(m.trackId, m.frames, m.recording, Number.isSafeInteger(m.physics) && m.physics > 0 ? m.physics : null);

@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.27",
+        "changes": [
+            "Custom tracks in Rocket League or Royale have their own leaderboard, separate from Normal, even on the same track",
+            "Your best times, ghosts and player counts are kept per mode too"
+        ]
+    },
+    {
         "version": "v13.26",
         "changes": [
             "Tall cars like trucks stay sharp from wheels to roof in cinematic Watch on Ultra"

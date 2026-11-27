@@ -38,6 +38,10 @@ window.__nswsTrackWeek = function(trackId) {
     const week = (window.__nswsTrackWeekMap || {})[trackId];
     return Number.isSafeInteger(week) ? week : null;
 };
+// A custom track raced in Rocket League or Royale keeps its records and boards under that mode's own id (mod/nsws_tracks.js).
+window.__nswsBoardId = function(trackId) {
+    return window.__nswsTracks?.boardId?.(trackId) ?? trackId;
+};
 window.__nswsProfileToken = function() {
     try {
         const slot = parseInt(localStorage.getItem("polytrack_v5_prod_user_slot") ?? "0", 10);
@@ -59738,6 +59742,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 t >= 0 && C.get(this, Vh, "f").splice(t, 1)
             }
             async setRecord(e, t, n, i, r) {
+                t = window.__nswsBoardId(t);
                 const __nswsSetAt = Date.now()
                   , a = C.get(this, Oh, "f").getUserProfile(e);
                 if (null == a)
@@ -59754,6 +59759,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return s
             }
             async syncRecord(e, t, n) {
+                t = window.__nswsBoardId(t);
                 if (C.get(this, Fh, "f").determinismState != Js.Ok)
                     return null;
                 const i = this.getRecord(e, t);
@@ -59770,6 +59776,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 "Download") : null
             }
             clearRecord(e, t) {
+                t = window.__nswsBoardId(t);
                 C.get(this, Bh, "f").deleteRecord(e, t);
                 for (const e of C.get(this, Vh, "f"))
                     e()
@@ -59785,6 +59792,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return null == n ? null : n.time
             }
             getRecord(e, t) {
+                t = window.__nswsBoardId(t);
                 const n = C.get(this, Oh, "f").getUserProfile(e);
                 if (null == n)
                     return null;
@@ -62421,6 +62429,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ku.set(this, "v6/")
             }
             getLeaderboard(e, t, n, i, r) {
+                t = window.__nswsBoardId(t);
                 let a = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboard?version=0.6.2&trackId=" + t + "&skip=" + n.toString() + "&amount=" + i.toString() + "&onlyVerified=" + r.toString() + window.__nswsTrackQuery(t);
                 this.determinismState == Js.Ok && (a += "&userTokenHash=" + encodeURIComponent(e));
                 window.__nswsBEBoard?.(t) && (a = window.__nswsApiBase + "nsws/tracks/board?trackId=" + t + "&skip=" + n + "&amount=" + i + "&userTokenHash=" + encodeURIComponent(e));
@@ -62554,6 +62563,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 __nswsBoard
             }
             getLeaderboardUserEntry(e, t, n) {
+                t = window.__nswsBoardId(t);
                 const i = window.__nswsApiBase + "" + C.get(this, ku, "f") + "leaderboardUserEntry?version=0.6.2&trackId=" + t + "&userTokenHash=" + encodeURIComponent(e) + "&onlyVerified=false" + window.__nswsTrackQuery(t); window.__nswsUserToken = encodeURIComponent(e);
                 // Kodub has no Better Editor runs; their board's own reply carries this profile's entry.
                 if (window.__nswsBEBoard?.(t))
@@ -62689,10 +62699,11 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 ))
             }
             submitLeaderboard(e, t, n, i, r, a, s, o) {
+                r = window.__nswsBoardId(r);
                 if (window.__nswsBEBoard?.(r) && this.determinismState == Js.Ok && !window.__nswsMacro?.locked())
                     return window.__nswsBESubmit(e, t, n, i, r, s, o);
                 return new Promise(( (l, c) => {
-                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(r) && null == window.__nswsTrackWeek(r))
+                    if (this.determinismState != Js.Ok || window.__nswsMacro?.locked() || self.TM?.extTrackIds.has(window.__nswsTracks?.baseOf?.(r) ?? r) && null == window.__nswsTrackWeek(r))
                         c(new Error("Submit not allowed"));
                     else {
                         const h = o.serialize();
@@ -65137,7 +65148,8 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 return !0
             };
             // For the Custom Tracks track page (mod/nsws_tracks.js): a page of a board, runs to race as ghosts, this profile's record.
-            window.__nswsBEBoard = id => !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id)) && null == window.__nswsTrackWeek?.(id);
+            window.__nswsBEBoard = id => (id = window.__nswsTracks?.baseOf?.(id) ?? id,
+            !!(self.TM?.extTrackIds?.has(id) || window.__nswsBEBoardIds?.has(id)) && null == window.__nswsTrackWeek?.(id));
             let runPhysics = null;
             window.__nswsBESubmit = async (token, nickname, countryCode, carStyle, trackId, time, recording) => {
                 const res = await fetch(window.__nswsApiBase + "nsws/tracks/board/submit", {
@@ -65187,7 +65199,7 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                     let physics = null;
                     if (window.__nswsBEBoard?.(id))
                         try {
-                            physics = JSON.parse(localStorage.getItem("nswsBEPhysics") || "{}")?.[id] ?? 1
+                            physics = JSON.parse(localStorage.getItem("nswsBEPhysics") || "{}")?.[window.__nswsBoardId(id)] ?? 1
                         } catch (e) {
                             physics = 1
                         }
