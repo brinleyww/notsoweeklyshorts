@@ -1,5 +1,6 @@
 // Debug info panel: frame timing graph, renderer counts, memory, car, network and system info.
 // The key is in Settings -> Controls ("Toggle debug info", F3 by default). Nothing is measured while it is closed.
+// On touch: a quick three-finger tap, the Show button beside the key, or a tap on the panel's close hint.
 (function () {
     const KEY_STORAGE = "_nswsDebugKeyBind";
     const DEFAULT_KEY = "F3";
@@ -9,6 +10,9 @@
     const SCENE_MS = 1000;
     const PLACE_MS = 500;
     const MARGIN = 10;
+    const TAP_GATHER_MS = 250;
+    const TAP_MS = 600;
+    const TAP_SLOP = 30;
     const VIOLET = "#8f8ff0";
     const SLOW = "#ff8080";
     const GPU_COLOR = "#80ffaa";
@@ -98,6 +102,7 @@
 .nsws-debug .off{opacity:.3;}
 .nsws-debug .warn{color:${SLOW};}
 .nsws-debug .hidden{display:none;}
+.nsws-debug .top .tap{pointer-events:auto;cursor:pointer;margin:-7px -10px -6px 0;padding:7px 10px 6px 16px;touch-action:manipulation;}
 `;
 
     let panel = null, renderManager = null, gl = null, timerExt = null, gpuName = "", version = "";
@@ -150,6 +155,7 @@
         const top = el("div", "top", panel);
         ui.title = el("span", null, top, "Debug info");
         ui.hint = el("span", null, top);
+        ui.hint.addEventListener("click", hide);
         const fps = el("div", "fps", panel);
         ui.fps = el("b", null, fps, "-");
         ui.fpsLine = el("span", null, fps, "");
@@ -224,7 +230,8 @@
             renderManager && (renderManager.renderer.info.autoReset = !1);
         } catch (e) {}
         document.body.appendChild(panel);
-        set(ui.hint, (window.__nswsKeyBindings?.format?.(key()) ?? key()) + " to close");
+        ui.hint.classList.toggle("tap", touched);
+        set(ui.hint, touched ? "Tap here to close" : (window.__nswsKeyBindings?.format?.(key()) ?? key()) + " to close");
         Promise.resolve(window.__nswsLoadedVersion).then(v => {
             version = v || "";
         }, () => {});
@@ -626,6 +633,34 @@
         toggle();
     });
     window.addEventListener("resize", () => open && placePanel(true));
+
+    // Three fingers down and up again quickly, without sliding. Held pedals never match: they stay down.
+    let touched = !!window.matchMedia?.("(pointer: coarse)").matches, tap = null;
+    window.addEventListener("touchstart", e => {
+        touched = true;
+        const now = performance.now();
+        if (e.touches.length === e.changedTouches.length) tap = { t: now, ok: true, max: 0, pts: new Map };
+        if (!tap) return;
+        if (now - tap.t > TAP_GATHER_MS || e.touches.length > 3) tap.ok = false;
+        tap.max = Math.max(tap.max, e.touches.length);
+        for (const p of e.changedTouches) tap.pts.set(p.identifier, [p.clientX, p.clientY]);
+    }, { capture: true, passive: true });
+    window.addEventListener("touchmove", e => {
+        if (!tap?.ok) return;
+        for (const p of e.changedTouches) {
+            const from = tap.pts.get(p.identifier);
+            if (from && Math.hypot(p.clientX - from[0], p.clientY - from[1]) > TAP_SLOP) tap.ok = false;
+        }
+    }, { capture: true, passive: true });
+    window.addEventListener("touchend", e => {
+        if (!tap || e.touches.length) return;
+        const hit = tap.ok && tap.max === 3 && performance.now() - tap.t < TAP_MS;
+        tap = null;
+        hit && toggle();
+    }, { capture: true, passive: true });
+    window.addEventListener("touchcancel", () => {
+        tap = null;
+    }, { capture: true, passive: true });
 
     window.__nswsDebug = { attach, frameStart, frameEnd, newCar, key, setKey, toggle, isOpen: () => open };
 })();

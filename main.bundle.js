@@ -54430,6 +54430,12 @@ body.nsws-touch .time-bar-ui > .button.nsws-freecam-button { display: block; }
                 _keyBtn.className = "button";
                 bindKeyBindingButton(_keyBtn, window.__nswsDebug.key, window.__nswsDebug.setKey);
                 _wrap.appendChild(_keyBtn);
+                // No keyboard on a phone: the same toggle as a button.
+                const _showBtn = document.createElement("button");
+                _showBtn.className = "button";
+                _showBtn.textContent = "Show / hide";
+                _showBtn.addEventListener("click", () => window.__nswsDebug.toggle());
+                _wrap.appendChild(_showBtn);
                 _row.appendChild(_wrap);
                 C.get(this, ks, "f").appendChild(_row);
             }

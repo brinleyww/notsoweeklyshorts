@@ -1,5 +1,12 @@
 [
     {
+        "version": "v13.31",
+        "changes": [
+            "On phones, a quick three-finger tap opens and closes the debug info",
+            "Settings > Controls has a Show / hide button for the debug info"
+        ]
+    },
+    {
         "version": "v13.30",
         "changes": [
             "Restarting doesn't stutter on slow devices anymore",
