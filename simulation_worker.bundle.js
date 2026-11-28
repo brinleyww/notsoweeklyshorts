@@ -13231,6 +13231,7 @@
             }
             function i(i) {
                 const s = i.data;
+                null !== __cTimer && __cPace(!0);
                 if (__ovRoute(s))
                     return;
                 s.messageType != Ki.Verify && s.messageType != Ki.TestDeterminism && s.messageType != Ki.Init || __parkDrop();
@@ -13280,7 +13281,7 @@
                             } else
                                 setInterval(h, 1e3 / 60);
                         else
-                            setInterval(c)
+                            __cPace(!0)
                     }(s);
                     break;
                 case Ki.Verify:
@@ -14666,11 +14667,23 @@
                     r.push(stepCar(t, e));
                 r.post()
             }
+            // The non-realtime loop (ghosts, checks) ran flat out, about 250 times a second, in every such worker for
+            // as long as the page lived, cars or not. With nothing to step it now runs 10 times a second, and any
+            // message from the page puts it back to full speed.
+            var __cTimer = null
+              , __cFast = !1;
+            function __cPace(fast) {
+                if (null !== __cTimer && __cFast === fast)
+                    return;
+                null !== __cTimer && clearInterval(__cTimer),
+                __cFast = fast,
+                __cTimer = fast ? setInterval(c) : setInterval(c, 100)
+            }
             function c() {
                 const t = performance.now();
+                let any = !1;
                 if (e.length > 0) {
-                    const i = stateBatch(64);
-                    let r;
+                    let i = null, r;
                     do {
                         r = !0;
                         for (let t = 0; t < Math.max(1, Math.ceil(100 / e.length)); t++) {
@@ -14680,17 +14693,19 @@
                                         throw new Error("Non-realtime simulation requires targetSimulationFrames");
                                     if (t.frames < Qa.maxFrames && t.frames < t.targetSimulationFrames && !t.isPaused) {
                                         const e = t.controls.getControls(t.frames);
-                                        i.push(stepCar(t, e)),
+                                        (i ??= stateBatch(64)).push(stepCar(t, e)),
                                         t.frames++,
-                                        r = !1
+                                        r = !1,
+                                        any = !0
                                     }
                                 }
                             if (r)
                                 break
                         }
                     } while (Math.max(0, performance.now() - t) / 1e3 < .01 && !r);
-                    i.post()
+                    i?.post()
                 }
+                any || __cPace(!1)
             }
             for (const t of queued)
                 i(t)

@@ -1,5 +1,14 @@
 [
     {
+        "version": "v13.30",
+        "changes": [
+            "Restarting doesn't stutter on slow devices anymore",
+            "Less lag on High End and Ultra on tracks with grass tufts",
+            "The game uses less CPU while you race and in the menus",
+            "The timer and speedometer are cheaper to draw"
+        ]
+    },
+    {
         "version": "v13.29",
         "changes": [
             "Starting a track on a slow device shows a loading spinner until the track is drawn, not a blank dark screen"
