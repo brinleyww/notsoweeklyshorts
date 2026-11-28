@@ -1,5 +1,11 @@
 [
     {
+        "version": "v13.32",
+        "changes": [
+            "The Lock cursor key no longer locks the mouse in the Custom Tracks Editor"
+        ]
+    },
+    {
         "version": "v13.31",
         "changes": [
             "On phones, a quick three-finger tap opens and closes the debug info",
